@@ -23,9 +23,7 @@ services:
       sizeGB: 1
 
   # Frontend Service
-  - type: web # Using web service for frontend to support rewrite rules easier via static site config or just serving static
-    # Start: Switching to Static Site type which is cheaper/free usually
-  - type: static
+  - type: web
     name: aistory-frontend
     env: static
     buildCommand: |
