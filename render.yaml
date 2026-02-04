@@ -3,7 +3,7 @@ services:
   - type: web
     name: aistory-backend
     env: python
-    region: oregon
+    region: singapore
     buildCommand: |
       cd backend
       pip install -r requirements.txt
