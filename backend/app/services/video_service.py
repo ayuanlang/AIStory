@@ -1,7 +1,7 @@
 import os
 import uuid
 import logging
-from moviepy.editor import VideoFileClip, concatenate_videoclips
+from moviepy import VideoFileClip, concatenate_videoclips
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
