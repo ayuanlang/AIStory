@@ -1,9 +1,12 @@
 
 import axios from 'axios';
+import { API_URL } from '../config';
 
-// Use relative path to leverage Vite's proxy
+console.log("Initializing API Helper with Base URL:", API_URL);
+
+// Use API_URL from config which supports production env vars
 const api = axios.create({
-  baseURL: '/api/v1',
+  baseURL: API_URL,
 });
 
 // Add a request interceptor to include the token
