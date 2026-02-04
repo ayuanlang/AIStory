@@ -1,0 +1,300 @@
+
+import axios from 'axios';
+
+// Use relative path to leverage Vite's proxy
+const api = axios.create({
+  baseURL: '/api/v1',
+});
+
+// Add a request interceptor to include the token
+api.interceptors.request.use(
+    (config) => {
+        const token = localStorage.getItem('token');
+        if (token) {
+            config.headers.Authorization = `Bearer ${token}`;
+        }
+        return config;
+    },
+    (error) => {
+        return Promise.reject(error);
+    }
+);
+
+// Add a response interceptor to handle 401 errors
+api.interceptors.response.use(
+    (response) => response,
+    (error) => {
+        if (error.response && error.response.status === 401) {
+            localStorage.removeItem('token');
+            window.location.href = '/auth';
+        }
+        return Promise.reject(error);
+    }
+);
+
+export const sendAgentCommand = async (query, context = {}, history = []) => {
+    const response = await api.post('/agent/command', {
+        query,
+        context,
+        history
+    });
+    return response.data;
+};
+
+export const fetchProjects = async () => {
+    const response = await api.get('/projects/');
+    return response.data;
+}
+
+export const createProject = async (data) => {
+    const response = await api.post('/projects/', data);
+    return response.data;
+}
+
+export const fetchProject = async (id) => {
+    const response = await api.get(`/projects/${id}`);
+    return response.data;
+}
+
+export const updateProject = async (id, data) => {
+    const response = await api.put(`/projects/${id}`, data);
+    return response.data;
+}
+
+// Episodes
+export const fetchEpisodes = async (projectId) => {
+    const response = await api.get(`/projects/${projectId}/episodes`);
+    return response.data;
+}
+
+export const createEpisode = async (projectId, data) => {
+    const response = await api.post(`/projects/${projectId}/episodes`, data);
+    return response.data;
+}
+
+export const updateEpisode = async (episodeId, data) => {
+    const response = await api.put(`/episodes/${episodeId}`, data);
+    return response.data;
+}
+
+export const updateEpisodeSegments = async (episodeId, segments) => {
+    const response = await api.put(`/episodes/${episodeId}/segments`, segments);
+    return response.data;
+}
+
+export const deleteEpisode = async (episodeId) => {
+    const response = await api.delete(`/episodes/${episodeId}`);
+    return response.data;
+}
+
+// Scenes
+export const fetchScenes = async (episodeId) => {
+    const response = await api.get(`/episodes/${episodeId}/scenes`);
+    return response.data;
+}
+
+export const createScene = async (episodeId, data) => {
+    const response = await api.post(`/episodes/${episodeId}/scenes`, data);
+    return response.data;
+}
+
+export const updateScene = async (sceneId, data) => {
+    const response = await api.put(`/scenes/${sceneId}`, data);
+    return response.data;
+}
+
+// Shots
+export const fetchEpisodeShots = async (episodeId) => {
+    const response = await api.get(`/episodes/${episodeId}/shots`);
+    return response.data;
+}
+
+export const fetchShots = async (sceneId) => {
+    const response = await api.get(`/scenes/${sceneId}/shots`);
+    return response.data;
+}
+
+export const createShot = async (sceneId, data) => {
+    const response = await api.post(`/scenes/${sceneId}/shots`, data);
+    return response.data;
+}
+
+export const updateShot = async (shotId, data) => {
+    console.log(`[API] updateShot ${shotId} payload:`, JSON.stringify(data, null, 2));
+    const response = await api.put(`/shots/${shotId}`, data);
+    return response.data;
+}
+
+export const deleteShot = async (shotId) => {
+    const response = await api.delete(`/shots/${shotId}`);
+    return response.data;
+}
+
+export const fetchSceneShotsPrompt = async (sceneId) => {
+    const response = await api.get(`/scenes/${sceneId}/ai_prompt_preview`);
+    return response.data;
+}
+
+export const generateSceneShots = async (sceneId, promptData = null) => {
+    const response = await api.post(`/scenes/${sceneId}/ai_generate_shots`, promptData);
+    return response.data;
+}
+
+// Entities
+export const fetchEntities = async (projectId, type = null) => {
+    const params = type ? { type } : {};
+    const response = await api.get(`/projects/${projectId}/entities`, { params });
+    return response.data;
+}
+
+export const createEntity = async (projectId, data) => {
+    const response = await api.post(`/projects/${projectId}/entities`, data);
+    return response.data;
+}
+
+export const updateEntity = async (entityId, data) => {
+    const response = await api.put(`/entities/${entityId}`, data);
+    return response.data;
+}
+
+export const deleteEntity = async (entityId) => {
+    const response = await api.delete(`/entities/${entityId}`);
+    return response.data;
+}
+
+// Generation
+export const generateImage = async (prompt, provider = null, ref_image_url = null, options = {}) => {
+    const response = await api.post('/generate/image', { prompt, provider, ref_image_url, ...options });
+    return response.data;
+}
+
+export const generateVideo = async (prompt, provider = null, ref_image_url = null, last_frame_url = null, duration = 5, options = {}, keyframes = []) => {
+    const response = await api.post('/generate/video', { prompt, provider, ref_image_url, last_frame_url, duration, keyframes, ...options });
+    return response.data;
+}
+
+export const deleteProject = async (projectId) => {
+    const response = await api.delete(`/projects/${projectId}`);
+    return response.data;
+}
+
+export const registerUser = async (data) => {
+    // data: { username, email, password, full_name }
+    const response = await api.post('/users/', data);
+    return response.data;
+}
+
+export const apiLogin = async (username, password) => {
+    console.log("Logging in via JSON endpoint (apiLogin)...");
+    const response = await api.post('/login', {
+        username,
+        password
+    });
+    return response.data;
+}
+
+export const getSettings = async () => {
+    const response = await api.get('/settings');
+    return response.data;
+}
+
+export const getSettingDefaults = async () => {
+    const response = await api.get('/settings/defaults');
+    return response.data;
+}
+
+export const updateSetting = async (data) => {
+    const response = await api.post('/settings', data);
+    return response.data;
+}
+
+export const deleteSetting = async (id) => {
+    const response = await api.delete(`/settings/${id}`);
+    return response.data;
+}
+
+export default api;
+
+
+// --- Assets ---
+export const fetchAssets = async (params = {}) => {
+    const config = {};
+    if (typeof params === 'string') {
+        config.params = { type: params };
+    } else {
+        config.params = params;
+    }
+    const response = await api.get('/assets/', config);
+    return response.data;
+};
+
+export const createAsset = async (data) => {
+    const response = await api.post('/assets/', data);
+    return response.data;
+};
+
+export const uploadAsset = async (data, optionalData = {}) => {
+    let payload = data;
+    // Auto-wrap File object in FormData
+    if (data instanceof File) {
+        payload = new FormData();
+        payload.append('file', data);
+        // Append optional metadata
+        Object.keys(optionalData).forEach(key => {
+            if (optionalData[key]) payload.append(key, optionalData[key]);
+        });
+    }
+    const response = await api.post('/assets/upload', payload);
+    return response.data;
+};
+
+export const deleteAsset = async (id) => {
+    const response = await api.delete(`/assets/${id}`);
+    return response.data;
+};
+
+export const updateAsset = async (id, data) => {
+    const response = await api.put(`/assets/${id}`, data);
+    return response.data;
+};
+
+export const translateText = async (q, from_lang = 'en', to_lang = 'zh') => {
+    const response = await api.post('/tools/translate', { q, from_lang, to_lang });
+    return response.data;
+};
+
+export const refinePrompt = async (original_prompt, instruction, type = 'image') => {
+    const response = await api.post('/tools/refine_prompt', { original_prompt, instruction, type });
+    return response.data;
+};
+
+// Prompt Helper Export
+export const injectEntityFeatures = (prompt, entities = []) => {
+    let modified = false;
+    let text = prompt;
+    
+    // Regular expression to find {Name} pattern
+    const regex = /\{([^}]+)\}/g;
+    
+    text = text.replace(regex, (match, name) => {
+        const entity = entities.find(e => 
+            (e.name && e.name.toLowerCase() === name.toLowerCase()) || 
+            (e.name_en && e.name_en.toLowerCase() === name.toLowerCase())
+        );
+
+        if (entity && entity.description) {
+            modified = true;
+            // Return format: {Name}(description)
+            // Or just inject description? 
+            // Usually we want to keep the name for reference but add description.
+            // Let's use standard round bracket injection: {Name}(visual description)
+            
+            // Clean description to avoid nested brackets issues or newlines
+            const cleanDesc = entity.description.replace(/[\r\n]+/g, ' ').substring(0, 300); // Limit length
+            return `{${name}}(${cleanDesc})`;
+        }
+        return match; // No change if not found
+    });
+
+    return { text, modified };
+};

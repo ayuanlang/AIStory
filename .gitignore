@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.class
+.env
+.venv/
+venv/
+*.log
+
+# Javascript/Node
+node_modules/
+dist/
+npm-debug.log
+
+# Media assets (generated)
+*.png
+*.jpg
+*.jpeg
+*.mp4
+*.webm
+backend/uploads/
+backend/data/uploads/
+frontend/dist/
+
+# Editor
+.vscode/
+.idea/

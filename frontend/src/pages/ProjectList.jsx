@@ -1,0 +1,501 @@
+
+import React, { useEffect, useState } from 'react';
+import { fetchProjects, createProject, getSettings, updateSetting, getSettingDefaults, deleteSetting, deleteProject } from '../services/api';
+import Editor from './Editor';
+import SettingsPage from './Settings';
+import AssetsLibrary from '../components/AssetsLibrary';
+import { 
+    Plus, 
+    Folder, 
+    Layout, 
+    Settings, 
+    Image, 
+    LogOut, 
+    Search,
+    User,
+    MoreVertical,
+    Cpu,
+    MessageSquare,
+    Save,
+    RotateCcw,
+    ArrowLeft,
+    Trash2,
+    Edit2,
+    CheckCircle,
+    Video,
+    Mic,
+    Palette,
+    Monitor
+} from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { motion } from 'framer-motion';
+
+const cinematicImages = [
+    "https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=500&q=80", // Movie theater
+    "https://images.unsplash.com/photo-1485846234645-a62644f84728?w=500&q=80", // Film camera
+    "https://images.unsplash.com/photo-1542204165-65bf26472b9b?w=500&q=80", // Film strip
+    "https://images.unsplash.com/photo-1626814026160-2237a95fc5a0?w=500&q=80", // Matrix code
+    "https://images.unsplash.com/photo-1440404653325-ab127d49abc1?w=500&q=80", // Clapperboard
+    "https://images.unsplash.com/photo-1598899134739-24c46f58b8c0?w=500&q=80", // Movie set
+    "https://images.unsplash.com/photo-1517602302552-471fe67acf66?w=500&q=80", // Vibes
+];
+
+const THEMES = {
+    default: {
+        name: "Cinematic Dark",
+        description: "Deep blacks and high contrast for focus.",
+        colors: {
+            "--background": "224 71% 4%",
+            "--card": "224 71% 4%",
+            "--primary": "210 40% 98%",
+            "--secondary": "222.2 47.4% 11.2%",
+            "--muted": "223 47% 11%",
+            "--border": "216 34% 17%"
+        }
+    },
+    midnight: {
+        name: "Midnight Blue",
+        description: "Professional deep blue tones.",
+        colors: {
+            "--background": "222 47% 11%",
+            "--card": "223 47% 13%",
+            "--primary": "210 40% 98%",
+            "--secondary": "217 33% 17%",
+            "--muted": "217 33% 15%",
+            "--border": "217 33% 20%"
+        }
+    },
+    slate: {
+        name: "Titanium Slate",
+        description: "Neutral, industrial grey tones.",
+        colors: {
+            "--background": "210 14% 12%",
+            "--card": "210 14% 14%",
+            "--primary": "210 40% 98%",
+            "--secondary": "210 10% 20%",
+            "--muted": "210 10% 18%",
+            "--border": "210 10% 22%"
+        }
+    },
+    nebula: {
+        name: "Cosmic Nebula",
+        description: "Atmospheric purple and deep space vibes.",
+            colors: {
+            "--background": "260 40% 8%",
+            "--card": "260 40% 10%",
+            "--primary": "280 70% 85%",
+            "--secondary": "260 30% 18%",
+            "--muted": "260 30% 14%",
+            "--border": "260 30% 18%"
+        }
+    }
+};
+
+const ProjectList = () => {
+    const [projects, setProjects] = useState([]);
+    const [isCreating, setIsCreating] = useState(false);
+    const [newTitle, setNewTitle] = useState('');
+    const [activeTab, setActiveTab] = useState('projects');
+    const [selectedProjectId, setSelectedProjectId] = useState(null);
+    const navigate = useNavigate();
+
+    // Theme Logic - Moved to Parent for persistence on reload
+    const [currentTheme, setCurrentTheme] = useState('default');
+    const [toast, setToast] = useState(null);
+
+    useEffect(() => {
+        const savedTheme = localStorage.getItem('theme');
+        if (savedTheme && THEMES[savedTheme]) {
+             handleThemeChange(savedTheme, false);
+        }
+    }, []);
+
+    const handleThemeChange = (key, showToast = true) => {
+        setCurrentTheme(key);
+        const theme = THEMES[key];
+        const root = document.documentElement;
+        Object.entries(theme.colors).forEach(([property, value]) => {
+            root.style.setProperty(property, value);
+        });
+        localStorage.setItem('theme', key);
+        if (showToast) {
+            setToast({ type: 'success', message: `${theme.name} Activated` });
+            setTimeout(() => setToast(null), 2000);
+        }
+    };
+    
+    useEffect(() => {
+        if (activeTab === 'projects') {
+            loadProjects();
+        }
+    }, [activeTab]);
+
+    const loadProjects = async () => {
+        try {
+            const data = await fetchProjects();
+            setProjects(data);
+        } catch (error) {
+            console.error("Failed to load projects", error);
+        }
+    };
+
+    const handleCreate = async () => {
+        if (!newTitle) return;
+        await createProject({ title: newTitle });
+        setNewTitle('');
+        setIsCreating(false);
+        loadProjects();
+    };
+
+    const handleLogout = () => {
+        localStorage.removeItem('token');
+        navigate('/');
+    };
+
+    const handleDeleteProject = async (e, projectId) => {
+        e.stopPropagation(); // Prevent opening the project
+        if (!confirm("Are you sure you want to delete this project?")) return;
+        
+        try {
+            await deleteProject(projectId);
+            setToast({ type: 'success', message: 'Project deleted successfully' });
+            setTimeout(() => setToast(null), 3000);
+            loadProjects(); // Refresh list
+        } catch (error) {
+            console.error("Failed to delete project", error);
+            setToast({ type: 'error', message: 'Failed to delete project' });
+            setTimeout(() => setToast(null), 3000);
+        }
+    };
+
+    const SidebarItem = ({ id, icon: Icon, label, disabled }) => (
+        <button 
+            onClick={() => {
+                if (disabled) return;
+                setActiveTab(id);
+                setSelectedProjectId(null); // Return to list view when switching tabs
+            }}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors ${
+                activeTab === id && !selectedProjectId
+                ? 'bg-primary text-primary-foreground' 
+                : 'text-muted-foreground hover:bg-secondary/50 hover:text-foreground'
+            } ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+        >
+            <Icon className="w-5 h-5" />
+            {label}
+        </button>
+    );
+
+    // If a project is selected, show the full-screen Editor immediately
+    if (selectedProjectId) {
+        return <Editor projectId={selectedProjectId} onClose={() => setSelectedProjectId(null)} />;
+    }
+
+    return (
+        <div className="flex h-screen bg-background text-foreground font-sans overflow-hidden">
+             {toast && (
+                <div className={`fixed bottom-8 right-8 px-6 py-3 rounded-lg shadow-xl text-white z-50 animate-in fade-in slide-in-from-bottom-4 bg-green-600`}>
+                    {toast.message}
+                </div>
+            )}
+            {/* Sidebar */}
+            <aside className="w-64 border-r bg-card/30 flex flex-col p-6">
+                <div className="flex items-center gap-2 mb-10 px-2">
+                    <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
+                        <Layout className="w-5 h-5 text-primary-foreground" />
+                    </div>
+                    <span className="text-xl font-bold tracking-tight">AI Story</span>
+                </div>
+
+                <div className="space-y-2 flex-1">
+                    <SidebarItem id="projects" icon={Folder} label="My Projects" />
+                    <SidebarItem id="assets" icon={Image} label="Assets Library" />
+                    <SidebarItem id="settings" icon={Settings} label="Settings" />
+                </div>
+
+                <div className="mt-auto border-t pt-6">
+                    <div className="flex items-center gap-3 px-2 mb-4">
+                        <div className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center">
+                            <User className="w-5 h-5 text-muted-foreground" />
+                        </div>
+                        <div className="flex-1 overflow-hidden">
+                            <p className="text-sm font-medium truncate">Creator</p>
+                            <p className="text-xs text-muted-foreground truncate">Free Plan</p>
+                        </div>
+                    </div>
+                    <button 
+                        onClick={handleLogout}
+                        className="w-full flex items-center gap-2 px-2 text-sm text-muted-foreground hover:text-destructive transition-colors"
+                    >
+                        <LogOut className="w-4 h-4" /> Sign Out
+                    </button>
+                </div>
+            </aside>
+
+            {/* Main Content */}
+            <main className="flex-1 overflow-y-auto bg-background/50 relative flex flex-col">
+                <div className="max-w-7xl mx-auto w-full px-8 lg:px-12 pt-8 pb-4 relative z-40">
+                    {/* Header */}
+                    <header className="flex justify-between items-center">
+                        <div>
+                            <h1 className="text-3xl font-bold tracking-tight capitalize">
+                                {activeTab === 'projects' ? 'My Projects' : activeTab}
+                            </h1>
+                            <p className="text-muted-foreground mt-1">
+                                {activeTab === 'projects' && 'Manage and edit your storyboard scripts.'}
+                                {activeTab === 'assets' && 'Manage your generated characters and scenes.'}
+                                {activeTab === 'settings' && 'Manage your account preferences.'}
+                            </p>
+                        </div>
+                        {activeTab === 'projects' && (
+                            <div className="flex items-center gap-4">
+                                {selectedProjectId ? (
+                                    <button 
+                                        onClick={() => setSelectedProjectId(null)}
+                                        className="flex items-center gap-2 px-5 py-2.5 bg-secondary text-secondary-foreground rounded-full hover:bg-secondary/80 transition-all font-medium"
+                                    >
+                                        <ArrowLeft className="w-4 h-4" /> Back to Projects
+                                    </button>
+                                ) : (
+                                    <>
+                                        <div className="relative hidden md:block">
+                                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                                            <input 
+                                                type="text" 
+                                                placeholder="Search projects..." 
+                                                className="pl-9 pr-4 py-2 bg-secondary/50 border-none rounded-full text-sm focus:ring-1 focus:ring-primary w-64"
+                                            />
+                                        </div>
+                                        <button 
+                                            onClick={() => setIsCreating(true)}
+                                            className="flex items-center gap-2 px-5 py-2.5 bg-primary text-primary-foreground rounded-full hover:bg-primary/90 shadow-lg shadow-primary/20 transition-all hover:scale-105 font-medium"
+                                        >
+                                            <Plus className="w-4 h-4" /> New Project
+                                        </button>
+                                    </>
+                                )}
+                            </div>
+                        )}
+                    </header>
+                </div>
+
+                 {/* Cinematic Header Strip */}
+                 <div className="h-40 relative overflow-hidden group w-full select-none border-b border-white/5 shrink-0">
+                    {/* Gradients to fade edges and bottom */}
+                    <div className="absolute inset-0 bg-gradient-to-r from-background via-transparent to-background z-20 pointer-events-none" />
+                    <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-background via-background/80 to-transparent z-20 pointer-events-none" />
+                    
+                    <motion.div 
+                        className="flex gap-6 absolute left-0 top-6 h-24 items-center pl-4 opacity-40 grayscale group-hover:grayscale-0 group-hover:opacity-80 transition-all duration-700"
+                        animate={{ x: ["0%", "-50%"] }}
+                        transition={{ repeat: Infinity, ease: "linear", duration: 40 }}
+                        style={{ width: "fit-content" }}
+                    >
+                         {[...cinematicImages, ...cinematicImages].map((src, idx) => (
+                             <div key={idx} className="w-64 h-36 rounded-xl overflow-hidden flex-shrink-0 border border-white/10 shadow-2xl transform -skew-x-12 hover:skew-x-0 transition-transform duration-500 origin-bottom">
+                                 <img src={src} alt="Cinematic element" className="w-full h-full object-cover scale-125" />
+                                 <div className="absolute inset-0 bg-blue-900/20 mix-blend-overlay"></div>
+                             </div>
+                         ))}
+                    </motion.div>
+                </div>
+
+                <div className="max-w-7xl mx-auto w-full px-8 lg:px-12 pb-12 mt-4 relative z-30 flex-1 flex flex-col">
+                    {/* Content Views */}
+                    <div className="flex-1 min-h-0 flex flex-col">
+                        {activeTab === 'projects' && (
+                            selectedProjectId ? (
+                                <motion.div 
+                                    initial={{ opacity: 0, y: 20 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    className="h-full flex-1"
+                                >
+                                    <Editor projectId={selectedProjectId} />
+                                </motion.div>
+                            ) : (
+                            <>
+                                {isCreating && (
+                                    <motion.div 
+                                        initial={{ opacity: 0, y: -20 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        className="mb-8 p-6 border bg-card rounded-2xl shadow-sm"
+                                    >
+                                        <label className="block text-sm font-medium mb-2">Project Title</label>
+                                        <div className="flex gap-3">
+                                            <input 
+                                                className="flex-1 px-4 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/20 outline-none" 
+                                                value={newTitle} 
+                                                onChange={e => setNewTitle(e.target.value)} 
+                                                placeholder="e.g., The Last Horizon - Scene 1"
+                                                autoFocus
+                                            />
+                                            <button onClick={handleCreate} className="px-6 py-2.5 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700">Create</button>
+                                            <button onClick={() => setIsCreating(false)} className="px-6 py-2.5 bg-secondary text-secondary-foreground rounded-lg font-medium hover:bg-secondary/80">Cancel</button>
+                                        </div>
+                                    </motion.div>
+                                )}
+
+                                {projects.length === 0 && !isCreating ? (
+                                    <div className="text-center py-24 rounded-3xl border border-dashed border-white/10 bg-white/[0.02] backdrop-blur-sm">
+                                        <div className="w-20 h-20 bg-gradient-to-tr from-primary/20 to-purple-500/20 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-inner ring-1 ring-white/10">
+                                            <Folder className="w-10 h-10 text-primary blur-[1px] absolute opacity-50" />
+                                            <Folder className="w-10 h-10 text-white relative z-10" />
+                                        </div>
+                                        <h3 className="text-2xl font-bold mb-3 bg-clip-text text-transparent bg-gradient-to-b from-white to-white/60">Start Your Journey</h3>
+                                        <p className="text-muted-foreground max-w-sm mx-auto mb-8 text-lg font-light">
+                                            Your studio is empty. Create your first screenplay to begin generating shots.
+                                        </p>
+                                        <button 
+                                            onClick={() => setIsCreating(true)}
+                                            className="px-8 py-3 rounded-full bg-primary/20 border border-primary/50 text-white font-medium hover:bg-primary/30 transition-all hover:scale-105"
+                                        >
+                                            Create First Project
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
+                                        {projects.map(p => (
+                                            <div onClick={() => setSelectedProjectId(p.id)} key={p.id} className="cursor-pointer">
+                                                <motion.div 
+                                                    whileHover={{ y: -8, scale: 1.02 }}
+                                                    transition={{ type: "spring", stiffness: 300, damping: 20 }}
+                                                    className="group relative bg-card/40 backdrop-blur-md border border-white/5 rounded-3xl overflow-hidden hover:border-primary/50 transition-all shadow-lg hover:shadow-2xl hover:shadow-primary/10"
+                                                >
+                                                    {/* Card Image Area */}
+                                                    <div className="aspect-[2.35/1] bg-black/60 relative overflow-hidden group-hover:bg-black/40 transition-colors">
+                                                       {/* Gradient Overlay */}
+                                                       <div className="absolute inset-0 bg-gradient-to-t from-card via-transparent to-transparent opacity-90 z-10" />
+                                                       <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-primary/10 opacity-0 group-hover:opacity-100 transition-opacity z-10" />
+                                                       
+                                                       {/* Dynamic Grid Pattern */}
+                                                       <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] bg-[size:16px_16px] z-0 opacity-50"></div>
+                                                       
+                                                       {/* Icon or Thumbnail */}
+                                                       <div className="absolute inset-0 flex items-center justify-center z-0">
+                                                            <Folder className="w-12 h-12 text-white/5 group-hover:text-primary/20 transition-all duration-500 transform group-hover:scale-110" />
+                                                       </div>
+
+                                                       {/* Top Badge */}
+                                                       <div className="absolute top-4 right-4 z-20">
+                                                            <div className="text-[10px] uppercase tracking-widest font-bold px-2 py-1 rounded-sm bg-black/80 text-white/70 border border-white/10 backdrop-blur-md">
+                                                                {p.global_info?.overall_genre || "SCENE"}
+                                                            </div>
+                                                       </div>
+                                                    </div>
+
+                                                    {/* Card Content */}
+                                                    <div className="p-6 relative z-20">
+                                                        <div className="flex justify-between items-start mb-3">
+                                                            <h3 className="text-xl font-bold text-white group-hover:text-primary transition-colors truncate tracking-tight">{p.title}</h3>
+                                                            <button 
+                                                                onClick={(e) => handleDeleteProject(e, p.id)}
+                                                                className="opacity-0 group-hover:opacity-100 p-2 text-muted-foreground hover:text-red-500 hover:bg-white/10 rounded-lg transition-all"
+                                                                title="Delete Project"
+                                                            >
+                                                                <Trash2 className="w-4 h-4" />
+                                                            </button>
+                                                        </div>
+                                                        <p className="text-sm text-muted-foreground line-clamp-2 leading-relaxed font-light opacity-80 mb-6 min-h-[2.5em]">
+                                                            {p.global_info?.notes || "No description added."}
+                                                        </p>
+                                                        
+                                                        {/* Footer Meta */}
+                                                        <div className="flex items-center justify-between text-xs text-muted-foreground/60 pt-4 border-t border-white/5 group-hover:border-white/10 transition-colors">
+                                                            <span>Edited 2m ago</span>
+                                                            <div className="flex -space-x-2">
+                                                                <div className="w-5 h-5 rounded-full bg-blue-500 border border-card"></div>
+                                                                <div className="w-5 h-5 rounded-full bg-purple-500 border border-card"></div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </motion.div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </>
+                            )
+                        )}
+
+                        {activeTab === 'assets' && (
+                            <div className="h-full bg-card/30 rounded-3xl border border-white/5 overflow-hidden">
+                                <AssetsLibrary />
+                            </div>
+                        )}
+
+                        {activeTab === 'settings' && (
+                           <SettingsPanel 
+                                currentTheme={currentTheme}
+                                handleThemeChange={handleThemeChange}
+                           />
+                        )}
+                    </div>
+                </div>
+            </main>
+        </div>
+    );
+};
+
+
+const SettingsPanel = ({ currentTheme, handleThemeChange }) => {
+    const [section, setSection] = useState('general');
+
+    return (
+        <div className="w-full h-full"> 
+            <div className="flex items-center justify-between mb-8">
+                <div className="flex space-x-1 bg-card/50 p-1 rounded-xl border border-white/5">
+                    <button onClick={() => setSection('general')} className={`px-5 py-2 rounded-lg text-sm font-medium transition-all ${section === 'general' ? 'bg-primary text-black font-bold shadow-lg' : 'text-muted-foreground'}`}>General</button>
+                    <button onClick={() => setSection('configuration')} className={`px-5 py-2 rounded-lg text-sm font-medium transition-all ${section === 'configuration' ? 'bg-primary text-black font-bold shadow-lg' : 'text-muted-foreground'}`}>Configuration</button>
+                </div>
+            </div>
+
+            {section === 'general' && (
+                 <div className="grid gap-8 animate-in fade-in duration-500">
+                     <section>
+                         <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
+                             <Palette className="w-5 h-5 text-primary" />
+                             Interface Appearance
+                         </h3>
+                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                             {Object.entries(THEMES).map(([key, theme]) => (
+                                 <div 
+                                    key={key} 
+                                    onClick={() => handleThemeChange(key)}
+                                    className={`cursor-pointer group relative overflow-hidden rounded-2xl border transition-all duration-300 ${currentTheme === key ? 'border-primary ring-2 ring-primary/20 scale-[1.02] shadow-2xl shadow-black/50' : 'border-white/10 hover:border-white/30 bg-card/30'}`}
+                                 >
+                                     <div className="aspect-[1.6/1] relative border-b border-white/5" style={{ background: `hsl(${theme.colors['--background']})` }}>
+                                         {/* Mock UI Preview */}
+                                         <div className="absolute inset-4 flex gap-2">
+                                            <div className="w-1/4 h-full rounded-lg opacity-80" style={{ background: `hsl(${theme.colors['--card']})` }}></div>
+                                            <div className="flex-1 flex flex-col gap-2">
+                                                <div className="h-4 rounded col-span-2 opacity-50" style={{ background: `hsl(${theme.colors['--muted']})` }}></div>
+                                                <div className="h-20 rounded-lg flex items-center justify-center border border-white/5" style={{ background: `hsl(${theme.colors['--card']})` }}>
+                                                    <div className="w-6 h-6 rounded-full" style={{ background: `hsl(${theme.colors['--primary']})` }}></div>
+                                                </div>
+                                            </div>
+                                         </div>
+                                     </div>
+                                     <div className="p-4 bg-card/50 backdrop-blur-sm">
+                                         <div className="flex justify-between items-center mb-1">
+                                            <h4 className="font-bold text-sm tracking-wide">{theme.name}</h4>
+                                            {currentTheme === key && <CheckCircle className="w-4 h-4 text-green-500" />}
+                                         </div>
+                                         <p className="text-xs text-muted-foreground opacity-70 leading-relaxed font-light">{theme.description}</p>
+                                     </div>
+                                 </div>
+                             ))}
+                         </div>
+                     </section>
+                 </div>
+            )}
+
+            {section === 'configuration' && (
+                <div className="h-[calc(100vh-250px)] animate-in fade-in">
+                    <SettingsPage />
+                </div>
+            )}
+        </div>
+    );
+};
+
+export default ProjectList;

@@ -1,0 +1,173 @@
+
+import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { apiLogin, registerUser } from '../services/api';
+import { useStore } from '../lib/store';
+import { Lock, Mail, User, AlertCircle } from 'lucide-react';
+
+const Auth = () => {
+    const [isLogin, setIsLogin] = useState(true);
+    const [formData, setFormData] = useState({
+        username: '',
+        password: '',
+        email: '',
+        full_name: ''
+    });
+    const [error, setError] = useState('');
+    const [loading, setLoading] = useState(false);
+    const navigate = useNavigate();
+    const { refreshSettings } = useStore();
+
+    const handleChange = (e) => {
+        setFormData({ ...formData, [e.target.name]: e.target.value });
+    };
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        setError('');
+        setLoading(true);
+
+        console.log("Submitting form (v2):", isLogin ? "Login" : "Register", formData);
+
+        try {
+            if (isLogin) {
+                // Use the JSON login endpoint
+                const response = await apiLogin(formData.username, formData.password);
+                console.log("Login Success (JSON):", response);
+                localStorage.setItem('token', response.access_token);
+                await refreshSettings();
+                navigate('/projects');
+            } else {
+                const response = await registerUser(formData);
+                console.log("Registration Success:", response);
+                setIsLogin(true); // Switch to login after registration
+                setError("Registration successful! Please login.");
+            }
+        } catch (err) {
+            console.error("Auth Error:", err);
+            const detail = err.response?.data?.detail;
+            let errorMessage = "Authentication failed. Please check your credentials.";
+            
+            if (Array.isArray(detail)) {
+                errorMessage = detail.map(e => e.msg).join('; ');
+            } else if (typeof detail === 'string') {
+                errorMessage = detail;
+            } else if (typeof detail === 'object') {
+                errorMessage = JSON.stringify(detail);
+            }
+            
+            // Ensure error is a string
+            if (typeof errorMessage !== 'string') {
+                errorMessage = String(errorMessage);
+            }
+            
+            setError(errorMessage);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <div className="min-h-screen flex items-center justify-center bg-muted/20">
+            <div className="w-full max-w-md bg-card p-8 rounded-xl shadow-lg border">
+                <div className="text-center mb-6">
+                    <h1 className="text-2xl font-bold">{isLogin ? 'Welcome Back' : 'Create Account'}</h1>
+                    <p className="text-muted-foreground mt-2">
+                        {isLogin ? 'Enter your credentials to access your projects.' : 'Start your journey with AI Story.'}
+                    </p>
+                </div>
+
+                {error && (
+                    <div className="mb-4 p-3 bg-destructive/10 text-destructive text-sm rounded-md flex items-center gap-2">
+                         <AlertCircle className="w-4 h-4" /> 
+                         <span>{error}</span>
+                    </div>
+                )}
+
+                <form onSubmit={handleSubmit} className="space-y-4">
+                    {!isLogin && (
+                        <>
+                        <div className="space-y-1">
+                            <label className="text-sm font-medium">Full Name</label>
+                            <div className="relative">
+                                <User className="w-4 h-4 absolute left-3 top-3 text-muted-foreground" />
+                                <input 
+                                    name="full_name"
+                                    className="w-full pl-10 pr-3 py-2 border rounded-md bg-background"
+                                    placeholder="John Doe"
+                                    value={formData.full_name}
+                                    onChange={handleChange}
+                                />
+                            </div>
+                        </div>
+                        <div className="space-y-1">
+                            <label className="text-sm font-medium">Email</label>
+                            <div className="relative">
+                                <Mail className="w-4 h-4 absolute left-3 top-3 text-muted-foreground" />
+                                <input 
+                                    name="email"
+                                    type="email"
+                                    className="w-full pl-10 pr-3 py-2 border rounded-md bg-background"
+                                    placeholder="john@example.com"
+                                    value={formData.email}
+                                    onChange={handleChange}
+                                />
+                            </div>
+                        </div>
+                        </>
+                    )}
+
+                    <div className="space-y-1">
+                        <label className="text-sm font-medium">Username</label>
+                        <div className="relative">
+                            <User className="w-4 h-4 absolute left-3 top-3 text-muted-foreground" />
+                            <input 
+                                name="username"
+                                className="w-full pl-10 pr-3 py-2 border rounded-md bg-background"
+                                placeholder="username"
+                                value={formData.username}
+                                onChange={handleChange}
+                            />
+                        </div>
+                    </div>
+
+                    <div className="space-y-1">
+                        <label className="text-sm font-medium">Password</label>
+                        <div className="relative">
+                            <Lock className="w-4 h-4 absolute left-3 top-3 text-muted-foreground" />
+                            <input 
+                                name="password"
+                                type="password"
+                                className="w-full pl-10 pr-3 py-2 border rounded-md bg-background"
+                                placeholder="••••••••"
+                                value={formData.password}
+                                onChange={handleChange}
+                            />
+                        </div>
+                    </div>
+
+                    <button 
+                        disabled={loading}
+                        className="w-full py-2 bg-primary text-primary-foreground rounded-md font-medium hover:bg-primary/90 disabled:opacity-50"
+                    >
+                        {loading ? 'Processing...' : (isLogin ? 'Sign In' : 'Sign Up')}
+                    </button>
+                </form>
+
+                <div className="mt-6 text-center text-sm">
+                    <span className="text-muted-foreground">
+                        {isLogin ? "Don't have an account? " : "Already have an account? "}
+                    </span>
+                    <button 
+                        onClick={() => setIsLogin(!isLogin)}
+                        className="text-primary hover:underline font-medium"
+                    >
+                        {isLogin ? 'Sign up' : 'Sign in'}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+export default Auth;
