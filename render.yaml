@@ -46,4 +46,5 @@ databases:
   - name: aistory-db
     databaseName: aistory
     user: aistory_user
+    region: oregon
     plan: free # Note: Free tier Postgres expires after 90 days on Render
