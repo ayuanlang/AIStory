@@ -10,8 +10,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 class Settings(BaseSettings):
     PROJECT_NAME: str = "AI Story"
     API_V1_STR: str = "/api/v1"
-    # Use absolute path to ensure we always use the backend/aistory.db file
-    DATABASE_URL: str = f"sqlite:///{BASE_DIR}/aistory.db"
+    
+    # Database config with Postgres support for Render
+    # Render provides DATABASE_URL starting with postgres:// but SQLAlchemy needs postgresql://
+    _db_url: str = os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR}/aistory.db")
+    if _db_url.startswith("postgres://"):
+        _db_url = _db_url.replace("postgres://", "postgresql://", 1)
+    
+    DATABASE_URL: str = _db_url
     
     # Security (simplistic for demo)
     SECRET_KEY: str = "supersecretkey"

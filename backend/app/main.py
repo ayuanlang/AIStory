@@ -38,6 +38,14 @@ origins = [
     "http://localhost:5173", # Vite default
 ]
 
+# Add production domains from env if present
+if os.getenv("RENDER_EXTERNAL_URL"):
+    origins.append(os.getenv("RENDER_EXTERNAL_URL"))
+
+# Allow all origins for simplicity in this demo/blueprint setup
+# In a strict production environment, you should list specific domains
+origins = ["*"]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
