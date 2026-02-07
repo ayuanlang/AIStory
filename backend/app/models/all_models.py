@@ -11,6 +11,11 @@ class User(Base):
     email = Column(String, unique=True, index=True)
     full_name = Column(String, nullable=True)
     hashed_password = Column(String)
+    
+    is_active = Column(Boolean, default=True)
+    is_superuser = Column(Boolean, default=False)
+    is_authorized = Column(Boolean, default=False) # Can reuse system keys
+    is_system = Column(Boolean, default=False) # Provider of shared keys
 
     projects = relationship("Project", back_populates="owner")
     api_settings = relationship("APISetting", back_populates="user")

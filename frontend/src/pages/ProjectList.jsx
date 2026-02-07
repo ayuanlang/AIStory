@@ -97,11 +97,29 @@ const ProjectList = () => {
     const [newTitle, setNewTitle] = useState('');
     const [activeTab, setActiveTab] = useState('projects');
     const [selectedProjectId, setSelectedProjectId] = useState(null);
+    const [currentUser, setCurrentUser] = useState(null); // Simple user state to check permissions if we had endpoint
     const navigate = useNavigate();
 
     // Theme Logic - Moved to Parent for persistence on reload
     const [currentTheme, setCurrentTheme] = useState('default');
     const [toast, setToast] = useState(null);
+    
+    useEffect(() => {
+        // Fetch User Info to check admin status
+        const fetchMe = async () => {
+             try {
+                const token = localStorage.getItem('token');
+                const res = await fetch(`${api.BASE_URL}/users/me`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    setCurrentUser(data);
+                }
+             } catch(e) {}
+        };
+        fetchMe();
+    }, []);
 
     useEffect(() => {
         const savedTheme = localStorage.getItem('theme');
@@ -210,6 +228,15 @@ const ProjectList = () => {
                 <div className="space-y-2 flex-1">
                     <SidebarItem id="projects" icon={Folder} label="My Projects" />
                     <SidebarItem id="assets" icon={Image} label="Assets Library" />
+                    {currentUser?.is_superuser && (
+                         <button 
+                            onClick={() => navigate('/admin/users')}
+                            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-muted-foreground hover:bg-secondary/50 hover:text-foreground`}
+                        >
+                            <Shield className="w-5 h-5 text-red-500" />
+                            Admin Panel
+                        </button>
+                    )}
                     <SidebarItem id="settings" icon={Settings} label="Settings" />
                 </div>
 

@@ -97,6 +97,68 @@ class LLMService:
                 "plan": []
             }
 
+
+    async def chat_completion(self, messages: List[Dict], config: Dict[str, Any]) -> str:
+        """
+        Direct chat completion that returns raw content string.
+        """
+        if not config:
+            raise ValueError("No LLM config provided")
+
+        api_key = config.get("api_key")
+        base_url = config.get("base_url")
+        model = config.get("model")
+
+        if not api_key:
+             raise ValueError("API Key missing in config")
+
+        try:
+            # Re-use the openai compatible caller but just extract content
+            # This is a bit of a hack to reuse existing code which expects a specific JSON format
+            # But the _call_openai_compatible method parses JSON for agents. 
+            # We need a simpler caller for raw text generation.
+            
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            # OpenAI specific headers
+            if "openai" in (base_url or "").lower():
+                 pass 
+            
+            payload = {
+                "model": model,
+                "messages": messages,
+                "temperature": 0.7,
+                # "stream": True # TODO: Support streaming?
+            }
+            if extra_config := config.get("config", {}):
+                  # Merge extra config like max_tokens etc if needed
+                  payload.update(extra_config)
+
+            timeout = 300 # 5 minutes for long analysis
+            
+            logger.info(f"LLM Completion Request to {base_url} model {model}")
+            
+            # Using synchronous requests for simplicity in async wrapper, or use aiohttp
+            # LLMService methods are async def, so we should run blocking IO in executor if using requests,
+            # but for now let's just do a direct call. Since this runs in FastAPI async route, 
+            # blocking here is bad. But _call_openai_compatible uses run_in_executor? 
+            # Actually _call_openai_compatible logic below uses requests.post which blocks.
+            # We should probably fix that broadly, but for now let's follow the pattern.
+            
+            response = requests.post(f"{base_url}/chat/completions", headers=headers, json=payload, timeout=timeout)
+            response.raise_for_status()
+            
+            data = response.json()
+            content = data["choices"][0]["message"]["content"]
+            return content
+
+        except Exception as e:
+            logger.error(f"LLM Raw Completion failed: {e}")
+            raise e
+
     async def _call_openai_compatible(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> Dict[str, Any]:
         content = await self._raw_llm_request(base_url, api_key, model, messages, extra_config)
         

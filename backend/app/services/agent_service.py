@@ -15,7 +15,7 @@ from typing import List, Dict, Any, Optional
 from app.schemas.agent import AgentRequest, AgentResponse, AgentAction
 from app.services.llm_service import llm_service
 from app.db.session import SessionLocal
-from app.models.all_models import APISetting, Entity
+from app.models.all_models import APISetting, Entity, User
 from app.core.config import settings
 # from app.db.session import db as legacy_db 
 # Mock legacy_db to prevent import error during refactor
@@ -89,12 +89,25 @@ class AgentService:
         """
         try:
             with SessionLocal() as session:
+                user = session.query(User).filter(User.id == user_id).first()
+                if not user:
+                    return {}
+
+                # 1. Try User's own setting
                 setting = session.query(APISetting).filter(
                     APISetting.user_id == user_id,
                     APISetting.category == "LLM",
                     APISetting.is_active == True
                 ).first()
                 
+                # 2. Fallback if authorized and not set
+                if not setting and user.is_authorized:
+                    setting = session.query(APISetting).join(User).filter(
+                        User.is_system == True, 
+                        APISetting.category == "LLM",
+                        APISetting.is_active == True
+                    ).first()
+
                 if setting:
                     # Import defaults here to avoid circular imports at top level if any
                     from app.api.settings import DEFAULTS

@@ -5,7 +5,7 @@ import { useLog } from '../context/LogContext';
 import { useStore } from '../lib/store';
 import LogPanel from '../components/LogPanel';
 import AgentChat from '../components/AgentChat';
-import { MessageSquare, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Languages, Loader2, Save, Layers, ArrowUp } from 'lucide-react';
+import { MessageSquare, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Languages, Loader2, Save, Layers, ArrowUp, Sparkles } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
     fetchProject, 
@@ -27,6 +27,7 @@ import {
     createEntity,
     updateEntity,
     deleteEntity,
+    deleteAllEntities,
     generateImage,
     generateVideo,
     fetchAssets, 
@@ -36,7 +37,10 @@ import {
     uploadAsset,
     getSettings,
     translateText,
-    refinePrompt
+    refinePrompt,
+    analyzeScene,
+    fetchPrompt,
+    fetchMe
 } from '../services/api';
 
 import RefineControl from '../components/RefineControl.jsx';
@@ -251,22 +255,22 @@ const ProjectOverview = ({ id }) => {
     const [info, setInfo] = useState({
         script_title: "",
         series_episode: "",
-        base_positioning: "",
-        type: "",
-        visual_style: "",
+        base_positioning: "Modern Workplace",
+        type: "Live Action (Realism/Cinematic 8K)",
+        Global_Style: "Photorealistic, Cinematic Lighting, 8k, Masterpiece",
         tech_params: {
             visual_standard: {
-                horizontal_resolution: "",
-                vertical_resolution: "",
-                frame_rate: "",
-                aspect_ratio: "",
-                quality: ""
+                horizontal_resolution: "3840",
+                vertical_resolution: "2160",
+                frame_rate: "24",
+                aspect_ratio: "9:16",
+                quality: "Ultra High"
             }
         },
-        tone: "",
+        tone: "Skin Tone Optimized, Dreamy",
         lighting: "",
-        language: "",
-        borrowed_films: [],
+        language: "English",
+        borrowed_films: ["King Kong (2005)", "Joker (2019)", "The Truman Show"],
         notes: ""
     });
 
@@ -542,22 +546,22 @@ const EpisodeInfo = ({ episode, onUpdate }) => {
         e_global_info: {
             script_title: "",
             series_episode: "",
-            base_positioning: "",
-            type: "",
-            Global_Style: "",
+            base_positioning: "Modern Workplace",
+            type: "Live Action (Realism/Cinematic 8K)",
+            Global_Style: "Photorealistic, Cinematic Lighting, 8k, Masterpiece",
             tech_params: {
                 visual_standard: {
-                    horizontal_resolution: "",
-                    vertical_resolution: "",
-                    frame_rate: "",
-                    aspect_ratio: "",
-                    quality: ""
+                    horizontal_resolution: "3840",
+                    vertical_resolution: "2160",
+                    frame_rate: "24",
+                    aspect_ratio: "9:16",
+                    quality: "Ultra High"
                 }
             },
-            tone: "",
+            tone: "Skin Tone Optimized, Dreamy",
             lighting: "",
-            language: "",
-            borrowed_films: [],
+            language: "English",
+            borrowed_films: ["King Kong (2005)", "Joker (2019)", "The Truman Show"],
             notes: ""
         }
     });
@@ -970,6 +974,77 @@ const ScriptEditor = ({ activeEpisode, onUpdateScript, onLog }) => {
              alert(`Failed to save script: ${e.message}`);
         }
     };
+    
+    // AI Analysis Handler
+    const [isAnalyzing, setIsAnalyzing] = useState(false);
+    const [showAnalysisModal, setShowAnalysisModal] = useState(false);
+    const [systemPrompt, setSystemPrompt] = useState("");
+    const [userPrompt, setUserPrompt] = useState("");
+    const [isSuperuser, setIsSuperuser] = useState(false);
+
+    // Check user role on mount
+    useEffect(() => {
+        fetchMe().then(user => {
+            if (user && user.is_superuser) {
+                setIsSuperuser(true);
+            }
+        }).catch(() => {});
+    }, []);
+
+    const handleAnalysisClick = async () => {
+        if (!rawContent || rawContent.trim().length < 10) {
+            alert("Script content is too short for analysis.");
+            return;
+        }
+
+        if (isSuperuser) {
+            // Fetch default prompt
+            try {
+                const res = await fetchPrompt("scene_analysis.txt");
+                setSystemPrompt(res.content);
+                setUserPrompt(rawContent);
+                setShowAnalysisModal(true);
+            } catch (e) {
+                console.error("Failed to fetch system prompt", e);
+                // Fallback if fails
+                setSystemPrompt("Error loading system prompt.");
+                setUserPrompt(rawContent);
+                setShowAnalysisModal(true);
+            }
+        } else {
+             // Normal user flow
+             if (!confirm("This will overwrite the current raw content with the AI analysis result (Markdown Table format). Continue?")) {
+                return;
+            }
+            executeAnalysis(rawContent);
+        }
+    };
+
+    const executeAnalysis = async (content, customSystemPrompt = null) => {
+        setIsAnalyzing(true);
+        if (onLog) onLog("Starting AI Scene Analysis...", "start");
+
+        try {
+            const result = await analyzeScene(content, customSystemPrompt);
+            const analyzedText = result.result || result.analysis || (typeof result === 'string' ? result : JSON.stringify(result));
+
+            setRawContent(analyzedText);
+            
+            // Auto-save the analyzed content
+            if (onLog) onLog("Analysis complete. Saving result...", "process");
+            await onUpdateScript(activeEpisode.id, analyzedText);
+            
+            if (onLog) onLog("AI Analysis applied and saved.", "success");
+            alert("AI Scene Analysis Completed!");
+            setShowAnalysisModal(false);
+        } catch (e) {
+            console.error(e);
+            if (onLog) onLog(`Analysis Failed: ${e.message}`, "error");
+            alert(`Analysis failed: ${e.message}`);
+        } finally {
+            setIsAnalyzing(false);
+        }
+    };
 
     if (!activeEpisode) return <div className="p-8 text-muted-foreground">Select or create an episode to start writing.</div>;
 
@@ -989,6 +1064,24 @@ const ScriptEditor = ({ activeEpisode, onUpdateScript, onLog }) => {
                             className="px-4 py-2 bg-white/10 text-white rounded-lg text-sm font-bold hover:bg-white/20"
                         >
                             {isRawMode ? "Switch to Table View" : "Edit Raw Text"}
+                        </button>
+                    )}
+                    {isRawMode && (
+                        <button 
+                            onClick={handleAnalysisClick} 
+                            disabled={isAnalyzing}
+                            className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${isAnalyzing ? 'bg-purple-900/50 text-purple-200 cursor-not-allowed' : 'bg-purple-600 text-white hover:bg-purple-500'}`}
+                            title="Analyze raw script to generate structure"
+                        >
+                            {isAnalyzing ? (
+                                <>
+                                    <Loader2 className="w-4 h-4 animate-spin" /> Analyzing...
+                                </>
+                            ) : (
+                                <>
+                                    <Wand2 className="w-4 h-4" /> AI Scene Analysis
+                                </>
+                            )}
                         </button>
                     )}
                     {!isRawMode && (
@@ -1067,6 +1160,71 @@ const ScriptEditor = ({ activeEpisode, onUpdateScript, onLog }) => {
                     </div>
                 )}
             </div>
+
+            {showAnalysisModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm" onClick={() => setShowAnalysisModal(false)}>
+                    <div className="bg-[#1a1a1a] border border-white/10 rounded-xl w-full max-w-6xl h-[90vh] flex flex-col shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+                        <div className="flex items-center justify-between p-4 border-b border-white/10 bg-white/5">
+                            <h3 className="text-lg font-bold flex items-center gap-2">
+                                <Wand2 className="w-5 h-5 text-purple-500" />
+                                Advanced AI Analysis (Superuser)
+                            </h3>
+                            <button onClick={() => setShowAnalysisModal(false)} className="p-1 hover:bg-white/10 rounded-lg transition-colors">
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                        
+                        <div className="flex-1 p-6 grid grid-cols-2 gap-6 overflow-hidden">
+                            <div className="flex flex-col h-full">
+                                <label className="text-sm font-bold text-muted-foreground mb-2 flex items-center justify-between">
+                                    System Prompt
+                                    <span className="text-xs font-normal opacity-70">Define the AI persona & rules</span>
+                                </label>
+                                <textarea
+                                    className="flex-1 w-full bg-black/30 border border-white/10 text-white/90 p-3 font-mono text-xs leading-relaxed rounded-lg focus:outline-none focus:border-purple-500/50 resize-none custom-scrollbar"
+                                    value={systemPrompt}
+                                    onChange={(e) => setSystemPrompt(e.target.value)}
+                                    spellCheck={false}
+                                />
+                            </div>
+                            <div className="flex flex-col h-full">
+                                <label className="text-sm font-bold text-muted-foreground mb-2 flex items-center justify-between">
+                                    User Input (Script)
+                                    <span className="text-xs font-normal opacity-70">The content to act upon</span>
+                                </label>
+                                <textarea
+                                    className="flex-1 w-full bg-black/30 border border-white/10 text-white/90 p-3 font-mono text-sm leading-relaxed rounded-lg focus:outline-none focus:border-purple-500/50 resize-none custom-scrollbar"
+                                    value={userPrompt}
+                                    onChange={(e) => setUserPrompt(e.target.value)}
+                                    spellCheck={false}
+                                />
+                            </div>
+                        </div>
+                        
+                        <div className="p-4 border-t border-white/10 bg-white/5 flex justify-end gap-2">
+                             <button
+                                onClick={() => {
+                                    const fullText = `[System Instruction]\n${systemPrompt}\n\n[User Input]\n${userPrompt}`;
+                                    navigator.clipboard.writeText(fullText);
+                                    if(onLog) onLog("Copied full prompt to clipboard.", "success");
+                                    alert("Full prompt copied!");
+                                }}
+                                className="flex items-center gap-2 px-4 py-2 bg-white/5 hover:bg-white/10 rounded-lg font-medium transition-colors text-white border border-white/10"
+                             >
+                                <Copy className="w-4 h-4" /> Copy Full Prompt
+                             </button>
+                             <button 
+                                onClick={() => executeAnalysis(userPrompt, systemPrompt)}
+                                disabled={isAnalyzing}
+                                className="flex items-center gap-2 px-6 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                             >
+                                {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
+                                Run Analysis
+                             </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {showMerged && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm" onClick={() => setShowMerged(false)}>
@@ -2335,6 +2493,9 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
 
     const handleSceneUpdate = (updatedScene) => {
         setScenes(prev => prev.map(s => s.id === updatedScene.id ? updatedScene : s));
+        if (editingScene && editingScene.id === updatedScene.id) {
+            setEditingScene(updatedScene);
+        }
     };
 
     const handleSave = async () => {
@@ -2458,7 +2619,9 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
             return;
         }
 
+
         setShotPromptModal({ open: true, sceneId: sceneId, data: null, loading: true });
+
         try {
             const data = await fetchSceneShotsPrompt(sceneId);
             setShotPromptModal({ open: true, sceneId: sceneId, data: data, loading: false });
@@ -2566,9 +2729,14 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
                                         </div>
                                     </div>
                                     
-                                    <div className="pt-4 border-t border-white/5">
+                                    <div className="pt-4 border-t border-white/5 h-full flex flex-col">
                                          <label className="text-xs text-muted-foreground uppercase font-bold tracking-wider mb-2 block text-primary/80">Core Scene Info (Visual Direction)</label>
-                                         <MarkdownCell value={editingScene.core_scene_info} onChange={v => handleSceneUpdate({...editingScene, core_scene_info: v})} className="min-h-[150px]" />
+                                         <textarea 
+                                            className="w-full flex-1 bg-black/40 border border-white/10 rounded p-3 text-white text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-none custom-scrollbar font-mono leading-relaxed min-h-[400px]"
+                                            value={editingScene.core_scene_info || ''}
+                                            onChange={e => handleSceneUpdate({...editingScene, core_scene_info: e.target.value})}
+                                            placeholder="Enter visual direction, lighting, mood, composition..."
+                                        />
                                     </div>
                                 </div>
                             </div>
@@ -2743,6 +2911,18 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
         } catch (e) {
             console.error(e);
             alert("Failed to delete entity");
+        }
+    };
+
+    const handleDeleteAllEntities = async () => {
+        if (!confirm("WARNING: This will delete ALL subjects/entities in this library. This action cannot be undone. Are you sure?")) return;
+        try {
+            await deleteAllEntities(projectId);
+            loadEntities();
+            setViewingEntity(null);
+        } catch (e) {
+            console.error(e);
+            alert("Failed to delete all entities");
         }
     };
     
@@ -3065,6 +3245,13 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
             <div className="flex justify-between items-center mb-6">
                 <h2 className="text-2xl font-bold">Subjects Library</h2>
                 <div className="flex items-center gap-4">
+                     <button 
+                        onClick={handleDeleteAllEntities}
+                        className="p-2 text-red-400 hover:text-red-300 hover:bg-red-900/20 rounded-md transition-colors"
+                        title="Delete All Subjects"
+                    >
+                        <Trash2 size={16} />
+                    </button>
                      <button 
                         onClick={handleBatchGenerateEntities}
                         disabled={isBatchGeneratingEntities}
@@ -4451,7 +4638,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                      };
                      
                      // Only push valid rows
-                     if (shotData.shot_id || shotData.shot_name) {
+                     if (shotData.shot_id && String(shotData.shot_id).trim() !== '') {
                         parsedShots.push(shotData);
                      }
                  }
@@ -4506,16 +4693,21 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             }
 
             if (count > 0) {
-                onLog?.(`Imported ${count} shots successfully. Please refresh if needed.`, 'success');
+                onLog?.(`Imported ${count} shots successfully. Refreshing view...`, 'success');
                 setIsImportOpen(false);
-                refreshShots();
-                // Force a check via API to see if shots are returned
-                fetchShots(selectedSceneId).then(res => {
-                    console.log("Post-import fetch result:", res);
-                    if (!res || res.length === 0) {
-                        onLog?.("Warning: API returns 0 shots after import.", "error");
+                
+                // FORCE REFRESH: Fetch specifically for current scene to ensure we have data immediately
+                // Try refreshing both full episode list and specific scene
+                await refreshShots(); 
+                
+                try {
+                    const sceneSpecific = await fetchShots(selectedSceneId);
+                    if (sceneSpecific && sceneSpecific.length > 0) {
+                        setShots(sceneSpecific);
+                        console.log("[Import] Force set shots via direct Scene Fetch:", sceneSpecific.length);
                     }
-                });
+                } catch(e) { console.error("Post-import fetch failed", e); }
+
             } else {
                  onLog?.('Import completed but no shots created.', 'warning');
             }
@@ -5044,6 +5236,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             // NEW: Inject Global Context
             const globalCtx = getGlobalContextStr();
             const finalPrompt = prompt + globalCtx;
+            
+            console.log("--------------------------------------------------");
+            console.log("[DEBUG] Final Video Prompt (Single):", finalPrompt);
+            console.log("--------------------------------------------------");
 
             const res = await generateVideo(finalPrompt, null, finalStartRef, finalEndRef, durParam, {
                 project_id: projectId,
@@ -5338,6 +5534,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                         onLog?.(`[Batch ${processedCount}/${shots.length}] Generating Video for Shot ${currentShot.shot_id}...`, "info");
                         
                         const durParam = parseFloat(currentShot.duration) || 5;
+
+                        console.log("--------------------------------------------------");
+                        console.log(`[DEBUG] Final Video Prompt (Batch - Shot ${currentShot.shot_id}):`, injectedPrompt);
+                        console.log("--------------------------------------------------");
 
                         const res = await generateVideo(injectedPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, lastFrame, durParam, {
                             project_id: projectId,
@@ -6533,6 +6733,7 @@ const AssetsLibrary = () => {
 const ImportModal = ({ isOpen, onClose, onImport, defaultType = 'auto' }) => {
     const [text, setText] = useState('');
     const [importType, setImportType] = useState(defaultType); // auto, json, script, scene, shot
+    const [isAnalyzing, setIsAnalyzing] = useState(false);
     
     // Reset type when modal opens
     useEffect(() => {
@@ -6545,11 +6746,44 @@ const ImportModal = ({ isOpen, onClose, onImport, defaultType = 'auto' }) => {
         onImport(text, importType);
     };
 
+    const handleAIAnalysis = async () => {
+        if (!text.trim()) return;
+        setIsAnalyzing(true);
+        try {
+            const token = localStorage.getItem('token');
+            const res = await fetch(`${API_BASE_URL}/analyze_scene`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ 
+                    text: text,
+                    prompt_file: "scene_analysis.txt"
+                })
+            });
+            
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.detail || "Analysis Failed");
+            }
+            
+            const data = await res.json();
+            setText(data.result); // Replace content with analysis result
+            alert("AI Analysis Complete! Review the generated markdown below.");
+        } catch (e) {
+            alert(`Analysis Error: ${e.message}`);
+            console.error(e);
+        } finally {
+            setIsAnalyzing(false);
+        }
+    };
+
     return (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm">
             <div className="bg-[#09090b] border border-white/20 rounded-xl p-6 w-[800px] shadow-2xl flex flex-col max-h-[90vh]">
                 <div className="flex justify-between items-center mb-4 shrink-0">
-                     <h3 className="font-bold text-white flex items-center gap-2"><Upload className="w-5 h-5 text-primary"/> Import Content</h3>
+                     <h3 className="font-bold text-white flex items-center gap-2"><Upload className="w-5 h-5 text-primary"/> Import & AI Analysis</h3>
                      <button onClick={onClose}><X className="w-5 h-5 text-muted-foreground hover:text-white"/></button>
                 </div>
                 
@@ -6578,23 +6812,34 @@ const ImportModal = ({ isOpen, onClose, onImport, defaultType = 'auto' }) => {
                 </div>
 
                 <div className="text-xs text-gray-400 mb-2 shrink-0">
-                    Paste content below. Please ensure the selected type matches the content.
+                   Paste raw script text for AI Analysis, or paste formatted JSON/Table for Import.
                 </div>
                 <textarea 
                     className="flex-1 bg-black/40 border border-white/10 rounded-lg p-4 text-xs text-white font-mono focus:border-primary/60 outline-none resize-none mb-4 custom-scrollbar"
                     value={text}
                     onChange={(e) => setText(e.target.value)}
-                    placeholder={`Paste content here...`}
+                    placeholder={`Paste script or data here...`}
                 />
-                <div className="flex justify-end gap-2 shrink-0">
-                    <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-muted-foreground hover:bg-white/5">Cancel</button>
+                <div className="flex justify-between gap-2 shrink-0">
                     <button 
-                        onClick={handleImportClick} 
-                        disabled={!text.trim()}
-                        className="px-4 py-2 bg-primary text-black rounded-lg text-sm font-bold hover:bg-primary/90 disabled:opacity-50"
+                        onClick={handleAIAnalysis}
+                        disabled={!text.trim() || isAnalyzing}
+                        className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-2 border border-purple-500/30 text-purple-200 hover:bg-purple-500/20 transition-all ${isAnalyzing ? 'opacity-50' : ''}`}
                     >
-                        Analyze & Import
+                        <Sparkles className={`w-3 h-3 ${isAnalyzing ? 'animate-spin' : ''}`} />
+                        {isAnalyzing ? "Analyzing Scene..." : "AI Scene Analysis"}
                     </button>
+                    
+                    <div className="flex gap-2">
+                        <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-muted-foreground hover:bg-white/5">Cancel</button>
+                        <button 
+                            onClick={handleImportClick} 
+                            disabled={!text.trim()}
+                            className="px-4 py-2 bg-primary text-black rounded-lg text-sm font-bold hover:bg-primary/90 disabled:opacity-50"
+                        >
+                            Import Data
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -7061,7 +7306,6 @@ const Editor = ({ projectId, onClose }) => {
                                 visual_params: env.visual_params,
                                 narrative_description: env.description_cn,
 
-                                name_en: env.name_en,
                                 visual_dependencies: env.visual_dependencies || [],
                                 dependency_strategy: env.dependency_strategy || {}
                             });
@@ -7155,14 +7399,29 @@ const Editor = ({ projectId, onClose }) => {
 
                 for (let line of lines) {
                     const trimmed = line.trim();
+                    let isTableRow = trimmed.startsWith('|');
+                    
+                    // Robustness: Allow internal rows without leading pipe
+                    if (!isTableRow && (inSceneTable || inShotTable) && trimmed.includes('|')) isTableRow = true;
+                    
+                    let cols = [];
+                    if (isTableRow || trimmed.includes('|')) { 
+                        cols = line.split('|').map(c => c.trim());
+                        if (trimmed.startsWith('|') && cols.length > 0 && cols[0] === "") cols.shift();
+                        if (trimmed.endsWith('|') && cols.length > 0 && cols[cols.length-1] === "") cols.pop();
+                    }
 
+                    // DEBUG LOG
+                    if (trimmed.length > 0 && (inSceneTable || inShotTable || isTableRow)) {
+                        console.log(`[Import] Line: "${trimmed.substring(0, 30)}..." | TableRow=${isTableRow} | Cols=${cols.length} | InScene=${inSceneTable} | IsSep=${line.includes('---')} | Skip=${(cols.length < 2 || line.includes('---'))}`);
+                    }
 
-                    // 1. Header Detection (Strict Mode respected)
-                    const isShotKey = line.includes('|') && (line.includes("Shot ID") || line.includes("镜头ID") || line.includes("Shot Name") || line.includes("Shot No"));
-                    const isSceneKey = line.includes('|') && (line.includes('Scene No') || line.includes('场次序号') || (line.includes('Scene ID') && !line.includes('Shot ID')));
+                    // 1. Header Detection (Relaxed)
+                    const isShotKey = (isTableRow || line.includes('|')) && (line.includes("Shot ID") || line.includes("镜头ID") || line.includes("Shot Name") || line.includes("Shot No"));
+                    const isSceneKey = (isTableRow || line.includes('|')) && (line.includes('Scene No') || line.includes('场次序号') || (line.includes('Scene ID') && !line.includes('Shot ID')));
 
                     // Enter Shot Table Mode
-                    if (canShot && !inSceneTable && (isShotKey || (importType === 'shot' && !inShotTable && line.includes('|') && cols.length > 2))) {
+                    if (canShot && !inSceneTable && (isShotKey || (importType === 'shot' && !inShotTable && isTableRow && cols.length > 2))) {
                         inShotTable = true;
                         inSceneTable = false;
                         addLog("Found Shot Header (or Forced Type).", "info");
@@ -7190,11 +7449,14 @@ const Editor = ({ projectId, onClose }) => {
                     }
 
                     // 2. Data Line Processing
-                    if (trimmed.startsWith('|')) {
-                         const cols = line.split('|').map(c => c.trim());
-                         if (cols.length > 0 && cols[0] === "") cols.shift();
-                         if (cols.length > 0 && cols[cols.length-1] === "") cols.pop();
-                         if (cols.length < 2 || line.includes('---')) {
+                    if (isTableRow) {
+                         // cols already parsed and cleaned at top of loop
+                         // Only skip if strict separator line. 
+                         // Check only for regex match of '---|---' style or '---' in cells
+                         const isSeparator = /\|\s*-{3,}/.test(line) || /^[\s\|-]*$/.test(line);
+                         const isEmptyRow = cols.every(c => c === "");
+
+                         if (cols.length < 2 || isSeparator || isEmptyRow) {
                              if (inSceneTable) sceneLines.push(line);
                              if (inShotTable) shotLines.push(line);
                              continue; 
@@ -7204,31 +7466,42 @@ const Editor = ({ projectId, onClose }) => {
 
                          // A. Handle Scene Row
                          if (inSceneTable) {
+                             console.log("DEBUG: HIT SCENE ROW BLOCK");
                              sceneLines.push(line);
-                             // Expected: ID | Title | Duration | Core Info | Script | Env | Chars | Props
-                             const scData = {
-                                 scene_no: clean(cols[0]),
-                                 scene_name: clean(cols[1]),
-                                 equivalent_duration: clean(cols[2]),
-                                 core_scene_info: clean(cols[3]),
-                                 original_script_text: clean(cols[4]), 
-                                 environment_name: clean(cols[5]),
-                                 linked_characters: clean(cols[6]),
-                                 key_props: clean(cols[7])
-                             };
                              
                              try {
-                                 const match = existingScenes.find(s => String(s.scene_no) === String(scData.scene_no));
-                                 if (match) {
-                                     await updateScene(match.id, scData); 
-                                     currentSceneDbId = match.id;
-                                 } else {
-                                     const newScene = await createScene(activeEpisodeId, scData);
-                                     currentSceneDbId = newScene.id;
-                                     existingScenes.push(newScene); 
-                                 }
-                             } catch (dbErr) {
-                                 console.error("Scene DB Sync Error", dbErr);
+                                const scData = {
+                                    scene_no: clean(cols[0]),
+                                    scene_name: clean(cols[1]),
+                                    equivalent_duration: clean(cols[2]),
+                                    core_scene_info: clean(cols[3]),
+                                    original_script_text: clean(cols[4]), 
+                                    environment_name: clean(cols[5]),
+                                    linked_characters: clean(cols[6]),
+                                    key_props: clean(cols[7])
+                                };
+                                
+                                if (!scData.scene_no) {
+                                    // addLog("Skipping empty Scene row", "info"); // Optional log
+                                    continue;
+                                }
+
+                                addLog(`Processing Scene Row: No=${scData.scene_no} Name=${(scData.scene_name || '').substring(0, 20)}...`, "info");
+
+                                const match = existingScenes.find(s => String(s.scene_no) === String(scData.scene_no));
+                                if (match) {
+                                    await updateScene(match.id, scData); 
+                                    currentSceneDbId = match.id;
+                                    addLog(`Updated Scene ${scData.scene_no}`, "success");
+                                } else {
+                                    const newScene = await createScene(activeEpisodeId, scData);
+                                    currentSceneDbId = newScene.id;
+                                    existingScenes.push(newScene); 
+                                    addLog(`Created Scene ${scData.scene_no}`, "success");
+                                }
+                             } catch (rowErr) {
+                                 console.error("Row Error", rowErr);
+                                 addLog(`Row Processing Failed: ${rowErr.message}`, "error");
                              }
                          }
                          
@@ -7258,6 +7531,9 @@ const Editor = ({ projectId, onClose }) => {
 
                              const rawShotId = useMap ? getVal(['shotid', 'shotno', '镜头id', 'id'], 0) : clean(cols[0]);
                              
+                             if (!rawShotId) {
+                                 continue; 
+                             }
 
                              // Infer Scene from Shot ID if needed (e.g. 1-1)
                              if (!currentSceneDbId) {
@@ -7356,6 +7632,20 @@ const Editor = ({ projectId, onClose }) => {
                 setRefreshKey(prev => prev + 1);
                 addLog("Project Settings updated. Refreshing views...", "info");
                 alert("Import Successful! Project settings and content have been updated.");
+                
+                // Force reload of scenes if the active episode was affected
+                if (activeEpisodeId) {
+                    try {
+                        const newScenes = await fetchScenes(activeEpisodeId);
+                        // Accessing SceneManager via ref or forcing a global refresh is intricate.
+                        // Ideally, we just update the 'activeEpisode' reference which triggers SceneManager useEffect.
+                        // But activeEpisode is derived from 'episodes'. 'setEpisodes(fresh)' does that.
+                        // HOWEVER, SceneManager uses [activeEpisode, projectId] dependency.
+                        // If 'fresh' episode object is identical (by reference or value), it might not trigger.
+                        // Let's force a window reload as a last resort fallback, or better:
+                        // window.location.reload(); // Removed to prevent full page reload navigating away
+                    } catch(e) { console.error(e); }
+                }
             } else {
                 alert("Import Successful!");
             }

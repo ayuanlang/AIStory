@@ -19,3 +19,10 @@ class AgentResponse(BaseModel):
     reply: str
     actions: List[AgentAction] = []
     updated_data: Optional[Dict[str, Any]] = None
+
+class AnalyzeSceneRequest(BaseModel):
+    text: str
+    llm_config: Optional[Dict[str, Any]] = None
+    prompt_file: Optional[str] = None
+    system_prompt: Optional[str] = None
+    prompt_file: Optional[str] = "scene_analysis.txt"

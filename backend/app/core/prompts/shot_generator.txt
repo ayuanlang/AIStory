@@ -19,20 +19,20 @@
 
 ### 1. 基本约束
 - **实体引用**：严格使用输入实体，名称必须用方括号 `[Subject Name]` 包裹（与 `Linked Characters` 和 `Environment Anchor` 的名称完全一致，要带上（）里的内容，不能插入任何字符及切换全半角等），严禁创造新主体（如有未定义角色请用泛指如 `[Unidentified Man]`）。场景必须含 `[Environment Anchor]`。
-- **分镜对应**：分镜需与 Scene 一一对应，一个 Scene 必须拆分为多个 Shot。
-- **时长限制**：单镜头最短4秒，最长10秒；若包含对话，则必须大于6秒（6-10秒）。
-- **改编权限**：可参考经典影片风格，对原需求进行合理改编以匹配视觉逻辑（动作合理性），可设定主观镜头比例（如 30%）。
+- **外观锁定 (Appearance Lockdown)**：严禁描述角色的具体外貌（如发型、肤色、面部特征）及服装细节（如颜色、款式）。这些元素完全由 Reference Image 控制。prompt 中仅需提及 `[Character Name]` 并专注于其动作、表情与光影互动。
+- **分镜对应**：分镜需与 Scene 一一对应，一个 Scene 必须拆分为多个 Shot，根据视觉需要按Beat为单位继续拆分或合并。
+- **时长限制**：单镜头最短5秒，最长10秒；。
+- **改编权限**：要参考经典影片风格，对原需求进行合理改编以匹配视觉逻辑（动作合理性），可设定主观镜头比例（如 30%）。
 - **Persistent Style Anchor**：每个镜头必须继承 [Global Style] 与上一镜头的光影/空间关系。
 - **人员控制 (Character Control)**：严禁在画面描述中引入剧本未提及的人物（如路人、背景板），除非场景类型（如集市、派对）有明确的“Crowd”要求。保持画面干净，仅展示 Linked Characters 列表中的角色。
 
 ### 2. 分镜逻辑与拆分
-- **最大化细分**：不节省镜头数量，将剧本行拆为最小视觉单元。复合动作需按 Beat 拆分。
-- **拆分铁律**：机位变化 = 新镜；状态/动态变化 = 新镜（呈现 State A → Process → State B）。
+- **最大化细分**：不节省镜头数量，将剧本拆为最小视觉单元。复合动作需按 Beat 拆分。
+- **拆分铁律**：机位变化 = 新镜；。
  **景别递进**：同一 Scene 内遵循 Master → Medium → Close/Detail → Insert 的逻辑，不得无理由大幅跳跃,但必须变化。
-- **轴线规则**：恪守 180° 规则，破轴需有回位镜头或明确运镜意图。
-- **切换时机**：优先 Cut on Action 或 Cut on Emotion。同场景同空间优先用 Blocking + Camera Move (Follow/Pan) 衔接，避免硬切。
-- **主体独立性**：核心动作优先单人镜头，突出焦点。
-- **镜头必须面对[Environment Anchor]**
+- **轴线规则**：恪守 180° 规则，破轴需有回位镜头或明确运镜意图（含视线轴线与动作轴线）。
+- **主体独立性 (Subject Isolation)**：针对关键动作或情感反应，必须优先给予**单人镜头 (Solo Shot)**。尽量避免多人在同一画面中进行复杂交互，除非是专门的关系镜头（Two-shot）。确保每一镜的视觉重心单一且明确。
+
 
 ### 3. 视觉锚点与空间结构 (Visual Anchor & Spatial Structure)
 - **Anchor Injection**：Prompt 中保留方括号锚点。
@@ -41,10 +41,13 @@
 
 ### 4. 动作分解与连续性 (Action Decomposition & Continuity)
 - **物理与空间预判 (Physics & Spatial Planning)**：在动作分解前，必须明确规划角色/道具在环境中的**相对位置**与**相互关系**。严格推演**受力逻辑**（施力源）、**受力轨迹**（运动路径）及**受力影响结果**（最终状态），并校验这是否与实体初始位置矛盾。若有矛盾，优先修正位置关系。
-- **Frame Stability Check**：Start Frame 必须为“动作前的准备状态” (Pre-action state)；End Frame 必须为“动作后的稳定状态” (Post-action settled state)。严禁出现模糊的中间态或悬空未落定的物体。如遇 **Continuous Action (In Medias Res)**，首尾帧应选择动作循环的关键姿态 (Key Pose)，而非模糊的过渡态。
+- **Frame Stability Check**：Start Frame 必须为“动作前的准备状态” (Pre-action state)；End Frame 必须为“动作后的稳定状态” (Post-action settled state)。严禁出现模糊的中间态或悬空未落定的物体。
 - **动作拆解 (Decomposition)**：所有动作/运动拆为物理可行、逻辑连续的序列，避免跳跃与断层；机位变/状态变即新镜。
 - **一致性 Check**：主动检查并修正位置跳跃、物理不可能、时间顺序错乱、交互不匹配的问题。
 - **实体闭环 (Entity Continuity)**：如果在 `Video Content` 中提及了任何实体（道具、角色、环境细节），该实体**必须**在 `Start Frame` 或 `End Frame` 的视觉描述中被明确包含，确保动作所涉及的对象在静态画面中真实存在。
+- **逻辑闭环 (Logical Loop)**：**严格遵守 Start Frame + Video Content = End Frame 公式。** 
+  - **全要素覆盖**：必须检查画面中**所有** `Linked Characters` 和 `Key Props` 的状态变化。
+  - **稳定态流转**：Action 必须是从 Start Frame 的**稳定起始态**，经过 Video Content 的**连续演变**，最终到达 End Frame 的**稳定结束态**。严禁出现 Start Frame 和 End Frame 状态断裂或 Video Content 无法推导出 End Frame 的情况。
 
 ### 5. 场景入场与空间建置 (Scene Entry & Geography)
 建置镜头（Establishing Shot）是确立观众时空感的锚点，不仅“有必要”，更是叙事的地基。
@@ -65,7 +68,7 @@
 
 ### 0. 镜头连续性特例 (Shot Continuity Exceptions)
 **Rule: 默认原则 (Default Principle)**
-一般情况下，当前分镜的 `Start Frame` 应当在视觉上与上一分镜的 `End Frame` 保持**像素级连续 (Pixel-Perfect Continuity)**（即 "SAME" 逻辑），以确保时间流动的自然性。
+一般情况下，当前分镜的 `Start Frame` 应当在视觉上与上一分镜的 `End Frame` 保持**像素级连续 (Pixel-Perfect Continuity)**（即 "SAME" 逻辑），以确保时间流动的自然性，Start Frame仅填写“SAME”。
 
 **Exceptions: 下列情况严禁使用“SAME”逻辑，首帧必须重新独立描述 (Independent Generation)**
 1.  **场景切换 (Time/Space Jump)**: 
@@ -142,6 +145,7 @@
 
 ### 1. 字段结构与格式
 - **输出形式**：仅输出最终 Markdown 表格，无过程描述。
+- **排版检查 (Format Validation)**：输出前必须进行 Markdown 格式自检。确保 Markdown 表格语法严格准确，不能出现错误的换行、未闭合的竖线 `|` 或导致表格渲染失败的特殊字符。
 - **语言要求**：视觉描述文字（Start/End/Video）必须使用英文；**Shot Logic** 必须使用中文；**台词/OS/画面文字**遵循 `Global Context` 设定。
 - **ID 格式**：Shot ID (e.g., 1-1) 中连字符 `-` 前的数字必须与 Scene ID 严格一致。
 - **必填项**：所有字段全填，无省略。
@@ -149,30 +153,33 @@
 ### 2. 画面描述规范 (Visual Description)
 必须描述中加入标签化字段，避免歧义。
 - **Tag 格式**：使用 `[Tag: Value]`。
-  - `[Camera: Focal Length, Angle, Stability]`
+  - `[Camera: Focal Length, Angle, Stability, Framing]`
   - `[Lighting: Style, Source]`
   - `[Composition: Placement, Depth]`
-
+- 先生成Start Frame，再生成Video Content，最后生成End Frame（要匹配Video Content的最终状态），保证符合逻辑闭环规则。
 #### A. 静态维度 (Start Frame / End Frame描述)
-- **定义**：固化机位、焦段、构图的“摄影师指令”。
+- **定义**：明示机位、焦段、构图的“摄影师指令”，**必须符合 AI 生图提示词 (Image Gen Prompt) 规范**。
 - **必须包含 (Mandatory Elements)**：
   - **[Global Style]**：所有描述必须以 `[Global Style]` 开头。
-  - **环境结构**：必须包含至少一个 `[Environment Anchor]`，并描述环境结构或物理特征。
+  - **[Camera Description]**: 必须包含 **Framing** (景别, e.g., Medium Shot, Wide Shot) 和 **Relative Position** (相对位置). 明确摄影机相对于主体和环境的位置（例如："Low angle from the ground," "Overhead shot looking down at the valley"），以确立环境关系。
+  - **光影与色调 (Lighting & Color)**：严格继承 `[Global Style]` 的视觉基调。必须明确描述**光源性质**（Hard/Soft）、**光影对比度**（High key/Low key/Chiaroscuro）以及**主色调**（Color Palette）。例如：若风格为 "Neon Noir"，则描述 "Harsh neon side lighting, deep shadows, wet pavement reflections, cyan and magenta contrast"。
+  - **构图法则 (Composition Technique)**：必须指定一种经典的构图方式以增强形式感。可选技法包括：**Symmetrical Composition** (对称), **Rule of Thirds** (三分法), **Leading Lines** (引导线), **Center Framed** (中心), **Frame within a Frame** (框中框), **Triangular** (三角), **Negative Space** (留白)。
+  - **画在结构 (Composition Layers)**：必须明确划分 **[Foreground] (前景)**、**[Midground] (中景)**、**[Background] (背景)**。例如： "Foreground: blurred leaves. Midground: [Subject A] standing. Background: [Environment Anchor] with city lights."
+  - **表情描述 (Facial Expression)**：Start Frame 与 End Frame 必须明确描述角色的面部表情状态（如 "Neutral expression", "Mouth slightly open in shock", "Eyes narrowed"）。此描述必须与 Video Content 中的情感演变保持**严格一致**（即 Start Frame 表情 = Video Content 起始表情；End Frame 表情 = Video Content 结束表情）。
+  - **环境结构**：必须包含至少一个 `[Environment Anchor]`。
   - **主体状态**：角色的具体姿态、朝向，相互的位置关系，着力点。
 - **禁止项 (Strict Prohibitions)**：
   - **Rule 1 (无动作动词)**：严禁使用 run, jump, fight 等动作动词。仅能使用名词短语或状态分词描述静态画面（如 "Man in running pose" 而非 "Man runs"）。
   - **Rule 2 (禁止抽象)**：严禁 angry, messy, beautiful 等抽象形容词。必须转化为可视物理特征（如 "Furrowed brows", "Overturned chairs"）。
-  - **Rule 3 (无过程)**：描述的是**瞬间切片**，而非时间段。
-  - **Rule 4 (无无关人员)**：绝对禁止添加任何未在场景中定义的人物。画面中仅出现 `Linked Characters`。
+  - **Rule 3 (无无关人员)**：绝对禁止添加任何未在场景中定义的人物。画面中仅出现 `Linked Characters`。
 - **Frame Stability Check**：首帧必须为“动作前的准备状态”，尾帧必须为“动作后的稳定状态”，如：不允许从角色或道具停止空中的时候开始或结束；或落点必须是稳定的环境位置等。
 - **细节粒度**：
   - 肢体分解（左右手/脚位置）、具体姿态（肌肉张力）、微表情（面部肌肉牵动）。
   - 明确角色间、角色与道具/环境的距离、连接关系、朝向、姿势（站，坐，躺，弯腰）、位置关系，占画面比例，涉及道具或特殊人物（如巨人），还要明确角色或道具之间的大小比例比较。
 
 #### B. 动态维度 (Video Content)
-- **定义**：描述从 `Start Frame` 到 `End Frame` 的完整时空演变过程，重点阐述“角色与道具状态如何流转”。
-- **强制结构**：`[Global Style] + [Transition] + [Camera Evolution] + [Action Flow & Physics] + [Audio/Dialogue]`
-- **核心目标**：填补首尾帧之间的视觉空白，确保从静止画面 A 平滑过渡到静止画面 B。
+- **定义**：描述从 `Start Frame` 到 `End Frame` 的完整时空演变过程，重点阐述“角色与道具的变化状态如何变化”。
+- **核心目标**：填补首尾帧之间的视觉空白，确保从静止画面 `Start Frame`平滑过渡到静止画面 `End Frame`。
 - **内容细则 (Detailed Evolution)**：
   1.  **镜头运镜演化 (Camera Evolution)**：
       *   **轨迹描述**：必须说明镜头如何从 Start Frame 的初始机位移动到 End Frame 的最终机位。
@@ -194,27 +201,43 @@
               *   **Snorkel / Periscope**: 潜望镜视角（低角度贴地/贴水面）。
       *   **强制多样性 (Mandatory Variety)**：每个 Scene (场景) 的分镜序列中，**必须**至少有一个镜头使用上述 "Advanced FX" 或 "Perspective & Traversal" 中的高级术语，以拒绝平庸的运镜。
   2.  **角色与道具变化 (Character & Prop Metamorphosis)**：
-      *   **分步动作**：将动作拆解为连续步骤。例：Start是坐姿，End是站姿，Video Content必须描述“双手撑扶手 -> 身体前倾 -> 腿部发力 -> 直立 -> 整理衣角”的全过程。
+      *   **时间轴对齐 (Timeline Synchronization)**：**必须按秒描述动作演变，总时长必须与 Duration 严格匹配，不得小于5秒**。
+          - 格式：`(0s-2s) Action A -> (2s-4s) Action B`。
+          - 示例：若 Duration=5s，则描述为 `(0s-2s) [Subject] places hand on handle... -> (2s-5s) [Subject] pushes door open entirely.`
+      *   **强制动作密度 (Mandatory Action Density)**：为了保证视频的丰富度与真实感，**必须在 `Video Content` 中至少描述 5 个以上的动作或微动态细节**。
+          - **高频采样**：即便是在慢节奏场景中，也必须通过肢体、微表情、背景流转、光影变化、衣物摆动等细节凑足 5 个动态点。
+          - **时间比例分配**：这 5+ 个动作必须均匀或有节奏地分布在 Duration 时间轴上，严禁全部堆积在某一秒。
+          - **静止即动作**：若某段时间确实为静止，必须显式描述为“Intentional Stillness (有意静止)”，这也算作一个动态点（需注明时长占比，e.g., "(0s-3s) Absolute stillness to build tension"）。
+      *   **强制状态描述 (Mandatory Status)**：画面中所有可见的 `Linked Characters` 和 `Key Props` 都必须在 Video Content 中有明确的状态描述。
+          - **有动作**：拆解为连续物理步骤（如：Start是坐姿，End是站姿，Video Content必须描述“双手撑扶手 -> 身体前倾 -> 腿部发力 -> 直立 -> 整理衣角”的全过程，不得遗漏，做到最细描述）。
+          - **无动作**：必须显式标记为静止（e.g., "[Subject] remains static," "maintains pose," "breathing gently"），严禁忽略不写。
       *   **道具交互**：明确道具的物理转移过程（Who holds it? Where does it move?）。确保道具不会凭空消失或出现。
       *   **非焦点反应 (Persistent Presence)**：背景角色或非焦点角色不能冻结，必须有符合情境的持续动作（如点头、颤抖、视线跟随）。
+      *   **表情演变 (Facial Expression Evolution)**：必须在 Video Content 中明确描述角色表情随时间的演变细节。
+          - 动态变化：包含微表情（Micro-expressions），如“eyebrows furrowing slightly (眉头微皱)”、“eyes widening in shock (瞳孔震惊放大)”、“smile fading into seriousness (笑容逐渐消失)”。
+          - 静态表情：若表情无明显变化，也需注明维持何种状态（e.g., "Maintains a cold, unblinking stare"）。
   3.  **对白与声音 (Audio & Dialogue)**：
       *   **必含台词**：若剧本有台词，必须以 `Dialogue: "..."` 或 `OS: "..."` 形式嵌入描述中，并注明说话时的动作配合。
       *   **语言适配**：台词内容严格遵循 `[Global Context]` 的语言设定（如设定为中文，则台词输出中文）。
-      *   **音效 (SFX)**：注明环境音或特定的动作音效（e.g., "Sound of glass shattering"）。
+      *   **音效 (SFX)与背景音乐**：注明环境音或特定的动作音效（e.g., "Sound of glass shattering"）。
 
 #### C. 动作逻辑 (Shot Logic) [中文输出]<100字
-- **定义**：这是对 `Start Frame`、`End Frame` 和 `Video Content` 三个核心字段的**中文逻辑摘要**。
+- **定义**：这是对 `Start Frame`、`End Frame` 和 `Video Content` 三个核心字段的**中文逻辑摘要**，同时也是**逻辑闭环的自检陈述**。
+- **逻辑闭环检查 (Logical Loop Check)**：在生成此字段时，必须强制进行逻辑验算：`Start Frame (初始态) + Video Content (动作过程) = End Frame (结果态)`。
+  - 如果 Start Frame 的姿态加上 Video Content 的动作，无法自然推导出 End Frame 的状态，**说明前述英文描述有误，必须返回修正英文内容**。
+  - 在中文摘要中，必须清晰体现这一完整的演变逻辑，证明闭环成立。
 - **绝对一致性 (Absolute Consistency)**：Shot Logic 的描述必须严格反映前述三个字段的实际内容，**绝不能**出现逻辑不一致。特别要注意首帧状态的继承性。
 - **内容要求**：
   1. **Start Frame**：[中文翻译] 简要概括 Start Frame 的定格状态。
   2. **End Frame**：[中文翻译] 简要概括 End Frame 的尾帧定格状态。
-  3. **Video Content**：[中文翻译] 简要概括 Video Content 的运镜与动作演化。
+  3. **Video Content**：[中文翻译] 概括 Video Content 的运镜与动作演化从Start Frame到End Frame，验证逻辑闭环。
 - **格式要求**：三部分内容必须用 `<br>` 换行分隔，清晰呈现。
+- Shot Name的语言与提供的剧本一致。
 
 ### 3. 表格输出模板（示例）
 | Shot ID | Shot Name | Scene ID | Start Frame | End Frame | Video Content | Duration (s) | Associated Entities | Shot Logic (CN) |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| 1-1 | Scene-Beat | 1 | **Overview**: [SubjectA] standing static... | **Overview**: [SubjectA] in crouching posture... | [Global Style]... | 2.0 | [SubjectA], [Environment Name] | **首帧**：[SubjectA] 站在中景。<br>**尾帧**：[SubjectA] 呈蹲姿。<br>**运动**：[SubjectA] 缓慢下蹲，镜头跟随微俯（Tilt Down），手掌触地。 |
+| 1-1 | Kael Hesitates | 1 | [Global Style] Cyberpunk, Neon Noir. **[Camera]**: Medium Shot, Eye-level, positioned inside the narrow alley looking out. **Lighting**: Harsh neon blue side lighting mixed with deep shadows. **Composition**: Rule of Thirds. **Layers**: [Foreground] Blurred falling rain. [Midground] [Kael] stands in profile, arm extended, aiming [Plasma Revolver] forward. [Background] [Rainy Alley] extending into depth with flickering signs. **Expression**: [Kael] has a focused, intense frown, eyes locked on target. | [Global Style] Cyberpunk, Neon Noir. **[Camera]**: Close-up, slight Low Angle, maintaining alley backdrop. **Lighting**: Same harsh neon lighting. **Composition**: Center Framed. **Layers**: [Foreground] Rain clears slightly. [Midground] [Kael] stands with [Plasma Revolver] lowered by his side. [Background] [Rainy Alley] signs buzzing. **Expression**: [Kael] shows visible relief, eyes softened, mouth slightly open exhaling. | (0s-2s) **Camera**: Starts at medium distance, performing a slow **Dolly In** towards [Kael]'s face. **Action**: [Kael] holds the aiming pose, [Plasma Revolver] perfectly steady. Expression remains intense. <br> (2s-5s) **Acion**: [Kael] slowly lowers the [Plasma Revolver] to his side. **Expression**: His frown relaxes into a look of relief. He exhales a visible puff of vapor. | 5.0 | [Kael], [Plasma Revolver], [Rainy Alley] | **首帧**：[Kael] 侧身站立，举枪瞄准，神情凝重。<br>**尾帧**：[Kael] 垂下枪口，神情释然。<br>**运动**：镜头缓慢推近（Dolly In）。(0-2s) [Kael] 维持举枪姿势；(2-5s) 缓慢放下 [Plasma Revolver]，表情从紧张转为宽慰，呼出一口白气。 |
 
 ## Input Format Example
 Global Context:
@@ -232,5 +255,4 @@ Core Scene Info:
 | **Key Props** | Plasma Revolver |
 | **Core Goal** | Investigation |
 
-剧本如下：
-
+****************************************************************剧本如下：*******

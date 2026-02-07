@@ -5,9 +5,12 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from app.db.session import get_db
 from app.models.all_models import Project, User, Episode, Scene, Shot, Entity, Asset, APISetting, ScriptSegment
-from app.schemas.agent import AgentRequest, AgentResponse
+from app.schemas.agent import AgentRequest, AgentResponse, AnalyzeSceneRequest
 from app.services.agent_service import agent_service
 from app.services.llm_service import llm_service
+import os
+
+
 from app.services.media_service import MediaGenerationService
 from app.services.video_service import create_montage
 from app.api.deps import get_current_user  # Import dependency
@@ -43,6 +46,126 @@ router = APIRouter()
 media_service = MediaGenerationService()
 logger = logging.getLogger("api_logger")
 
+def get_system_api_setting(db: Session, provider: str = None, category: str = None) -> Optional[APISetting]:
+    """Helper to find a system-level API configuration."""
+    query = db.query(APISetting).join(User).filter(User.is_system == True, APISetting.is_active == True)
+    if provider:
+        query = query.filter(APISetting.provider == provider)
+    if category:
+        query = query.filter(APISetting.category == category)
+    return query.first()
+
+def get_effective_api_setting(db: Session, user: User, provider: str = None, category: str = None) -> Optional[APISetting]:
+    """
+    Get API setting for current user. 
+    If not found AND user is authorized, fallback to system setting.
+    """
+    # 1. Try User's own setting
+    user_setting_query = db.query(APISetting).filter(
+        APISetting.user_id == user.id, 
+        APISetting.is_active == True
+    )
+    if provider:
+        user_setting_query = user_setting_query.filter(APISetting.provider == provider)
+    if category:
+        user_setting_query = user_setting_query.filter(APISetting.category == category)
+    
+    setting = user_setting_query.first()
+    if setting:
+         return setting
+    
+    # 2. Fallback if authorized
+    if user.is_authorized:
+         return get_system_api_setting(db, provider, category)
+    
+    return None
+
+@router.get("/prompts/{filename}")
+async def get_prompt_content(filename: str, current_user: User = Depends(get_current_user)):
+    """Retrieve content of a prompt file."""
+    prompt_path = os.path.join(os.path.dirname(__file__), "..", "core", "prompts", filename)
+    
+    # Fallback to absolute path check if relative fails
+    if not os.path.exists(prompt_path):
+         prompt_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "core", "prompts", filename))
+    
+    if not os.path.exists(prompt_path):
+         prompt_path = f"c:\\storyboard\\AIStory\\backend\\app\\core\\prompts\\{filename}"
+    
+    if not os.path.exists(prompt_path):
+        raise HTTPException(status_code=404, detail=f"Prompt file '{filename}' not found.")
+        
+    with open(prompt_path, "r", encoding="utf-8") as f:
+        return {"content": f.read()}
+
+@router.post("/analyze_scene", response_model=Dict[str, Any])
+async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)): # user auth optional depending on reqs, kept for safety
+    """
+    Submits raw script text to LLM for Scene/Beat analysis using a specific prompt template.
+    Returns the raw analysis result (Markdown/JSON).
+    """
+    try:
+        # Load the prompt template or use provided system_prompt
+        system_instruction = ""
+        
+        if request.system_prompt:
+            system_instruction = request.system_prompt
+        else:
+            prompt_filename = request.prompt_file or "scene_analysis.txt"
+            prompt_path = os.path.join(os.path.dirname(__file__), "..", "core", "prompts", prompt_filename)
+            
+            # Fallback to absolute path check if relative fails
+            if not os.path.exists(prompt_path):
+                 # Try determining path relative to project root 'backend/app/core/prompts'
+                 # We know the structure is c:/storyboard/AIStory/backend/app/core/prompts
+                 # This file is in .../backend/app/api/endpoints.py
+                 prompt_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "core", "prompts", prompt_filename))
+            
+            if not os.path.exists(prompt_path):
+                 # Check if it was created in the main prompts dir 
+                 prompt_path = f"c:\\storyboard\\AIStory\\backend\\app\\core\\prompts\\{prompt_filename}"
+            
+            if not os.path.exists(prompt_path):
+                raise HTTPException(status_code=404, detail=f"Prompt file '{prompt_filename}' not found.")
+                
+            with open(prompt_path, "r", encoding="utf-8") as f:
+                system_instruction = f.read()
+        # Construct messages
+        messages = [
+            {"role": "system", "content": system_instruction},
+            {"role": "user", "content": f"Script to Analyze:\n\n{request.text}"}
+        ]
+
+        # Use the LLM service directly
+        # If llm_config in request, use it, otherwise try to fetch from user/project logic if needed.
+        # Here we assume frontend sends the active LLM config or we rely on a default.
+        # Ideally, we should fetch the user's preferred LLM settings from DB.
+        
+        config = request.llm_config
+        # If config is missing/empty, try to get from db (Simplified: assuming passed from frontend for now as typically done in this project)
+        if not config:
+            # Fallback to system default or error
+            # Try to get from APISettings table if exists
+            api_setting = get_effective_api_setting(db, current_user, category="LLM")
+            if api_setting:
+                config = {
+                    "api_key": api_setting.api_key,
+                    "base_url": api_setting.base_url,
+                    "model": api_setting.model
+                }
+        
+        if not config:
+             raise HTTPException(status_code=400, detail="LLM Configuration missing. Please check your settings.")
+
+        logger.info(f"Analyzing scene for user {current_user.id} with model {config.get('model')}")
+        result_content = await llm_service.chat_completion(messages, config)
+        
+        return {"result": result_content}
+
+    except Exception as e:
+        logger.error(f"Scene Analysis Failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 # --- Tools ---
 class TranslateRequest(BaseModel):
     q: str
@@ -56,17 +179,11 @@ def translate_text(
     current_user: User = Depends(get_current_user)
 ):
     # Try specific provider first
-    setting = db.query(APISetting).filter(
-        APISetting.user_id == current_user.id,
-        APISetting.provider == "baidu_translate"
-    ).first()
+    setting = get_effective_api_setting(db, current_user, "baidu_translate")
     
     # Fallback to generic baidu
     if not setting:
-         setting = db.query(APISetting).filter(
-            APISetting.user_id == current_user.id,
-            APISetting.provider == "baidu"
-        ).first()
+         setting = get_effective_api_setting(db, current_user, "baidu")
 
     if not setting or not setting.api_key:
         raise HTTPException(status_code=400, detail="Baidu Translation settings not configured. Please add 'baidu_translate' provider with Access Token in API Key field.")
@@ -699,20 +816,33 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
         relevant_names.update(parts)
     if scene.environment_name:
         relevant_names.add(scene.environment_name.strip())
-        
+    
+    env_narrative = ""
+
     for ent in project_entities:
-        # Check relevancy (Case-insensitive check)
+        # Check relevancy (Case-insensitive check, considering name_en)
         is_relevant = False
-        if ent.name in relevant_names:
-            is_relevant = True
-        else:
+        ent_aliases = [n for n in [ent.name, ent.name_en] if n]
+        
+        for alias in ent_aliases:
+            alias_clean = alias.strip().lower()
             for rn in relevant_names:
-                if rn.lower() == ent.name.lower():
+                if rn.strip().lower() == alias_clean:
                     is_relevant = True
                     break
+            if is_relevant: break
         
         # If relevant, try to extract Description field
         if is_relevant:
+            # Check if this is the Environment Anchor to capture narrative for Scenario Content
+            if scene.environment_name:
+                 sn_clean = scene.environment_name.strip().lower()
+                 for alias in ent_aliases:
+                      if alias.strip().lower() == sn_clean:
+                           if ent.narrative_description:
+                                env_narrative = ent.narrative_description
+                           break
+
             desc_parts = []
             
             # 1. Narrative Description (New Column Priority)
@@ -761,6 +891,12 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
     if additional_context:
         global_section += f"\n{additional_context}"
 
+    core_goal_text = scene.core_scene_info or ''
+    if env_narrative:
+         # Append environment narrative to Core Goal if not already present
+         if env_narrative not in core_goal_text:
+              core_goal_text += f"\n\n(Environment Context: {env_narrative})"
+
     user_input = f"""{global_section}
 
 # Core Scene Info
@@ -771,7 +907,7 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
 | **Environment Anchor** | {scene.environment_name or ''} |
 | **Linked Characters** | {scene.linked_characters or ''} |
 | **Key Props** | {scene.key_props or ''} |
-| **Core Goal** | {scene.core_scene_info or ''} |
+| **Core Goal** | {core_goal_text} |
 
 {entity_section}
 
@@ -1266,6 +1402,20 @@ def delete_entity(
     db.commit()
     return {"status": "success"}
 
+@router.delete("/projects/{project_id}/entities")
+def delete_project_entities(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+        
+    db.query(Entity).filter(Entity.project_id == project_id).delete()
+    db.commit()
+    return {"status": "success", "message": "All entities deleted"}
+
 # --- Users ---
 
 class UserCreate(BaseModel):
@@ -1277,11 +1427,15 @@ class UserCreate(BaseModel):
 class UserOut(BaseModel):
     id: int
     username: str
-    email: str
-    full_name: Optional[str] = None
-    
+    email: Optional[str]
+    full_name: Optional[str]
+    is_active: bool
+    is_superuser: bool
+    is_authorized: bool
+    is_system: bool
+
     class Config:
-        from_attributes = True
+        orm_mode = True
 
 @router.post("/users/", response_model=UserOut)
 def create_user(user: UserCreate, db: Session = Depends(get_db)):
@@ -1725,12 +1879,79 @@ async def generate_image_endpoint(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
+
+# --- User Management ---
+class UserUpdate(BaseModel):
+    is_active: Optional[bool] = None
+    is_authorized: Optional[bool] = None
+    is_superuser: Optional[bool] = None
+    is_system: Optional[bool] = None
+    password: Optional[str] = None
+
+
+@router.get("/users/me", response_model=UserOut)
+def read_users_me(current_user: User = Depends(get_current_user)):
+    """
+    Get current user.
+    """
+    return current_user
+
+@router.get("/users", response_model=List[UserOut])
+def get_users(
+    skip: int = 0, 
+    limit: int = 100, 
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+    users = db.query(User).offset(skip).limit(limit).all()
+    return users
+
+@router.put("/users/{user_id}", response_model=UserOut)
+def update_user(
+    user_id: int, 
+    user_in: UserUpdate, 
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+    
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    if user_in.is_active is not None:
+        user.is_active = user_in.is_active
+    if user_in.is_authorized is not None:
+        user.is_authorized = user_in.is_authorized
+    if user_in.is_superuser is not None:
+        user.is_superuser = user_in.is_superuser
+    if user_in.is_system is not None:
+        # Ensure only one system user if we want strict uniqueness, but user asked for "System user unique" logic potentially
+        # For now, let's just allow marking. 
+        # If we need strict 1 system user, we can unset others.
+        if user_in.is_system:
+             # Unset others? Or just trust admin. Let's unset others to be safe as per "system user unique" hint.
+             db.query(User).filter(User.id != user_id).update({"is_system": False})
+        user.is_system = user_in.is_system
+        
+    if user_in.password:
+        user.hashed_password = get_password_hash(user_in.password)
+        
+    db.commit()
+    db.refresh(user)
+    return user
+
+
 @router.post("/generate/video")
 async def generate_video_endpoint(
     req: VideoGenerationRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    print(f"DEBUG: Backend Received Video Prompt: {req.prompt}")
     try:
         # 1. Resolve Context for Aspect Ratio
         aspect_ratio = None

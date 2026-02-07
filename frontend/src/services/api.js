@@ -5,7 +5,7 @@ import { API_URL } from '../config';
 console.log("Initializing API Helper with Base URL:", API_URL);
 
 // Use API_URL from config which supports production env vars
-const api = axios.create({
+export const api = axios.create({
   baseURL: API_URL,
 });
 
@@ -165,6 +165,12 @@ export const deleteEntity = async (entityId) => {
     return response.data;
 }
 
+export const deleteAllEntities = async (projectId) => {
+    const response = await api.delete(`/projects/${projectId}/entities`);
+    return response.data;
+}
+
+
 // Generation
 export const generateImage = async (prompt, provider = null, ref_image_url = null, options = {}) => {
     const response = await api.post('/generate/image', { prompt, provider, ref_image_url, ...options });
@@ -172,6 +178,7 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
 }
 
 export const generateVideo = async (prompt, provider = null, ref_image_url = null, last_frame_url = null, duration = 5, options = {}, keyframes = []) => {
+    console.log("[DEBUG API] generateVideo Prompt:", prompt);
     const response = await api.post('/generate/video', { prompt, provider, ref_image_url, last_frame_url, duration, keyframes, ...options });
     return response.data;
 }
@@ -268,6 +275,28 @@ export const translateText = async (q, from_lang = 'en', to_lang = 'zh') => {
 
 export const refinePrompt = async (original_prompt, instruction, type = 'image') => {
     const response = await api.post('/tools/refine_prompt', { original_prompt, instruction, type });
+    return response.data;
+};
+
+export const analyzeScene = async (scriptText, systemPrompt = null) => {
+    const payload = { script_text: scriptText };
+    if (systemPrompt) {
+        payload.system_prompt = systemPrompt;
+    }
+    const response = await api.post('/analyze_scene', { 
+        text: scriptText,
+        system_prompt: systemPrompt
+    });
+    return response.data;
+};
+
+export const fetchPrompt = async (filename) => {
+    const response = await api.get(`/prompts/${filename}`);
+    return response.data;
+};
+
+export const fetchMe = async () => {
+    const response = await api.get('/users/me');
     return response.data;
 };
 

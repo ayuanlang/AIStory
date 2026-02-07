@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useStore } from '@/lib/store';
-import { Save, Info } from 'lucide-react';
+import { Save, Info, Upload, Download } from 'lucide-react';
 import { API_URL } from '@/config';
 import { updateSetting, getSettings } from '../services/api';
 
@@ -12,6 +12,9 @@ const Settings = () => {
     const [apiKey, setApiKey] = useState("");
     const [endpoint, setEndpoint] = useState("");
     const [model, setModel] = useState("");
+    
+    // Hidden file input ref
+    const fileInputRef = useRef(null);
 
     // State for generation supplements
     const [charSupplements, setCharSupplements] = useState("");
@@ -49,6 +52,109 @@ const Settings = () => {
     const showNotification = (message, type = 'success') => {
         setNotification({ message, type });
         setTimeout(() => setNotification(null), 3000);
+    };
+
+    // --- Import / Export Handlers ---
+    const handleExportSettings = async () => {
+        try {
+            const data = await getSettings();
+            if (!data) {
+                showNotification("No settings to export.", "error");
+                return;
+            }
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `aistory_settings_${new Date().toISOString().split('T')[0]}.json`;
+            a.click();
+            window.URL.revokeObjectURL(url);
+            showNotification("Settings exported successfully!", "success");
+        } catch (e) {
+            console.error("Export failed", e);
+            showNotification("Failed to export settings", "error");
+        }
+    };
+
+    const handleImportClick = () => {
+        fileInputRef.current?.click();
+    };
+
+    const handleFileChange = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = async (event) => {
+            try {
+                const json = JSON.parse(event.target.result);
+                if (!Array.isArray(json)) {
+                    showNotification("Invalid settings file format (must be array).", "error");
+                    return;
+                }
+
+                addLog("Starting settings import...", "process");
+                
+                let successCount = 0;
+                for (const item of json) {
+                    if (item.provider && item.category) {
+                        // 1. Update Backend
+                        await updateSetting({
+                            ...item,
+                            id: undefined // Create or update logic handled by backend usually, but here updateSetting relies on provider matching often
+                        });
+
+                        // 2. Update Local Store (Sync)
+                        // Map backend item back to local format
+                        const configData = {
+                            apiKey: item.api_key || "",
+                            endpoint: item.base_url || item.config?.endpoint || "",
+                            model: item.model || "",
+                            width: item.config?.width,
+                            height: item.config?.height,
+                            webHook: item.config?.webHook
+                        };
+
+                        // Store logic
+                        if (item.category === 'LLM') {
+                            // Map backend provider back to frontend if needed
+                            // (Simplified: assuming mapped names match or are close enough for now)
+                            saveProviderConfig(item.provider, configData);
+                        } else if (item.category === 'Image' || item.category === 'Video') {
+                            // For tools, we use the display name as key mostly? 
+                            // This is tricky because backend stores "grsai" but frontend uses "Grsai-Image"
+                            // We might need to rely on the backend provider + category to map back.
+                            // Or just rely on the user refreshing/re-selecting. 
+                            
+                            // Best effort mapping: 
+                            // If user sets "Grsai-Image", backend sees provider="grsai", category="Image"
+                            // So we can try to save to "Grsai-Image" if we know the mapping?
+                            // Actually, let's just update the Backend for now to ensure functional correctness.
+                            // The sync downstream is a bonus.
+                        }
+                        successCount++;
+                    }
+                }
+
+                showNotification(`Successfully imported settings!`, "success");
+                addLog(`Imported ${successCount} settings items.`, "success");
+                
+                // Refresh local view data (Baidu token etc)
+                const fresh = await getSettings();
+                const baidu = fresh.find(s => s.provider === 'baidu_translate' || s.provider === 'baidu');
+                if (baidu) setBaiduToken(baidu.api_key || "");
+                
+                // Re-trigger load for LLM if it matches current
+                // (Optional refinement)
+
+            } catch (err) {
+                console.error("Import parsing failed", err);
+                showNotification("Failed to parse settings file.", "error");
+            }
+            // Reset input
+            if (fileInputRef.current) fileInputRef.current.value = "";
+        };
+        reader.readAsText(file);
     };
     
     // Load backend settings
@@ -554,7 +660,34 @@ const Settings = () => {
                 </div>
             )}
             <header className="flex justify-between items-center bg-card p-4 rounded-xl border border-white/10 shadow-sm bg-black/20">
-                <h1 className="text-3xl font-bold">Settings</h1>
+                <div className="flex items-center gap-4">
+                    <h1 className="text-3xl font-bold">Settings</h1>
+                    <div className="flex gap-2">
+                        <button 
+                            onClick={handleImportClick}
+                            className="flex items-center space-x-2 bg-white/5 border border-white/10 px-3 py-1.5 rounded-lg hover:bg-white/10 text-xs transition-colors"
+                            title="Import Settings JSON"
+                        >
+                            <Upload size={14} />
+                            <span>Import</span>
+                        </button>
+                        <button 
+                            onClick={handleExportSettings}
+                            className="flex items-center space-x-2 bg-white/5 border border-white/10 px-3 py-1.5 rounded-lg hover:bg-white/10 text-xs transition-colors"
+                            title="Export Settings JSON"
+                        >
+                            <Download size={14} />
+                            <span>Export</span>
+                        </button>
+                        <input 
+                            type="file" 
+                            ref={fileInputRef} 
+                            className="hidden" 
+                            accept=".json" 
+                            onChange={handleFileChange} 
+                        />
+                    </div>
+                </div>
                 <div className="flex bg-white/5 p-1 rounded-lg">
                     <button 
                         onClick={() => setActiveTab('api')}
