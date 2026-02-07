@@ -1,4 +1,5 @@
 # Role: AI Visual Analysis Master & Structured Data Generator
+# Version: 2026-02-07
 
 ## 最终目标：
 1. 完整最细粒度拆分清楚Beat：

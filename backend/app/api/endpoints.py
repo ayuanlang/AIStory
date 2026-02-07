@@ -87,16 +87,13 @@ def get_effective_api_setting(db: Session, user: User, provider: str = None, cat
 @router.get("/prompts/{filename}")
 async def get_prompt_content(filename: str, current_user: User = Depends(get_current_user)):
     """Retrieve content of a prompt file."""
-    prompt_path = os.path.join(os.path.dirname(__file__), "..", "core", "prompts", filename)
-    
-    # Fallback to absolute path check if relative fails
-    if not os.path.exists(prompt_path):
-         prompt_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "core", "prompts", filename))
+    # Robust path resolution using settings.BASE_DIR (backend root)
+    prompt_dir = os.path.join(str(settings.BASE_DIR), "app", "core", "prompts")
+    prompt_path = os.path.join(prompt_dir, filename)
     
     if not os.path.exists(prompt_path):
-         prompt_path = f"c:\\storyboard\\AIStory\\backend\\app\\core\\prompts\\{filename}"
-    
-    if not os.path.exists(prompt_path):
+        # logging for debug on Render
+        logger.error(f"Prompt file not found at: {prompt_path}")
         raise HTTPException(status_code=404, detail=f"Prompt file '{filename}' not found.")
         
     with open(prompt_path, "r", encoding="utf-8") as f:
@@ -116,21 +113,13 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             system_instruction = request.system_prompt
         else:
             prompt_filename = request.prompt_file or "scene_analysis.txt"
-            prompt_path = os.path.join(os.path.dirname(__file__), "..", "core", "prompts", prompt_filename)
-            
-            # Fallback to absolute path check if relative fails
-            if not os.path.exists(prompt_path):
-                 # Try determining path relative to project root 'backend/app/core/prompts'
-                 # We know the structure is c:/storyboard/AIStory/backend/app/core/prompts
-                 # This file is in .../backend/app/api/endpoints.py
-                 prompt_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "core", "prompts", prompt_filename))
+            # Robust path resolution
+            prompt_dir = os.path.join(str(settings.BASE_DIR), "app", "core", "prompts")
+            prompt_path = os.path.join(prompt_dir, prompt_filename)
             
             if not os.path.exists(prompt_path):
-                 # Check if it was created in the main prompts dir 
-                 prompt_path = f"c:\\storyboard\\AIStory\\backend\\app\\core\\prompts\\{prompt_filename}"
-            
-            if not os.path.exists(prompt_path):
-                raise HTTPException(status_code=404, detail=f"Prompt file '{prompt_filename}' not found.")
+                 logger.error(f"Scene analysis prompt not found at: {prompt_path}")
+                 raise HTTPException(status_code=404, detail=f"Prompt file '{prompt_filename}' not found.")
                 
             with open(prompt_path, "r", encoding="utf-8") as f:
                 system_instruction = f.read()
@@ -874,22 +863,17 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
         entity_section = "# Entity Reference\n" + "\n".join(entity_descriptions) + "\n"
 
     # 3. Prepare System Prompt
-    prompt_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../core/prompts/shot_generator.txt"))
-    # Fallback path logic
-    if not os.path.exists(prompt_path):
-        prompt_path = "c:/storyboard/AIStory/backend/app/core/prompts/shot_generator.txt"
+    prompt_dir = os.path.join(str(settings.BASE_DIR), "app", "core", "prompts")
+    prompt_path = os.path.join(prompt_dir, "shot_generator.txt")
     
     system_prompt = ""
     try:
         with open(prompt_path, "r", encoding="utf-8") as f:
             system_prompt = f.read()
-    except:
-        # Try absolute path from known structure
-        try:
-            with open("c:/storyboard/AIStory/backend/app/core/prompts/shot_generator.txt", "r", encoding="utf-8") as f:
-                system_prompt = f.read()
-        except:
-            system_prompt = "You are a Storyboard Master. Generate a shot list as a markdown table."
+    except Exception as e:
+        logger.error(f"Failed to load shot_generator.txt from {prompt_path}: {e}")
+        # Very drastic fallback, but better than crash
+        system_prompt = "You are a Storyboard Master. Generate a shot list as a markdown table."
 
     global_section = f"# Global Context\nGlobal Style: {global_style}"
     if additional_context:
