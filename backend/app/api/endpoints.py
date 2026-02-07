@@ -2106,13 +2106,15 @@ async def analyze_asset_image(
         system_prompt = "Describe the art style and visual elements of this image."
 
     # 4. Construct Image URL
-    # Assuming valid public URL or accessible internal URL
-    base_url = os.getenv("RENDER_EXTERNAL_URL", "http://localhost:8000")
-    # Clean up double slashes just in case
-    image_path = asset.file_path
-    if not image_path.startswith("/"):
-        image_path = "/" + image_path
-    image_url = f"{base_url}{image_path}"
+    base_url = os.getenv("RENDER_EXTERNAL_URL", "http://localhost:8000").rstrip("/")
+    
+    image_url_raw = asset.url
+    if image_url_raw and image_url_raw.startswith("http"):
+        image_url = image_url_raw
+    else:
+        # Local path
+        path_part = image_url_raw if image_url_raw.startswith("/") else f"/{image_url_raw}"
+        image_url = f"{base_url}{path_part}"
     
     logger.info(f"Analyzing Image: {image_url}")
 
