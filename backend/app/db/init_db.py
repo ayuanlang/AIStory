@@ -6,53 +6,57 @@ from app.db.session import engine
 logger = logging.getLogger(__name__)
 
 def check_and_migrate_tables():
+    print("!!! MIGRATION CHECK STARTED !!!") # stdout for visibility
     logger.info(f"Starting migration check. Dialect: {engine.dialect.name}")
     
     try:
-        # Force migration for Postgres using engine.begin() which handles transaction/commit automatically
-        if 'postgres' in engine.dialect.name:
-            with engine.begin() as conn:
-                logger.info("Attempting Postgres migration...")
-                try:
-                    conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_authorized BOOLEAN DEFAULT FALSE"))
-                    logger.info("Executed: ADD COLUMN IF NOT EXISTS is_authorized")
-                except Exception as e:
-                    logger.error(f"Error adding is_authorized: {e}")
+        # 1. Get current columns using Inspector (works for both)
+        inspector = inspect(engine)
+        existing_columns = [c['name'] for c in inspector.get_columns('users')]
+        logger.info(f"Existing columns in 'users': {existing_columns}")
+        print(f"Existing columns: {existing_columns}")
 
+        columns_to_add = []
+        if 'is_authorized' not in existing_columns:
+            columns_to_add.append(("is_authorized", "BOOLEAN DEFAULT FALSE"))
+        if 'is_system' not in existing_columns:
+            columns_to_add.append(("is_system", "BOOLEAN DEFAULT FALSE"))
+
+        if not columns_to_add:
+            logger.info("No migrations needed. Columns exist.")
+            print("No migrations needed.")
+            return
+
+        # 2. Apply Changes
+        with engine.begin() as conn: # Transactional
+            for col_name, col_type in columns_to_add:
+                print(f"Migrating {col_name}...")
+                logger.info(f"Adding column {col_name}...")
+                
+                # Try Postgres Syntax first (most likely for Render)
                 try:
-                    conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_system BOOLEAN DEFAULT FALSE"))
-                    logger.info("Executed: ADD COLUMN IF NOT EXISTS is_system")
-                except Exception as e:
-                    logger.error(f"Error adding is_system: {e}")
+                    # Note: Postgres supports 'IF NOT EXISTS' in recent versions, but standard ADD works if we checked existence
+                    # We use simple ADD COLUMN logic since we verified it's missing
+                    conn.execute(text(f"ALTER TABLE users ADD COLUMN {col_name} {col_type}"))
+                    logger.info(f"Successfully added {col_name} (Standard SQL)")
+                except Exception as e_pg:
+                    logger.warning(f"Standard ADD COLUMN failed ({e_pg}). Trying SQLite syntax...")
+                    # Fallback for SQLite (if 'FALSE' literals cause issues, though usually mapped)
+                    # SQLite doesn't strictly have boolean, but SQLAlchemy handles it. 
+                    # Raw SQL might need 0/1 for SQLite default
+                    try:
+                        sqlite_type = col_type.replace("FALSE", "0").replace("TRUE", "1")
+                        conn.execute(text(f"ALTER TABLE users ADD COLUMN {col_name} {sqlite_type}"))
+                        logger.info(f"Successfully added {col_name} (SQLite fallback)")
+                    except Exception as e_sqlite:
+                        logger.error(f"Failed to add {col_name} with SQLite syntax: {e_sqlite}")
+                        raise e_sqlite # Re-raise if both fail
+
+        # 3. Verify
+        inspector = inspect(engine)
+        final_cols = [c['name'] for c in inspector.get_columns('users')]
+        print(f"Final columns: {final_cols}")
         
-        # SQLite / Generic Fallback
-        else:
-            inspector = inspect(engine)
-            columns = [c['name'] for c in inspector.get_columns('users')]
-            logger.info(f"Current columns (SQLite): {columns}")
-            
-            with engine.begin() as conn:
-                if 'is_authorized' not in columns:
-                    try:
-                        conn.execute(text("ALTER TABLE users ADD COLUMN is_authorized BOOLEAN DEFAULT 0"))
-                        logger.info("Migrated is_authorized (SQLite)")
-                    except Exception as e:
-                        logger.error(f"Failed to add is_authorized: {e}")
-
-                if 'is_system' not in columns:
-                    try:
-                        conn.execute(text("ALTER TABLE users ADD COLUMN is_system BOOLEAN DEFAULT 0"))
-                        logger.info("Migrated is_system (SQLite)")
-                    except Exception as e:
-                        logger.error(f"Failed to add is_system: {e}")
-
-        # Verification Step
-        try:
-            inspector = inspect(engine)
-            final_columns = [c['name'] for c in inspector.get_columns('users')]
-            logger.info(f"MIGRATION COMPLETE. Final columns in 'users': {final_columns}")
-        except Exception as e:
-            logger.error(f"Verification failed: {e}")
-
     except Exception as e:
         logger.critical(f"Migration CRITICAL FAILURE: {e}")
+        print(f"MIGRATION FAILED: {e}")
