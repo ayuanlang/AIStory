@@ -6,35 +6,32 @@ from app.db.session import engine
 logger = logging.getLogger(__name__)
 
 def check_and_migrate_tables():
-    logger.info("Checking for database migrations...")
+    logger.info(f"Starting migration check. Dialect: {engine.dialect.name}")
+    
     try:
-        # Use simple try-except block for each column to be robust against inspection failures or race conditions
-        with engine.connect() as conn:
-            # PostgreSQL optimized path
-            if engine.dialect.name == 'postgresql':
-                conn.execute(text("COMMIT")) # Ensure we are not in a failed transaction state if any
-                
-                # Add is_authorized
+        # Force migration for Postgres using engine.begin() which handles transaction/commit automatically
+        if 'postgres' in engine.dialect.name:
+            with engine.begin() as conn:
+                logger.info("Attempting Postgres migration...")
                 try:
                     conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_authorized BOOLEAN DEFAULT FALSE"))
-                    logger.info("Checked/Migrated is_authorized (PostgreSQL)")
+                    logger.info("Executed: ADD COLUMN IF NOT EXISTS is_authorized")
                 except Exception as e:
-                    logger.warning(f"Message during is_authorized migration: {e}")
+                    logger.error(f"Error adding is_authorized: {e}")
 
-                # Add is_system
                 try:
                     conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_system BOOLEAN DEFAULT FALSE"))
-                    logger.info("Checked/Migrated is_system (PostgreSQL)")
+                    logger.info("Executed: ADD COLUMN IF NOT EXISTS is_system")
                 except Exception as e:
-                    logger.warning(f"Message during is_system migration: {e}")
-                
-                conn.commit()
-
-            # SQLite path (local dev)
-            else: 
-                inspector = inspect(engine)
-                columns = [c['name'] for c in inspector.get_columns('users')]
-                
+                    logger.error(f"Error adding is_system: {e}")
+        
+        # SQLite / Generic Fallback
+        else:
+            inspector = inspect(engine)
+            columns = [c['name'] for c in inspector.get_columns('users')]
+            logger.info(f"Current columns (SQLite): {columns}")
+            
+            with engine.begin() as conn:
                 if 'is_authorized' not in columns:
                     try:
                         conn.execute(text("ALTER TABLE users ADD COLUMN is_authorized BOOLEAN DEFAULT 0"))
@@ -48,8 +45,14 @@ def check_and_migrate_tables():
                         logger.info("Migrated is_system (SQLite)")
                     except Exception as e:
                         logger.error(f"Failed to add is_system: {e}")
-                conn.commit()
-                
-        logger.info("Database migration check complete.")
+
+        # Verification Step
+        try:
+            inspector = inspect(engine)
+            final_columns = [c['name'] for c in inspector.get_columns('users')]
+            logger.info(f"MIGRATION COMPLETE. Final columns in 'users': {final_columns}")
+        except Exception as e:
+            logger.error(f"Verification failed: {e}")
+
     except Exception as e:
-        logger.error(f"Migration check CRITICAL FAILURE: {e}")
+        logger.critical(f"Migration CRITICAL FAILURE: {e}")
