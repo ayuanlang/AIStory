@@ -1,9 +1,54 @@
 
 import logging
+import bcrypt
 from sqlalchemy import text, inspect
 from app.db.session import engine
 
 logger = logging.getLogger(__name__)
+
+def create_default_superuser():
+    """Ensure default system user exists."""
+    print("!!! CHECKING DEFAULT SUPERUSER !!!")
+    try:
+        with engine.begin() as conn:
+            # Check if user exists
+            result = conn.execute(text("SELECT id FROM users WHERE username = 'ylsystem'"))
+            user = result.fetchone()
+            
+            if not user:
+                print("Creating default superuser: ylsystem")
+                logger.info("Creating default superuser 'ylsystem'...")
+                
+                # Hash password using bcrypt
+                password = "ylsystem"
+                hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+                
+                # Insert
+                # PostgreSQL and SQLite compatible parameter binding for raw SQL varies (%(name)s vs :name)
+                # We'll use text() with params which usually handles it via SQLAlchemy
+                sql = text("""
+                    INSERT INTO users (username, email, hashed_password, is_active, is_superuser, is_authorized, is_system)
+                    VALUES (:username, :email, :password, :active, :superuser, :authorized, :system)
+                """)
+                
+                conn.execute(sql, {
+                    "username": "ylsystem",
+                    "email": "ylsystem@admin.com",
+                    "password": hashed,
+                    "active": True, # SQLAlchemy generic type handling should convert to 1/0 or TRUE/FALSE
+                    "superuser": True,
+                    "authorized": True,
+                    "system": True
+                })
+                logger.info("Default superuser created.")
+                print("Default superuser 'ylsystem' created.")
+            else:
+                logger.info("Default superuser 'ylsystem' already exists.")
+                print("Default superuser exists.")
+
+    except Exception as e:
+        logger.error(f"Failed to create default superuser: {e}")
+        print(f"SUPERUSER CREATION FAILED: {e}")
 
 def check_and_migrate_tables():
     print("!!! MIGRATION CHECK STARTED !!!") # stdout for visibility
