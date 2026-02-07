@@ -16,11 +16,18 @@ def check_and_migrate_tables():
         logger.info(f"Existing columns in 'users': {existing_columns}")
         print(f"Existing columns: {existing_columns}")
 
+        # format: (column_name, sql_type_and_default)
+        columns_to_check = [
+            ("is_active", "BOOLEAN DEFAULT TRUE"),
+            ("is_superuser", "BOOLEAN DEFAULT FALSE"),
+            ("is_authorized", "BOOLEAN DEFAULT FALSE"),
+            ("is_system", "BOOLEAN DEFAULT FALSE")
+        ]
+
         columns_to_add = []
-        if 'is_authorized' not in existing_columns:
-            columns_to_add.append(("is_authorized", "BOOLEAN DEFAULT FALSE"))
-        if 'is_system' not in existing_columns:
-            columns_to_add.append(("is_system", "BOOLEAN DEFAULT FALSE"))
+        for col_name, col_def in columns_to_check:
+            if col_name not in existing_columns:
+                columns_to_add.append((col_name, col_def))
 
         if not columns_to_add:
             logger.info("No migrations needed. Columns exist.")
