@@ -70,26 +70,12 @@
 ## 二、场景类型规则 (Scene-Type Rules)
 按剧情类型细化的镜头逻辑，指导分镜节奏与光影风格。除常规模式外，必须根据剧本深度选择高级叙事策略。
 
-### 0. 镜头连续性特例 (Shot Continuity Exceptions)
-**Rule: 默认原则 (Default Principle)**
-一般情况下，当前分镜的 `Start Frame` 应当在视觉上与上一分镜的 `End Frame` 保持**像素级连续 (Pixel-Perfect Continuity)**（即 "SAME" 逻辑），以确保时间流动的自然性，Start Frame仅填写“SAME”。
-
-**Exceptions: 下列情况严禁使用“SAME”逻辑，首帧必须重新独立描述 (Independent Generation)**
-1.  **场景切换 (Time/Space Jump)**: 
-    - Scene ID 发生变化，或同一 Scene 内发生明显时间跳跃（"Later that night..."）。
-2.  **视角反转 (Reverse Angle / 180° Break)**:
-    - 镜头角度发生剧烈变化（如从正面 0° 切至背面 180°，或过肩镜头 A to B 互切）。
-    - 此时若复用上一帧画面会导致空间错乱。
-3.  **主观/客观切换 (POV Switch)**:
-    - 从客观视角（Master Shot）切换至角色主观视角（POV Shot），或反之。
-4.  **插入镜头 (Insert Shot / Cutaway)**:
-    - 从叙事主线切出，展示独立的物体特写（Props）、环境细节或回忆闪回。
-    - 插入镜头之后的**回归镜头 (Return Shot)** 也不能简单 "SAME"，需根据插入时长判断主画面是否有细微演变。
-5.  **跨越性景别突变 (Scale Jump)**:
-    - 极大全景 (EWS) 直接切至特写 (CU/ECU)，或反之。
-    - **Rejection Criteria**: 像素跨度过大，AI 无法通过图生图进行有效的超分或重绘（AI Hallucination Risk）。必须重新构建高精度构图。
-6.  **高速蒙太奇 (Fast Montage)**:
-    - 旨在展示不同时空切片的组接镜头，本质上无时间和空间连续性。
+### 0. 独立描述原则 (Principle of Independent Description)
+**Rule: 绝对独立性 (Absolute Independence)**
+- **严禁依赖上下文 (No Context Dependency)**：每一个 Shot 的 `Start Frame`, `Video Content`, `End Frame` 都必须是**完全独立、自包含**的描述。
+- **禁止省略 (No Shortcuts)**：**严禁使用** "Same as above", "Continued from previous shot", "Same setting", "Unchanged", "See previous" 等指代性词汇。如果不写清楚，生图AI将无法生成画面。
+- **全量重写 (Full Rewrite)**：即使当前镜头接续上一镜头（Continuity），也必须**重新完整描写**所有的视觉元素（即把上一镜的 End Frame 视觉元素 Copy 并根据新机位调整后填入当前 Start Frame）。
+- **理由**：每个 Shot 都是独立的生成任务，模型没有上下文记忆。
 
 1. **情感对话 (Dialogue & Emotion)**
    - **序列逻辑**：Establishing → Master/Two-shot → OTS (Over-the-shoulder) → Medium-close → Extreme Close-up (Eyes/Lips)。
@@ -168,7 +154,8 @@
   5. **Generate End Frame**: 根据 Video Content 的最终结果生成结束状态。
 
 #### A. 静态维度 (Start Frame / End Frame描述)
-- **定义**：明示机位、焦段、构图的“摄影师指令”，**必须符合 AI 生图提示词 (Image Gen Prompt) 规范**，不能用“同上”类表述，要独立表达。
+- **定义**：明示机位、焦段、构图的“摄影师指令”，**必须符合 AI 生图提示词 (Image Gen Prompt) 规范**。
+- **严禁 "Same as" (Strictly Forbidden)**：不管是 Start 还是 End，绝不允许出现 "Same as previous", "Similar to last shot" 等字眼。必须把画面里的东西（who, where, lighting, camera）完整、独立地写出来。
 - **强制机位物理定义 (Mandatory Camera Physics)**：
   - 在描述任何视觉内容前，必须先使用自然语言明确 **[Camera Setup]**。
   - **格式**：`[Camera Setup]: Placed at [Specific Location], facing [Cardinal Direction/Target].`
@@ -194,6 +181,10 @@
 
 #### B. 动态维度 (Video Content)
 - **定义**：描述从 `Start Frame` 到 `End Frame` 的完整时空演变过程，重点阐述“角色与道具的变化状态如何变化”。
+- **强制机位物理定义 (Mandatory Camera Physics)**：
+  - 在 `Video Content` 的描述开头，也必须再次强调或确认机位状态。
+  - **格式**：`[Camera Movement]: Starting from [Setup A], moving to [Setup B].`
+  - **原则**：Start Frame 定义的“Placemnet”必须是 Video Content 的起点；End Frame 定义的“Implied Final Placement”必须是 Video Content 的终点。
 - **核心目标**：填补首尾帧之间的视觉空白，确保从静止画面 `Start Frame`平滑过渡到静止画面 `End Frame`。
 - **内容细则 (Detailed Evolution)**：
   1.  **镜头运镜演化 (Camera Evolution)**：
