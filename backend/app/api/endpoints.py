@@ -2086,9 +2086,16 @@ async def analyze_asset_image(
          raise HTTPException(status_code=403, detail="Not authorized")
 
     # 2. Get LLM Config
-    llm_config = settings_api.get_llm_config_internal(db, current_user.id)
-    if not llm_config:
-        raise HTTPException(status_code=400, detail="LLM Settings not configured")
+    api_setting = get_effective_api_setting(db, current_user, category="LLM")
+    if not api_setting:
+         raise HTTPException(status_code=400, detail="LLM Settings not configured (No active LLM provider found). Please configure one in Settings.")
+    
+    llm_config = {
+        "api_key": api_setting.api_key,
+        "base_url": api_setting.base_url,
+        "model": api_setting.model,
+        "config": api_setting.config or {}
+    }
 
     # 3. Load System Prompt
     prompt_path = os.path.join(settings.BASE_DIR, "app/core/prompts", "image_style_extractor.txt")
