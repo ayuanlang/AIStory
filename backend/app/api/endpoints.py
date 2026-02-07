@@ -2082,7 +2082,7 @@ async def analyze_asset_image(
         raise HTTPException(status_code=404, detail="Asset not found")
         
     # Check permissions
-    if asset.owner_id != current_user.id and not current_user.is_superuser:
+    if asset.user_id != current_user.id and not current_user.is_superuser:
          raise HTTPException(status_code=403, detail="Not authorized")
 
     # 2. Get LLM Config
