@@ -161,16 +161,22 @@
   - `[Lighting: Style, Source]`
   - `[Composition: Placement, Depth]`
 - **特别重要：执行顺序调整 (Critical Execution Order)**：
-  1. **Generate Start Frame**: 定义动作的起始状态。
-  2. **Generate Duration**: 确定动作需要的总时长（5-10s）。
-  3. **Generate Video Content**: 根据 Duration 填充每一秒的动作。
-  4. **Generate End Frame**: 根据 Video Content 的最终结果生成结束状态。
+  1. **Define Camera Physics**: 明确机位物理关系（内/外，高/低，距离）。
+  2. **Generate Start Frame**: 定义动作的起始状态（必须符合机位物理关系）。
+  3. **Generate Duration**: 确定动作需要的总时长（5-10s）。
+  4. **Generate Video Content**: 根据 Duration 填充每一秒的动作。
+  5. **Generate End Frame**: 根据 Video Content 的最终结果生成结束状态。
 
 #### A. 静态维度 (Start Frame / End Frame描述)
 - **定义**：明示机位、焦段、构图的“摄影师指令”，**必须符合 AI 生图提示词 (Image Gen Prompt) 规范**，不能用“同上”类表述，要独立表达。
+- **强制机位物理定义 (Mandatory Camera Physics)**：
+  - 在描述任何视觉内容前，必须先使用自然语言明确 **[Camera Setup]**。
+  - **格式**：`[Camera Setup]: Placed at [Specific Location], facing [Cardinal Direction/Target].`
+  - **例如**：`Placed inside the car passenger seat, facing the driver` 或 `Placed 2 meters behind the character, facing the temple entrance`.
+  - **一致性原则**：Start Frame 和 End Frame 的机位物理定义必须保持一致（除非是专门的长镜头调度，但也必须平滑过渡，严格禁止突变，如从“Looking Out”瞬间变为“Looking In”）。
 - **必须包含 (Mandatory Elements)**：
   - **[Global Style]**：所有描述必须以 `[Global Style]` 开头。
-  - **[Camera Description]**: 必须包含 **Framing** (景别, e.g., Medium Shot, Wide Shot) 和 **Relative Position** (相对位置). 明确摄影机相对于主体和环境的位置（例如："Low angle from the ground," "Overhead shot looking down at the valley"），以确立环境关系。
+  - **[Camera Description]**: 必须包含 **Framing** (景别) 和 **Angle** (角度)。
   - **光影与色调 (Lighting & Color)**：严格继承 `[Global Style]` 的视觉基调。必须明确描述**光源性质**（Hard/Soft）、**光影对比度**（High key/Low key/Chiaroscuro）以及**主色调**（Color Palette）。例如：若风格为 "Neon Noir"，则描述 "Harsh neon side lighting, deep shadows, wet pavement reflections, cyan and magenta contrast"。
   - **构图法则 (Composition Technique)**：必须指定一种经典的构图方式以增强形式感。可选技法包括：**Symmetrical Composition** (对称), **Rule of Thirds** (三分法), **Leading Lines** (引导线), **Center Framed** (中心), **Frame within a Frame** (框中框), **Triangular** (三角), **Negative Space** (留白)。
   - **图片景深 (Composition Layers)**：必须明确划分 **[Foreground] (前景)**、**[Midground] (中景)**、**[Background] (背景)**。例如： "Foreground: blurred leaves. Midground: [Subject A] standing. Background: [Environment Anchor] with city lights."。
@@ -191,6 +197,13 @@
 - **核心目标**：填补首尾帧之间的视觉空白，确保从静止画面 `Start Frame`平滑过渡到静止画面 `End Frame`。
 - **内容细则 (Detailed Evolution)**：
   1.  **镜头运镜演化 (Camera Evolution)**：
+      *   **绝对禁止跳跃 (Strictly Prohibited Jumps)**：**严禁**在同一 Shot 内发生剧烈的机位方向变化（如从正面突然切到背面，从内突然切到外）。**Camera Axis (机位轴线)** 必须保持稳定。
+      *   **允许的运动 (Allowed Movements)**：
+          - **推拉 (Dolly In/Out)**：沿轴线前后移动。
+          - **横移 (Truck/Tracking)**：保持轴线方向的平行移动。
+          - **摇摄 (Pan/Tilt)**：固定轴点的角度微调。
+          - **手持震动 (Handheld Shake)**：增加临场感。
+          - **跟随 (Follow)**：跟随主体移动，但保持相对视角一致。
       *   **轨迹描述**：必须说明镜头如何从 Start Frame 的初始机位移动到 End Frame 的最终机位。
       *   **具体指令**：e.g., "Camera starts at waist level, tracks backward as [Subject A] walks forward, keeping distance constant."
       *   **术语库 (Terminology)**：
