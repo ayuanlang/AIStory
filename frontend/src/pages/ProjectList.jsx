@@ -230,21 +230,24 @@ const ProjectList = () => {
                 <div className="space-y-2 flex-1">
                     <SidebarItem id="projects" icon={Folder} label="My Projects" />
                     <SidebarItem id="assets" icon={Image} label="Assets Library" />
-                    <button 
-                        onClick={() => navigate('/admin/logs')}
-                        className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-muted-foreground hover:bg-secondary/50 hover:text-foreground`}
-                    >
-                        <Activity className="w-5 h-5" />
-                        System Logs
-                    </button>
+                    
                     {currentUser?.is_superuser && (
-                         <button 
-                            onClick={() => navigate('/admin/users')}
-                            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-muted-foreground hover:bg-secondary/50 hover:text-foreground`}
-                        >
-                            <Shield className="w-5 h-5 text-red-500" />
-                            Admin Panel
-                        </button>
+                        <>
+                            <button 
+                                onClick={() => navigate('/admin/logs')}
+                                className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-muted-foreground hover:bg-secondary/50 hover:text-foreground`}
+                            >
+                                <Activity className="w-5 h-5" />
+                                System Logs
+                            </button>
+                            <button 
+                                onClick={() => navigate('/admin/users')}
+                                className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-muted-foreground hover:bg-secondary/50 hover:text-foreground`}
+                            >
+                                <Shield className="w-5 h-5 text-red-500" />
+                                Admin Panel
+                            </button>
+                        </>
                     )}
                     <SidebarItem id="settings" icon={Settings} label="Settings" />
                 </div>
