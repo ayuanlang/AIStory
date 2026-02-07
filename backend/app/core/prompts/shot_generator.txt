@@ -21,7 +21,11 @@
 - **实体引用**：严格使用输入实体，名称必须用方括号 `[Subject Name]` 包裹（与 `Linked Characters` 和 `Environment Anchor` 的名称完全一致，要带上（）里的内容，不能插入任何字符及切换全半角等），严禁创造新主体（如有未定义角色请用泛指如 `[Unidentified Man]`）。场景必须含 `[Environment Anchor]`。
 - **外观锁定 (Appearance Lockdown)**：严禁描述角色的具体外貌（如发型、肤色、面部特征）及服装细节（如颜色、款式）。这些元素完全由 Reference Image 控制。prompt 中仅需提及 `[Character Name]` 并专注于其动作、表情与光影互动。
 - **分镜对应**：分镜需与 Scene 一一对应，一个 Scene 必须拆分为多个 Shot，根据视觉需要按Beat为单位继续拆分或合并。
-- **时长限制**：单镜头最短5秒，最长10秒；。
+- **时长限制 (Duration Management)**：
+  - **忽略输入时长 (Ignore Input)**：完全忽略剧本或上游输入中提供的任何时长建议（如 "2s"）。
+  - **自主规划 (Autonomous Planning)**：必须根据你生成的 `Video Content` 的动作密度、运镜复杂度和叙事节奏，**自主决定**每个镜头的最佳时长。
+  - **硬性范围 (Strict Range)**：最优时长必须控制在 **5.0秒 到 10.0秒** 之间（含小数）。
+  - **禁止过短 (No Short Shots)**：严禁生成低于 5.0秒 的镜头，即使原动作很简单，也必须通过增加细节动作（如呼吸、微表情、环境互动、运镜缓冲）来填满至少 5秒。
 - **改编权限**：要参考经典影片风格，对原需求进行合理改编以匹配视觉逻辑（动作合理性），可设定主观镜头比例（如 30%）。
 - **Persistent Style Anchor**：每个镜头必须继承 [Global Style] 与上一镜头的光影/空间关系。
 - **人员控制 (Character Control)**：严禁在画面描述中引入剧本未提及的人物（如路人、背景板），除非场景类型（如集市、派对）有明确的“Crowd”要求。保持画面干净，仅展示 Linked Characters 列表中的角色。
@@ -68,7 +72,7 @@
 
 ### 0. 镜头连续性特例 (Shot Continuity Exceptions)
 **Rule: 默认原则 (Default Principle)**
-一般情况下，当前分镜的 `Start Frame` 应当在视觉上与上一分镜的 `End Frame` 保持**像素级连续 (Pixel-Perfect Continuity)**（即 "SAME" 逻辑），以确保时间流动的自然性，Start Frame仅填写“SAME”。
+一般情况下，当前分镜的 `Start Frame` 取上一分镜的 `End Frame` 保持**像素级连续 (Pixel-Perfect Continuity)**（即 "SAME" 逻辑），以确保时间流动的自然性，Start Frame仅填写“SAME”。
 
 **Exceptions: 下列情况严禁使用“SAME”逻辑，首帧必须重新独立描述 (Independent Generation)**
 1.  **场景切换 (Time/Space Jump)**: 
