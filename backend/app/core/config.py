@@ -8,6 +8,7 @@ from pydantic_settings import BaseSettings
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 class Settings(BaseSettings):
+    BASE_DIR: Path = BASE_DIR
     PROJECT_NAME: str = "AI Story"
     API_V1_STR: str = "/api/v1"
     
