@@ -7,12 +7,15 @@ from app.api import endpoints, settings as settings_api
 from app.db.session import engine
 from app.models.all_models import Base
 from app.core.logging import LoggingMiddleware, logger
+from app.db.init_db import check_and_migrate_tables
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 # Create DB tables
 Base.metadata.create_all(bind=engine)
+# Run migrations for existing tables
+check_and_migrate_tables()
 
 app = FastAPI(title=settings.PROJECT_NAME)
 
