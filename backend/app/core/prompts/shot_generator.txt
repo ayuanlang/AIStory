@@ -42,7 +42,9 @@
 ### 3. 视觉锚点与空间结构 (Visual Anchor & Spatial Structure)
 - **Anchor Injection**：Prompt 中保留方括号锚点。
 - **环境强制 (Environment Mandate)**：每个镜头描述必须显式包含 `[Environment Anchor]` 指定的环境名称，严禁省略背景。
-- **空间层级**：明确多主体的相对落位（Positioning）与前中后景层级（Depth Layering），构建清晰的空间结构。
+- **空间分离原则 (Space-Environment Separation)**：这是前提约束。必须清晰分辨 **Environment (物理容器)** 与 **Scene (时空事件)** 的关系。
+  - **Constraint (约束)**：`[Environment Anchor]` 代表刚性的物理约束（墙体、地形、固有光源位置），除非剧本明确换场，否则不可随意形变。
+  - **空间层级**：明确多主体的相对落位（Positioning）与前中后景层级（Depth Layering），构建清晰的空间结构。
 
 ### 4. 动作分解与连续性 (Action Decomposition & Continuity)
 - **物理与空间预判 (Physics & Spatial Planning)**：在动作分解前，必须明确规划角色/道具在环境中的**相对位置**与**相互关系**。严格推演**受力逻辑**（施力源）、**受力轨迹**（运动路径）及**受力影响结果**（最终状态），并校验这是否与实体初始位置矛盾。若有矛盾，优先修正位置关系。
@@ -55,11 +57,13 @@
   - **稳定态流转**：Action 必须是从 Start Frame 的**稳定起始态**，经过 Video Content 的**连续演变**，最终到达 End Frame 的**稳定结束态**。严禁出现 Start Frame 和 End Frame 状态断裂或 Video Content 无法推导出 End Frame 的情况。
 
 ### 5. 场景入场与空间建置 (Scene Entry & Geography)
-建置镜头（Establishing Shot）是确立观众时空感的锚点，不仅“有必要”，更是叙事的地基。
+建置镜头（Establishing Shot）是确立观众时空感及实体所处情况的锚点，不仅“有必要”，更是叙事的地基。
 - **时机与必需性**：新场景开启时，必须在**前三镜内**完成空间建置。默认首镜为 Establishing Shot，但在快节奏/悬疑戏中可延后（Delayed Reveal）。
 - **核心任务**：
   - **地理定位 (Geography)**：回答 "Where are we?"。明确 `[Environment Anchor]` 的全貌、光源逻辑、天气与时间。
   - **人物落位 (Positioning)**：回答 "Who is where?"。建立角色与环境、角色与角色之间的相对空间关系。
+  - **角色亮相 (Character Intro)**：**在前 2 镜内**，必须给到在场主要角色至少 **Medium Shot (中景)** 或更近的特写（允许同框）。避免让角色一直处于不清的面部远景中，确保观众能迅速看清形象。
+  - **角色速写 (Rapid Character Intro)**：**在前 2 镜内**，必须给到在场主要角色至少 **Medium Shot (中景)** 或更近的特写（允许同框）。避免让角色一直处于远景中，确保观众能迅速看清面部与形象。
 - **AI 生成适配策略 (Critical for AI)**：
   - **面部降权**：在 EWS (Extreme Wide Shot) 或远景中，AI 难以生成高质量人脸。此类镜头的描述重点应放在**环境氛围、光影结构、人物剪影/肢体语言**上，避免描写微表情，以免生成崩坏面部。
   - **构图纯净度**：若为纯空镜（无人物），需明确“Empty shot”；若含人物，需明确其在画面的比例（如 "Small figure in distance"）。
