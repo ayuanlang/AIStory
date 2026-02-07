@@ -32,6 +32,7 @@
 
 ### 2. 分镜逻辑与拆分
 - **最大化细分**：不节省镜头数量，将剧本拆为最小视觉单元。复合动作需按 Beat 拆分。
+- **合并原则 (Merging Exception)**：**优先保证尾帧稳定**。若按 Beat 拆分导致 End Frame 处于不稳定状态（如半空、动作中途），必须无视“最大化细分”原则，将当前 Beat 与下一 Beat **合并**，直到捕捉到下一个自然稳定点（Settled Point）。
 - **拆分铁律**：机位变化 = 新镜；时间跳跃 = 新镜；空间变化 = 新镜。
 - **景别递进**：同一 Scene 内遵循 Master → Medium → Close/Detail → Insert 的视觉呼吸感，避免单调重复。
 - **轴线规则**：恪守 180° 规则，破轴需有回位镜头或明确运镜意图（含视线轴线与动作轴线）。
@@ -45,7 +46,7 @@
 
 ### 4. 动作分解与连续性 (Action Decomposition & Continuity)
 - **物理与空间预判 (Physics & Spatial Planning)**：在动作分解前，必须明确规划角色/道具在环境中的**相对位置**与**相互关系**。严格推演**受力逻辑**（施力源）、**受力轨迹**（运动路径）及**受力影响结果**（最终状态），并校验这是否与实体初始位置矛盾。若有矛盾，优先修正位置关系。
-- **Frame Stability Check**：Start Frame 必须为“动作前的准备状态” (Pre-action state)；End Frame 必须为“动作后的稳定状态” (Post-action settled state)。严禁出现模糊的中间态或悬空未落定的物体。
+- **Frame Stability Check**：Start Frame 必须为“动作前的准备状态” (Pre-action state)；End Frame 必须为“动作后的稳定状态” (Post-action settled state)。严禁出现模糊的中间态或悬空未落定的物体。若发现 End Frame 不稳定，请立即触发**合并原则**。
 - **动作拆解 (Decomposition)**：所有动作/运动拆为物理可行、逻辑连续的序列，避免跳跃与断层；机位变/状态变即新镜。
 - **一致性 Check**：主动检查并修正位置跳跃、物理不可能、时间顺序错乱、交互不匹配的问题。
 - **实体闭环 (Entity Continuity)**：如果在 `Video Content` 中提及了任何实体（道具、角色、环境细节），该实体**必须**在 `Start Frame` 或 `End Frame` 的视觉描述中被明确包含，确保动作所涉及的对象在静态画面中真实存在。
