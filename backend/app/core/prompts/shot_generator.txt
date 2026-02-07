@@ -169,7 +169,12 @@
   - **图片景深 (Composition Layers)**：必须明确划分 **[Foreground] (前景)**、**[Midground] (中景)**、**[Background] (背景)**。例如： "Foreground: blurred leaves. Midground: [Subject A] standing. Background: [Environment Anchor] with city lights."。
   - **表情描述 (Facial Expression)**：Start Frame 与 End Frame 必须明确描述角色的面部表情状态（如 "Neutral expression", "Mouth slightly open in shock", "Eyes narrowed"）。此描述必须与 Video Content 中的情感演变保持**严格一致**（即 Start Frame 表情 = Video Content 起始表情；End Frame 表情 = Video Content 结束表情）。
   - **环境结构**：必须包含至少一个 `[Environment Anchor]`。
-  - **主体状态**：所有角色的具体姿态、朝向，相互的位置关系，着力点。
+  - **主体状态 (Subject Status)**：必须使用坐标思维 (X/Y/Z Axes) 明确描述主体与镜头的空间关系。
+    - **X轴 (Horizontal)**: 主体在画面横向的位置（Left, Center, Right）。
+    - **Y轴 (Vertical)**: 主体相对镜头的高度关系（Above, Below, Level）。
+    - **Z轴 (Depth)**: 主体距离镜头的具体物理距离（e.g., "2 meters away"），并明确所属景深层级（Foreground, Midground, Background）。
+    - **朝向 (Orientation)**: 身体与面部相对镜头的精确角度（e.g., "Facing camera directly," "Profile 90 degrees left"）。
+    - **姿态与互动**: 具体的身体姿势与着力点。
 - **禁止项 (Strict Prohibitions)**：
   - **Rule 1 (无动作动词)**：严禁使用 run, jump, fight 等动作动词。仅能使用名词短语或状态分词描述静态画面（如 "Man in running pose" 而非 "Man runs"）。
   - **Rule 2 (禁止抽象)**：严禁 angry, messy, beautiful 等抽象形容词。必须转化为可视物理特征（如 "Furrowed brows", "Overturned chairs"）。
