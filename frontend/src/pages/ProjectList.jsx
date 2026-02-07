@@ -25,7 +25,9 @@ import {
     Video,
     Mic,
     Palette,
-    Monitor
+    Monitor,
+    Activity,
+    Shield
 } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
@@ -228,6 +230,13 @@ const ProjectList = () => {
                 <div className="space-y-2 flex-1">
                     <SidebarItem id="projects" icon={Folder} label="My Projects" />
                     <SidebarItem id="assets" icon={Image} label="Assets Library" />
+                    <button 
+                        onClick={() => navigate('/admin/logs')}
+                        className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-muted-foreground hover:bg-secondary/50 hover:text-foreground`}
+                    >
+                        <Activity className="w-5 h-5" />
+                        System Logs
+                    </button>
                     {currentUser?.is_superuser && (
                          <button 
                             onClick={() => navigate('/admin/users')}

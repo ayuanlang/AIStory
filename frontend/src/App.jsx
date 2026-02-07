@@ -7,6 +7,7 @@ import Editor from './pages/Editor';
 import Settings from './pages/Settings';
 import Auth from './pages/Auth';
 import UserAdmin from './pages/UserAdmin';
+import SystemLogs from './pages/SystemLogs';
 import { LogProvider } from './context/LogContext';
 import LogPanel from './components/LogPanel';
 
@@ -34,6 +35,7 @@ function App() {
             <Route path="/settings" element={<PrivateRoute><Settings /></PrivateRoute>} />
             <Route path="/editor/:id" element={<PrivateRoute><Editor /></PrivateRoute>} />
             <Route path="/admin/users" element={<PrivateRoute><UserAdmin /></PrivateRoute>} />
+            <Route path="/admin/logs" element={<PrivateRoute><SystemLogs /></PrivateRoute>} />
           </Routes>
           <LogPanel />
         </div>

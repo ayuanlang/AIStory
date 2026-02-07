@@ -331,6 +331,7 @@ class MediaGenerationService:
                 "content": content_payload,
                 "duration": final_duration,
                 "logo_info": {"add_logo": False},
+                "watermark": False
             }
             
             # For Doubao (Ark), if image is provided, ratio should typically be omitted 

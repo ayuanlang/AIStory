@@ -46,6 +46,10 @@ router = APIRouter()
 media_service = MediaGenerationService()
 logger = logging.getLogger("api_logger")
 
+
+from app.services.system_log_service import log_action
+from app.schemas.system_log import SystemLogOut
+
 def get_system_api_setting(db: Session, provider: str = None, category: str = None) -> Optional[APISetting]:
     """Helper to find a system-level API configuration."""
     query = db.query(APISetting).join(User).filter(User.is_system == True, APISetting.is_active == True)
@@ -1502,6 +1506,9 @@ def login_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Ses
     if not user:
         raise HTTPException(status_code=400, detail="Incorrect email or password")
     
+    # Log Successful Login
+    log_action(db, user_id=user.id, user_name=user.username, action="LOGIN", details="User logged in via OAuth2 Form")
+    
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
         data={"sub": user.username}, expires_delta=access_token_expires
@@ -1516,7 +1523,12 @@ def login_json(login_data: LoginRequest, db: Session = Depends(get_db)):
     """
     user = authenticate_user(db, login_data.username, login_data.password)
     if not user:
+        # Optional: Log failed login attempts?
+        # log_action(db, user_id=None, user_name=login_data.username, action="LOGIN_FAILED", details="Incorrect password")
         raise HTTPException(status_code=400, detail="Incorrect email or password")
+    
+    # Log Successful Login
+    log_action(db, user_id=user.id, user_name=user.username, action="LOGIN", details="User logged in via API")
     
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
@@ -1524,6 +1536,26 @@ def login_json(login_data: LoginRequest, db: Session = Depends(get_db)):
     )
     return {"access_token": access_token, "token_type": "bearer"}
 
+
+
+from app.models.all_models import SystemLog
+
+@router.get("/system/logs", response_model=List[SystemLogOut])
+def get_system_logs(
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get system logs. Requires superuser or 'system' username.
+    """
+    is_admin = current_user.is_superuser or current_user.username == "system" or current_user.username == "admin"
+    if not is_admin:
+        raise HTTPException(status_code=403, detail="Not authorized to view system logs")
+    
+    logs = db.query(SystemLog).order_by(SystemLog.timestamp.desc()).offset(skip).limit(limit).all()
+    return logs
 
 # --- Assets ---
 

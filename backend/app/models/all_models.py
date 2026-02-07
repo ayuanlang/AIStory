@@ -20,6 +20,19 @@ class User(Base):
     projects = relationship("Project", back_populates="owner")
     api_settings = relationship("APISetting", back_populates="user")
     assets = relationship("Asset", back_populates="owner")
+    system_logs = relationship("SystemLog", back_populates="user")
+
+class SystemLog(Base):
+    __tablename__ = "system_logs"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    user_name = Column(String, nullable=True)
+    action = Column(String, index=True)
+    details = Column(Text, nullable=True)
+    ip_address = Column(String, nullable=True)
+    timestamp = Column(String, default=datetime.datetime.utcnow().isoformat)
+    
+    user = relationship("User", back_populates="system_logs")
 
 class Project(Base):
     __tablename__ = "projects"

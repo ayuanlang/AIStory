@@ -54,6 +54,12 @@ export const createProject = async (data) => {
     return response.data;
 }
 
+
+export const fetchSystemLogs = async (skip = 0, limit = 100) => {
+    const response = await api.get(`/system/logs?skip=${skip}&limit=${limit}`);
+    return response.data;
+}
+
 export const fetchProject = async (id) => {
     const response = await api.get(`/projects/${id}`);
     return response.data;
