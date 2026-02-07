@@ -1,6 +1,6 @@
 
 import React, { useEffect, useState } from 'react';
-import { fetchProjects, createProject, getSettings, updateSetting, getSettingDefaults, deleteSetting, deleteProject } from '../services/api';
+import { api, fetchProjects, createProject, getSettings, updateSetting, getSettingDefaults, deleteSetting, deleteProject } from '../services/api';
 import Editor from './Editor';
 import SettingsPage from './Settings';
 import AssetsLibrary from '../components/AssetsLibrary';
@@ -110,15 +110,13 @@ const ProjectList = () => {
         // Fetch User Info to check admin status
         const fetchMe = async () => {
              try {
-                const token = localStorage.getItem('token');
-                const res = await fetch(`${api.BASE_URL}/users/me`, {
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-                if (res.ok) {
-                    const data = await res.json();
-                    setCurrentUser(data);
+                const res = await api.get('/users/me');
+                if (res.data) {
+                    setCurrentUser(res.data);
                 }
-             } catch(e) {}
+             } catch(e) {
+                 console.error("Failed to fetch user info", e);
+             }
         };
         fetchMe();
     }, []);
@@ -258,8 +256,8 @@ const ProjectList = () => {
                             <User className="w-5 h-5 text-muted-foreground" />
                         </div>
                         <div className="flex-1 overflow-hidden">
-                            <p className="text-sm font-medium truncate">Creator</p>
-                            <p className="text-xs text-muted-foreground truncate">Free Plan</p>
+                            <p className="text-sm font-medium truncate">{currentUser?.full_name || currentUser?.username || "Guest User"}</p>
+                            <p className="text-xs text-muted-foreground truncate" title={currentUser?.email}>{currentUser?.email || "No Account"}</p>
                         </div>
                     </div>
                     <button 
