@@ -55,6 +55,126 @@ If the user's request is not clear or does not require a tool, return an empty p
 """
 
 class LLMService:
+    async def analyze_multimodal(self, prompt: str, image_url: str, config: Dict[str, Any]) -> str:
+        """
+        Analyzes an image with a prompt using multimodal LLM capabilities.
+        Supports:
+        1. Doubao/Ark format (if 'doubao' in model name or 'responses' endpoint used)
+        2. Standard OpenAI Vision format (fallback)
+        """
+        if not config:
+            return "Error: No LLM configuration found."
+
+        api_key = config.get("api_key")
+        base_url = config.get("base_url")
+        model = config.get("model")
+
+        if not api_key:
+             return "Error: Please configure your LLM API Key in Settings."
+
+        # Detect Doubao / Ark specific mode based on user instruction
+        is_doubao = "doubao" in (model or "").lower() or "ark.cn-" in (base_url or "").lower()
+
+        if is_doubao:
+            return await self._call_doubao_prop(base_url, api_key, model, prompt, image_url)
+        else:
+            return await self._call_openai_vision(base_url, api_key, model, prompt, image_url)
+
+    async def _call_doubao_prop(self, base_url: str, api_key: str, model: str, prompt: str, image_url: str) -> str:
+        """
+        Specific implementation for Doubao/Ark /api/v3/responses endpoint
+        Structure:
+        {
+            "model": "...",
+            "input": [ { "role": "user", "content": [ { "type": "input_image", ... }, { "type": "input_text", ... } ] } ]
+        }
+        """
+        # Construct specific Doubao URL
+        # base_url usually: https://ark.cn-beijing.volces.com/api/v3
+        url = base_url.rstrip("/")
+        if url.endswith("/chat/completions"):
+            url = url.replace("/chat/completions", "/responses")
+        elif not url.endswith("/responses"):
+             url = f"{url}/responses"
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+
+        payload = {
+            "model": model,
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_image",
+                            "image_url": image_url
+                        },
+                        {
+                            "type": "input_text",
+                            "text": prompt
+                        }
+                    ]
+                }
+            ]
+        }
+        
+        logger.info(f"Calling Doubao Multimodal: {url} model={model}")
+
+        def _request():
+            return requests.post(url, headers=headers, json=payload, timeout=120)
+
+        try:
+            response = await asyncio.to_thread(_request)
+            
+            if response.status_code != 200:
+                 # Try fallback to standard OpenAI format if 404/400, in case it's a standard model
+                 logger.warning(f"Doubao proprietary call failed: {response.text}. Attempting OpenAI standard format...")
+                 return await self._call_openai_vision(base_url, api_key, model, prompt, image_url)
+                 
+            data = response.json()
+            # Doubao responses format might differ?
+            # Usually Ark /responses returns similar to /chat/completions but 'choices' key exists
+            if "choices" in data and len(data["choices"]) > 0:
+                return data["choices"][0]["message"]["content"]
+            else:
+                 return f"Error: Unexpected response format from Doubao: {data}"
+                 
+        except Exception as e:
+            logger.error(f"Doubao Multimodal failed: {e}")
+            return f"Error: {e}"
+
+    async def _call_openai_vision(self, base_url: str, api_key: str, model: str, prompt: str, image_url: str) -> str:
+        """Standard OpenAI Vision Format"""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text", 
+                        "text": prompt
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": image_url
+                        }
+                    }
+                ]
+            }
+        ]
+        
+        # Reuse existing raw request logic but we need to ensure it processes the list content correctly
+        # The existing _raw_llm_request takes `messages` list and sends it as JSON.
+        # So it should simply work if we call it.
+        try:
+             return await self._raw_llm_request(base_url, api_key, model, messages)
+        except Exception as e:
+             logger.error(f"OpenAI Vision call failed: {e}")
+             return f"Error: {e}"
+
     async def analyze_intent(self, query: str, context: Dict[str, Any], history: List[Dict[str, str]], config: Dict[str, Any]) -> Dict[str, Any]:
         """
         Analyzes user query and returns a plan (list of tool calls).

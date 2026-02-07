@@ -982,7 +982,12 @@ async def ai_generate_shots(
         
         shots_data = []
         if len(table_lines) > 2:
-            headers = [h.strip() for h in table_lines[0].strip('|').split('|')]
+            # Robust header parsing: strip whitespace and markdown bold/italic markers
+            raw_headers = [h.strip() for h in table_lines[0].strip('|').split('|')]
+            headers = [h.replace('*', '').replace('_', '').strip() for h in raw_headers]
+            
+            logger.info(f"[ai_generate_shots] headers detected: {headers}")
+
             # Expected mappings (flexible)
             # Shot ID, Shot Name, Start Frame, End Frame, Video Content, Duration (s), Associated Entities
             
@@ -990,12 +995,14 @@ async def ai_generate_shots(
                 if "---" in line: continue 
                 
                 cols = [c.strip() for c in line.strip('|').split('|')]
-                if len(cols) >= len(headers): # Handle matches
+                if len(cols) >= len(headers):
                     shot_dict = {}
                     for i, h in enumerate(headers):
                         if i < len(cols):
                             shot_dict[h] = cols[i]
                     shots_data.append(shot_dict)
+                else:
+                    logger.warning(f"[ai_generate_shots] Skipping malformed line (cols={len(cols)}, headers={len(headers)}): {line[:50]}...")
 
         if not shots_data:
              print("DEBUG: No table found. Content:", response_content)
@@ -2070,5 +2077,63 @@ async def generate_montage(
         return {"url": url}
     except Exception as e:
         logger.error(f"Montage failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class AnalyzeImageRequest(BaseModel):
+    asset_id: int
+
+@router.post("/assets/analyze", response_model=Dict[str, str])
+async def analyze_asset_image(
+    request: AnalyzeImageRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Analyzes an asset image to extract style and prompt descriptions.
+    """
+    # 1. Fetch Asset
+    asset = db.query(Asset).filter(Asset.id == request.asset_id).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail="Asset not found")
+        
+    # Check permissions
+    if asset.owner_id != current_user.id and not current_user.is_superuser:
+         raise HTTPException(status_code=403, detail="Not authorized")
+
+    # 2. Get LLM Config
+    llm_config = settings_api.get_llm_config_internal(db, current_user.id)
+    if not llm_config:
+        raise HTTPException(status_code=400, detail="LLM Settings not configured")
+
+    # 3. Load System Prompt
+    prompt_path = os.path.join(settings.BASE_DIR, "app/core/prompts", "image_style_extractor.txt")
+    if os.path.exists(prompt_path):
+        with open(prompt_path, "r", encoding="utf-8") as f:
+            system_prompt = f.read()
+    else:
+        system_prompt = "Describe the art style and visual elements of this image."
+
+    # 4. Construct Image URL
+    # Assuming valid public URL or accessible internal URL
+    base_url = os.getenv("RENDER_EXTERNAL_URL", "http://localhost:8000")
+    # Clean up double slashes just in case
+    image_path = asset.file_path
+    if not image_path.startswith("/"):
+        image_path = "/" + image_path
+    image_url = f"{base_url}{image_path}"
+    
+    logger.info(f"Analyzing Image: {image_url}")
+
+    # 5. Call Service
+    try:
+        result = await llm_service.analyze_multimodal(
+            prompt=system_prompt,
+            image_url=image_url,
+            config=llm_config
+        )
+        return {"result": result}
+    except Exception as e:
+        logger.error(f"Image analysis failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 

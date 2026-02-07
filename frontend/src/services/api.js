@@ -274,6 +274,11 @@ export const updateAsset = async (id, data) => {
     return response.data;
 };
 
+export const analyzeAssetImage = async (asset_id) => {
+    const response = await api.post('/assets/analyze', { asset_id });
+    return response.data;
+};
+
 export const translateText = async (q, from_lang = 'en', to_lang = 'zh') => {
     const response = await api.post('/tools/translate', { q, from_lang, to_lang });
     return response.data;

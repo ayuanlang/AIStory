@@ -3,9 +3,10 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { 
     Image, Video, Upload, Link as LinkIcon, Plus, X, 
     MoreVertical, Trash2, Edit2, Info, Maximize2,
-    Folder, User, Film, Globe, Layers, ArrowDown, ArrowUp
+    Folder, User, Film, Globe, Layers, ArrowDown, ArrowUp,
+    Sparkles, Copy, Loader2
 } from 'lucide-react';
-import { fetchAssets, createAsset, uploadAsset, deleteAsset, updateAsset } from '../services/api';
+import { fetchAssets, createAsset, uploadAsset, deleteAsset, updateAsset, analyzeAssetImage } from '../services/api';
 import { useLog } from '../context/LogContext';
 import { API_URL } from '../config';
 import RefineControl from './RefineControl.jsx';
@@ -592,10 +593,85 @@ const AssetDetailModal = ({ asset, onClose, onUpdate }) => {
                                 />
                             </div>
                         )}
+                        
+                        {asset.type === 'image' && (
+                             <AnalyzeSection asset={asset} />
+                        )}
                     </div>
                 </div>
             </motion.div>
          </div>
+    );
+};
+
+const AnalyzeSection = ({ asset }) => {
+    const [analyzing, setAnalyzing] = useState(false);
+    const [result, setResult] = useState('');
+
+    const handleAnalyze = async () => {
+        setAnalyzing(true);
+        try {
+            const data = await analyzeAssetImage(asset.id);
+            setResult(data.result);
+        } catch (e) {
+            console.error(e);
+            setResult(`Analysis Failed: ${e.message}`);
+        } finally {
+            setAnalyzing(false);
+        }
+    };
+
+    const copyToClipboard = () => {
+        if (!result) return;
+        navigator.clipboard.writeText(result);
+        alert("Prompt copied to clipboard!"); 
+    };
+
+    return (
+        <div className="pt-6 border-t border-white/10 mt-6">
+            <div className="flex justify-between items-center mb-3">
+                <label className="text-xs font-bold text-muted-foreground uppercase block flex items-center gap-2">
+                    <Sparkles size={12} className="text-primary" />
+                    Style Analysis
+                </label>
+                {result && (
+                     <button onClick={copyToClipboard} className="text-white/60 hover:text-white" title="Copy">
+                        <Copy size={12} />
+                     </button>
+                )}
+            </div>
+            
+            {!result && !analyzing && (
+                <button 
+                    onClick={handleAnalyze}
+                    className="w-full py-2 bg-secondary/50 border border-white/10 rounded-lg text-xs font-medium hover:bg-secondary hover:text-white transition-colors flex items-center justify-center gap-2"
+                >
+                    <Sparkles size={14} />
+                    Extract Style & Prompt
+                </button>
+            )}
+
+            {analyzing && (
+                <div className="flex items-center justify-center py-4 text-xs text-muted-foreground gap-2">
+                    <Loader2 size={14} className="animate-spin text-primary" />
+                    Analyzing image...
+                </div>
+            )}
+
+            {result && (
+                <div className="relative group">
+                    <p className="text-xs leading-relaxed text-white/80 p-3 bg-black/30 border border-white/5 rounded-lg max-h-40 overflow-y-auto font-mono">
+                        {result}
+                    </p>
+                    <button 
+                        onClick={() => setResult('')}
+                        className="absolute right-2 top-2 p-1 text-white/20 hover:text-red-400 hidden group-hover:block"
+                    >
+                        <X size={10} />
+                    </button>
+                </div>
+            )}
+        </div>
     );
 };
 
