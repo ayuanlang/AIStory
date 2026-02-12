@@ -104,10 +104,43 @@ def check_and_migrate_tables():
                         logger.error(f"Failed to add {col_name} with SQLite syntax: {e_sqlite}")
                         raise e_sqlite # Re-raise if both fail
 
-        # 3. Verify
+        # 3. Verify Users
         inspector = inspect(engine)
         final_cols = [c['name'] for c in inspector.get_columns('users')]
-        print(f"Final columns: {final_cols}")
+        print(f"Final users columns: {final_cols}")
+
+        # --- MIGRATE SHOTS TABLE ---
+        logger.info("Checking 'shots' table for missing columns...")
+        existing_shot_columns = [c['name'] for c in inspector.get_columns('shots')]
+        print(f"Existing columns in 'shots': {existing_shot_columns}")
+
+        # format: (column_name, sql_type_and_default)
+        shot_columns_to_check = [
+            ("keyframes", "TEXT"),
+            ("associated_entities", "TEXT"),
+            ("shot_logic_cn", "TEXT"),
+            ("scene_code", "VARCHAR") 
+        ]
+
+        shot_columns_to_add = []
+        for col_name, col_def in shot_columns_to_check:
+            if col_name not in existing_shot_columns:
+                shot_columns_to_add.append((col_name, col_def))
+        
+        if shot_columns_to_add:
+            with engine.begin() as conn:
+                for col_name, col_type in shot_columns_to_add:
+                    print(f"Migrating shots.{col_name}...")
+                    logger.info(f"Adding column shots.{col_name}...")
+                    try:
+                        conn.execute(text(f"ALTER TABLE shots ADD COLUMN {col_name} {col_type}"))
+                        logger.info(f"Successfully added shots.{col_name}")
+                    except Exception as e:
+                        logger.error(f"Failed to add shots.{col_name}: {e}")
+                        # Don't re-raise immediately so we can try others? No, DB might be in bad state.
+                        
+        final_shot_cols = [c['name'] for c in inspector.get_columns('shots')]
+        print(f"Final shots columns: {final_shot_cols}")
         
     except Exception as e:
         logger.critical(f"Migration CRITICAL FAILURE: {e}")

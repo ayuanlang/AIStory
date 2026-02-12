@@ -4782,7 +4782,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                              if (val) console.log("DEBUG: Found shot_logic_cn:", val);
                              return val;
                          })(),
-                         
+                         keyframes: useMap ? getVal(['keyframes', 'key frames', '关键帧', 'kf'], 8) : '',
+
                          // Clear unused
                          shot_type: '',
                          lens: '',
@@ -5008,6 +5009,172 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         }
     }, [editingShot?.id, entities]); // Only run when shot ID changes or entities load
 
+    // Keyframe State Management
+    const [localKeyframes, setLocalKeyframes] = useState([]);
+    
+    // Parse keyframes from shot text + technical_notes images
+    useEffect(() => {
+        if (!editingShot) return;
+
+        const rawText = editingShot.keyframes || "";
+        const tech = JSON.parse(editingShot.technical_notes || '{}');
+        const legacyUrls = tech.keyframes || [];
+        const mappedImages = tech.keyframe_images || {}; // Map: "1.5s": url
+
+        let parsed = [];
+        
+        // 1. Parse Text Prompts
+        if (rawText && rawText !== "NO" && rawText.length > 5) {
+            // Regex to find [Time: XX] blocks
+            // Assumption: keyframes are separated by [Time: ...]
+            // Example: [Time: 1.5s] Desc... [Time: 2.0s] Desc...
+            // Or newlines.
+            const parts = rawText.split(/\[Time:\s*/i).filter(p => p.trim().length > 0);
+            
+            parts.forEach((p, idx) => {
+                // p will be "1.5s] Description..."
+                const closeBracket = p.indexOf(']');
+                let time = `KF${idx+1}`;
+                let prompt = p;
+                
+                if (closeBracket > -1) {
+                    time = p.substring(0, closeBracket).trim();
+                    prompt = p.substring(closeBracket+1).trim();
+                } else {
+                    // Fallback
+                    prompt = "[Time: " + p; 
+                }
+                
+                // Find image
+                // Try map first
+                let url = mappedImages[time];
+                
+                // Fallback to legacy array if index matches and no map entry
+                if (!url && idx < legacyUrls.length) {
+                    url = legacyUrls[idx];
+                }
+
+                parsed.push({ id: idx, time, prompt, url });
+            });
+        }
+        
+        // 2. Append extra legacy images that didn't match validation text
+        if (legacyUrls.length > parsed.length) {
+            for (let i = parsed.length; i < legacyUrls.length; i++) {
+                parsed.push({ 
+                    id: i, 
+                    time: `Legacy ${i+1}`, 
+                    prompt: "Legacy Keyframe (Image Only)", 
+                    url: legacyUrls[i],
+                    isLegacy: true
+                });
+            }
+        }
+        
+        // If empty and not "NO", maybe init one? No, let user add.
+        setLocalKeyframes(parsed);
+        
+    }, [editingShot?.id, editingShot?.keyframes, editingShot?.technical_notes]);
+
+    const handleUpdateKeyframePrompt = (idx, newText) => {
+        const updated = [...localKeyframes];
+        updated[idx].prompt = newText;
+        setLocalKeyframes(updated);
+        // Debounced save or save on blur is better, but here we can just wait for a "Save" action or similar
+        // Or reconstruct immediately. Reconstructing immediately is safer for consistency.
+        reconstructKeyframes(updated);
+    };
+    
+    const reconstructKeyframes = async (currentList, newTechOverride = null) => {
+         // Rebuild shot.keyframes String
+         // Format: [Time: time] prompt ...
+         
+         const textParts = currentList
+            .filter(k => !k.isLegacy) // Legacy items don't go into text unless converted
+            .map(k => `[Time: ${k.time}] ${k.prompt}`);
+         
+         const newKeyframesText = textParts.length > 0 ? textParts.join('\n') : "NO";
+         
+         // Rebuild Technical Notes
+         const tech = JSON.parse(editingShot.technical_notes || '{}');
+         
+         // 1. Legacy Array (keep for safety, but sync with list)
+         const urls = currentList.map(k => k.url).filter(Boolean);
+         tech.keyframes = urls;
+         
+         // 2. Map (Preferred)
+         const imgMap = {};
+         currentList.forEach(k => {
+             if (k.url) imgMap[k.time] = k.url;
+         });
+         tech.keyframe_images = imgMap;
+         
+         if (newTechOverride) {
+             Object.assign(tech, newTechOverride);
+         }
+         
+         // Update Local Logic (Optimistic)
+         // We don't setLocalKeyframes here because that would trigger re-render loop if we are not careful
+         // But we need to update 'editingShot' to trigger persistence
+         
+         const newData = {
+             keyframes: newKeyframesText,
+             technical_notes: JSON.stringify(tech)
+         };
+         
+         // Update parent
+         await onUpdateShot(editingShot.id, newData);
+         // setEditingShot handled by onUpdateShot's internal state update wrapper if we used one, 
+         // but local setEditingShot is raw.
+         // onUpdateShot does: setShots ... and setEditingShot ...
+         // So this will trigger useEffect parse again.
+         // This might cause cursor jump in textarea. 
+         // Strategy: Only update 'editingShot' if we are sure? 
+         // Or rely on the fact that we are editing 'localKeyframes' state for text, and only syncing on Blur?
+    };
+
+    // Helper for Generating Keyframe
+    const handleGenerateKeyframe = async (kfIndex) => {
+        const kf = localKeyframes[kfIndex];
+        if (!kf) return;
+        
+        // UI Loading State (Local)
+        const updated = [...localKeyframes];
+        updated[kfIndex].loading = true;
+        setLocalKeyframes(updated); // Show spinner
+        
+        onLog?.(`Generating Keyframe for T=${kf.time}...`, 'info');
+        
+        try {
+            // Prompt Construction
+            const globalCtx = getGlobalContextStr();
+            const fullPrompt = kf.prompt + globalCtx;
+            
+            // Generate
+            const res = await generateImage(fullPrompt, null, null, {
+                project_id: projectId,
+                shot_id: editingShot.id,
+                shot_number: `${editingShot.shot_id}_KF_${kf.time}`,
+                asset_type: 'keyframe'
+            });
+            
+            if (res && res.url) {
+                updated[kfIndex].url = res.url;
+                updated[kfIndex].loading = false;
+                
+                // Save
+                setLocalKeyframes([...updated]); // Force re-render with image
+                await reconstructKeyframes(updated);
+                onLog?.(`Keyframe T=${kf.time} Generated.`, 'success');
+            }
+        } catch(e) {
+            console.error(e);
+            onLog?.(`Keyframe Gen Failed: ${e.message}`, 'error');
+            updated[kfIndex].loading = false;
+            setLocalKeyframes(updated);
+        }
+    };
+    
     // --- Entity Injection Helper ---
     // Converts [Name] -> {Name}(Description) ...
     const injectEntityFeatures = (text) => {
@@ -6432,26 +6599,30 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                     </div>
                                 </div>
 
-                                {/* Keyframes Section */}
-                                <div className="space-y-2 border-t border-white/10 pt-4">
+
+                                {/* Keyframes Section (Enhanced) */}
+                                <div className="space-y-4 border-t border-white/10 pt-4">
                                      <div className="flex justify-between items-center">
                                         <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
-                                            Keyframes (Intermediate)
+                                            Keyframes (Timeline)
                                             <span className="bg-white/10 text-white px-1.5 rounded-full text-[9px]">
-                                                {(() => {
-                                                    try { return (JSON.parse(editingShot.technical_notes || '{}').keyframes || []).length; } catch(e){ return 0; }
-                                                })()}
+                                                {localKeyframes.length}
                                             </span>
                                         </div>
                                         <button 
                                             onClick={() => {
-                                                openMediaPicker((url) => {
-                                                    const tech = JSON.parse(editingShot.technical_notes || '{}');
-                                                    const keys = tech.keyframes || [];
-                                                    keys.push(url);
-                                                    tech.keyframes = keys;
-                                                    setEditingShot({...editingShot, technical_notes: JSON.stringify(tech)});
-                                                });
+                                                const newTime = `${(localKeyframes.length + 1) * 1.0}s`;
+                                                const newKf = { 
+                                                    id: Date.now(), 
+                                                    time: newTime, 
+                                                    prompt: "[Global Style] ...", 
+                                                    url: "" 
+                                                };
+                                                const newList = [...localKeyframes, newKf];
+                                                setLocalKeyframes(newList);
+                                                // Trigger save logic? Maybe wait for edit?
+                                                // auto-save structure
+                                                // reconstructKeyframes(newList); // Optional, maybe let user edit first
                                             }}
                                             className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-1 rounded flex items-center gap-1"
                                         >
@@ -6459,38 +6630,120 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                         </button>
                                     </div>
                                     
-                                    <div className="flex gap-2 overflow-x-auto pb-2 min-h-[80px]">
-                                        {(() => {
-                                            try { 
-                                                const keys = JSON.parse(editingShot.technical_notes || '{}').keyframes || [];
-                                                if (keys.length === 0) return <div className="text-xs text-muted-foreground italic p-2">No keyframes added.</div>;
-                                                return keys.map((url, idx) => (
-                                                    <div key={idx} className="relative w-[120px] aspect-video flex-shrink-0 group">
-                                                        <img 
-                                                            src={url} 
-                                                            className="w-full h-full object-cover rounded border border-white/10 cursor-pointer"
-                                                            onClick={() => setViewMedia({ url, type: 'image', title: `Keyframe #${idx+1}` })}
-                                                        />
-                                                        <button 
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                const tech = JSON.parse(editingShot.technical_notes || '{}');
-                                                                const k = tech.keyframes || [];
-                                                                k.splice(idx, 1);
-                                                                tech.keyframes = k;
-                                                                setEditingShot({...editingShot, technical_notes: JSON.stringify(tech)});
+                                    <div className="flex gap-4 overflow-x-auto pb-4 min-h-[160px] snap-x">
+                                        {localKeyframes.length === 0 && (
+                                            <div className="text-xs text-muted-foreground italic p-2 w-full text-center border-dashed border border-white/10 rounded">
+                                                No keyframes defined. Add one to start complex motion planning.
+                                            </div>
+                                        )}
+                                        {localKeyframes.map((kf, idx) => (
+                                            <div key={idx} className="relative w-[280px] flex-shrink-0 bg-black/20 rounded border border-white/10 p-2 space-y-2 snap-center group">
+                                                {/* Header */}
+                                                <div className="flex justify-between items-center text-[10px]">
+                                                    <div className="flex items-center gap-1">
+                                                        <span className="text-muted-foreground font-bold">T=</span>
+                                                        <input 
+                                                            className="bg-transparent border-b border-white/10 w-12 text-center focus:border-primary outline-none text-white"
+                                                            value={kf.time}
+                                                            onChange={(e) => {
+                                                                const updated = [...localKeyframes];
+                                                                updated[idx].time = e.target.value;
+                                                                setLocalKeyframes(updated);
                                                             }}
-                                                            className="absolute top-1 right-1 bg-black/80 text-red-500 p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity"
-                                                        >
-                                                            <X className="w-3 h-3"/>
-                                                        </button>
-                                                        <div className="absolute bottom-1 left-1 bg-black/60 text-[9px] px-1 rounded text-white">{idx+1}</div>
+                                                            onBlur={() => reconstructKeyframes(localKeyframes)}
+                                                        />
                                                     </div>
-                                                ));
-                                            } catch(e){ return null; }
-                                        })()}
+                                                    <div className="flex gap-1">
+                                                        <button 
+                                                            onClick={() => handleGenerateKeyframe(idx)} 
+                                                            className="px-1.5 py-0.5 bg-primary/20 hover:bg-primary/30 text-primary rounded flex items-center gap-1"
+                                                            disabled={kf.loading}
+                                                        >
+                                                            {kf.loading ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
+                                                            Gen
+                                                        </button>
+                                                        <button 
+                                                            onClick={() => {
+                                                                const updated = [...localKeyframes];
+                                                                updated.splice(idx, 1);
+                                                                setLocalKeyframes(updated);
+                                                                reconstructKeyframes(updated);
+                                                            }}
+                                                            className="p-1 hover:bg-red-500/20 text-muted-foreground hover:text-red-500 rounded transition-colors"
+                                                        >
+                                                            <Trash2 className="w-3 h-3"/>
+                                                        </button>
+                                                    </div>
+                                                </div>
+
+                                                {/* Image Area */}
+                                                <div className="aspect-video bg-black/40 rounded border border-white/10 relative overflow-hidden group/image">
+                                                    {kf.url ? (
+                                                        <>
+                                                            <img 
+                                                                src={kf.url} 
+                                                                className="w-full h-full object-cover cursor-pointer hover:opacity-90"
+                                                                onClick={() => setViewMedia({ url: kf.url, type: 'image', title: `Keyframe T=${kf.time}`, prompt: kf.prompt })}
+                                                            />
+                                                            <button 
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    if(!confirm("Remove image?")) return;
+                                                                    const updated = [...localKeyframes];
+                                                                    updated[idx].url = "";
+                                                                    setLocalKeyframes(updated);
+                                                                    reconstructKeyframes(updated);
+                                                                }}
+                                                                className="absolute top-1 right-1 bg-black/60 text-white p-1 rounded opacity-0 group-hover/image:opacity-100 transition-opacity"
+                                                            >
+                                                                <Trash2 className="w-3 h-3"/>
+                                                            </button>
+                                                        </>
+                                                    ) : (
+                                                        <div className="absolute inset-0 flex items-center justify-center opacity-20">
+                                                            <ImageIcon className="w-6 h-6"/>
+                                                        </div>
+                                                    )}
+                                                    
+                                                    {/* Quick Set Button Overlay */}
+                                                    <div className="absolute bottom-1 right-1 opacity-0 group-hover/image:opacity-100 transition-opacity">
+                                                        <button 
+                                                            onClick={() => openMediaPicker((url) => {
+                                                                const updated = [...localKeyframes];
+                                                                updated[idx].url = url;
+                                                                setLocalKeyframes(updated);
+                                                                reconstructKeyframes(updated);
+                                                            })}
+                                                            className="bg-black/60 hover:bg-white/20 text-white text-[9px] px-1.5 py-0.5 rounded flex items-center gap-1 backdrop-blur-sm"
+                                                        >
+                                                            <Upload className="w-2.5 h-2.5"/> Set
+                                                        </button>
+                                                    </div>
+
+                                                    {kf.loading && (
+                                                        <div className="absolute inset-0 bg-black/60 flex items-center justify-center z-10">
+                                                            <Loader2 className="w-5 h-5 animate-spin text-primary"/>
+                                                        </div>
+                                                    )}
+                                                </div>
+
+                                                {/* Prompt Area */}
+                                                <textarea 
+                                                    className="w-full bg-black/20 border border-white/10 rounded p-1.5 text-[10px] h-[60px] focus:border-primary/50 outline-none resize-none"
+                                                    placeholder="Keyframe Description..."
+                                                    value={kf.prompt}
+                                                    onChange={(e) => {
+                                                        const updated = [...localKeyframes];
+                                                        updated[idx].prompt = e.target.value;
+                                                        setLocalKeyframes(updated);
+                                                    }}
+                                                    onBlur={() => reconstructKeyframes(localKeyframes)}
+                                                />
+                                            </div>
+                                        ))}
                                     </div>
                                 </div>
+
 
                                 {/* Video Result - REMOVED from here, moved up */}
                             </div>
