@@ -5,7 +5,7 @@ import { useLog } from '../context/LogContext';
 import { useStore } from '../lib/store';
 import LogPanel from '../components/LogPanel';
 import AgentChat from '../components/AgentChat';
-import { MessageSquare, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Languages, Loader2, Save, Layers, ArrowUp, Sparkles } from 'lucide-react';
+import { MessageSquare, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
     fetchProject, 
@@ -250,7 +250,7 @@ const InputGroup = ({ label, value, onChange, list, placeholder, idPrefix, multi
 };
 
 // Mock Data / Placeholders for Tabs
-const ProjectOverview = ({ id }) => {
+const ProjectOverview = ({ id, onProjectUpdate }) => {
     const [project, setProject] = useState(null);
     const [info, setInfo] = useState({
         script_title: "",
@@ -306,6 +306,7 @@ const ProjectOverview = ({ id }) => {
         try {
             await updateProject(id, { global_info: info });
             alert("Project info saved!");
+            if (onProjectUpdate) onProjectUpdate();
         } catch (e) {
             console.error("Failed to save", e);
             alert("Failed to save.");
@@ -815,7 +816,7 @@ const EpisodeInfo = ({ episode, onUpdate }) => {
 };
 
 
-const ScriptEditor = ({ activeEpisode, onUpdateScript, onLog }) => {
+const ScriptEditor = ({ activeEpisode, project, onUpdateScript, onLog }) => {
     const [segments, setSegments] = useState([]);
     const [showMerged, setShowMerged] = useState(false);
     const [mergedContent, setMergedContent] = useState('');
@@ -1002,7 +1003,26 @@ const ScriptEditor = ({ activeEpisode, onUpdateScript, onLog }) => {
             try {
                 const res = await fetchPrompt("scene_analysis.txt");
                 setSystemPrompt(res.content);
-                setUserPrompt(rawContent);
+                
+                // Construct full user prompt with metadata visible
+                let fullContent = rawContent;
+                if (project?.global_info) {
+                     const info = project.global_info;
+                     const metaParts = ["Project Overview Context:"];
+                     if (info.script_title) metaParts.push(`Title: ${info.script_title}`);
+                     if (info.type) metaParts.push(`Type: ${info.type}`);
+                     if (info.tone) metaParts.push(`Tone: ${info.tone}`);
+                     if (info.Global_Style) metaParts.push(`Global Style: ${info.Global_Style}`);
+                     if (info.base_positioning) metaParts.push(`Base Positioning: ${info.base_positioning}`);
+                     if (info.lighting) metaParts.push(`Lighting: ${info.lighting}`);
+                     if (info.series_episode) metaParts.push(`Episode: ${info.series_episode}`);
+                     
+                     if (metaParts.length > 1) {
+                        fullContent = `${metaParts.join('\n')}\n\nScript to Analyze:\n\n${rawContent}`;
+                     }
+                }
+                
+                setUserPrompt(fullContent);
                 setShowAnalysisModal(true);
             } catch (e) {
                 console.error("Failed to fetch system prompt", e);
@@ -1020,12 +1040,17 @@ const ScriptEditor = ({ activeEpisode, onUpdateScript, onLog }) => {
         }
     };
 
-    const executeAnalysis = async (content, customSystemPrompt = null) => {
+    const executeAnalysis = async (content, customSystemPrompt = null, skipMetadata = false) => {
         setIsAnalyzing(true);
         if (onLog) onLog("Starting AI Scene Analysis...", "start");
 
         try {
-            const result = await analyzeScene(content, customSystemPrompt);
+            // Include project metadata if available, unless skipped (baked in)
+            const metadata = skipMetadata ? null : (project?.global_info || null);
+            console.log("[ScriptEditor] Executing Analysis. Project Prop:", project);
+            console.log("[ScriptEditor] Using Metadata:", metadata);
+            
+            const result = await analyzeScene(content, customSystemPrompt, metadata);
             const analyzedText = result.result || result.analysis || (typeof result === 'string' ? result : JSON.stringify(result));
 
             setRawContent(analyzedText);
@@ -1214,7 +1239,7 @@ const ScriptEditor = ({ activeEpisode, onUpdateScript, onLog }) => {
                                 <Copy className="w-4 h-4" /> Copy Full Prompt
                              </button>
                              <button 
-                                onClick={() => executeAnalysis(userPrompt, systemPrompt)}
+                                onClick={() => executeAnalysis(userPrompt, systemPrompt, true)}
                                 disabled={isAnalyzing}
                                 className="flex items-center gap-2 px-6 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                              >
@@ -1385,11 +1410,12 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
     const [assets, setAssets] = useState([]);
     const [loading, setLoading] = useState(false);
     const [uploading, setUploading] = useState(false);
+    const [selectedAsset, setSelectedAsset] = useState(null); // Detail/Preview Mode
     
     // Filters
-    const [filterScope, setFilterScope] = useState('project'); // 'project', 'subject', 'shot'
+    const [filterScope, setFilterScope] = useState('project'); // 'project', 'subject', 'shot', 'type'
     const [filterType, setFilterType] = useState('all'); // 'all', 'image', 'video'
-    const [filterValue, setFilterValue] = useState(''); // entity_id or shot_id
+    const [filterValue, setFilterValue] = useState(''); // entity_id or shot_id or entity_type
     
     const [availableShots, setAvailableShots] = useState([]);
 
@@ -1434,22 +1460,31 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
         if (projectId) params.project_id = projectId;
         
         // Refine scope
+        let clientSideFilterIds = null; // If set, filter by these entity IDs locally
+
         if (filterScope === 'subject' && filterValue) {
             params.entity_id = filterValue;
         } else if (filterScope === 'shot' && filterValue) {
             params.shot_id = filterValue;
+        } else if (filterScope === 'type' && filterValue) {
+            // "By Type" strategy: Fetch project assets, then filter by entity_id belonging to that type
+            // Find all entities of this type
+            const targetEntities = entities.filter(e => (e.type || 'prop').toLowerCase() === filterValue.toLowerCase());
+            clientSideFilterIds = new Set(targetEntities.map(e => e.id));
         }
         
-        // Context override (legacy behavior maintained if scope is 'context'?)
-        // The original code had 'context' scope.
-        // Let's support 'context' as 'Automatic' or just merge it.
-        // Previous logic: if filterScope === 'context' ...
-        // We replaced 'context' with explicit 'subject'/'shot' options in UI, 
-        // but let's keep 'project' as default.
-        
         fetchAssets(params).then(data => {
-            // Backend already sorts by created_at desc
-            setAssets(data || []);
+            let res = data || [];
+            
+            // Client-side filtering for Entity Type logic (if backend doesn't support recursive type filtering)
+            if (clientSideFilterIds) {
+                res = res.filter(a => {
+                    const eid = a.meta_info?.entity_id;
+                    return eid && clientSideFilterIds.has(Number(eid));
+                });
+            }
+
+            setAssets(res);
         }).catch(console.error).finally(() => setLoading(false));
     };
 
@@ -1511,11 +1546,25 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
                             className="bg-[#151515] border border-white/10 rounded text-xs px-2 py-1 text-white outline-none focus:border-primary/50"
                         >
                             <option value="project">All Project Assets</option>
-                            <option value="subject">By Subject (Entity)</option>
+                            <option value="type">By Subject Type</option>
+                            <option value="subject">By Exact Subject</option>
                             <option value="shot">By Storyboard (Shot)</option>
                         </select>
 
                         {/* Refinement Selector */}
+                        {filterScope === 'type' && (
+                             <select 
+                                value={filterValue}
+                                onChange={(e) => setFilterValue(e.target.value)}
+                                className="bg-[#151515] border border-white/10 rounded text-xs px-2 py-1 text-white outline-none focus:border-primary/50 max-w-[150px]"
+                            >
+                                <option value="">Select Type...</option>
+                                <option value="character">Characters</option>
+                                <option value="prop">Props</option>
+                                <option value="environment">Environments</option>
+                            </select>
+                        )}
+
                         {filterScope === 'subject' && (
                              <select 
                                 value={filterValue}
@@ -1561,7 +1610,7 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
                             {assets.map(asset => (
                                 <div 
                                     key={asset.id} 
-                                    onClick={() => onSelect(asset.url, asset.type)}
+                                    onClick={() => setSelectedAsset(asset)}
                                     className="aspect-square bg-black/40 rounded overflow-hidden border border-white/5 hover:border-primary/50 cursor-pointer group relative"
                                 >
                                     {asset.type === 'video' ? (
@@ -1575,9 +1624,114 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
                                     <div className="absolute bottom-0 inset-x-0 p-1 bg-black/60 text-[9px] truncate text-white/70">
                                         {asset.name}
                                     </div>
+                                    {/* Quick Select Button on Hover */}
+                                    <button 
+                                        onClick={(e) => { e.stopPropagation(); onSelect(asset.url, asset.type); }}
+                                        className="absolute top-1 right-1 bg-primary text-black p-1 rounded-full opacity-0 group-hover:opacity-100 transition-all hover:scale-110 shadow-lg"
+                                        title="Quick Select"
+                                    >
+                                        <Check size={12} strokeWidth={3} />
+                                    </button>
                                 </div>
                             ))}
                             {assets.length === 0 && <div className="col-span-4 text-center text-muted-foreground py-8">No assets found</div>}
+                        </div>
+                    )}
+                    
+                    {/* Asset Detail Overlay */}
+                    {selectedAsset && (
+                        <div className="absolute inset-0 bg-[#1e1e1e] z-20 flex flex-col animate-in fade-in slide-in-from-bottom-4 duration-200">
+                             <div className="flex justify-between items-center p-3 border-b border-white/10 bg-black/20">
+                                <h4 className="font-bold text-sm flex items-center gap-2">
+                                    <button onClick={() => setSelectedAsset(null)} className="hover:bg-white/10 p-1 rounded"><ArrowLeft size={16}/></button>
+                                    Asset Details
+                                </h4>
+                                <div className="flex gap-2">
+                                     <button 
+                                        onClick={() => { onSelect(selectedAsset.url, selectedAsset.type); }}
+                                        className="bg-primary text-black text-xs font-bold px-3 py-1.5 rounded hover:opacity-90 flex items-center gap-1"
+                                     >
+                                        <Check size={14}/> Select This Asset
+                                     </button>
+                                </div>
+                            </div>
+                            <div className="flex-1 overflow-hidden flex">
+                                <div className="flex-1 bg-black/40 flex items-center justify-center p-4">
+                                     {selectedAsset.type === 'video' ? (
+                                        <video src={selectedAsset.url} controls className="max-w-full max-h-full rounded shadow-lg"/>
+                                     ) : (
+                                        <img src={selectedAsset.url} className="max-w-full max-h-full object-contain rounded shadow-lg"/>
+                                     )}
+                                </div>
+                                <div className="w-80 bg-[#151515] border-l border-white/10 p-4 overflow-y-auto space-y-4">
+                                    <div>
+                                        <label className="text-[10px] tx-muted-foreground font-bold uppercase">Name</label>
+                                        <div className="text-sm font-medium">{selectedAsset.name || 'Untitled'}</div>
+                                    </div>
+                                    
+                                    {selectedAsset.meta_info?.entity_id && (
+                                        <div>
+                                            <label className="text-[10px] tx-muted-foreground font-bold uppercase">Linked Entity</label>
+                                            <div className="text-xs bg-white/5 p-2 rounded border border-white/5 mt-1">
+                                                {entities.find(e => e.id === Number(selectedAsset.meta_info.entity_id))?.name || `Entity #${selectedAsset.meta_info.entity_id}`}
+                                            </div>
+                                        </div>
+                                    )}
+                                    
+                                    {selectedAsset.meta_info?.shot_id && (
+                                        <div>
+                                            <label className="text-[10px] tx-muted-foreground font-bold uppercase">Source Shot</label>
+                                            <div className="text-xs bg-white/5 p-2 rounded border border-white/5 mt-1">
+                                                {availableShots.find(s => s.id === Number(selectedAsset.meta_info.shot_id))?.shot_id || `Shot #${selectedAsset.meta_info.shot_id}`}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {selectedAsset.meta_info?.prompt && (
+                                        <div>
+                                            <label className="text-[10px] tx-muted-foreground font-bold uppercase">Prompt</label>
+                                            <div className="text-xs text-gray-400 bg-white/5 p-2 rounded border border-white/5 mt-1 max-h-[150px] overflow-y-auto custom-scrollbar">
+                                                {selectedAsset.meta_info.prompt}
+                                            </div>
+                                        </div>
+                                    )}
+                                    
+                                    {/* Detailed Technical Metadata */}
+                                    <div className="grid grid-cols-2 gap-2 pt-2 border-t border-white/5">
+                                         {selectedAsset.meta_info?.resolution && (
+                                            <div>
+                                                <label className="text-[10px] tx-muted-foreground font-bold uppercase">Resolution</label>
+                                                <div className="text-xs text-gray-300">{selectedAsset.meta_info.resolution}</div>
+                                            </div>
+                                         )}
+                                         {selectedAsset.meta_info?.size && (
+                                            <div>
+                                                <label className="text-[10px] tx-muted-foreground font-bold uppercase">Size</label>
+                                                <div className="text-xs text-gray-300">{selectedAsset.meta_info.size}</div>
+                                            </div>
+                                         )}
+                                          {selectedAsset.meta_info?.format && (
+                                            <div>
+                                                <label className="text-[10px] tx-muted-foreground font-bold uppercase">Format</label>
+                                                <div className="text-xs text-gray-300">{selectedAsset.meta_info.format}</div>
+                                            </div>
+                                         )}
+                                          {selectedAsset.meta_info?.duration && (
+                                            <div>
+                                                <label className="text-[10px] tx-muted-foreground font-bold uppercase">Duration</label>
+                                                <div className="text-xs text-gray-300">{/* Normalize 5.0 to 5s */}
+                                                {String(selectedAsset.meta_info.duration).endsWith('.0') ? parseInt(selectedAsset.meta_info.duration) : selectedAsset.meta_info.duration}s
+                                                </div>
+                                            </div>
+                                         )}
+                                    </div>
+
+                                    <div className="text-[10px] text-muted-foreground pt-4 border-t border-white/5">
+                                        File: {selectedAsset.url.split('/').pop()} <br/>
+                                        Created: {new Date(selectedAsset.created_at).toLocaleString()}
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     )}
 
@@ -6730,7 +6884,7 @@ const AssetsLibrary = () => {
     );
 };
 
-const ImportModal = ({ isOpen, onClose, onImport, defaultType = 'auto' }) => {
+const ImportModal = ({ isOpen, onClose, onImport, defaultType = 'auto', project }) => {
     const [text, setText] = useState('');
     const [importType, setImportType] = useState(defaultType); // auto, json, script, scene, shot
     const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -6751,16 +6905,21 @@ const ImportModal = ({ isOpen, onClose, onImport, defaultType = 'auto' }) => {
         setIsAnalyzing(true);
         try {
             const token = localStorage.getItem('token');
+            const body = { 
+                text: text,
+                prompt_file: "scene_analysis.txt"
+            };
+            if (project?.global_info) {
+                body.project_metadata = project.global_info;
+            }
+
             const res = await fetch(`${API_BASE_URL}/analyze_scene`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${token}`
                 },
-                body: JSON.stringify({ 
-                    text: text,
-                    prompt_file: "scene_analysis.txt"
-                })
+                body: JSON.stringify(body)
             });
             
             if (!res.ok) {
@@ -6967,18 +7126,21 @@ const Editor = ({ projectId, onClose }) => {
     const { addLog } = useLog();
 
     useEffect(() => {
-        const load = async () => {
-             if (!id) return;
-             try {
-                const p = await fetchProject(id);
-                setProject(p);
-             } catch (e) {
-                console.error("Failed to fetch project title", e);
-             }
-             loadEpisodes();
-        };
-        load();
+        loadProjectData();
     }, [id]);
+
+    const loadProjectData = async () => {
+         if (!id) return;
+         try {
+            const p = await fetchProject(id);
+            console.log("[Editor] Loaded Project Data (Full):", p);
+            console.log("[Editor] Global Info:", p?.global_info);
+            setProject(p);
+         } catch (e) {
+            console.error("Failed to fetch project title", e);
+         }
+         loadEpisodes();
+    };
 
     const loadEpisodes = async () => {
         if (!id) return;
@@ -7452,8 +7614,8 @@ const Editor = ({ projectId, onClose }) => {
                     if (isTableRow) {
                          // cols already parsed and cleaned at top of loop
                          // Only skip if strict separator line. 
-                         // Check only for regex match of '---|---' style or '---' in cells
-                         const isSeparator = /\|\s*-{3,}/.test(line) || /^[\s\|-]*$/.test(line);
+                         // Check only for regex match of '---|---' style or '---' in cells (handling :--- for alignment)
+                         const isSeparator = /\|\s*:?-{3,}:?/.test(line) || /^[\s\|:\-]*$/.test(line);
                          const isEmptyRow = cols.every(c => c === "");
 
                          if (cols.length < 2 || isSeparator || isEmptyRow) {
@@ -7481,7 +7643,7 @@ const Editor = ({ projectId, onClose }) => {
                                     key_props: clean(cols[7])
                                 };
                                 
-                                if (!scData.scene_no) {
+                                if (!scData.scene_no || String(scData.scene_no).trim().length === 0) {
                                     // addLog("Skipping empty Scene row", "info"); // Optional log
                                     continue;
                                 }
@@ -7531,7 +7693,7 @@ const Editor = ({ projectId, onClose }) => {
 
                              const rawShotId = useMap ? getVal(['shotid', 'shotno', '镜头id', 'id'], 0) : clean(cols[0]);
                              
-                             if (!rawShotId) {
+                             if (!rawShotId || String(rawShotId).trim().length === 0) {
                                  continue; 
                              }
 
@@ -7820,9 +7982,9 @@ const Editor = ({ projectId, onClose }) => {
             <div className="flex-1 overflow-hidden relative bg-background">
                 <div className="h-full overflow-y-auto custom-scrollbar p-0">
                     <div className="animate-in fade-in duration-300 min-h-full">
-                        {activeTab === 'overview' && <ProjectOverview id={id} key={refreshKey} />}
+                        {activeTab === 'overview' && <ProjectOverview id={id} key={refreshKey} onProjectUpdate={loadProjectData} />}
                         {activeTab === 'ep_info' && <EpisodeInfo episode={activeEpisode} onUpdate={handleUpdateEpisodeInfo} />}
-                        {activeTab === 'script' && <ScriptEditor activeEpisode={activeEpisode} onUpdateScript={handleUpdateScript} onLog={addLog} />}
+                        {activeTab === 'script' && <ScriptEditor activeEpisode={activeEpisode} project={project} onUpdateScript={handleUpdateScript} onLog={addLog} />}
                         {activeTab === 'scenes' && <SceneManager activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} />}
                         {activeTab === 'subjects' && <SubjectLibrary projectId={id} currentEpisode={activeEpisode} />}
                         {activeTab === 'assets' && <AssetsLibrary projectId={id} onLog={addLog} />}
@@ -7847,7 +8009,7 @@ const Editor = ({ projectId, onClose }) => {
                 )}
             </AnimatePresence>
 
-            <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} onImport={handleImport} />
+            <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} onImport={handleImport} project={project} />
 
             {/* Log Panel */}
             <LogPanel />

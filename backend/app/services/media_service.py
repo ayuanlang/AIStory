@@ -315,11 +315,24 @@ class MediaGenerationService:
                     "role": "last_frame"
                 })
 
-            # Ensure duration is within [4, 12] for Seedance 1.5 Pro
-            # User requirement: If < 4, set to 4.
-            final_duration = int(duration) if duration else 5
-            if final_duration < 4: final_duration = 4
-            if final_duration > 12: final_duration = 12
+            # Ensure duration is within valid range. 
+            # Note: The default 5s often causes InvalidParameter for Doubao (Seedance).
+            # "Switch back to config, unless invalid" -> Validate and fallback to -1 (Auto).
+            final_duration = duration
+            
+            # Config override (User Settings)
+            if tool_conf.get("duration"):
+                 final_duration = tool_conf.get("duration")
+
+            try:
+                 d_int = int(final_duration)
+                 # Filter out <=0 and the known-bad default 5 (unless 5 works for some models, but here it failed)
+                 if d_int <= 0 or d_int == 5: 
+                      final_duration = -1
+                 else:
+                      final_duration = d_int
+            except:
+                 final_duration = -1
 
             # Map aspect ratio for Doubao
             final_ratio = aspect_ratio if aspect_ratio else "16:9" # Default to 16:9 if not provided for T2V
@@ -333,6 +346,11 @@ class MediaGenerationService:
                 "logo_info": {"add_logo": False},
                 "watermark": False
             }
+
+            # Apply Draft Mode (Sample Mode) if configured and supported (1.5 Pro only)
+            if model and "1-5-pro" in model:
+                 # Default to False (Normal Mode) unless explicitly enabled
+                 payload["draft"] = bool(tool_conf.get("draft", False))
             
             # For Doubao (Ark), if image is provided, ratio should typically be omitted 
             # to respect image dimensions (or use 'size'/'resolution' params if available, but ratio causes 400).
@@ -512,7 +530,12 @@ class MediaGenerationService:
         model = config.get("model")
         tool_conf = config.get("config", {}) or {}
         base_url = tool_conf.get("endpoint") or "https://grsai.dakka.com.cn"
-        if "/v1/" in base_url: base_url = base_url.split("/v1/")[0].rstrip("/")
+        
+        # Robust stripping of Grsai specific paths to get the true base URL
+        # Remove /v1/draw/..., /v1/video/..., or just /v1 at the end
+        # This prevents "double pathing" if user pastes a full endpoint URL like .../v1/draw/nano-banana
+        base_url = re.sub(r'/v1/(draw|video).*$', '', base_url, flags=re.IGNORECASE)
+        base_url = re.sub(r'/v1/?$', '', base_url).rstrip("/")
         
         # Image
         if gen_type == "image":
@@ -555,24 +578,66 @@ class MediaGenerationService:
 
         # Video
         elif gen_type == "video":
-            is_veo = "veo" in (model or "").lower()
-            endpoint = f"{base_url}/v1/video/sora-video"
-            if is_veo: endpoint = f"{base_url}/v1/video/veo"
+            model_lower = (model or "").lower()
+            is_veo = "veo" in model_lower
             
+            # Check if user provided a specific full endpoint (Prefer Map -> Then generic config)
+            endpoint_map = tool_conf.get("endpointMap", {})
+            raw_endpoint = endpoint_map.get(model) or tool_conf.get("endpoint")
+            
+            if raw_endpoint and ("/video/" in raw_endpoint or raw_endpoint.strip().endswith("/veo")):
+                 endpoint = raw_endpoint.strip().rstrip("/")
+            else:
+                 # Auto-construct from base URL
+                 endpoint_suffix = "sora-video" # default
+                 if is_veo:
+                     endpoint_suffix = "veo"
+                 elif "kling" in model_lower or "banana" in model_lower:
+                     endpoint_suffix = "kling"
+                 elif "runway" in model_lower:
+                     endpoint_suffix = "runway"
+                 elif "luma" in model_lower:
+                     endpoint_suffix = "luma"
+                 elif "hailuo" in model_lower or "minimax" in model_lower:
+                     endpoint_suffix = "hailuo"
+                 elif "cogvideo" in model_lower:
+                     endpoint_suffix = "cogvideox"
+                     
+                 # Use base_url which was sanitized at start of method (removing trailing /v1)
+                 endpoint = f"{base_url}/v1/video/{endpoint_suffix}"
+            
+            # Recalculate result endpoint based on the FINAL submission endpoint
+            # Logic: If endpoint is .../v1/video/veo, we want to go up to .../v1/draw/result
+            # The pattern is fairly standard for this provider: base + /v1/draw/result
+            
+            # Attempt to extract base from final endpoint
+            result_base = base_url
+            if "/v1/" in endpoint:
+                result_base = endpoint.split("/v1/")[0]
+            
+            result_url = f"{result_base}/v1/draw/result"
+            print(f"[Grsai] Computed Result Poll URL: {result_url}")
+
             final_model = model or ("veo3.1-fast" if is_veo else "sora-2")
             
             # Common payload elements
-            payload = {"model": final_model, "prompt": prompt, "shutProgress": False}
+            payload = {"model": final_model, "prompt": prompt, "shutProgress": True}
             
             if is_veo:
-                # Veo spec: strict aspectRatio, urls param empty if unused, webHook needs to be URL format
-                payload["aspectRatio"] = aspect_ratio or "16:9"
+                # Veo spec: strict aspectRatio (only 16:9 or 9:16 supported), urls param empty if unused, webHook needs to be URL format
+                # Enforce supported aspect ratios for the API parameter
+                api_ar = "16:9"
+                if aspect_ratio == "9:16": 
+                    api_ar = "9:16"
+                payload["aspectRatio"] = api_ar
+                
                 # payload["urls"] = [] # API Spec: urls cannot be used with firstFrameUrl/lastFrameUrl. We prioritize firstFrameUrl.
                 # prompt truncation moved to end
             else:
                 # Sora/Others
                 payload["webHook"] = "-1"
-                payload["duration"] = duration
+                # API requires integer for duration
+                payload["duration"] = int(duration) if duration else 5
                 if aspect_ratio:
                     # Default map for common ratios if API expects WxH
                     map_size = {
@@ -652,7 +717,7 @@ class MediaGenerationService:
             print(f"[Grsai] Video Payload: {json.dumps(payload, ensure_ascii=False)}")
             
             # Double check payload validity before sending
-            return await self._submit_and_poll_grsai(endpoint, payload, api_key, f"{base_url}/v1/draw/result", is_video=True, extra_metadata=base_metadata)
+            return await self._submit_and_poll_grsai(endpoint, payload, api_key, result_url, is_video=True, extra_metadata=base_metadata)
     
     async def _submit_and_poll_grsai_legacy(self, url, payload, api_key, result_url, is_video=False, extra_metadata=None):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
@@ -890,13 +955,23 @@ class MediaGenerationService:
         
         # Override with aspect_ratio if provided
         if aspect_ratio:
-             # Wanx usually expects "1280*720" or "720P"
-             if aspect_ratio == "16:9": res = "1280*720"
-             elif aspect_ratio == "9:16": res = "720*1280"
-             elif aspect_ratio == "1:1": res = "1024*1024" # or 720*720
-             # If exact match in resolution style, use it
+             # Wanx 2.1 strictly requires '720P' or '480P'. It does NOT accept '1280*720'.
+             # It seems to infer orientation from valid input images or defaults to 1280x720.
+             if aspect_ratio == "16:9": res = "720P"
+             elif aspect_ratio == "9:16": res = "720P" # Use 720P and hope model respects input image
+             elif aspect_ratio == "1:1": res = "720P"
+             # If user provided a pixel string (e.g. 1280x720), force fallback to 720P to avoid API error
              elif "*" in aspect_ratio or "x" in aspect_ratio:
-                  res = aspect_ratio.replace("x", "*")
+                  res = "720P"
+        
+        # Double check validity against known strict list
+        if res not in ["720P", "480P", "1080P"]:
+            # Wanx2.1 typically only supports 720P and 480P. 1080P might be available on some but safer to fallback.
+            if "1280" in res or "720" in res:
+                res = "720P"
+            else:
+                res = "720P" # Fallback safe default
+
         
         parameters = {
             "resolution": res,
@@ -1118,17 +1193,32 @@ class MediaGenerationService:
 
     async def _submit_and_poll_grsai(self, url, payload, api_key, result_url, is_video=False, extra_metadata=None):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        print(f"[Grsai] Debug - POST URL: {url}")
         
         # Increased timeout to 300s
         def _post(): return requests.post(url, json=payload, headers=headers, timeout=300, verify=False)
         
         try:
             resp = await asyncio.to_thread(_post)
-            if resp.status_code != 200: return {"error": f"Submission Failed {resp.status_code}", "details": resp.text}
+            if resp.status_code != 200: 
+                print(f"[Grsai] API Error {resp.status_code}: {resp.text}")
+                return {"error": f"Submission Failed {resp.status_code}", "details": resp.text}
             
             data = resp.json()
-            task_id = data.get("data", {}).get("id")
-            if not task_id: return {"error": "No Task ID"}
+            
+            # Safe access to data object
+            data_obj = data.get("data")
+            if data_obj is None:
+                 # API returned 200 OK but data is null/missing - check for logic error
+                 print(f"[Grsai] API Logic Failure: {data}")
+                 msg = data.get("msg") or "Unknown Error"
+                 return {"error": f"API Error {data.get('code')}", "details": msg}
+                 
+            task_id = data_obj.get("id")
+            # If still no ID (and no explicit error above), fail gracefully
+            if not task_id: 
+                print(f"[Grsai] No Task ID in response: {data}")
+                return {"error": "No Task ID", "details": data}
             
             print(f"[Grsai] Task {task_id} submitted. Polling...")
 
@@ -1162,13 +1252,15 @@ class MediaGenerationService:
              return {"error": f"Grsai Exception: {str(e)}"}
 
     # -- Helpers --
-    def _download_and_save(self, url: str, filename_base: str = None) -> str:
+    def _download_and_save(self, url: str, filename_base: str = None, user_id: int = 1) -> str:
         try:
              UPLOAD_DIR = settings.UPLOAD_DIR
-             if not os.path.isabs(UPLOAD_DIR):
-                 UPLOAD_DIR = os.path.abspath(UPLOAD_DIR)
+             USER_DIR = os.path.join(UPLOAD_DIR, str(user_id))
+             
+             if not os.path.isabs(USER_DIR):
+                 USER_DIR = os.path.abspath(USER_DIR)
 
-             if not os.path.exists(UPLOAD_DIR): os.makedirs(UPLOAD_DIR)
+             if not os.path.exists(USER_DIR): os.makedirs(USER_DIR)
 
              if url.startswith("/"): return url
              if "localhost" in url or "127.0.0.1" in url: return url
@@ -1184,11 +1276,11 @@ class MediaGenerationService:
                 filename = f"gen_{uuid.uuid4().hex[:8]}{ext}"
                 if filename_base: filename = f"{filename_base}_{filename}"
                     
-                file_path = os.path.join(UPLOAD_DIR, filename)
+                file_path = os.path.join(USER_DIR, filename)
                 with open(file_path, 'wb') as f:
                     for chunk in response.iter_content(4096): f.write(chunk)
                 
-                return f"/uploads/{filename}"
+                return f"/uploads/{user_id}/{filename}"
         except Exception as e:
             print(f"Download failed: {e}")
         return url

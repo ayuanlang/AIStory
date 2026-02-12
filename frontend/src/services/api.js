@@ -289,15 +289,16 @@ export const refinePrompt = async (original_prompt, instruction, type = 'image')
     return response.data;
 };
 
-export const analyzeScene = async (scriptText, systemPrompt = null) => {
-    const payload = { script_text: scriptText };
-    if (systemPrompt) {
-        payload.system_prompt = systemPrompt;
-    }
-    const response = await api.post('/analyze_scene', { 
+export const analyzeScene = async (scriptText, systemPrompt = null, projectMetadata = null) => {
+    console.log("[API] analyzeScene called with metadata:", projectMetadata);
+    const payload = { 
         text: scriptText,
         system_prompt: systemPrompt
-    });
+    };
+    if (projectMetadata) {
+        payload.project_metadata = projectMetadata;
+    }
+    const response = await api.post('/analyze_scene', payload);
     return response.data;
 };
 

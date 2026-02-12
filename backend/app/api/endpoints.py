@@ -105,6 +105,12 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
     Submits raw script text to LLM for Scene/Beat analysis using a specific prompt template.
     Returns the raw analysis result (Markdown/JSON).
     """
+    logger.info("Received analyze_scene request")
+    if request.project_metadata:
+        logger.info(f"Project Metadata received: {request.project_metadata}")
+    else:
+        logger.info("No Project Metadata received")
+
     try:
         # Load the prompt template or use provided system_prompt
         system_instruction = ""
@@ -123,10 +129,39 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 
             with open(prompt_path, "r", encoding="utf-8") as f:
                 system_instruction = f.read()
+        
+        # Prepare user content with optional project metadata
+        user_content = f"Script to Analyze:\n\n{request.text}"
+        
+        if request.project_metadata:
+            meta_parts = ["Project Overview Context:"]
+            # Prioritize key fields if they exist
+            if request.project_metadata.get("script_title"):
+                meta_parts.append(f"Title: {request.project_metadata['script_title']}")
+            if request.project_metadata.get("type"):
+                meta_parts.append(f"Type: {request.project_metadata['type']}")
+            if request.project_metadata.get("tone"):
+                meta_parts.append(f"Tone: {request.project_metadata['tone']}")
+            if request.project_metadata.get("Global_Style"):
+                meta_parts.append(f"Global Style: {request.project_metadata['Global_Style']}")
+            if request.project_metadata.get("base_positioning"):
+                meta_parts.append(f"Base Positioning: {request.project_metadata['base_positioning']}")
+            if request.project_metadata.get("lighting"):
+                meta_parts.append(f"Lighting: {request.project_metadata['lighting']}")
+            if request.project_metadata.get("series_episode"):
+                meta_parts.append(f"Episode: {request.project_metadata['series_episode']}")
+             
+            # Simple dump of other fields if needed, or just rely on these key ones for the prompt
+            # Let's add all relevant fields that might influence the visual analysis
+            
+            meta_str = "\n".join(meta_parts)
+            user_content = f"{meta_str}\n\n{user_content}"
+            logger.info("Injected Project Context into Prompt:\n" + meta_str)
+
         # Construct messages
         messages = [
             {"role": "system", "content": system_instruction},
-            {"role": "user", "content": f"Script to Analyze:\n\n{request.text}"}
+            {"role": "user", "content": user_content}
         ]
 
         # Use the LLM service directly
@@ -648,6 +683,7 @@ class ShotCreate(BaseModel):
     project_id: Optional[int] = None
     episode_id: Optional[int] = None
     shot_logic_cn: Optional[str] = None
+    keyframes: Optional[str] = None
     
     # Optional legacy/AI fields
     image_url: Optional[str] = None
@@ -668,6 +704,7 @@ class ShotOut(BaseModel):
     duration: Optional[str]
     associated_entities: Optional[str]
     shot_logic_cn: Optional[str]
+    keyframes: Optional[str]
     
     scene_code: Optional[str]
 
@@ -832,8 +869,25 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
                  sn_clean = scene.environment_name.strip().lower()
                  for alias in ent_aliases:
                       if alias.strip().lower() == sn_clean:
-                           if ent.narrative_description:
+                           # Priority: description_cn (custom_attributes) > narrative_description > description
+                           desc_cn = None
+                           
+                           # Safe Custom Attributes Parsing
+                           custom_attrs = ent.custom_attributes
+                           if isinstance(custom_attrs, str):
+                                try: custom_attrs = json.loads(custom_attrs)
+                                except: custom_attrs = {}
+                                
+                           if custom_attrs and isinstance(custom_attrs, dict):
+                               desc_cn = custom_attrs.get('description_cn') or custom_attrs.get('description_CN')
+                           
+                           if desc_cn:
+                               env_narrative = desc_cn
+                           elif ent.narrative_description:
                                 env_narrative = ent.narrative_description
+                           elif ent.description:
+                                # Use description directly if others are missing
+                                env_narrative = ent.description
                            break
 
             desc_parts = []
@@ -880,10 +934,7 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
         global_section += f"\n{additional_context}"
 
     core_goal_text = scene.core_scene_info or ''
-    if env_narrative:
-         # Append environment narrative to Core Goal if not already present
-         if env_narrative not in core_goal_text:
-              core_goal_text += f"\n\n(Environment Context: {env_narrative})"
+    # Environment Context is now a separate field in the table
 
     user_input = f"""{global_section}
 
@@ -893,6 +944,7 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
 | **Scene No** | {scene.scene_no or ''} |
 | **Scene Name** | {scene.scene_name or ''} |
 | **Environment Anchor** | {scene.environment_name or ''} |
+| **Environment Context** | {env_narrative or 'N/A'} |
 | **Linked Characters** | {scene.linked_characters or ''} |
 | **Key Props** | {scene.key_props or ''} |
 | **Core Goal** | {core_goal_text} |
@@ -1022,6 +1074,7 @@ async def ai_generate_shots(
                 duration=str(duration_val),
                 associated_entities=s_data.get("Associated Entities", ""),
                 shot_logic_cn=s_data.get("Shot Logic (CN)", ""),
+                keyframes=s_data.get("Keyframes", "NO"),
                 prompt=s_data.get("Video Content", "")
             )
             db.add(shot)
@@ -1102,6 +1155,7 @@ def create_shot(
             duration=shot.duration,
             associated_entities=shot.associated_entities,
             shot_logic_cn=shot.shot_logic_cn,
+            keyframes=shot.keyframes,
             scene_code=shot.scene_code,
             image_url=shot.image_url,
             video_url=shot.video_url,
@@ -1666,13 +1720,16 @@ async def upload_asset(
 ):
     # Ensure upload directory
     upload_dir = settings.UPLOAD_DIR
-    if not os.path.exists(upload_dir):
-        os.makedirs(upload_dir)
+    
+    # Store by user
+    user_upload_dir = os.path.join(upload_dir, str(current_user.id))
+    if not os.path.exists(user_upload_dir):
+        os.makedirs(user_upload_dir)
     
     # Generate unique filename
     ext = os.path.splitext(file.filename)[1]
     filename = f"{uuid.uuid4()}{ext}"
-    file_path = os.path.join(upload_dir, filename)
+    file_path = os.path.join(user_upload_dir, filename)
 
     # Auto-detect type
     if file.content_type.startswith('video/') or ext.lower() in ['.mp4', '.mov', '.avi', '.webm']:
@@ -1704,7 +1761,7 @@ async def upload_asset(
 
     # Construct URL (assuming /uploads is mounted)
     # Get base URL from request ideally, but relative works for frontend
-    url = f"/uploads/{filename}"
+    url = f"/uploads/{current_user.id}/{filename}"
     
     asset = Asset(
         user_id=current_user.id,

@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     # Security (simplistic for demo)
     SECRET_KEY: str = "supersecretkey"
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 525600  # 1 year
     UPLOAD_DIR: str = "uploads"
     
     class Config:

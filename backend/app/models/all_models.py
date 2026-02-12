@@ -121,6 +121,7 @@ class Shot(Base):
     end_frame = Column(Text, nullable=True)     # Mapped to 'End Frame'
     video_content = Column(Text, nullable=True) # Mapped to 'Video Content'
     duration = Column(String, nullable=True)    # Mapped to 'Duration (s)'
+    keyframes = Column(Text, nullable=True)     # Mapped to 'Keyframes'
     associated_entities = Column(Text, nullable=True) # Mapped to 'Associated Entities'
     shot_logic_cn = Column(Text, nullable=True) # Mapped to 'Shot Logic (CN)'
     

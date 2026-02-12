@@ -35,10 +35,12 @@ const Settings = () => {
     const [vidToolKey, setVidToolKey] = useState("");
     const [vidToolEndpoint, setVidToolEndpoint] = useState("");
     const [vidToolModel, setVidToolModel] = useState("");
+    const [vidEndpointMap, setVidEndpointMap] = useState({}); // Model-specific endpoints
     
     // WebHooks
     const [imgToolWebHook, setImgToolWebHook] = useState("");
     const [vidToolWebHook, setVidToolWebHook] = useState("");
+    const [vidToolDraft, setVidToolDraft] = useState(false);
 
     // State for Baidu Translation
     const [baiduToken, setBaiduToken] = useState("");
@@ -304,21 +306,34 @@ const Settings = () => {
         } else {
              if (saved) {
                 setVidToolKey(saved.apiKey || "");
+                
+                const epMap = saved.endpointMap || {};
+                setVidEndpointMap(epMap);
+
                 // Auto-correct legacy Grsai endpoint
                 let ep = saved.endpoint || "";
                 if (toolName === "Grsai-Video" && (ep.includes("api.grsai.com") || ep.includes("grsai.com"))) {
                      ep = "https://grsai.dakka.com.cn";
                 }
+                
+                // Use mapped endpoint if available
+                if (saved.model && epMap[saved.model]) {
+                    ep = epMap[saved.model];
+                }
+                
                 setVidToolEndpoint(ep);
 
                 setVidToolModel(saved.model || "");
                 setVidToolWebHook(saved.webHook || "");
+                setVidToolDraft(saved.draft || false);
              } else {
+                 setVidEndpointMap({});
                  if (toolName === "Doubao Video") {
                     setVidToolKey("");
                     setVidToolEndpoint("https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks");
                     setVidToolModel("doubao-seedance-1-5-pro-251215");
                     setVidToolWebHook("");
+                    setVidToolDraft(false);
                  } else if (toolName === "Wanxiang") {
                      setVidToolKey("");
                      setVidToolEndpoint("https://dashscope.aliyuncs.com/api/v1/services/aigc/image2video/video-synthesis");
@@ -344,10 +359,31 @@ const Settings = () => {
                     setVidToolEndpoint("");
                     setVidToolModel("");
                     setVidToolWebHook("");
+                    setVidToolDraft(false);
                  }
              }
         }
     }
+
+    const handleVidSubModelChange = (newModel) => {
+        setVidToolModel(newModel);
+        // If we have a stored endpoint for this model, switch to it, otherwise keep current (or reset? user likely wants stickiness)
+        // Better: if map has it, use it. If not, maybe keep current base endpoint?
+        // Let's assume user wants to reuse current endpoint if not overridden.
+        if (vidEndpointMap[newModel]) {
+            setVidToolEndpoint(vidEndpointMap[newModel]);
+        }
+    };
+
+    const handleVidEndpointChange = (newEndpoint) => {
+        setVidToolEndpoint(newEndpoint);
+        if (vidToolModel) {
+            setVidEndpointMap(prev => ({
+                ...prev,
+                [vidToolModel]: newEndpoint
+            }));
+        }
+    };
 
     const handleImageToolChange = (newTool) => {
         setImageModel(newTool);
@@ -428,7 +464,9 @@ const Settings = () => {
                     endpoint: configData.endpoint, // Redundant but config often used for extra
                     width: configData.width,
                     height: configData.height,
-                    webHook: configData.webHook
+                    webHook: configData.webHook,
+                    endpointMap: configData.endpointMap,
+                    draft: configData.draft
                 },
                 is_active: true
             };
@@ -485,7 +523,9 @@ const Settings = () => {
             apiKey: vidToolKey, 
             endpoint: vidToolEndpoint, 
             model: vidToolModel,
-            webHook: vidToolWebHook
+            webHook: vidToolWebHook,
+            endpointMap: vidEndpointMap,
+            draft: vidToolDraft
         };
         saveToolConfig(videoModel, videoConfig);
         
@@ -582,10 +622,10 @@ const Settings = () => {
                                 className="w-full p-2 rounded-md bg-zinc-900 border border-white/10 text-white"
                             >
                                 <option className="bg-zinc-900" value="gemini-3-pro">Gemini 3 Pro</option>
+                                <option className="bg-zinc-900" value="gemini-2.5-pro">Gemini 2.5 Pro</option>
                                 <option className="bg-zinc-900" value="gemini-3-flash">Gemini 3 Flash</option>
                                 <option className="bg-zinc-900" value="gemini-2.5-flash">Gemini 2.5 Flash</option>
                                 <option className="bg-zinc-900" value="gemini-2.5-flash-lite">Gemini 2.5 Flash Lite</option>
-                                <option className="bg-zinc-900" value="gemini-2.5-pro">Gemini 2.5 Pro</option>
                                 <option className="bg-zinc-900" value="gemini-2.5-flash-think">Gemini 2.5 Flash Think</option>
                             </select>
                         </div>
@@ -838,6 +878,8 @@ const Settings = () => {
                                             >
                                                 <option className="bg-zinc-900" value="sora-image">Sora Image</option>
                                                 <option className="bg-zinc-900" value="gpt-image-1.5">GPT Image 1.5</option>
+                                                <option className="bg-zinc-900" value="sora-create-character">Sora Create Character</option>
+                                                <option className="bg-zinc-900" value="sora-upload-character">Sora Upload Character</option>
                                                 <option className="bg-zinc-900" value="nano-banana-pro">Nano Banana Pro</option>
                                                 <option className="bg-zinc-900" value="nano-banana-pro-vt">Nano Banana Pro VT</option>
                                                 <option className="bg-zinc-900" value="nano-banana-fast">Nano Banana Fast</option>
@@ -847,7 +889,7 @@ const Settings = () => {
                                                 <option className="bg-zinc-900" value="nano-banana-pro-4k-vip">Nano Banana Pro 4K VIP</option>
                                             </select>
                                         ) : (
-                                            <input 
+                                            <input  
                                                 type="text" 
                                                 value={imgToolModel}
                                                 onChange={(e) => setImgToolModel(e.target.value)}
@@ -927,7 +969,7 @@ const Settings = () => {
                                         <input 
                                             type="text" 
                                             value={vidToolEndpoint}
-                                            onChange={(e) => setVidToolEndpoint(e.target.value)}
+                                            onChange={(e) => handleVidEndpointChange(e.target.value)}
                                             placeholder="Optional"
                                             className="w-full p-2 text-sm rounded-md bg-white/10 border border-white/10 text-white" 
                                         />
@@ -936,12 +978,17 @@ const Settings = () => {
                                         {(videoModel === "Grsai-Video" || videoModel === "Grsai-Video (Upload)") ? (
                                             <select 
                                                 value={vidToolModel}
-                                                onChange={(e) => setVidToolModel(e.target.value)}
+                                                onChange={(e) => handleVidSubModelChange(e.target.value)}
                                                 className="w-full p-2 text-sm rounded-md bg-zinc-900 border border-white/10 text-white" 
                                             >
                                                 <option className="bg-zinc-900" value="sora-2">Sora 2</option>
                                                 <option className="bg-zinc-900" value="veo3.1-pro">Veo 3.1 Pro</option>
                                                 <option className="bg-zinc-900" value="veo3.1-fast">Veo 3.1 Fast</option>
+                                                <option className="bg-zinc-900" value="veo3.1-pro-1080p">Veo 3.1 Pro 1080p</option>
+                                                <option className="bg-zinc-900" value="veo3.1-pro-4k">Veo 3.1 Pro 4K</option>
+                                                <option className="bg-zinc-900" value="veo3.1-fast-1080p">Veo 3.1 Fast 1080p</option>
+                                                <option className="bg-zinc-900" value="veo3.1-fast-4k">Veo 3.1 Fast 4K</option>
+                                                
                                                 <option className="bg-zinc-900" value="nano-banana-pro">Nano Banana Pro</option>
                                                 <option className="bg-zinc-900" value="nano-banana-pro-vt">Nano Banana Pro VT</option>
                                                 <option className="bg-zinc-900" value="nano-banana-fast">Nano Banana Fast</option>
@@ -956,7 +1003,7 @@ const Settings = () => {
                                                     list="vidu-models"
                                                     type="text" 
                                                     value={vidToolModel}
-                                                    onChange={(e) => setVidToolModel(e.target.value)}
+                                                    onChange={(e) => handleVidSubModelChange(e.target.value)}
                                                     placeholder="e.g. vidu2.0 or select from list"
                                                     className="w-full p-2 text-sm rounded-md bg-white/10 border border-white/10 text-white" 
                                                 />
@@ -974,7 +1021,7 @@ const Settings = () => {
                                             <input 
                                                 type="text" 
                                                 value={vidToolModel}
-                                                onChange={(e) => setVidToolModel(e.target.value)}
+                                                onChange={(e) => handleVidSubModelChange(e.target.value)}
                                                 placeholder="e.g. doubao-seedance-1-5-pro-251215"
                                                 className="w-full p-2 text-sm rounded-md bg-white/10 border border-white/10 text-white" 
                                             />
@@ -989,7 +1036,29 @@ const Settings = () => {
                                             placeholder="https://your-callback.com/..."
                                             className="w-full p-2 text-sm rounded-md bg-white/10 border border-white/10 text-white" 
                                         />
-                                    </div>                                </div>
+                                    </div>
+                                    {videoModel === "Doubao Video" && (
+                                        <div className="col-span-2 flex items-start gap-3 p-3 rounded-lg bg-white/5 border border-white/10">
+                                            <input
+                                                type="checkbox"
+                                                id="draftMode"
+                                                checked={vidToolDraft}
+                                                onChange={(e) => setVidToolDraft(e.target.checked)}
+                                                className="mt-1 w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
+                                            />
+                                            <div className="flex flex-col gap-1">
+                                                <label htmlFor="draftMode" className="text-sm font-medium text-white cursor-pointer select-none">
+                                                    Draft Mode (Sample Mode)
+                                                </label>
+                                                <span className="text-[10px] text-muted-foreground leading-tight">
+                                                    Only Seedance 1.5 pro supports controlling whether to enable sample mode.<br/>
+                                                    True: Indicates that the sample mode is turned on, allowing for the generation of a highly consistent 5s video.<br/>
+                                                    False: Normal generation mode.
+                                                </span>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
                             </div>
 
                             <button 
