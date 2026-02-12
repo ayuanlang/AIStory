@@ -5570,8 +5570,15 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             }, keyframes);
             if (res && res.url) {
                 const newData = { video_url: res.url, prompt: prompt };
+                // 1. Update Server & Master List
                 await onUpdateShot(editingShot.id, newData);
-                setEditingShot(prev => ({...prev, ...newData}));
+                
+                // 2. Force Local State Update (using functional update to avoid stale closure)
+                setEditingShot(prev => {
+                   if (!prev) return null;
+                   return { ...prev, ...newData };
+                });
+                
                 onLog?.('Video Generated', 'success');
                 showNotification('Video Generated', 'success');
             }
@@ -6048,6 +6055,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                 <div className="aspect-video bg-black/60 flex items-center justify-center text-muted-foreground relative group-hover:bg-black/40 transition-colors overflow-hidden">
                                     {shot.video_url ? (
                                         <video 
+                                            key={shot.video_url}
                                             src={shot.video_url} 
                                             className="w-full h-full object-cover" 
                                             muted 
@@ -6562,9 +6570,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                             )}
                                             {(editingShot.video_url) ? (
                                                 <video 
+                                                    key={editingShot.video_url}
                                                     src={editingShot.video_url} 
                                                     className="w-full h-full object-cover" 
                                                     onClick={(e) => e.preventDefault()} 
+                                                    controls
                                                 />
                                             ) : (
                                                 <div className="absolute inset-0 flex items-center justify-center opacity-20 flex-col gap-2">
