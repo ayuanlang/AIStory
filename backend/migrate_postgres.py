@@ -26,20 +26,30 @@ def migrate():
                 ("shot_logic_cn", "TEXT"),
                 ("scene_code", "VARCHAR"),
                 ("project_id", "INTEGER"),
-                ("episode_id", "INTEGER")
+                ("episode_id", "INTEGER"),
+                ("technical_notes", "TEXT"),
+                ("image_url", "TEXT"),
+                ("video_url", "TEXT"),
+                ("prompt", "TEXT")
             ]
             
             for col_name, col_type in columns_to_add:
-                if col_name not in columns:
-                    print(f"Adding column '{col_name}' to 'shots' table...")
-                    try:
-                        with conn.begin():
-                            conn.execute(text(f"ALTER TABLE shots ADD COLUMN {col_name} {col_type}"))
-                        print(f"Successfully added '{col_name}'")
-                    except Exception as e:
-                        print(f"Error adding '{col_name}': {e}")
-                else:
-                    print(f"Column '{col_name}' already exists.")
+                print(f"Ensuring column '{col_name}' exists in 'shots' table...")
+                try:
+                    with conn.begin():
+                        # Postgres 9.6+ syntax
+                        conn.execute(text(f"ALTER TABLE shots ADD COLUMN IF NOT EXISTS {col_name} {col_type}"))
+                    print(f"Verified '{col_name}'")
+                except Exception as e:
+                    print(f"Error checking/adding '{col_name}': {e}")
+                    # Fallback for older DBs if needed
+                    if col_name not in columns:
+                         try:
+                            with conn.begin():
+                                conn.execute(text(f"ALTER TABLE shots ADD COLUMN {col_name} {col_type}"))
+                            print(f"Fallback add successful for {col_name}")
+                         except Exception as e2:
+                             print(f"Fallback failed: {e2}")
         else:
             print("Table 'shots' does not exist!")
 
