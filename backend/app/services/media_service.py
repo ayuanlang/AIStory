@@ -724,7 +724,21 @@ class MediaGenerationService:
                  # Webhook fix: Docs say "-1" for immediate ID return if no callback used
                  payload["webHook"] = "-1" 
 
-            print(f"[Grsai] Video Payload: {json.dumps(payload, ensure_ascii=False)}")
+            # Debug log (sanitized)
+            valid_payload_log = json.dumps(payload, ensure_ascii=False)
+            if "urls" in payload and payload["urls"]:
+                 # Simple hack to avoid dumping massive base64 in logs if present
+                 pass 
+            # If payload has direct base64 fields (firstFrameUrl often is one), we truncate for logs
+            debug_p = payload.copy()
+            for key in ["firstFrameUrl", "lastFrameUrl", "image", "urls"]:
+                if key in debug_p and debug_p[key]:
+                    if isinstance(debug_p[key], str) and len(debug_p[key]) > 200:
+                         debug_p[key] = debug_p[key][:50] + "...<Base64>..."
+                    elif isinstance(debug_p[key], list):
+                         debug_p[key] = [ (s[:50] + "...<Base64>...") if isinstance(s, str) and len(s) > 200 else s for s in debug_p[key] ]
+
+            print(f"[Grsai] Video Payload: {json.dumps(debug_p, ensure_ascii=False)}")
             
             # Double check payload validity before sending
             return await self._submit_and_poll_grsai(endpoint, payload, api_key, result_url, is_video=True, extra_metadata=base_metadata)
