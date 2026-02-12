@@ -19,6 +19,7 @@
 
 ### 1. 基本约束
 - **实体引用**：严格使用输入实体，名称必须用方括号 `[Subject Name]` 包裹（与 `Linked Characters` 和 `Environment Anchor` 的名称完全一致，要带上（）里的内容，不能插入任何字符及切换全半角等），严禁创造新主体（如有未定义角色请用泛指如 `[Unidentified Man]`）。场景必须含 `[Environment Anchor]`。
+    - **所有格特殊规则 (Possessive Exemption)**：当需要表达“角色的...”时（例如 `[RoleName]`'s hand），请直接书写 `[RoleName]'s`。这种形式会被系统识别并**跳过描述注入**，从而避免语法错误。这是**唯一**允许 Skipping Injection 的情况。请善用此规则来描述局部特写（e.g., `Close up of [RoleName]'s eyes`）。
 - **外观锁定 (Appearance Lockdown)**：严禁描述角色的具体外貌（如发型、肤色、面部特征）及服装细节（如颜色、款式）。这些元素完全由 Reference Image 控制。prompt 中仅需提及 `[Character Name]` 并专注于其动作、表情与光影互动。
 - **分镜对应**：分镜需与 Scene 一一对应，一个 Scene 可以拆分为多个 Shot，根据视觉需要按Beat为单位拆分或合并，长度符合时长限制。
 - **时长限制 (Duration Management: The 4-10s Control)**：

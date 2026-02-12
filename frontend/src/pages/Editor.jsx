@@ -5187,8 +5187,13 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         let newText = text;
         let modified = false;
 
-        newText = newText.replace(regex, (match, name) => {
+        newText = newText.replace(regex, (match, name, offset, string) => {
             const cleanKey = name.trim().toLowerCase();
+
+            // Check if followed by 's (possessive) -> Skip injection
+            if (string.slice(offset + match.length).startsWith("'s")) {
+                return match;
+            }
 
             // 1. Global Style Injection
             if (cleanKey === 'global style' || cleanKey === 'global_style') {
@@ -5570,10 +5575,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             }, keyframes);
             if (res && res.url) {
                 const newData = { video_url: res.url, prompt: prompt };
-                // 1. Update Server & Master List
-                await onUpdateShot(editingShot.id, newData);
                 
-                // 2. Force Local State Update (using functional update to avoid stale closure)
+                // 1. Force Local State Update IMMEDIATELY (Optimistic/Local)
                 setEditingShot(prev => {
                    if (!prev) return null;
                    return { ...prev, ...newData };
@@ -5581,6 +5584,14 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 
                 onLog?.('Video Generated', 'success');
                 showNotification('Video Generated', 'success');
+
+                // 2. Update Server & Master List (Async persistence)
+                try {
+                    await onUpdateShot(editingShot.id, newData);
+                } catch (updateErr) {
+                    console.error("Failed to save shot update to backend:", updateErr);
+                    // We don't block the UI - the video is here.
+                }
             }
         } catch (e) {
              onLog?.(`Generation failed: ${e.message}`, 'error');

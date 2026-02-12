@@ -41,6 +41,7 @@
 4.  **[Beats] (节拍流)**：按时间顺序排列的动作单元。
     - **Spatial Activation (空间激活)**：Beats 动作必须**主动发生在该物理空间中**，并与环境产生交互（如倚靠、穿越、拿起）。严禁“真空表演”。**Script Micro-Correction (剧本微调强制)**：为了保证空间激活，**必须**对剧本做不影响主要情节的细节修正（例如：增加与环境互动的动作，或调整站位以利用空间纵深，将枯燥的对话转化为伴随动作的表演）。
     - **格式**：`1. [User] action -> [Target] reaction.` (必须包含具体的对白/字幕/屏幕文字/音效内容)。**实体引用**：Beat 描述中涉及的所有**角色**、**道具**、**环境**均须用 `[]` 包裹（例如：`[Alice] walks to [Window] holding [Cup]`）。
+    - **所有格特殊规则 (Possessive Exemption)**：当需要表达“角色的...”时（例如 `[RoleName]`'s hand），请直接书写 `[RoleName]'s`。这种形式会被系统识别并**跳过描述注入**，从而避免语法错误。这是**唯一**允许 Skipping Injection 的情况。请善用此规则来描述局部特写（e.g., `Close up of [RoleName]'s eyes`）。
     - **Interaction Completeness (交互完整性)**: 若 Beat 中的动作涉及其他角色或道具（如离开，分开，打开），**必须显式描述**交互对手与道具被影响后的状态。严禁隐式省略。
       - *Example*: `[A] ends kiss with [B]` 必须写为 `[A] parts lips from [B], leaving [B] visible in frame`.
     - **Continuity Mandate (连贯性强制)**：每个 Beat 必须继承上一 Beat 的视觉状态。（开始新Beat时要检查）
