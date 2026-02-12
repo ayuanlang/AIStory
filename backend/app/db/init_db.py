@@ -111,33 +111,60 @@ def check_and_migrate_tables():
 
         # --- MIGRATE SHOTS TABLE ---
         logger.info("Checking 'shots' table for missing columns...")
-        existing_shot_columns = [c['name'] for c in inspector.get_columns('shots')]
-        print(f"Existing columns in 'shots': {existing_shot_columns}")
-
-        # format: (column_name, sql_type_and_default)
-        shot_columns_to_check = [
-            ("keyframes", "TEXT"),
-            ("associated_entities", "TEXT"),
-            ("shot_logic_cn", "TEXT"),
-            ("scene_code", "VARCHAR") 
-        ]
-
-        shot_columns_to_add = []
-        for col_name, col_def in shot_columns_to_check:
-            if col_name not in existing_shot_columns:
-                shot_columns_to_add.append((col_name, col_def))
         
-        if shot_columns_to_add:
+        # Robust Strategy for Postgres (Render)
+        if engine.dialect.name == 'postgresql':
+            logger.info("Detected Postgres dialect. Running idempotent migrations.")
+            shot_columns_pg = [
+                ("keyframes", "TEXT"),
+                ("associated_entities", "TEXT"),
+                ("shot_logic_cn", "TEXT"),
+                ("scene_code", "VARCHAR"),
+                ("technical_notes", "TEXT"),
+                ("image_url", "TEXT"), 
+                ("video_url", "TEXT"),
+                ("prompt", "TEXT")
+            ]
+            
             with engine.begin() as conn:
-                for col_name, col_type in shot_columns_to_add:
-                    print(f"Migrating shots.{col_name}...")
-                    logger.info(f"Adding column shots.{col_name}...")
+                for col_name, col_type in shot_columns_pg:
                     try:
-                        conn.execute(text(f"ALTER TABLE shots ADD COLUMN {col_name} {col_type}"))
-                        logger.info(f"Successfully added shots.{col_name}")
-                    except Exception as e:
-                        logger.error(f"Failed to add shots.{col_name}: {e}")
-                        # Don't re-raise immediately so we can try others? No, DB might be in bad state.
+                        # 'IF NOT EXISTS' handles the check atomically in the DB
+                        conn.execute(text(f"ALTER TABLE shots ADD COLUMN IF NOT EXISTS {col_name} {col_type}"))
+                        logger.info(f"Ensured shots.{col_name} exists (Postgres atomic check)")
+                    except Exception as pg_err:
+                        # Log but continue - often means column exists or slight syntax diff on older PG
+                        logger.warning(f"Postgres atomic ADD check for {col_name} returned: {pg_err}")
+        
+        else:
+            # Inspection-based Strategy for SQLite/Other
+            existing_shot_columns = [c['name'] for c in inspector.get_columns('shots')]
+            print(f"Existing columns in 'shots': {existing_shot_columns}")
+
+            # format: (column_name, sql_type_and_default)
+            shot_columns_to_check = [
+                ("keyframes", "TEXT"),
+                ("associated_entities", "TEXT"),
+                ("shot_logic_cn", "TEXT"),
+                ("scene_code", "VARCHAR") 
+            ]
+
+            shot_columns_to_add = []
+            for col_name, col_def in shot_columns_to_check:
+                if col_name not in existing_shot_columns:
+                    shot_columns_to_add.append((col_name, col_def))
+            
+            if shot_columns_to_add:
+                with engine.begin() as conn:
+                    for col_name, col_type in shot_columns_to_add:
+                        print(f"Migrating shots.{col_name}...")
+                        logger.info(f"Adding column shots.{col_name}...")
+                        try:
+                            conn.execute(text(f"ALTER TABLE shots ADD COLUMN {col_name} {col_type}"))
+                            logger.info(f"Successfully added shots.{col_name}")
+                        except Exception as e:
+                            logger.error(f"Failed to add shots.{col_name}: {e}")
+                            # Don't re-raise immediately so we can try others? No, DB might be in bad state.
                         
         final_shot_cols = [c['name'] for c in inspector.get_columns('shots')]
         print(f"Final shots columns: {final_shot_cols}")
