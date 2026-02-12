@@ -604,7 +604,12 @@ class MediaGenerationService:
                      endpoint_suffix = "cogvideox"
                      
                  # Use base_url which was sanitized at start of method (removing trailing /v1)
-                 endpoint = f"{base_url}/v1/video/{endpoint_suffix}"
+                 # Correct Grsai logic: base_url usually ends with host e.g. https://grsai.dakka.com.cn
+                 # The correct paths are /v1/video/veo, /v1/video/sora-video, etc.
+                 
+                 # Strip any trailing logic to be safe
+                 clean_base = base_url.split("/v1")[0].rstrip("/")
+                 endpoint = f"{clean_base}/v1/video/{endpoint_suffix}"
             
             # Recalculate result endpoint based on the FINAL submission endpoint
             # Logic: If endpoint is .../v1/video/veo, we want to go up to .../v1/draw/result
