@@ -527,7 +527,8 @@ class MediaGenerationService:
              
     async def _handle_grsai_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None):
         api_key = config.get("api_key")
-        model = config.get("model")
+        model = config.get("model") or "unknown_model"
+        print(f"[Grsai] Starting Generation. Type={gen_type}, Model={model}, PromptLen={len(prompt) if prompt else 0}")
         tool_conf = config.get("config", {}) or {}
         base_url = tool_conf.get("endpoint") or "https://grsaiapi.com"
         
