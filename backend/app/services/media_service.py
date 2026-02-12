@@ -301,11 +301,11 @@ class MediaGenerationService:
                     "role": "last_frame"
                 })
             elif start_img_url:
-                # Start Frame Only (No Role needed usually, or implicit)
+                # Start Frame Only - Strict 'first_frame' role required for newer models (1.5 Pro)
                 content_payload.append({
                     "type": "image_url", 
-                    "image_url": {"url": self._get_image_base64_for_api(start_img_url, force_data_uri=True)}
-                    # No role field
+                    "image_url": {"url": self._get_image_base64_for_api(start_img_url, force_data_uri=True)},
+                     "role": "first_frame"
                 })
             elif last_frame_url:
                 # Last Frame Only (Rare, but use role if strictly End frame)
