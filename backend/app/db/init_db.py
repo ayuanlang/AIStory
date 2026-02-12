@@ -75,12 +75,11 @@ def check_and_migrate_tables():
                 columns_to_add.append((col_name, col_def))
 
         if not columns_to_add:
-            logger.info("No migrations needed. Columns exist.")
-            print("No migrations needed.")
-            return
-
-        # 2. Apply Changes
-        with engine.begin() as conn: # Transactional
+            logger.info("No user-table migrations needed. Columns exist.")
+            print("No user-table migrations needed.")
+        else:
+            # 2. Apply Changes
+            with engine.begin() as conn: # Transactional
             for col_name, col_type in columns_to_add:
                 print(f"Migrating {col_name}...")
                 logger.info(f"Adding column {col_name}...")
