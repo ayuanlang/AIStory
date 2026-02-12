@@ -324,7 +324,11 @@
             - `(n)`: Index number.
             - `[Subject]`: Explicit Name.
             - `[Adverb]`: Velocity/Force (e.g., "violently").
-            - `[Direction]`: Physics Vector (e.g., "forward", "screen-left").
+            - `[Direction]`: Physics Vector. **Mandatory Reference Systems**:
+              1. **Camera-Relative** (Prioritized): "towards lens", "away from camera", "screen-left", "screen-right".
+              2. **Self-Relative**: "forward", "backward", "laterally".
+              3. **Target-Relative**: "towards [Subject B]".
+              *   **Avoid Environment-Relative** (e.g., "towards the door", "North") as motion vectors.
             - `**[Quantification]** (Mandatory)`: **Physical Extend/Distance/Angle**. Must be specific. (e.g., "**covering 2 meters**", "**rotating 90 degrees**", "**lifting to chin height**", "**shifting 3 steps**").
             - `[Result]`: Landing state.
       *   **Constraint Checklist**:

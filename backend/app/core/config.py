@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 525600  # 1 year
     UPLOAD_DIR: str = "uploads"
     
+    # Render Specific
+    RENDER_EXTERNAL_URL: str = os.getenv("RENDER_EXTERNAL_URL", "")
+
     class Config:
         env_file = ".env"
 

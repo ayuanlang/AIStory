@@ -1761,7 +1761,8 @@ async def upload_asset(
 
     # Construct URL (assuming /uploads is mounted)
     # Get base URL from request ideally, but relative works for frontend
-    url = f"/uploads/{current_user.id}/{filename}"
+    base_url = settings.RENDER_EXTERNAL_URL.rstrip('/') if settings.RENDER_EXTERNAL_URL else ""
+    url = f"{base_url}/uploads/{current_user.id}/{filename}"
     
     asset = Asset(
         user_id=current_user.id,

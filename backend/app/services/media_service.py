@@ -1280,7 +1280,11 @@ class MediaGenerationService:
                 with open(file_path, 'wb') as f:
                     for chunk in response.iter_content(4096): f.write(chunk)
                 
-                return f"/uploads/{user_id}/{filename}"
+                relative_path = f"/uploads/{user_id}/{filename}"
+                if settings.RENDER_EXTERNAL_URL:
+                    base = settings.RENDER_EXTERNAL_URL.rstrip('/')
+                    return f"{base}{relative_path}"
+                return relative_path
         except Exception as e:
             print(f"Download failed: {e}")
         return url
