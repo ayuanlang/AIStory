@@ -727,6 +727,7 @@ class MediaGenerationService:
         
         try:
             resp = await asyncio.to_thread(_post)
+            print(f"[Grsai Legacy] API Returned: {resp.text[:1000]}") # DEBUG USER REQUEST
             if resp.status_code != 200: return {"error": f"Submission Failed {resp.status_code}", "details": resp.text}
             
             data = resp.json()
@@ -1138,6 +1139,7 @@ class MediaGenerationService:
 
              if resp.status_code == 200:
                   data = resp.json()
+                  print(f"[{log_tag}] API Response: {data}") # DEBUG USER REQUEST
                   metadata = {"raw": data}
                   if extra_metadata:
                       metadata.update(extra_metadata)
@@ -1160,6 +1162,7 @@ class MediaGenerationService:
         try:
             print(f"[{log_tag}] POST Payload Length: {len(json.dumps(payload))}") 
             resp = await asyncio.to_thread(_post)
+            print(f"[{log_tag}] Submission Response: {resp.text[:500]}...") # DEBUG USER REQUEST
             if resp.status_code != 200: 
                 print(f"[{log_tag}] Error {resp.status_code}: {resp.text}")
                 return {"error": f"Submission Failed {resp.status_code}", "details": resp.text}
@@ -1177,6 +1180,7 @@ class MediaGenerationService:
                 p_resp = await asyncio.to_thread(_poll)
                 if p_resp.status_code == 200:
                     p_data = p_resp.json()
+                    print(f"[{log_tag}] Poll Response: {p_data}") # DEBUG USER REQUEST
                     status = p_data.get("status")
                     if status in ["Succeeded", "succeeded"]:
                         content = p_data.get("content", {})
@@ -1200,6 +1204,7 @@ class MediaGenerationService:
         
         try:
             resp = await asyncio.to_thread(_post)
+            print(f"[Grsai] API Returned: {resp.text[:1000]}") # DEBUG USER REQUEST
             if resp.status_code != 200: 
                 print(f"[Grsai] API Error {resp.status_code}: {resp.text}")
                 return {"error": f"Submission Failed {resp.status_code}", "details": resp.text}
