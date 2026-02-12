@@ -42,7 +42,7 @@ class MediaGenerationService:
             "runway": {"base_url": "https://api.runwayml.com", "model": "gen-2"},
             "elevenlabs": {"base_url": "https://api.elevenlabs.io/v1", "model": "premade/Adam"},
             "doubao": {"base_url": "https://ark.cn-beijing.volces.com/api/v3", "model": "doubao-seedream-4-5-251128"},
-            "grsai": {"base_url": "https://grsai.dakka.com.cn", "model": "sora-image"},
+            "grsai": {"base_url": "https://grsaiapi.com", "model": "sora-image"},
             "tencent": {"base_url": "https://aiart.tencentcloudapi.com", "model": "hunyuan-vision"},
             "wanxiang": {"base_url": "https://dashscope.aliyuncs.com/api/v1/services/aigc/image2video/video-synthesis", "model": "wanx2.1-i2v-plus"},
             "vidu": {"base_url": "https://api.vidu.studio/open/v1/creation/video", "model": "vidu2.0"},
@@ -529,7 +529,7 @@ class MediaGenerationService:
         api_key = config.get("api_key")
         model = config.get("model")
         tool_conf = config.get("config", {}) or {}
-        base_url = tool_conf.get("endpoint") or "https://grsai.dakka.com.cn"
+        base_url = tool_conf.get("endpoint") or "https://grsaiapi.com"
         
         # Robust stripping of Grsai specific paths to get the true base URL
         # Remove /v1/draw/..., /v1/video/..., or just /v1 at the end
