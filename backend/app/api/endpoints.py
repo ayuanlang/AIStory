@@ -1968,6 +1968,10 @@ async def generate_image_endpoint(
              detail = result["error"]
              if "details" in result:
                  detail = f"{detail}: {result['details']}"
+             
+             # Log full error for image gen
+             logger.error(f"[GenerateImage] Failed: {detail}")
+             
              raise HTTPException(status_code=400, detail=detail)
         
         # Register Asset
@@ -2107,6 +2111,10 @@ async def generate_video_endpoint(
              detail = result["error"]
              if "details" in result:
                  detail = f"{detail}: {result['details']}"
+             
+             # Log the full error detail for debugging
+             logger.error(f"[GenerateVideo] Failed: {detail}") 
+             
              raise HTTPException(status_code=400, detail=detail)
 
         # Register Asset
