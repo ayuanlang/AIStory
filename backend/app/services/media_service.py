@@ -609,6 +609,11 @@ class MediaGenerationService:
                  
                  # Strip any trailing logic to be safe
                  clean_base = base_url.split("/v1")[0].rstrip("/")
+                 
+                 # Force https if missing (common config error)
+                 if not clean_base.startswith("http"):
+                     clean_base = f"https://{clean_base}"
+                     
                  endpoint = f"{clean_base}/v1/video/{endpoint_suffix}"
             
             # Recalculate result endpoint based on the FINAL submission endpoint
