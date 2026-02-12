@@ -6652,6 +6652,15 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                             }}
                                                             onBlur={() => reconstructKeyframes(localKeyframes)}
                                                         />
+                                                        <TranslateControl 
+                                                            text={kf.prompt} 
+                                                            onUpdate={(v) => {
+                                                                const updated = [...localKeyframes];
+                                                                updated[idx].prompt = v;
+                                                                setLocalKeyframes(updated);
+                                                                reconstructKeyframes(updated);
+                                                            }} 
+                                                        />
                                                     </div>
                                                     <div className="flex gap-1">
                                                         <button 
@@ -6738,6 +6747,28 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                         setLocalKeyframes(updated);
                                                     }}
                                                     onBlur={() => reconstructKeyframes(localKeyframes)}
+                                                />
+                                                <RefineControl 
+                                                    originalText={kf.prompt}
+                                                    onUpdate={(v) => {
+                                                        const updated = [...localKeyframes];
+                                                        updated[idx].prompt = v;
+                                                        setLocalKeyframes(updated);
+                                                        reconstructKeyframes(updated);
+                                                    }}
+                                                    type="image"
+                                                    currentImage={kf.url}
+                                                    onImageUpdate={(url) => {
+                                                        const updated = [...localKeyframes];
+                                                        updated[idx].url = url;
+                                                        setLocalKeyframes(updated);
+                                                        reconstructKeyframes(updated);
+                                                    }}
+                                                    projectId={projectId}
+                                                    shotId={editingShot.id}
+                                                    assetType={`keyframe_${idx}`} // fallback to index
+                                                    featureInjector={injectEntityFeatures}
+                                                    onPickMedia={openMediaPicker}
                                                 />
                                             </div>
                                         ))}
