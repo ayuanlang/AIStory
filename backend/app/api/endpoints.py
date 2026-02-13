@@ -914,6 +914,10 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
 
             desc_parts = []
             
+            # 0. Anchor Description (Critical for AI Visualization)
+            if ent.anchor_description:
+                desc_parts.append(f"Anchor Description: {ent.anchor_description}")
+
             # 1. Narrative Description (New Column Priority)
             if ent.narrative_description:
                  desc_parts.append(f"Description: {ent.narrative_description}")
@@ -923,6 +927,13 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
                  if match:
                       desc_parts.append(f"Description: {match.group(1).strip()}")
             
+            # 1.5 Character Specifics
+            if ent.type and ent.type.lower() == 'character':
+                 if ent.appearance_cn:
+                      desc_parts.append(f"Appearance: {ent.appearance_cn}")
+                 if ent.clothing:
+                      desc_parts.append(f"Clothing: {ent.clothing}")
+
             # 2. Visual Params
             if ent.visual_params:
                 desc_parts.append(f"Visual: {ent.visual_params}")
