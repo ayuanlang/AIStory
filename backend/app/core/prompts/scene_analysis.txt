@@ -44,6 +44,7 @@
     - **所有格特殊规则 (Possessive Exemption)**：当需要表达“角色的...”时（例如 `[RoleName]`'s hand），请直接书写 `[RoleName]'s`。这种形式会被系统识别并**跳过描述注入**，从而避免语法错误。这是**唯一**允许 Skipping Injection 的情况。请善用此规则来描述局部特写（e.g., `Close up of [RoleName]'s eyes`）。
     - **Interaction Completeness (交互完整性)**: 若 Beat 中的动作涉及其他角色或道具（如离开，分开，打开），**必须显式描述**交互对手与道具被影响后的状态。严禁隐式省略。
       - *Example*: `[A] ends kiss with [B]` 必须写为 `[A] parts lips from [B], leaving [B] visible in frame`.
+    - **Environment Object Specificity (环境交互特指)**: 当 Beat 涉及与环境中的物体交互时，**严禁使用通用名词** (Do not use generic terms like "table/chair")。必须使用与 `[Environment Context]` 一致的**具体视觉描述**来特指（e.g., Use "the scratched metal workbench" instead of "the table"; "the red velvet sofa" instead of "the sofa"）。
     - **Continuity Mandate (连贯性强制)**：每个 Beat 必须继承上一 Beat 的视觉状态。（开始新Beat时要检查）
       - **Persistence (存续原则)**：上一 Beat 出现的角色与道具，默认在当前 Beat 继续保持存在（Visible），除非有明确的指令使其退出。
       - **Exit Logic (退出描述)**：如果某个上一 Beat 存在的实体在本 Beat 消失，**必须显式描述**其“离开的动作” (e.g., [A] exits frame left) 或“被遮挡的状态”。严禁凭空消失。
@@ -68,6 +69,7 @@
     3.  **Visual Specificity (视觉独特性)**: 必须具有需要专门设计的外观特征（如“雕刻精美的古董枪” vs “普通白色一次性纸杯”）。普通物品通过 Prompt 描述即可，无需资产化。
   - **Threshold (阈值)**：仅提取在**至少 2 个 Beats** 中被显著使用，或对剧情有**核心推动作用**（Key Plot Item）的道具。
   - **One-off Exemption (单次豁免)**：如果某道具仅在一个 Beat 中短暂出现（如“随手拿起一张纸巾擦嘴后扔掉”），**无需**将其提炼为独立 Prop Asset。直接在该 Beat 的描述中用自然语言描写即可。
+  - **Identity Matching (身份匹配)**: Prop 的 Prompt 描述必须显式包含与其持有者身份/性格相符的视觉细节（如“战士的剑应有磨损和血槽”，“贵族的杯子应有金边和徽章”）。
   - **Background Items**: 纯背景装饰物归入 Environment。
 - **State Variant Dependency (状态变体依赖)**：
   - **Rule: Priority of Original/Normal State (原始/常规状态优先)**：对于任何具有多种物理状态的道具，**必须优先定义其常态/完整态**作为 **Base Entity**。
@@ -80,23 +82,73 @@
 
 ---
 
-### 二、资产生成规范 (Asset Generation Rules)
+### 二、主体抽取与生成策略 (Subject Extraction & Generation Criteria)
 
-#### 1. Environment Prompt Template
-（**空场景**，无角色。核心在于构建一个围绕**物理锚点**展开的**可供剧情发展与人物活动**的物理空间。）
-`[Global Style] Camera at [Height/Angle] looking [Direction] into 【environment_name】; **Core Stage**: Centralized around 【primary_anchor description】. Lighting: 【source, direction, quality】. Atmosphere: 【mood keywords】. Details: 【materials, textures】. **No humans or characters present.**`
-
-#### 2. Character Prompt Template
-（**标准六视图**，确保几何一致性。）
-`[Global Style] 6-view character sheet for 【Name】. Structure: 6-view layout (Front, Back, Side, 3/4, Close-up, Detail). **Full Body Mandate**: Must show complete figure from head to toe. Appearance: 【Age, Body Type, ethnicity】. Attire: 【Clothing details】. **Footwear**: 【Detailed shoe description (Type/Color/Material)】. Anchors: 【Signature features e.g. scar, accessory】. Consistency: T-pose/Neutral pose. Expression Variation: 6 distinct expressions across the views (1. Neutral, 2. Happy, 3. Sad, 4. Angry, 5. Surprised, 6. Determined). Background: White.`
-
-#### 3. Prop Prompt Template
-（**独立物体**，白色背景。）
-`[Global Style] Prop Asset: 【Name】. View: 【Angle e.g. Isometric/Front】. Material: 【Texture details】. Wear & Tear: 【Condition】. **Functional Features**: 【Visible parts implying movement or state change (e.g. Hinges/Buttons/Liquid Level)】. Background: White.`
+- **Dependency Consistency (依赖一致性)**: 主体生成若需依托其他主体（通常为同一主体的不同状态，不同视角，要保持一致性，仅是同框出现的不算），必须在 `visual_dependencies` 字段中完整列出所有依赖主体的名称（与JSON定义一致），不得遗漏或模糊表述。
+- **Visual Anchor (视觉钩子)**: 每个主体配置一个专属视觉钩子 `anchor_description`：【thumbnail_readability】（如发型，衣服，相貌特征，配饰，材质，颜色等）。
+  - **Constraint**: 不要用主观词如美丽、伟大等，不要用禁忌词，如性感、血腥等NSFW。
+  - **Identity**: 要体现角色身份，如女孩，猩猩，提包等。
+  - **Length**: ≤ 20 英文词。
+- **主体生成依赖策略（强制）**：
+    - **Type A（特征提取）**：`[Global Style] + 【Anchor】 + 【New Angle/Pose】 + 【Context】`，用于多视角/新姿态。
+    - **Type B（图像编辑）**：`【Anchor Base】, 【Action】 to achieve 【Target】`，用于风格/材质/背景编辑。
+    - **Implementation**: 在 `visual_dependencies` 列出依赖主体，在 `dependency_strategy` 标注类型并填写 `logic`；`generation_prompt_en` 必须包含具体生成/编辑指令。
+- **角色规则 (Character Rules)**：
+  - **Identity**: 外观重大变化视为独立角色实体。
+  - **View**: 必须生成六视图（6-panel）。
+  - **Format**: 中文外观含身高与头身比。`generation_prompt_en` 结尾含英文资产要求。
+  - **Anchor**: `anchor_description` 必须包含实体身份（如 Girl, Gorilla）。
+- **道具规则 (Prop Rules)**：
+  - **Variants**: 状态变化生成独立资产名（如 `"Bottle (Shattered)"`）。
+  - **Presentation**: 单物体纯白背景展示，标注材质与相对比例。
+  - **Simplification**: 只出现一次的道具，不用单独提取，融合到环境或新建角色持道具的单独资产即可。
+- **环境规则 (Environment Rules)**：
+  - **Empty Scene**: 必须是**空场景**（无人物/道具，不能直接出现与角色、道具的关联）。
+  - **Action Space**: 必须检索与本环境相关的 Scene 的动作空间，保证描述能支持剧情发展需求。
+  - **Connectivity**: 明确空间连通性（如门窗位置）对动作空间范围的影响，预留好角色运动空间（不要出现门关着但要对门外角色有动作交互的情况）。如必须，环境描述要明确门是开着的或将运动空间设为门外。
+  - **New Asset Trigger**: 大幅位移或机位调整时需生成新的环境资产。即使是同一地点，只要镜头的变化，就应该是新的环境（Variant），但要依赖原来的环境（Base）。
 
 ---
 
-### 三、输出模版说明 (Output Templates)
+### 三、英文生成提示词模板 (English Generation Prompt Templates)
+
+**All prompts must start with [Global Style].**
+
+#### 1. Environment Prompt Template
+（用于生成背景环境图像，**空场景**，以 camera-first 开头，包含视觉锚点、尺度参考、材质、光照、色彩、负空间，**要充分考虑剧情发展所需的空间**）
+
+`[Global Style] Camera at 【camera_height_and_angle】 looking 【view_direction】 into 【environment_name】; focal point 【primary_anchor_feature】 at 【relative_position】; entrance 【position】; main circulation width ≈ 【width】; actionable area (m) 【action_area_dimensions】; architectural anchors 【key_features】; materials: floor 【floor_material】, walls 【wall_finish】, ceiling 【ceiling_detail】; scale reference 【scale_reference】 (include 1m scale bar); depth: foreground 【foreground_elements】, midground 【midground_elements】, background 【background_elements】, negative space 【negative_space】; time 【time_of_day】; lighting: key 【position,intensity,color_temp】, fill 【position,intensity,color_temp】, backlight 【position,intensity,color_temp】; shadow quality 【soft/hard】; color palette: dominant 【dominant_colors】, accents 【accent_colors】; mood 【mood_adjectives】; anchor_description：【thumbnail_readability】. **No people or characters in scene.**`
+
+#### 2. Character Prompt Template
+（用于生成角色六视图资产，包含精确视觉锚点与比例。**表情生成规则**：结合剧情为不同视图分配不同表情，唯独**特写(Close-up)** 必须保持**正常/标准表情**以作为基准。）
+
+`[Global Style], 6-view character sheet — all six views must show the same character, outfit, proportions, and anchors consistently.
+
+1. Full-body Front: standing pose with 【Expression 1: Character's Core Trait】, including footwear, face visible, key facial features.
+2. Full-body Back: rear standing pose, showing clothing seams, skirt hem, shoes, collar, and necklace placement.
+3. Half-body (Waist-up): torso view with 【Expression 2: Plot-relevant Emotion A】, shirt opening, necklace, hand position, fabric texture.
+4. Close-up: facial close-up with Neutral/Standard expression (Mandatory for reference), clear eyes, lips, makeup, and skin detail.
+5. Side Profile: true side view with 【Expression 3: Plot-relevant Emotion B】, showing full facial profile, ear, hairline, and shoulder slope.
+6. Back Detail: rear detail of upper back and collar area, showing collar turn-out, necklace, and stitching.
+
+Height: 【cm】; head-to-body ratio: 【ratio】.
+Clothing: 【layers, materials, colors, wear】; include footwear and skirt fit.
+Distinctive anchors: 【scar, tattoo, accessory, emblem】 at 【location】.
+Action traits: poised, controlled movements.
+Lighting: soft front light + rim light for silhouette.
+Background: white.
+anchor_description：【thumbnail_readability】.
+Style: follow [Global Style].
+Output: six high-resolution PNGs or a 6-panel composite; include neutral T-pose reference and scale marker; no text, watermark, or layout; End note: white background, high quality, large files, no text, no layout.`
+
+#### 3. Prop Prompt Template
+（用于生成单物体道具图像，包含材质、尺寸、相对尺度与细节）
+
+`[Global Style] Prop: 【PropName (state)】. Material: 【primary_material】; secondary materials: 【list】. Size: ~【dimensions cm or relative to reference】. Relative scale reference: 【reference_subject e.g., belt buckle, chair】. Visible details: 【surface texture, wear, markings, seams, labels】. Lighting for capture: 【direction, intensity, color_temp】; shadow behavior: 【soft/hard】. Camera framing: 【view e.g., front 3/4; macro insert】.anchor_description：【thumbnail_readability】. Background: white. Output: single object PNG with alpha; include scale ruler overlay; End note: white background, high quality, large file, no text, no layout.`
+
+---
+
+### 四、输出模版说明 (Output Templates)
 
 必须严格按照以下三部分顺序输出，不得包含多余的 conversational text。
 
@@ -205,7 +257,7 @@
 }
 ```
 
-### 四、校验清单 (Validation Checklist)
+### 五、校验清单 (Validation Checklist)
 1. **Anchor Check**: 每个 Scene 的 Core Scene Info 是否都定义了 **[Anchor] (物理锚点)**？
 2. **Space Check**: Environment Prompt 是否包含 **"No humans or characters present"**？
 3. **Consistency Check**: Scene 表格中的 `[Char A]` 是否在 Part 3 JSON 中有对应条目？
