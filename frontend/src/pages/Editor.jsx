@@ -1625,7 +1625,7 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
                                             <Video className="text-white/50 group-hover:text-primary transition-colors"/>
                                         </div>
                                     ) : (
-                                        <img src={asset.url} alt="asset" className="w-full h-full object-cover" />
+                                        <img src={getFullUrl(asset.url)} alt="asset" className="w-full h-full object-cover" />
                                     )}
                                     <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                                     <div className="absolute bottom-0 inset-x-0 p-1 bg-black/60 text-[9px] truncate text-white/70">
@@ -2196,7 +2196,7 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
                  <div className="bg-[#1a1a1a] border border-white/10 rounded-xl overflow-hidden max-w-5xl w-full max-h-[90vh] flex shadow-2xl" onClick={e => e.stopPropagation()}>
                     {/* Image Area */}
                     <div className="flex-1 bg-black/50 flex items-center justify-center p-4 relative group/modal">
-                        <img src={selectedImage} className="max-w-full max-h-full object-contain shadow-lg rounded" alt="Detail" />
+                        <img src={getFullUrl(selectedImage)} className="max-w-full max-h-full object-contain shadow-lg rounded" alt="Detail" />
                         <button 
                             className="absolute top-4 right-4 bg-black/50 text-white p-2 rounded-full hover:bg-white/20 transition-colors"
                             onClick={() => setSelectedImage(null)}
@@ -2288,7 +2288,11 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
                     {/* 1. Active Refs (Selected) */}
                     {activeRefs.map((url, idx) => (
                         <div key={url + idx} className="relative group shrink-0 w-[140px] aspect-video bg-black/40 rounded border border-primary/50 overflow-hidden shadow-[0_0_10px_rgba(0,0,0,0.5)] cursor-zoom-in" onClick={() => setSelectedImage(url)}>
-                            <img src={url} className="w-full h-full object-cover" alt="ref" />
+                            {(url.toLowerCase().endsWith('.mp4') || url.toLowerCase().endsWith('.webm')) ? (
+                                <video src={getFullUrl(url)} className="w-full h-full object-cover" muted loop onMouseEnter={e=>e.target.play()} onMouseLeave={e=>{e.target.pause();e.target.currentTime=0;}} />
+                            ) : (
+                                <img src={getFullUrl(url)} className="w-full h-full object-cover" alt="ref" />
+                            )}
                             {!useSequenceLogic && (
                                 <button 
                                     onClick={(e) => { e.stopPropagation(); handleRemove(url); }}
@@ -2403,7 +2407,7 @@ const SceneCard = ({ scene, entities, onClick, onGenerateShots }) => {
                 {imgUrl ? (
                     <motion.img 
                         key={imgUrl}
-                        src={imgUrl} 
+                        src={getFullUrl(imgUrl)} 
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         transition={{ duration: 0.5 }}
@@ -3472,7 +3476,7 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
                     >
                         <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent z-10 pointer-events-none"></div>
                         {entity.image_url ? (
-                            <img src={entity.image_url} alt={entity.name} className="absolute inset-0 object-cover w-full h-full" />
+                            <img src={getFullUrl(entity.image_url)} alt={entity.name} className="absolute inset-0 object-cover w-full h-full" />
                         ) : (
                             <div className="absolute inset-0 flex items-center justify-center bg-white/5">
                                 <Users className="text-white/20" size={48} />
@@ -3525,7 +3529,7 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
                             {/* Left: Image */}
                             <div className="w-1/2 bg-black relative flex items-center justify-center">
                                 {viewingEntity.image_url ? (
-                                    <img src={viewingEntity.image_url} alt={viewingEntity.name} className="max-w-full max-h-full object-contain" />
+                                    <img src={getFullUrl(viewingEntity.image_url)} alt={viewingEntity.name} className="max-w-full max-h-full object-contain" />
                                 ) : (
                                     <div className="flex flex-col items-center justify-center text-white/20">
                                         <Users size={64} />
@@ -4123,7 +4127,7 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
                                                             <div key={idx} className="flex-shrink-0 w-24 bg-black/40 border border-white/10 rounded-lg p-1.5 flex flex-col gap-1 relative group">
                                                                 <div className="aspect-square bg-black rounded overflow-hidden">
                                                                      {depEntity?.image_url ? (
-                                                                         <img src={depEntity.image_url} alt={dep} className="w-full h-full object-cover" />
+                                                                         <img src={getFullUrl(depEntity.image_url)} alt={dep} className="w-full h-full object-cover" />
                                                                      ) : (
                                                                          <div className="w-full h-full flex items-center justify-center bg-white/5">
                                                                              <Users size={16} className="text-white/20"/>
@@ -4206,7 +4210,7 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
                                                      // Selected Preview State
                                                      <div className="flex gap-3 bg-black/40 border border-white/10 rounded-lg p-2 items-center relative group">
                                                          <div className="w-10 h-10 bg-black rounded overflow-hidden flex-shrink-0 border border-white/5">
-                                                             <img src={refImage.url} alt="ref" className="w-full h-full object-cover" />
+                                                             <img src={getFullUrl(refImage.url)} alt="ref" className="w-full h-full object-cover" />
                                                          </div>
                                                          <div className="flex-1 overflow-hidden">
                                                              <div className="text-xs font-bold text-white truncate">{refImage.name || 'Reference Image'}</div>
@@ -4242,7 +4246,7 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
                                                                          }}
                                                                          className="aspect-square bg-black/40 rounded border border-white/5 hover:border-primary/50 cursor-pointer overflow-hidden relative group"
                                                                      >
-                                                                         <img src={asset.url} alt={asset.name} className="w-full h-full object-cover" />
+                                                                         <img src={getFullUrl(asset.url)} alt={asset.name} className="w-full h-full object-cover" />
                                                                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                                                                      </div>
                                                                  ))}
@@ -5294,7 +5298,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         
         let success = false;
         let attempts = 0;
-        const maxAttempts = 10;
+        const maxAttempts = 3; // Reduced from 10
 
         while (!success && attempts < maxAttempts) {
              if (abortGenerationRef.current) {
@@ -5409,7 +5413,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
         let success = false;
         let attempts = 0;
-        const maxAttempts = 10;
+        const maxAttempts = 3; // Reduced from 10
 
         while (!success && attempts < maxAttempts) {
              if (abortGenerationRef.current) {
@@ -6280,7 +6284,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                             {editingShot.image_url ? (
                                                 <>
                                                     <img 
-                                                        src={editingShot.image_url} 
+                                                        src={getFullUrl(editingShot.image_url)} 
                                                         className="w-full h-full object-cover cursor-pointer hover:opacity-90 transition-opacity" 
                                                         onClick={() => setViewMedia({ url: editingShot.image_url, type: 'image', title: 'Start Frame', prompt: editingShot.start_frame })}
                                                         alt="Start Frame"
@@ -6434,7 +6438,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                      return (
                                                         <div className="relative w-full h-full group/mirror">
                                                             <img 
-                                                                src={editingShot.image_url} 
+                                                                src={getFullUrl(editingShot.image_url)} 
                                                                 className="w-full h-full object-cover opacity-60 group-hover/mirror:opacity-100 transition-opacity cursor-pointer"
                                                                 title="Same as Start Frame (Prompt < 5 words)"
                                                                 onClick={() => setViewMedia({ url: editingShot.image_url, type: 'image', title: 'Start Frame (Mirrored)', prompt: editingShot.start_frame })}
@@ -6450,7 +6454,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                     return (
                                                         <>
                                                             <img 
-                                                                src={endUrl} 
+                                                                src={getFullUrl(endUrl)} 
                                                                 className="w-full h-full object-cover cursor-pointer hover:opacity-90 transition-opacity"
                                                                 onClick={() => setViewMedia({ url: endUrl, type: 'image', title: 'End Frame', prompt: editingShot.end_frame })}
                                                             />
@@ -6723,7 +6727,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                     {kf.url ? (
                                                         <>
                                                             <img 
-                                                                src={kf.url} 
+                                                                src={getFullUrl(kf.url)} 
                                                                 className="w-full h-full object-cover cursor-pointer hover:opacity-90"
                                                                 onClick={() => setViewMedia({ url: kf.url, type: 'image', title: `Keyframe T=${kf.time}`, prompt: kf.prompt })}
                                                             />
@@ -6899,7 +6903,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                         return allMatches.map((e, idx) => (
                                             <div key={e.id} className="flex flex-col items-center gap-2 min-w-[70px]">
                                                 <div className="w-14 h-14 rounded-full overflow-hidden border border-white/20 bg-black/50 relative">
-                                                    {e.image_url ? <img src={e.image_url} className="w-full h-full object-cover" /> : <Users className="w-6 h-6 m-auto absolute inset-0 text-muted-foreground opacity-50"/>}
+                                                    {e.image_url ? <img src={getFullUrl(e.image_url)} className="w-full h-full object-cover" /> : <Users className="w-6 h-6 m-auto absolute inset-0 text-muted-foreground opacity-50"/>}
                                                 </div>
                                                 <span className="text-[10px] text-center line-clamp-1 w-full opacity-80">{e.name}</span>
                                             </div>
@@ -7106,7 +7110,7 @@ const AssetsLibrary = () => {
                             onClick={() => setSelectedAsset(asset)}
                         >
                             {asset.type === 'image' ? (
-                                <img src={asset.url} alt={asset.name} className="w-full h-full object-cover" />
+                                <img src={getFullUrl(asset.url)} alt={asset.name} className="w-full h-full object-cover" />
                             ) : (
                                 <div className="w-full h-full flex items-center justify-center bg-black/50">
                                     <Video className="w-12 h-12 text-white/50" />

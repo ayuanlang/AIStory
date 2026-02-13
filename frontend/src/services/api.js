@@ -7,6 +7,7 @@ console.log("Initializing API Helper with Base URL:", API_URL);
 // Use API_URL from config which supports production env vars
 export const api = axios.create({
   baseURL: API_URL,
+  timeout: 300000, // 5 minutes timeout for long generation tasks
 });
 
 // Add a request interceptor to include the token

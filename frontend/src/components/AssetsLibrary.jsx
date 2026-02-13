@@ -8,22 +8,17 @@ import {
 } from 'lucide-react';
 import { fetchAssets, createAsset, uploadAsset, deleteAsset, updateAsset, analyzeAssetImage } from '../services/api';
 import { useLog } from '../context/LogContext';
-import { API_URL } from '../config';
+import { API_URL, BASE_URL } from '../config';
 import RefineControl from './RefineControl.jsx';
 
 // Helper to construct full URL if relative
 const getFullUrl = (url) => {
     if (!url) return '';
-    if (url.startsWith('http')) return url;
-    // Remove leading slash if present to avoid double slash if API_URL ends with slash
-    // But usually API_URL is http://localhost:8000. 
-    // If url is /uploads/..., we want http://localhost:8000/uploads/...
-    // The proxy might handle /api, but static files are mounted at /uploads
-    // If using Vite proxy: /uploads -> http://localhost:8000/uploads
-    // So just returning url (relative) works if base tag is not set, 
-    // or if we rely on browser resolving relative to domain.
-    // However, if we're in /editor/1, relative path assets/xxx might fail.
-    // Best to use absolute path from root.
+    if (url.startsWith('http') || url.startsWith('blob:') || url.startsWith('data:')) return url;
+    if (url.startsWith('/')) {
+        const base = BASE_URL.endsWith('/') ? BASE_URL.slice(0, -1) : BASE_URL;
+        return `${base}${url}`;
+    }
     return url; 
 };
 

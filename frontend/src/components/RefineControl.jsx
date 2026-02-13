@@ -2,6 +2,18 @@ import React, { useState } from 'react';
 import { useLog } from '../context/LogContext';
 import { Loader2, Wand2, Image as ImageIcon, Plus, X, Languages, MessageSquare } from 'lucide-react';
 import { generateImage, refinePrompt, translateText } from '../services/api';
+import { BASE_URL } from '../config';
+
+// Helper to handle relative URLs
+const getFullUrl = (url) => {
+    if (!url) return '';
+    if (url.startsWith('http') || url.startsWith('blob:') || url.startsWith('data:')) return url;
+    if (url.startsWith('/')) {
+        const base = BASE_URL.endsWith('/') ? BASE_URL.slice(0, -1) : BASE_URL;
+        return `${base}${url}`;
+    }
+    return url;
+};
 
 const RefineControl = ({ originalText, onUpdate, type = 'image', currentImage = null, onImageUpdate = null, projectId = null, shotId = null, assetType = null, featureInjector = null, onPickMedia = null }) => {
     const { addLog } = useLog();
@@ -187,7 +199,7 @@ const RefineControl = ({ originalText, onUpdate, type = 'image', currentImage = 
                     <span className="text-[9px] text-muted-foreground whitespace-nowrap">Refs:</span>
                     {extraRefs.map((url, idx) => (
                         <div key={idx} className="relative w-8 h-8 rounded border border-white/10 shrink-0 group">
-                            <img src={url} className="w-full h-full object-cover rounded opacity-80" alt="ref"/>
+                            <img src={getFullUrl(url)} className="w-full h-full object-cover rounded opacity-80" alt="ref"/>
                             <button 
                                 onClick={() => handleRemoveRef(idx)}
                                 className="absolute -top-1 -right-1 bg-red-500 text-white w-3 h-3 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
