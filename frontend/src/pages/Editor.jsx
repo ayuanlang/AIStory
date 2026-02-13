@@ -7,14 +7,21 @@ import LogPanel from '../components/LogPanel';
 import AgentChat from '../components/AgentChat';
 import { MessageSquare, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { 
-    fetchProject, 
-    updateProject,
-    fetchEpisodes, 
-    createEpisode, 
-    updateEpisode,
-    updateEpisodeSegments,
-    deleteEpisode,
+import { API_URL, BASE_URL } from '../config';
+
+// Helper to handle relative URLs
+const getFullUrl = (url) => {
+    if (!url) return '';
+    if (url.startsWith('http') || url.startsWith('blob:') || url.startsWith('data:')) return url;
+    // If it's a relative path starting with /, append BASE_URL
+    if (url.startsWith('/')) {
+        // Avoid double slash if BASE_URL ends with /
+        const base = BASE_URL.endsWith('/') ? BASE_URL.slice(0, -1) : BASE_URL;
+        return `${base}${url}`;
+    }
+    return url;
+};
+
     fetchScenes, 
     createScene,
     updateScene, 
@@ -1342,9 +1349,9 @@ const MediaDetailModal = ({ media, onClose }) => {
                 {/* Media Area */}
                 <div className="flex-1 bg-black/50 flex items-center justify-center p-4 relative group/modal min-h-[400px]">
                     {media.type === 'video' ? (
-                        <video src={media.url} controls autoPlay className="max-w-full max-h-full shadow-lg rounded" />
+                        <video src={getFullUrl(media.url)} controls autoPlay className="max-w-full max-h-full shadow-lg rounded" />
                     ) : (
-                        <img src={media.url} className="max-w-full max-h-full object-contain shadow-lg rounded" alt="Detail" />
+                        <img src={getFullUrl(media.url)} className="max-w-full max-h-full object-contain shadow-lg rounded" alt="Detail" />
                     )}
                     
                     <button 
@@ -1658,9 +1665,9 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
                             <div className="flex-1 overflow-hidden flex">
                                 <div className="flex-1 bg-black/40 flex items-center justify-center p-4">
                                      {selectedAsset.type === 'video' ? (
-                                        <video src={selectedAsset.url} controls className="max-w-full max-h-full rounded shadow-lg"/>
+                                        <video src={getFullUrl(selectedAsset.url)} controls className="max-w-full max-h-full rounded shadow-lg"/>
                                      ) : (
-                                        <img src={selectedAsset.url} className="max-w-full max-h-full object-contain rounded shadow-lg"/>
+                                        <img src={getFullUrl(selectedAsset.url)} className="max-w-full max-h-full object-contain rounded shadow-lg"/>
                                      )}
                                 </div>
                                 <div className="w-80 bg-[#151515] border-l border-white/10 p-4 overflow-y-auto space-y-4">
@@ -5475,6 +5482,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
     const handleGenerateVideo = async () => {
         if (!editingShot) return;
+        if (generatingState.video) {
+             console.log("Video generation already in progress used. Ignoring double click.");
+             return; 
+        }
+
         setGeneratingState(prev => ({ ...prev, video: true }));
 
         // 1. Feature Injection for Video Prompt
@@ -6067,17 +6079,17 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                     {shot.video_url ? (
                                         <video 
                                             key={shot.video_url}
-                                            src={shot.video_url} 
+                                            src={getFullUrl(shot.video_url)} 
                                             className="w-full h-full object-cover" 
                                             muted 
                                             loop
                                             playsInline
-                                            poster={shot.image_url}
+                                            poster={getFullUrl(shot.image_url)}
                                             onMouseEnter={e => e.target.play().catch(() => {})}
                                             onMouseLeave={e => { e.target.pause(); e.target.currentTime = 0; }}
                                         />
                                     ) : shot.image_url ? (
-                                        <img src={shot.image_url} alt={shot.shot_name} className="w-full h-full object-cover" />
+                                        <img src={getFullUrl(shot.image_url)} alt={shot.shot_name} className="w-full h-full object-cover" />
                                     ) : (
                                         <div className="flex flex-col items-center gap-2 opacity-50">
                                             <ImageIcon className="w-8 h-8" />
@@ -6571,7 +6583,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                         
                                         <div 
                                             className="aspect-video bg-black/40 rounded border border-white/10 relative group overflow-hidden cursor-pointer"
-                                            onClick={() => editingShot.video_url && setViewMedia({ url: editingShot.video_url, type: 'video', title: 'Final Video', prompt: editingShot.prompt })}
+                                            onClick={() => editingShot.video_url && setViewMedia({ url: getFullUrl(editingShot.video_url), type: 'video', title: 'Final Video', prompt: editingShot.prompt })}
                                         >
                                             {generatingState.video && (
                                                 <div className="absolute inset-0 bg-black/60 z-10 flex items-center justify-center flex-col gap-2">
@@ -6582,7 +6594,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                             {(editingShot.video_url) ? (
                                                 <video 
                                                     key={editingShot.video_url}
-                                                    src={editingShot.video_url} 
+                                                    src={getFullUrl(editingShot.video_url)} 
                                                     className="w-full h-full object-cover" 
                                                     onClick={(e) => e.preventDefault()} 
                                                     controls
@@ -7135,9 +7147,9 @@ const AssetsLibrary = () => {
                             {/* Left: Preview */}
                             <div className="flex-[2] bg-black flex items-center justify-center relative border-r border-white/10 p-4">
                                 {selectedAsset.type === 'image' ? (
-                                    <img src={selectedAsset.url} alt={selectedAsset.name} className="max-w-full max-h-full object-contain" />
+                                    <img src={getFullUrl(selectedAsset.url)} alt={selectedAsset.name} className="max-w-full max-h-full object-contain" />
                                 ) : (
-                                    <video src={selectedAsset.url} controls className="max-w-full max-h-full" />
+                                    <video src={getFullUrl(selectedAsset.url)} controls className="max-w-full max-h-full" />
                                 )}
                             </div>
 

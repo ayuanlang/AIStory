@@ -197,7 +197,7 @@
   5. **Generate Duration**: 确定动作需要的总时长（根据动作密度自然估算）。
   6. **Generate Video Content**: 根据 Logic 规划与 Duration 填充每一秒的动作。
   7. **Generate End Frame**: 根据 Video Content 的最终结果生成结束状态。  - **Entity Integrity Check (角色/实体完整性检查)**:
-    - **Rule: No Mystery Guests**. 所有的 Linked Characters 以及在 `Video Content` (提示词) 中发生的任何主动行为主体，**必须**显式地出现在 `Start Frame` (开始画面) 或者 `End Frame` (结束画面) 的描述中。
+    - **Rule: No Mystery Guests**. 在 `Video Content` 中发生的任何主动行为主体，**必须**显式地出现在 `Start Frame` (开始画面) 或者 `End Frame` (结束画面) 的描述中。
     - **Logic**: 视频生成模型需要首尾帧作为视觉锚点。如果提示词里写了 "John 举起了手"，但 Start Frame 和 End Frame 都没有提到 "John"，模型可能会凭空捏造一个陌生人作为 actor，或导致动作失效。
     - **Corrective Action**: 只要在 Video Content 提及了某实体 [Entity]，请务必检查 Start/End Frame 是否包含了该实体。如果都没有，**强制**将该实体的最终状态写入 End Frame。
 
@@ -418,8 +418,9 @@
   - **首帧**：[中文] 描述 T=0s 时的主体稳定状态与位置。
   - **过程**：[中文] 完整罗列从首帧到尾帧的所有微节拍动作（例如10个）。为了阅读简洁，此处不必强制标注【方向+速率+量化】，但后续生成 English Video Content 时必须根据语境自动补全这些详细物理参数。
   - **尾帧**：[中文] 描述 T=End 时的主体落位与最终状态。**必须显式标注**：[稳定态（非动作过渡）: 是/否(原因)]，[近景收束: 是/否(原因)]。
+  - **校验**：[实体完整性: 通过/已强制修正(说明补回了哪些遗漏角色)]。
 - **作用**：以此为逻辑基准，生成后续的英文 Prompt。如果逻辑不通或密度不足，则视为无效生成。
-- **分隔符**：五部分内容必须用 `<br>` 换行分隔。
+- **分隔符**：六部分内容必须用 `<br>` 换行分隔。
 - Shot Name的语言与提供的剧本一致。
 
 
