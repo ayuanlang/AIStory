@@ -196,7 +196,10 @@
   4. **Generate Start Frame**: 根据 Logic 规划，定义动作的起始状态（必须符合机位物理关系）。
   5. **Generate Duration**: 确定动作需要的总时长（根据动作密度自然估算）。
   6. **Generate Video Content**: 根据 Logic 规划与 Duration 填充每一秒的动作。
-  7. **Generate End Frame**: 根据 Video Content 的最终结果生成结束状态。
+  7. **Generate End Frame**: 根据 Video Content 的最终结果生成结束状态。  - **Entity Integrity Check (角色/实体完整性检查)**:
+    - **Rule: No Mystery Guests**. 所有的 Linked Characters 以及在 `Video Content` (提示词) 中发生的任何主动行为主体，**必须**显式地出现在 `Start Frame` (开始画面) 或者 `End Frame` (结束画面) 的描述中。
+    - **Logic**: 视频生成模型需要首尾帧作为视觉锚点。如果提示词里写了 "John 举起了手"，但 Start Frame 和 End Frame 都没有提到 "John"，模型可能会凭空捏造一个陌生人作为 actor，或导致动作失效。
+    - **Corrective Action**: 只要在 Video Content 提及了某实体 [Entity]，请务必检查 Start/End Frame 是否包含了该实体。如果都没有，**强制**将该实体的最终状态写入 End Frame。
 
 #### A. 分镜类型判别 (Shot Type Classification)
 - **定义**：在生成具体的画面描述前，必须先评估动作复杂度，决定采用何种生成模式。这直接决定了 **Keyframes** 字段的填写方式。
