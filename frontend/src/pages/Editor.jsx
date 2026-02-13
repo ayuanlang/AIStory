@@ -1435,6 +1435,9 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
     const [availableShots, setAvailableShots] = useState([]);
 
     useEffect(() => {
+        if (isOpen) {
+             setSelectedAsset(null); // Reset detail view on open
+        }
         if (isOpen && tab === 'assets') {
              // Reset filters if context is provided?
              // If context has entityId, maybe default to subject?
