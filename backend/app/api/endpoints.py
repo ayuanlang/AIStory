@@ -862,12 +862,21 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
     
     # Identify relevant entity names from Scene data
     relevant_names = set()
+    
+    def _clean_br(s):
+        return s.replace('[', '').replace(']', '').strip()
+
     if scene.linked_characters:
         # Split by comma and handle potential variations
-        parts = [p.strip() for p in scene.linked_characters.split(',') if p.strip()]
+        parts = [_clean_br(p) for p in scene.linked_characters.split(',') if p.strip()]
         relevant_names.update(parts)
+
+    if scene.key_props:
+        parts = [_clean_br(p) for p in scene.key_props.split(',') if p.strip()]
+        relevant_names.update(parts)
+        
     if scene.environment_name:
-        relevant_names.add(scene.environment_name.strip())
+        relevant_names.add(_clean_br(scene.environment_name))
     
     env_narrative = ""
 
@@ -888,7 +897,7 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
         if is_relevant:
             # Check if this is the Environment Anchor to capture narrative for Scenario Content
             if scene.environment_name:
-                 sn_clean = scene.environment_name.strip().lower()
+                 sn_clean = _clean_br(scene.environment_name).lower()
                  for alias in ent_aliases:
                       if alias.strip().lower() == sn_clean:
                            # Priority: description_cn (custom_attributes) > narrative_description > description
