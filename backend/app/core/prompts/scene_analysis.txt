@@ -44,7 +44,7 @@
     - **所有格特殊规则 (Possessive Exemption)**：当需要表达“角色的...”时（例如 `[RoleName]`'s hand），请直接书写 `[RoleName]'s`。这种形式会被系统识别并**跳过描述注入**，从而避免语法错误。这是**唯一**允许 Skipping Injection 的情况。请善用此规则来描述局部特写（e.g., `Close up of [RoleName]'s eyes`）。
     - **Interaction Completeness (交互完整性)**: 若 Beat 中的动作涉及其他角色或道具（如离开，分开，打开），**必须显式描述**交互对手与道具被影响后的状态。严禁隐式省略。
       - *Example*: `[A] ends kiss with [B]` 必须写为 `[A] parts lips from [B], leaving [B] visible in frame`.
-    - **Environment Object Specificity (环境交互特指)**: 当 Beat 涉及与环境中的物体交互时，**严禁使用通用名词** (Do not use generic terms like "table/chair")。必须使用与 `[Environment Context]` 一致的**具体视觉描述**来特指（e.g., Use "the scratched metal workbench" instead of "the table"; "the red velvet sofa" instead of "the sofa"）。
+    - **Environment Object Specificity (环境交互特指)**: 当 Beat 涉及与环境中的物体交互时，**严禁使用通用名词** (Do not use generic terms like "table/chair")。必须使用与 `[Environment Context]` 一致的**具体视觉描述**来特指（e.g., Use "the scratched metal workbench" instead of "the table"; "the red velvet sofa" instead of "the sofa"）。尤其是后续会与角色产生交互的物体，必须提供**Anchor Description (描点描述)**，明确其**颜色、形状、材质或特殊标记**（e.g., "The [Red Leather Armchair] with torn cushion", "The [Brass Antique Lamp] with green shade"）。
     - **Continuity Mandate (连贯性强制)**：每个 Beat 必须继承上一 Beat 的视觉状态。（开始新Beat时要检查）
       - **Persistence (存续原则)**：上一 Beat 出现的角色与道具，默认在当前 Beat 继续保持存在（Visible），除非有明确的指令使其退出。
       - **Exit Logic (退出描述)**：如果某个上一 Beat 存在的实体在本 Beat 消失，**必须显式描述**其“离开的动作” (e.g., [A] exits frame left) 或“被遮挡的状态”。严禁凭空消失。
