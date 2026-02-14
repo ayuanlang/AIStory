@@ -23,6 +23,7 @@ const Settings = () => {
     // State for generation models
     const [imageModel, setImageModel] = useState("Midjourney");
     const [videoModel, setVideoModel] = useState("Runway");
+    const [visionModel, setVisionModel] = useState("Grsai-Vision"); // New Vision Model State
     const [promptLanguage, setPromptLanguage] = useState("mixed");
 
     // State for Tool Configs (Active inputs)
@@ -36,6 +37,10 @@ const Settings = () => {
     const [vidToolEndpoint, setVidToolEndpoint] = useState("");
     const [vidToolModel, setVidToolModel] = useState("");
     const [vidEndpointMap, setVidEndpointMap] = useState({}); // Model-specific endpoints
+
+    const [visToolKey, setVisToolKey] = useState(""); // Vision Tool Key
+    const [visToolEndpoint, setVisToolEndpoint] = useState(""); // Vision Tool Endpoint
+    const [visToolModel, setVisToolModel] = useState(""); // Vision Tool Model
     
     // WebHooks
     const [imgToolWebHook, setImgToolWebHook] = useState("");
@@ -234,18 +239,22 @@ const Settings = () => {
             
             const iModel = generationConfig.imageModel || "Midjourney";
             const vModel = generationConfig.videoModel || "Runway";
-            
+            const visModel = generationConfig.visionModel || "Grsai-Vision";
+
             setImageModel(iModel);
             setVideoModel(vModel);
+            setVisionModel(visModel);
             
             // Load saved tool configs
             loadToolConfig(iModel, 'image');
             loadToolConfig(vModel, 'video');
+            loadToolConfig(visModel, 'vision');
         } else {
              // Even if no generationConfig, we might have defaults set in state (e.g. Midjourney/Runway)
              // and we should load their configs if savedToolConfigs updates
              loadToolConfig(imageModel, 'image');
              loadToolConfig(videoModel, 'video');
+             loadToolConfig(visionModel || "Grsai-Vision", 'vision');
         }
     }, [generationConfig, savedToolConfigs]);
 
@@ -303,7 +312,7 @@ const Settings = () => {
                      setImgToolWebHook("");
                  }
             }
-        } else {
+        } else if (type === 'video') {
              if (saved) {
                 setVidToolKey(saved.apiKey || "");
                 
@@ -362,6 +371,25 @@ const Settings = () => {
                     setVidToolDraft(false);
                  }
              }
+        } else if (type === 'vision') {
+             if (saved) {
+                setVisToolKey(saved.apiKey || "");
+                setVisToolEndpoint(saved.endpoint || "");
+                setVisToolModel(saved.model || "");
+                // Defaults for Grsai-Vision if specific fields missing (migration)
+                 if (toolName === "Grsai-Vision" && !saved.endpoint) {
+                     setVisToolEndpoint("https://grsaiapi.com/v1/chat/completions");
+                 }
+                 if (toolName === "Grsai-Vision" && !saved.model) {
+                     setVisToolModel("gemini-3-pro");
+                 }
+            } else {
+                if (toolName === "Grsai-Vision") {
+                     setVisToolKey("");
+                     setVisToolEndpoint("https://grsaiapi.com/v1/chat/completions");
+                     setVisToolModel("gemini-3-pro");
+                }
+            }
         }
     }
 
@@ -502,7 +530,8 @@ const Settings = () => {
             sceneSupplements: sceneSupplements,
             prompt_language: promptLanguage,
             imageModel,
-            videoModel
+            videoModel,
+            visionModel
         });
 
         // Save tool credentials locally
@@ -531,6 +560,16 @@ const Settings = () => {
         
         // Sync Video to Backend
         syncToBackend("Video", videoModel, videoConfig);
+
+        const visConfig = {
+            apiKey: visToolKey,
+            endpoint: visToolEndpoint,
+            model: visToolModel
+        };
+        saveToolConfig(visionModel, visConfig);
+
+        // Sync Vision to Backend
+        syncToBackend("Vision", visionModel, visConfig);
 
         showNotification("Generation settings & credentials saved", "success");
         addLog("Generation settings & credentials saved", "success");
@@ -973,7 +1012,8 @@ const Settings = () => {
                                             placeholder="Optional"
                                             className="w-full p-2 text-sm rounded-md bg-white/10 border border-white/10 text-white" 
                                         />
-                                    </div>                                    <div className="space-y-2 col-span-2">
+                                    </div>
+                                    <div className="space-y-2 col-span-2">
                                         <label className="text-xs font-medium uppercase text-muted-foreground">Model ID</label>
                                         {(videoModel === "Grsai-Video" || videoModel === "Grsai-Video (Upload)") ? (
                                             <select 
@@ -1061,12 +1101,65 @@ const Settings = () => {
                                 </div>
                             </div>
 
+                            {/* Vision Tool Section */}
+                            <div className="space-y-4">
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium text-pink-400">Vision / Image Recognition Tool</label>
+                                    <select 
+                                        value={visionModel}
+                                        onChange={(e) => setVisionModel(e.target.value)}
+                                        className="w-full p-2 rounded-md bg-zinc-900 border border-white/10 text-white"
+                                    >
+                                        <option className="bg-zinc-900" value="Grsai-Vision">Grsai (Vision Capability)</option>
+                                    </select>
+                                    <p className="text-xs text-muted-foreground">
+                                        Used for Scene Analysis from Image, Image to Text, etc. Compatible with OpenAI Vision API format.
+                                    </p>
+                                </div>
+                                
+                                {visionModel === "Grsai-Vision" && (
+                                    <div className="space-y-2 pl-4 border-l-2 border-pink-400/30">
+                                         <div className="space-y-1">
+                                            <label className="text-xs font-medium text-muted-foreground">API Key</label>
+                                            <input 
+                                                type="password" 
+                                                value={visToolKey}
+                                                onChange={(e) => setVisToolKey(e.target.value)}
+                                                placeholder="sk-..."
+                                                className="w-full p-2 rounded-md bg-zinc-900 border border-white/10 text-white text-sm"
+                                            />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <label className="text-xs font-medium text-muted-foreground">Endpoint URL</label>
+                                            <input 
+                                                type="text" 
+                                                value={visToolEndpoint}
+                                                onChange={(e) => setVisToolEndpoint(e.target.value)}
+                                                placeholder="https://grsaiapi.com/v1/chat/completions"
+                                                className="w-full p-2 rounded-md bg-zinc-900 border border-white/10 text-white text-sm"
+                                            />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <label className="text-xs font-medium text-muted-foreground">Model Name (ID)</label>
+                                            <input 
+                                                type="text" 
+                                                value={visToolModel}
+                                                onChange={(e) => setVisToolModel(e.target.value)}
+                                                placeholder="gemini-3-pro, gemini-2.5-pro, etc."
+                                                className="w-full p-2 rounded-md bg-zinc-900 border border-white/10 text-white text-sm"
+                                            />
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
                             <button 
                                 onClick={handleSaveGeneration}
                                 className="w-full flex items-center justify-center space-x-2 bg-white/10 text-white border border-white/10 px-4 py-3 rounded-lg hover:bg-white/20 transition-colors font-medium font-bold"
                             >
                                 <Save size={18} />
                                 <span>Save Tool Credentials</span>
+
                             </button>
                         </div>
                     </div>

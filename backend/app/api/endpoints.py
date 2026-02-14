@@ -1,5 +1,5 @@
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Body
 import logging
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
@@ -1742,19 +1742,109 @@ def get_assets(
 
         filtered_assets.append(a)
 
-    return [
-        {
+    # Enrichment Logic for Grouping
+    project_ids = set()
+    entity_ids = set()
+    shot_ids = set()
+
+
+    for a in filtered_assets:
+        # Ensure meta is a dict
+        meta = a.meta_info
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta)
+            except:
+                meta = {}
+        elif not isinstance(meta, dict):
+            meta = {}
+            
+        p_id = meta.get('project_id')
+        if p_id: 
+            try: project_ids.add(int(p_id))
+            except: pass
+            
+        e_id = meta.get('entity_id')
+        if e_id: 
+            try: entity_ids.add(int(e_id))
+            except: pass
+            
+        s_id = meta.get('shot_id')
+        if s_id: 
+            try: shot_ids.add(int(s_id))
+            except: pass
+
+    # ... Fetch Maps ...
+    
+    # ... Populate Results ...
+    project_map = {}
+    if project_ids:
+        projects = db.query(Project.id, Project.title).filter(Project.id.in_(project_ids)).all()
+        project_map = {p.id: p.title for p in projects}
+        
+    entity_map = {}
+    if entity_ids:
+        entities = db.query(Entity.id, Entity.name).filter(Entity.id.in_(entity_ids)).all()
+        entity_map = {e.id: e.name for e in entities}
+        
+    shot_map = {}
+    if shot_ids:
+        shots = db.query(Shot.id, Shot.shot_id).filter(Shot.id.in_(shot_ids)).all()
+        shot_map = {s.id: s.shot_id for s in shots}
+
+    results = []
+    for a in filtered_assets:
+        meta = a.meta_info
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta)
+            except:
+                meta = {}
+        elif not isinstance(meta, dict):
+            meta = {}
+        
+        # Make a copy to avoid mutating SQLAlchemy object if it was a dict
+        meta = dict(meta)
+        
+        # Enrich
+        p_id = meta.get('project_id')
+        if p_id:
+            try:
+                pid_int = int(p_id)
+                if pid_int in project_map: meta['project_title'] = project_map[pid_int]
+            except: pass
+            
+        e_id = meta.get('entity_id')
+        if e_id:
+            try:
+                eid_int = int(e_id)
+                if eid_int in entity_map: meta['entity_name'] = entity_map[eid_int]
+            except: pass
+            
+        s_id = meta.get('shot_id')
+        if s_id:
+            try:
+                sid_int = int(s_id)
+                if sid_int in shot_map: meta['shot_number'] = shot_map[sid_int]
+            except: pass
+
+        results.append({
             "id": a.id,
             "type": a.type,
             "url": a.url,
             "filename": a.filename,
-            "meta_info": a.meta_info,
+            "meta_info": meta,
             "remark": a.remark,
             "created_at": a.created_at
-        } for a in filtered_assets
-    ]
+        })
 
-@router.post("/assets/", response_model=dict)
+
+    # Debug log for asset response consistency
+    if results:
+        logger.info(f"Asset response sample (1/{len(results)}): Meta={results[0]['meta_info']}")
+
+    return results
+
 def create_asset_url(
     asset_in: AssetCreate,
     current_user: User = Depends(get_current_user),
@@ -1861,6 +1951,7 @@ async def upload_asset(
         "created_at": asset.created_at
     }
 
+
 @router.delete("/assets/{asset_id}")
 def delete_asset(
     asset_id: int,
@@ -1871,13 +1962,53 @@ def delete_asset(
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
         
-    # Optional: Delete file if local
-    # if asset.url.startswith("/uploads/"):
-    #     ...
-        
+    # Delete file if local
+    try:
+        if asset.url and "/uploads/" in asset.url:
+            # parsing logic: /uploads/{user_id}/{filename}
+            parts = asset.url.split("/uploads/")
+            if len(parts) > 1:
+                rel_path = parts[1] # user_id/filename
+                file_path = os.path.join(settings.UPLOAD_DIR, rel_path)
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+    except Exception as e:
+        print(f"Error deleting file for asset {asset_id}: {e}")
+
     db.delete(asset)
     db.commit()
     return {"status": "success"}
+
+@router.post("/assets/batch-delete")
+def batch_delete_assets(
+    asset_ids: List[int] = Body(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    assets = db.query(Asset).filter(
+        Asset.id.in_(asset_ids), 
+        Asset.user_id == current_user.id
+    ).all()
+    
+    deleted_count = 0
+    for asset in assets:
+        # Delete file if local
+        try:
+            if asset.url and "/uploads/" in asset.url:
+                parts = asset.url.split("/uploads/")
+                if len(parts) > 1:
+                    rel_path = parts[1]
+                    file_path = os.path.join(settings.UPLOAD_DIR, rel_path)
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+        except Exception as e:
+            print(f"Error deleting file for asset {asset.id}: {e}")
+        
+        db.delete(asset)
+        deleted_count += 1
+        
+    db.commit()
+    return {"status": "success", "deleted_count": deleted_count}
 
 @router.put("/assets/{asset_id}", response_model=dict)
 def update_asset(

@@ -270,6 +270,11 @@ export const deleteAsset = async (id) => {
     return response.data;
 };
 
+export const deleteAssetsBatch = async (ids) => {
+    const response = await api.post('/assets/batch-delete', ids);
+    return response.data;
+};
+
 export const updateAsset = async (id, data) => {
     const response = await api.put(`/assets/${id}`, data);
     return response.data;

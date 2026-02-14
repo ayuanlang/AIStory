@@ -4,9 +4,9 @@ import {
     Image, Video, Upload, Link as LinkIcon, Plus, X, 
     MoreVertical, Trash2, Edit2, Info, Maximize2,
     Folder, User, Film, Globe, Layers, ArrowDown, ArrowUp,
-    Sparkles, Copy, Loader2
+    Sparkles, Copy, Loader2, CheckCircle, Settings, Calendar, AlertTriangle
 } from 'lucide-react';
-import { fetchAssets, createAsset, uploadAsset, deleteAsset, updateAsset, analyzeAssetImage } from '../services/api';
+import { fetchAssets, createAsset, uploadAsset, deleteAsset, deleteAssetsBatch, updateAsset, analyzeAssetImage } from '../services/api';
 import { useLog } from '../context/LogContext';
 import { API_URL, BASE_URL } from '../config';
 import RefineControl from './RefineControl.jsx';
@@ -22,12 +22,30 @@ const getFullUrl = (url) => {
     return url; 
 };
 
-const AssetItem = ({ asset, onClick, onDelete }) => {
+// Helper to normalize asset types
+const getAssetCategory = (type) => {
+    if (!type) return 'unknown';
+    const t = String(type).toLowerCase();
+    if (t.includes('video')) return 'video';
+    if (t.includes('image') || t.includes('frame') || t.includes('photo')) return 'image';
+    return t; // fallback
+};
+
+
+const AssetItem = React.memo(({ asset, onClick, onDelete, isManageMode, isSelected, onToggleSelect, onReportError }) => {
     const videoRef = React.useRef(null);
     const [isPlaying, setIsPlaying] = useState(false);
+    const [isError, setIsError] = useState(false);
+    const category = getAssetCategory(asset.type);
+
+    React.useEffect(() => {
+        if (isError && onReportError) {
+            onReportError(asset.id);
+        }
+    }, [isError, asset.id, onReportError]);
 
     const handleMouseEnter = async () => {
-        if (asset.type === 'video' && videoRef.current) {
+        if (!isManageMode && category === 'video' && videoRef.current && !isError) {
             try {
                 videoRef.current.currentTime = 0;
                 await videoRef.current.play();
@@ -39,22 +57,42 @@ const AssetItem = ({ asset, onClick, onDelete }) => {
     };
 
     const handleMouseLeave = () => {
-        if (asset.type === 'video' && videoRef.current) {
+        if (!isManageMode && category === 'video' && videoRef.current && !isError) {
             videoRef.current.pause();
             videoRef.current.currentTime = 0;
             setIsPlaying(false);
         }
     };
+    
+    // ... handleClick ...
+    const handleClick = (e) => {
+        if (isManageMode) {
+            e.stopPropagation();
+            onToggleSelect(asset.id);
+        } else {
+            onClick(asset);
+        }
+    };
 
     return (
         <div 
-            onClick={() => onClick(asset)}
+            onClick={handleClick}
             onMouseEnter={handleMouseEnter}
             onMouseLeave={handleMouseLeave}
-            className="group relative aspect-square bg-card rounded-xl border border-white/5 overflow-hidden cursor-pointer hover:border-primary/50 transition-all hover:scale-[1.02] shadow-sm transform-gpu"
+             className={`group relative aspect-square bg-card rounded-xl border overflow-hidden cursor-pointer transition-all hover:scale-[1.02] shadow-sm transform-gpu ${isSelected ? 'border-primary ring-2 ring-primary ring-offset-2 ring-offset-black' : 'border-white/5 hover:border-primary/50'}`}
         >
-            {asset.type === 'image' ? (
-                <img src={getFullUrl(asset.url)} className="w-full h-full object-cover" alt="asset" />
+            {isError ? (
+                <div className="w-full h-full flex flex-col items-center justify-center bg-white/5 text-muted-foreground gap-2">
+                    <AlertTriangle size={24} className="opacity-50" />
+                    <span className="text-[10px] uppercase font-bold opacity-50">Not Found</span>
+                </div>
+            ) : category === 'image' ? (
+                <img 
+                    src={getFullUrl(asset.url)} 
+                    className="w-full h-full object-cover bg-black/20" 
+                    alt="asset" 
+                    onError={() => setIsError(true)}
+                />
             ) : (
                 <div className="relative w-full h-full bg-black">
                     <video 
@@ -65,11 +103,21 @@ const AssetItem = ({ asset, onClick, onDelete }) => {
                         muted
                         loop
                         playsInline
+                        onError={() => setIsError(true)}
                     />
                     <div className={`absolute inset-0 flex items-center justify-center pointer-events-none transition-opacity duration-300 ${isPlaying ? 'opacity-0' : 'opacity-100'}`}>
                         <div className="bg-black/50 p-3 rounded-full backdrop-blur-sm">
                             <Video className="w-6 h-6 text-white" />
                         </div>
+                    </div>
+                </div>
+            )}
+            
+            {/* Selection Overlay */}
+            {isManageMode && (
+                <div className={`absolute top-2 right-2 z-20 transition-transform ${isSelected ? 'scale-100' : 'scale-90 opacity-70 hover:opacity-100'}`}>
+                    <div className={`p-1 rounded-full ${isSelected ? 'bg-primary text-black' : 'bg-black/50 text-white border border-white/20'}`}>
+                        <CheckCircle size={18} className={isSelected ? 'fill-current' : ''} />
                     </div>
                 </div>
             )}
@@ -83,17 +131,19 @@ const AssetItem = ({ asset, onClick, onDelete }) => {
                              {asset.meta_info?.resolution && <span className="bg-white/10 px-1 rounded text-white/60">{asset.meta_info.resolution}</span>}
                         </div>
                     </div>
-                    <button 
-                        onClick={(e) => onDelete(asset.id, e)}
-                        className="p-1.5 bg-red-500/20 text-red-400 rounded-md hover:bg-red-500 hover:text-white transition-colors"
-                    >
-                        <Trash2 size={14} />
-                    </button>
+                    {!isManageMode && (
+                        <button 
+                            onClick={(e) => onDelete(asset.id, e)}
+                            className="p-1.5 bg-red-500/20 text-red-400 rounded-md hover:bg-red-500 hover:text-white transition-colors"
+                        >
+                            <Trash2 size={14} />
+                        </button>
+                    )}
                 </div>
             </div>
         </div>
     );
-};
+});
 
 const AssetsLibrary = () => {
     const { addLog } = useLog();
@@ -104,6 +154,26 @@ const AssetsLibrary = () => {
     const [loading, setLoading] = useState(false);
     const [selectedAsset, setSelectedAsset] = useState(null); 
     const [isUploadOpen, setIsUploadOpen] = useState(false);
+    
+    // Manage Mode State
+    const [isManageMode, setIsManageMode] = useState(false);
+    const [selectedIds, setSelectedIds] = useState(new Set());
+    const brokenAssetsRef = React.useRef(new Set());
+
+    const handleReportError = React.useCallback((id) => {
+        brokenAssetsRef.current.add(id);
+    }, []);
+
+    const handleSelectBroken = () => {
+        if (brokenAssetsRef.current.size === 0) {
+            addLog("No broken assets detected yet (scroll to load them).");
+            return;
+        }
+        const newSet = new Set(selectedIds);
+        brokenAssetsRef.current.forEach(id => newSet.add(id));
+        setSelectedIds(newSet);
+        addLog(`Selected ${brokenAssetsRef.current.size} broken assets.`);
+    };
 
     useEffect(() => {
         loadAssets();
@@ -113,8 +183,16 @@ const AssetsLibrary = () => {
         setLoading(true);
         try {
             const data = await fetchAssets();
-            setAssets(data);
-            addLog(`Loaded ${data.length} assets from library.`);
+            // Ensure meta_info is always an object
+            const cleanData = data.map(a => {
+                let meta = a.meta_info;
+                if (typeof meta === 'string') {
+                    try { meta = JSON.parse(meta); } catch (e) { meta = {}; }
+                }
+                return { ...a, meta_info: meta || {} };
+            });
+            setAssets(cleanData);
+            addLog(`Loaded ${cleanData.length} assets from library.`);
         } catch (e) {
             console.error("Failed to load assets", e);
             addLog(`Error loading assets: ${e.message}`, 'error');
@@ -137,8 +215,68 @@ const AssetsLibrary = () => {
         }
     };
 
+    const toggleSelect = (id) => {
+        const newSet = new Set(selectedIds);
+        if (newSet.has(id)) newSet.delete(id);
+        else newSet.add(id);
+        setSelectedIds(newSet);
+    };
+
+    const runBatchDelete = async (idsToDelete) => {
+        try {
+            const idsList = Array.isArray(idsToDelete) ? idsToDelete : Array.from(idsToDelete);
+            await deleteAssetsBatch(idsList);
+            setAssets(prev => prev.filter(a => !idsList.includes(a.id)));
+            setSelectedIds(prev => {
+                const newSet = new Set(prev);
+                idsList.forEach(id => newSet.delete(id));
+                return newSet;
+            });
+            addLog(`Successfully deleted ${idsList.length} assets.`);
+        } catch (e) {
+            console.error("Batch delete failed", e);
+            addLog(`Failed to delete assets: ${e.message}`, 'error');
+        }
+    };
+
+    const handleDeleteSelected = async () => {
+        if (selectedIds.size === 0) return;
+        if (!confirm(`Delete ${selectedIds.size} selected assets? Files will be removed.`)) return;
+        await runBatchDelete(selectedIds);
+    };
+
+    const handleDeleteFiltered = async () => {
+        const ids = filteredAssets.map(a => a.id);
+        if (ids.length === 0) return;
+        if (!confirm(`Delete ALL ${ids.length} currently filtered assets?`)) return;
+        await runBatchDelete(ids);
+    };
+
+    const handleSelectOld = () => {
+        const weekAgo = new Date();
+        weekAgo.setDate(weekAgo.getDate() - 7);
+        
+        const oldAssets = filteredAssets.filter(a => {
+            if (!a.created_at) return false;
+            return new Date(a.created_at) < weekAgo;
+        });
+        
+        if (oldAssets.length === 0) {
+            addLog("No assets older than 1 week found in current view.");
+            return;
+        }
+        
+        const newSet = new Set(selectedIds);
+        oldAssets.forEach(a => newSet.add(a.id));
+        setSelectedIds(newSet);
+        addLog(`Selected ${oldAssets.length} assets older than 7 days.`);
+    };
+
     const filteredAssets = React.useMemo(() => {
-        const list = assets.filter(a => filter === 'all' || a.type === filter);
+        const list = assets.filter(a => {
+            if (filter === 'all') return true;
+            return getAssetCategory(a.type) === filter;
+        });
         return list.sort((a, b) => {
              const tA = new Date(a.created_at || a.id).getTime ? new Date(a.created_at || 0).getTime() : 0; 
              // ID fallback is weak, assuming createdAt exists or backend provides it.
@@ -149,6 +287,64 @@ const AssetsLibrary = () => {
         });
     }, [assets, filter, sortOrder]);
 
+
+    const [isScanning, setIsScanning] = useState(false);
+    const [scanProgress, setScanProgress] = useState(0);
+
+    // Batch check valid URLs
+    const handleScanBroken = async () => {
+        if (isScanning) return;
+        setIsScanning(true);
+        setScanProgress(0);
+        
+        const assetsToCheck = filteredAssets;
+        const total = assetsToCheck.length;
+        const invalidIds = new Set();
+        const batchSize = 10;
+        
+        for (let i = 0; i < total; i += batchSize) {
+            const batch = assetsToCheck.slice(i, i + batchSize);
+            await Promise.all(batch.map(async (asset) => {
+                const url = getFullUrl(asset.url);
+                try {
+                    if (getAssetCategory(asset.type) === 'video') {
+                         // Use fetch head for video if possible, else rely on error reporting later or just image check
+                         // Simple fetch head might fail cors, so let's try fetch
+                         const res = await fetch(url, { method: 'HEAD', mode: 'no-cors' }); 
+                         // no-cors mode returns opaque response, so we can't check status.
+                         // But if 404, it might still resolve.
+                         // Better to just try standard fetch or skip video checking in this pass if problematic.
+                         // Reverting to fetch head without no-cors, assuming user has access.
+                         const check = await fetch(url, { method: 'HEAD' });
+                         if (!check.ok) throw new Error(check.statusText);
+                    } else {
+                        await new Promise((resolve, reject) => {
+                            const img = new window.Image();
+                            img.onload = resolve;
+                            img.onerror = reject;
+                            img.src = url;
+                        });
+                    }
+                } catch (e) {
+                    invalidIds.add(asset.id);
+                }
+            }));
+            setScanProgress(Math.round(((i + batchSize) / total) * 100));
+            // Yield to main thread
+            await new Promise(r => setTimeout(r, 10));
+        }
+        
+        setIsScanning(false);
+        setScanProgress(0);
+        
+        if (invalidIds.size > 0) {
+            setSelectedIds(prev => new Set([...prev, ...invalidIds]));
+            addLog(`Scan complete. Found ${invalidIds.size} broken assets.`);
+        } else {
+            addLog("Scan complete. No broken assets found.");
+        }
+    };
+
     const groupedSections = React.useMemo(() => {
         if (groupBy === 'none') return { 'All Assets': filteredAssets };
         
@@ -156,18 +352,35 @@ const AssetsLibrary = () => {
         const globalKey = 'Global / Unsorted';
         
         filteredAssets.forEach(asset => {
-            const meta = asset.meta_info || {};
+            // Robust parsing of meta if it's somehow a double-encoded string or object
+            let meta = asset.meta_info;
+            if (typeof meta === 'string') {
+                try { meta = JSON.parse(meta); } catch {}
+            }
+            if (!meta || typeof meta !== 'object') meta = {};
+            
             let key = globalKey;
             
+            // Normalize keys to lowercase just in case
+            // Some databases might return different casing
+            const pId = meta.project_id || meta.Project_id || meta.ProjectId;
+            const pTitle = meta.project_title || meta.Project_title;
+            
+            const eId = meta.entity_id || meta.Entity_id;
+            const eName = meta.entity_name || meta.Entity_name;
+            
+            const sId = meta.shot_id || meta.Shot_id;
+            const sNum = meta.shot_number || meta.Shot_number;
+
             if (groupBy === 'project') {
-                if (meta.project_title) key = meta.project_title;
-                else if (meta.project_id) key = `Project ${meta.project_id}`;
+                if (pTitle) key = pTitle;
+                else if (pId) key = `Project ${pId}`;
             } else if (groupBy === 'subject') {
-                if (meta.entity_name) key = meta.entity_name;
-                else if (meta.entity_id) key = `Entity ${meta.entity_id}`;
+                if (eName) key = eName;
+                else if (eId) key = `Entity ${eId}`;
             } else if (groupBy === 'shot') {
-                if (meta.shot_number) key = `Shot ${meta.shot_number}`;
-                else if (meta.shot_id) key = `Shot ${meta.shot_id}`;
+                if (sNum) key = `Shot ${sNum}`;
+                else if (sId) key = `Shot ${sId}`;
             }
             
             if (!groups[key]) groups[key] = [];
@@ -177,10 +390,12 @@ const AssetsLibrary = () => {
         return groups;
     }, [filteredAssets, groupBy]);
 
+
     return (
         <div className="h-full flex flex-col p-6 animate-in fade-in">
             {/* Header Controls */}
             <div className="flex flex-col gap-4 mb-6">
+                 {!isManageMode ? (
                  <div className="flex justify-between items-center">
                     <div className="flex items-center gap-2">
                         <div className="flex space-x-2 bg-card/50 p-1 rounded-lg border border-white/5">
@@ -197,8 +412,56 @@ const AssetsLibrary = () => {
                         </button>
                     </div>
                     
-                    <button onClick={() => setIsUploadOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-primary text-black rounded-lg hover:bg-primary/90 transition-colors font-bold"><Plus size={18} /> Add Asset</button>
+                    <div className="flex items-center gap-3">
+                        <button onClick={() => setIsManageMode(true)} className="flex items-center gap-2 px-4 py-2 bg-card border border-white/10 text-white rounded-lg hover:bg-white/5 transition-colors"><Settings size={18} /> Manage</button>
+                        <button onClick={() => setIsUploadOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-primary text-black rounded-lg hover:bg-primary/90 transition-colors font-bold"><Plus size={18} /> Add Asset</button>
+                    </div>
                 </div>
+                ) : (
+                    <div className="flex justify-between items-center bg-red-500/10 p-2 rounded-lg border border-red-500/20 animate-in fade-in slide-in-from-top-2">
+                         <div className="flex items-center gap-4">
+                             <span className="font-bold text-red-200 ml-2">Manage</span>
+                             <div className="h-6 w-px bg-white/10"></div>
+                             <button onClick={() => {
+                                 const allIds = filteredAssets.map(a => a.id);
+                                 if (selectedIds.size === allIds.length) setSelectedIds(new Set());
+                                 else setSelectedIds(new Set(allIds));
+                             }} className="text-sm hover:text-white text-white/70">
+                                 {selectedIds.size === filteredAssets.length && filteredAssets.length > 0 ? 'Deselect All' : 'Select All'}
+                             </button>
+                             <span className="text-white/50 text-sm">{selectedIds.size} selected</span>
+                         </div>
+                         <div className="flex items-center gap-2">
+                             {isScanning ? (
+                                <div className="px-3 py-1.5 text-xs flex items-center gap-2 bg-card border border-white/10 rounded min-w-[120px]">
+                                    <Loader2 size={12} className="animate-spin text-yellow-500" />
+                                    <div className="w-16 h-1 bg-white/10 rounded-full overflow-hidden">
+                                        <div className="h-full bg-yellow-500 transition-all duration-300" style={{ width: `${scanProgress}%` }} />
+                                    </div>
+                                </div>
+                             ) : (
+                                 <button onClick={handleScanBroken} className="px-3 py-1.5 text-xs bg-card border border-white/10 hover:bg-white/5 rounded flex items-center gap-2 transition-colors text-yellow-500/80 hover:text-yellow-400" title="Scan & Select Missing Files">
+                                     <AlertTriangle size={14} /> Scan Broken
+                                 </button>
+                             )}
+                             <button onClick={handleSelectOld} className="px-3 py-1.5 text-xs bg-card border border-white/10 hover:bg-white/5 rounded flex items-center gap-2 transition-colors" title="Select files > 7 days old">
+                                 <Calendar size={14} /> Select Old
+                             </button>
+                             <button onClick={handleDeleteFiltered} className="px-3 py-1.5 text-xs bg-card border border-white/10 hover:bg-white/5 rounded flex items-center gap-2 transition-colors" title="Delete All Visible">
+                                 <Layers size={14} /> Filtered
+                             </button>
+                             <button 
+                                 onClick={handleDeleteSelected} 
+                                 disabled={selectedIds.size === 0}
+                                 className={`px-3 py-1.5 text-xs bg-red-500 text-white rounded flex items-center gap-2 transition-colors ${selectedIds.size===0 ? 'opacity-50 cursor-not-allowed' : 'hover:bg-red-600'}`}
+                             >
+                                 <Trash2 size={14} /> Delete ({selectedIds.size})
+                             </button>
+                             <div className="h-6 w-px bg-white/10 mx-2"></div>
+                             <button onClick={() => { setIsManageMode(false); setSelectedIds(new Set()); }} className="p-1.5 hover:bg-white/10 rounded transition-colors"><X size={18}/></button>
+                         </div>
+                     </div>
+                )}
 
                 {/* Group By Controls */}
                 <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-hide">
@@ -230,6 +493,24 @@ const AssetsLibrary = () => {
                                 {groupBy === 'subject' && <User size={14} />}
                                 {groupBy === 'shot' && <Film size={14} />}
                                 {sectionTitle}
+                                {isManageMode && (
+                                    <button 
+                                        onClick={() => {
+                                            const groupIds = sectionAssets.map(a => a.id);
+                                            const allSelected = groupIds.every(id => selectedIds.has(id));
+                                            const newSet = new Set(selectedIds);
+                                            if (allSelected) {
+                                                groupIds.forEach(id => newSet.delete(id));
+                                            } else {
+                                                groupIds.forEach(id => newSet.add(id));
+                                            }
+                                            setSelectedIds(newSet);
+                                        }} 
+                                        className="ml-2 text-[10px] bg-white/5 hover:bg-white/10 px-2 py-0.5 rounded text-white/50 hover:text-white transition-colors uppercase tracking-wide"
+                                    >
+                                        {sectionAssets.every(a => selectedIds.has(a.id)) ? 'Deselect' : 'Select All'}
+                                    </button>
+                                )}
                                 <span className="text-xs bg-white/10 text-white/50 px-2 py-0.5 rounded-full ml-auto">{sectionAssets.length}</span>
                             </h3>
                             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
@@ -238,7 +519,11 @@ const AssetsLibrary = () => {
                                         key={asset.id} 
                                         asset={asset} 
                                         onClick={setSelectedAsset} 
-                                        onDelete={handleDelete} 
+                                        onDelete={handleDelete}
+                                        isManageMode={isManageMode}
+                                        isSelected={selectedIds.has(asset.id)}
+                                        onToggleSelect={toggleSelect}
+                                        onReportError={handleReportError}
                                     />
                                 ))}
                             </div>

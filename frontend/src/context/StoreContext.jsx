@@ -66,6 +66,7 @@ export const StoreProvider = ({ children }) => {
             let activeLLMConfig = null;
             let activeImageModel = null;
             let activeVideoModel = null;
+            let activeVisionModel = null;
 
             settings.forEach(s => {
                 const prov = s.provider ? s.provider.toLowerCase() : "";
@@ -90,7 +91,7 @@ export const StoreProvider = ({ children }) => {
                             };
                         }
                     }
-                } else if (cat === 'Image' || cat === 'Video') {
+                } else if (cat === 'Image' || cat === 'Video' || cat === 'Vision') {
                     // Map to savedToolConfigs using Tool Name
                     let toolName = null;
                     if (cat === 'Image') {
@@ -106,6 +107,8 @@ export const StoreProvider = ({ children }) => {
                         else if (prov === 'doubao') toolName = "Doubao Video";
                         else if (prov === 'vidu') toolName = "Vidu (Video)";
                         else if (prov === 'grsai') toolName = "Grsai-Video";
+                    } else if (cat === 'Vision') {
+                        if (prov === 'grsai') toolName = "Grsai-Vision";
                     }
 
                     if (toolName) {
@@ -121,6 +124,7 @@ export const StoreProvider = ({ children }) => {
                         if (s.is_active) {
                             if (cat === 'Image') activeImageModel = toolName;
                             if (cat === 'Video') activeVideoModel = toolName;
+                            if (cat === 'Vision') activeVisionModel = toolName;
                         }
                     }
                 }
@@ -136,11 +140,12 @@ export const StoreProvider = ({ children }) => {
             }
             
             // Restore active Generation Models
-            if (activeImageModel || activeVideoModel) {
+            if (activeImageModel || activeVideoModel || activeVisionModel) {
                 setGenerationConfigState(prev => ({
                     ...(prev || {}),
                     imageModel: activeImageModel || (prev?.imageModel || "Midjourney"),
-                    videoModel: activeVideoModel || (prev?.videoModel || "Runway")
+                    videoModel: activeVideoModel || (prev?.videoModel || "Runway"),
+                    visionModel: activeVisionModel || (prev?.visionModel || "Grsai-Vision")
                 }));
             }
 
