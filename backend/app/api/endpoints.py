@@ -864,7 +864,8 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
     relevant_names = set()
     
     def _clean_br(s):
-        return s.replace('[', '').replace(']', '').strip()
+        # Remove brackets and backticks, then strip
+        return s.replace('[', '').replace(']', '').replace('`', '').strip()
 
     if scene.linked_characters:
         # Split by comma and handle potential variations
@@ -876,20 +877,28 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
         relevant_names.update(parts)
         
     if scene.environment_name:
-        relevant_names.add(_clean_br(scene.environment_name))
+        # Environment name might also be a comma-separated list
+        parts = [_clean_br(p) for p in scene.environment_name.split(',') if p.strip()]
+        relevant_names.update(parts)
     
+    logger.info(f"[_build_shot_prompts] Relevant Names from Scene (cleaned): {relevant_names}")
+
     env_narrative = ""
+    env_narratives_map = {}
 
     for ent in project_entities:
         # Check relevancy (Case-insensitive check, considering name_en)
         is_relevant = False
         ent_aliases = [n for n in [ent.name, ent.name_en] if n]
         
+        # logger.info(f"Checking entity: {ent.name} (Aliases: {ent_aliases})") 
+
         for alias in ent_aliases:
             alias_clean = alias.strip().lower()
             for rn in relevant_names:
                 if rn.strip().lower() == alias_clean:
                     is_relevant = True
+                    logger.info(f"[_build_shot_prompts] Match found: Entity '{ent.name}' matches scene ref '{rn}'")
                     break
             if is_relevant: break
         
@@ -897,9 +906,11 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
         if is_relevant:
             # Check if this is the Environment Anchor to capture narrative for Scenario Content
             if scene.environment_name:
-                 sn_clean = _clean_br(scene.environment_name).lower()
+                 # Check against all scene environment parts
+                 env_parts = [_clean_br(p).lower() for p in scene.environment_name.split(',') if p.strip()]
                  for alias in ent_aliases:
-                      if alias.strip().lower() == sn_clean:
+                      if alias.strip().lower() in env_parts:
+                           logger.info(f"[_build_shot_prompts] Environment Match: {ent.name}")
                            # Priority: description_cn (custom_attributes) > narrative_description > description
                            desc_cn = None
                            
@@ -913,12 +924,20 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
                                desc_cn = custom_attrs.get('description_cn') or custom_attrs.get('description_CN')
                            
                            if desc_cn:
-                               env_narrative = desc_cn
+                               new_narrative = desc_cn
+                               logger.info(f"[_build_shot_prompts] Found Env Narrative from Custom Attrs")
                            elif ent.narrative_description:
-                                env_narrative = ent.narrative_description
+                                new_narrative = ent.narrative_description
+                                logger.info(f"[_build_shot_prompts] Found Env Narrative from Narrative Desc")
                            elif ent.description:
                                 # Use description directly if others are missing
-                                env_narrative = ent.description
+                                new_narrative = ent.description
+                                logger.info(f"[_build_shot_prompts] Found Env Narrative from Description")
+                           else:
+                                new_narrative = ""
+
+                           if new_narrative:
+                               env_narratives_map[ent.name] = new_narrative
                            break
 
             desc_parts = []
@@ -926,6 +945,8 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
             # 0. Anchor Description (Critical for AI Visualization)
             if ent.anchor_description:
                 desc_parts.append(f"Anchor Description: {ent.anchor_description}")
+            else:
+                logger.warning(f"[_build_shot_prompts] Entity {ent.name} missing anchor_description")
 
             # 1. Narrative Description (New Column Priority)
             if ent.narrative_description:
@@ -940,6 +961,9 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
             if ent.type and ent.type.lower() == 'character':
                  if ent.appearance_cn:
                       desc_parts.append(f"Appearance: {ent.appearance_cn}")
+                 else:
+                      logger.warning(f"[_build_shot_prompts] Character {ent.name} missing appearance_cn")
+
                  if ent.clothing:
                       desc_parts.append(f"Clothing: {ent.clothing}")
 
@@ -953,7 +977,16 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
 
             if desc_parts:
                 entity_descriptions.append(f"[{ent.name}] " + " | ".join(desc_parts))
+            else:
+                logger.warning(f"[_build_shot_prompts] Entity {ent.name} matched but has no description parts")
 
+    # Format concatenated environment narrative
+    if env_narratives_map:
+        parts = []
+        for name, desc in env_narratives_map.items():
+            parts.append(f"[{name}]: {desc}")
+        env_narrative = "\n".join(parts)
+    
     entity_section = ""
     if entity_descriptions:
         entity_section = "# Entity Reference\n" + "\n".join(entity_descriptions) + "\n"
