@@ -3061,17 +3061,73 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
 
     // Create Entity
     const handleCreate = async () => {
-        const name = prompt(`Enter ${subTab} name:`);
-        if (!name) return;
+        // Create a temporary "New Entity" state to open the modal in "Create Mode"
+        // We use a special ID 'new' to signal that this is not yet in DB
+        setViewingEntity({
+            id: 'new',
+            name: '',
+            type: subTab,
+            description: '',
+            anchor_description: '',
+            generation_prompt_en: '',
+            appearance_cn: '',
+            clothing: '',
+            visual_params: '',
+            atmosphere: '',
+            narrative_description: '',
+            name_en: '',
+            role: '',
+            archetype: '',
+            gender: ''
+        });
+    };
+
+    // Helper: Update Field (Sync to DB if not new)
+    const handleFieldUpdate = (field, value) => {
+        if (!viewingEntity) return;
+        
+        // Always update local viewing state
+        setViewingEntity(prev => ({ ...prev, [field]: value }));
+
+        // Only sync to server if it's an existing entity
+        if (viewingEntity.id !== 'new') {
+            const updated = { ...viewingEntity, [field]: value };
+            
+            // Optimistic Update
+            setEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
+            setAllEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
+            
+            updateEntity(updated.id, { [field]: value }).catch(console.error);
+        }
+    };
+
+    // Helper: Commit Create (Save manually)
+    const handleCommitCreate = async () => {
+        if (!viewingEntity || !viewingEntity.name) {
+            alert("Name is required");
+            return;
+        }
         try {
-            await createEntity(projectId, {
-                name,
-                type: subTab,
-                description: `Description for ${name}`
-            });
-            loadEntities();
+            // Must clone and remove the 'new' ID
+            const payload = { ...viewingEntity };
+            delete payload.id; 
+            
+            const newEnt = await createEntity(projectId, payload);
+            
+            // Update local state with real object (and real ID)
+            setAllEntities(prev => [...prev, newEnt]);
+            
+            // If current tab matches, show it
+            if (newEnt.type === subTab) {
+                setEntities(prev => [...prev, newEnt]);
+            }
+            
+            // Switch view to the real entity (no longer 'new')
+            setViewingEntity(newEnt);
+            alert("Subject Created Successfully!");
         } catch (e) {
             console.error(e);
+            alert("Failed to create subject: " + e.message);
         }
     };
 
@@ -3548,15 +3604,17 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
                                     </div>
                                 )}
                                 
-                                <div className="absolute top-4 left-4 flex gap-2">
-                                     <button 
-                                        onClick={() => { setViewingEntity(null); handleOpenImageModal(viewingEntity, 'library'); }}
-                                        className="p-3 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md transition-colors"
-                                        title="Change Image"
-                                     >
-                                         <ImageIcon size={20} />
-                                     </button>
-                                </div>
+                                {viewingEntity.id !== 'new' && (
+                                    <div className="absolute top-4 left-4 flex gap-2">
+                                         <button 
+                                            onClick={() => { setViewingEntity(null); handleOpenImageModal(viewingEntity, 'library'); }}
+                                            className="p-3 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md transition-colors"
+                                            title="Change Image"
+                                         >
+                                             <ImageIcon size={20} />
+                                         </button>
+                                    </div>
+                                )}
                             </div>
                             
                             {/* Right: Info */}
@@ -3569,30 +3627,14 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
                                                 const val = e.target.value;
                                                 setViewingEntity(prev => ({ ...prev, name: val }));
                                             }}
-                                            onBlur={(e) => {
-                                                const val = e.target.value;
-                                                // Trigger update
-                                                const updated = { ...viewingEntity, name: val };
-                                                setEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
-                                                setAllEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
-                                                updateEntity(updated.id, { name: val });
-                                            }}
+                                            onBlur={(e) => handleFieldUpdate('name', e.target.value)}
                                             className="text-3xl font-bold font-serif mb-1 bg-transparent border-b border-transparent hover:border-white/10 focus:border-primary outline-none w-full transition-colors truncate"
                                             placeholder="Entity Name"
                                         />
                                         <input 
                                             value={viewingEntity.name_en || ''} 
-                                            onChange={(e) => {
-                                                const val = e.target.value;
-                                                setViewingEntity(prev => ({ ...prev, name_en: val }));
-                                            }}
-                                            onBlur={(e) => {
-                                                const val = e.target.value;
-                                                const updated = { ...viewingEntity, name_en: val };
-                                                setEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
-                                                setAllEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
-                                                updateEntity(updated.id, { name_en: val });
-                                            }}
+                                            onChange={(e) => setViewingEntity(prev => ({ ...prev, name_en: e.target.value }))}
+                                            onBlur={(e) => handleFieldUpdate('name_en', e.target.value)}
                                             className="text-lg text-muted-foreground font-mono bg-transparent border-b border-transparent hover:border-white/10 focus:border-primary outline-none w-full transition-colors"
                                             placeholder="English Name"
                                         />
@@ -3613,13 +3655,7 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
                                                 key={field}
                                                 value={viewingEntity[field] || ''}
                                                 onChange={(e) => setViewingEntity(prev => ({ ...prev, [field]: e.target.value }))}
-                                                onBlur={(e) => {
-                                                    const val = e.target.value;
-                                                    const updated = { ...viewingEntity, [field]: val };
-                                                    setEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
-                                                    setAllEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
-                                                    updateEntity(updated.id, { [field]: val });
-                                                }}
+                                                onBlur={(e) => handleFieldUpdate(field, e.target.value)}
                                                 placeholder={field}
                                                 className="px-3 py-1 bg-white/5 text-xs font-bold uppercase tracking-wider rounded-full border border-transparent focus:border-primary outline-none text-center min-w-[60px]"
                                             />
@@ -3634,13 +3670,7 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
                                         <textarea 
                                             value={viewingEntity.description || ''}
                                             onChange={(e) => setViewingEntity(prev => ({ ...prev, description: e.target.value }))}
-                                            onBlur={(e) => {
-                                                const val = e.target.value;
-                                                const updated = { ...viewingEntity, description: val };
-                                                setEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
-                                                setAllEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
-                                                updateEntity(updated.id, { description: val });
-                                            }}
+                                            onBlur={(e) => handleFieldUpdate('description', e.target.value)}
                                             className="w-full text-sm leading-relaxed text-white/80 bg-transparent border border-transparent hover:border-white/10 focus:border-primary focus:bg-white/5 rounded p-2 outline-none h-24 resize-none transition-colors"
                                             placeholder="Enter description..."
                                         />
@@ -3654,13 +3684,7 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
                                                  <input 
                                                     value={viewingEntity.atmosphere || ''}
                                                     onChange={(e) => setViewingEntity(prev => ({ ...prev, atmosphere: e.target.value }))}
-                                                    onBlur={(e) => {
-                                                        const val = e.target.value;
-                                                        const updated = { ...viewingEntity, atmosphere: val };
-                                                        setEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
-                                                        setAllEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
-                                                        updateEntity(updated.id, { atmosphere: val });
-                                                    }}
+                                                    onBlur={(e) => handleFieldUpdate('atmosphere', e.target.value)}
                                                     className="w-full text-sm bg-transparent border-b border-white/10 hover:border-white/30 focus:border-primary p-2 outline-none transition-colors"
                                                     placeholder="Atmosphere (e.g. Dark, Cozy)"
                                                 />
@@ -3670,13 +3694,7 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
                                                 <textarea 
                                                     value={viewingEntity.visual_params || ''}
                                                     onChange={(e) => setViewingEntity(prev => ({ ...prev, visual_params: e.target.value }))}
-                                                    onBlur={(e) => {
-                                                        const val = e.target.value;
-                                                        const updated = { ...viewingEntity, visual_params: val };
-                                                        setEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
-                                                        setAllEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
-                                                        updateEntity(updated.id, { visual_params: val });
-                                                    }}
+                                                    onBlur={(e) => handleFieldUpdate('visual_params', e.target.value)}
                                                     className="w-full text-sm bg-transparent border border-transparent hover:border-white/10 focus:border-primary focus:bg-white/5 rounded p-2 outline-none h-24 resize-none"
                                                     placeholder="Visual parameters..."
                                                 />
@@ -3686,13 +3704,7 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
                                                 <textarea 
                                                     value={viewingEntity.narrative_description || ''}
                                                     onChange={(e) => setViewingEntity(prev => ({ ...prev, narrative_description: e.target.value }))}
-                                                    onBlur={(e) => {
-                                                        const val = e.target.value;
-                                                        const updated = { ...viewingEntity, narrative_description: val };
-                                                        setEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
-                                                        setAllEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
-                                                        updateEntity(updated.id, { narrative_description: val });
-                                                    }}
+                                                    onBlur={(e) => handleFieldUpdate('narrative_description', e.target.value)}
                                                     className="w-full text-sm bg-transparent border border-transparent hover:border-white/10 focus:border-primary focus:bg-white/5 rounded p-2 outline-none h-24 resize-none"
                                                     placeholder="Detailed narrative (Description field)..."
                                                 />
@@ -3707,13 +3719,7 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
                                             <textarea 
                                                 value={viewingEntity.appearance_cn || ''}
                                                 onChange={(e) => setViewingEntity(prev => ({ ...prev, appearance_cn: e.target.value }))}
-                                                onBlur={(e) => {
-                                                    const val = e.target.value;
-                                                    const updated = { ...viewingEntity, appearance_cn: val };
-                                                    setEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
-                                                    setAllEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
-                                                    updateEntity(updated.id, { appearance_cn: val });
-                                                }}
+                                                onBlur={(e) => handleFieldUpdate('appearance_cn', e.target.value)}
                                                 className="w-full text-sm bg-transparent border border-transparent hover:border-white/10 focus:border-primary focus:bg-white/5 rounded p-2 outline-none h-20 resize-none"
                                                 placeholder="Appearance details..."
                                             />
@@ -3723,13 +3729,7 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
                                             <textarea 
                                                 value={viewingEntity.clothing || ''}
                                                 onChange={(e) => setViewingEntity(prev => ({ ...prev, clothing: e.target.value }))}
-                                                onBlur={(e) => {
-                                                    const val = e.target.value;
-                                                    const updated = { ...viewingEntity, clothing: val };
-                                                    setEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
-                                                    setAllEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
-                                                    updateEntity(updated.id, { clothing: val });
-                                                }}
+                                                onBlur={(e) => handleFieldUpdate('clothing', e.target.value)}
                                                 className="w-full text-sm bg-transparent border border-transparent hover:border-white/10 focus:border-primary focus:bg-white/5 rounded p-2 outline-none h-20 resize-none"
                                                 placeholder="Clothing details..."
                                             />
@@ -3744,13 +3744,7 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
                                         <textarea
                                             value={viewingEntity.generation_prompt_en || ''}
                                             onChange={(e) => setViewingEntity(prev => ({ ...prev, generation_prompt_en: e.target.value }))}
-                                            onBlur={(e) => {
-                                                const val = e.target.value;
-                                                const updated = { ...viewingEntity, generation_prompt_en: val };
-                                                setEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
-                                                setAllEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
-                                                updateEntity(updated.id, { generation_prompt_en: val });
-                                            }}
+                                            onBlur={(e) => handleFieldUpdate('generation_prompt_en', e.target.value)}
                                             className="w-full p-4 bg-black/20 rounded-lg border border-white/5 text-xs font-mono text-white/60 focus:text-white/90 focus:border-primary outline-none min-h-[100px] resize-y"
                                             placeholder="Enter generation prompt..."
                                         />
@@ -3764,13 +3758,7 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
                                         <textarea 
                                             value={viewingEntity.action_characteristics || ''}
                                             onChange={(e) => setViewingEntity(prev => ({ ...prev, action_characteristics: e.target.value }))}
-                                            onBlur={(e) => {
-                                                const val = e.target.value;
-                                                const updated = { ...viewingEntity, action_characteristics: val };
-                                                setEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
-                                                setAllEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
-                                                updateEntity(updated.id, { action_characteristics: val });
-                                            }}
+                                            onBlur={(e) => handleFieldUpdate('action_characteristics', e.target.value)}
                                             className="w-full text-sm p-3 bg-white/5 rounded-lg border border-white/5 hover:border-white/10 focus:border-primary outline-none resize-y min-h-[60px]"
                                             placeholder="Action characteristics..."
                                         />
@@ -3784,13 +3772,7 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
                                         <textarea 
                                             value={viewingEntity.anchor_description || ''}
                                             onChange={(e) => setViewingEntity(prev => ({ ...prev, anchor_description: e.target.value }))}
-                                            onBlur={(e) => {
-                                                const val = e.target.value;
-                                                const updated = { ...viewingEntity, anchor_description: val };
-                                                setEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
-                                                setAllEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
-                                                updateEntity(updated.id, { anchor_description: val });
-                                            }}
+                                            onBlur={(e) => handleFieldUpdate('anchor_description', e.target.value)}
                                             className="w-full text-sm p-3 bg-white/5 rounded-lg border border-white/5 font-mono text-xs hover:border-white/10 focus:border-primary outline-none resize-y min-h-[60px]"
                                             placeholder="Anchor description..."
                                         />
@@ -3829,16 +3811,10 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
                                                      <div key={i} className="px-2 py-1 bg-primary/20 text-primary border border-primary/20 rounded text-xs flex items-center gap-2 group">
                                                          <span className="font-bold">{typeof dep === 'string' ? dep : JSON.stringify(dep)}</span>
                                                          <button 
-                                                            onClick={async () => {
+                                                            onClick={() => {
                                                                  const current = Array.isArray(viewingEntity.visual_dependencies) ? viewingEntity.visual_dependencies : [];
                                                                  const newDeps = current.filter(d => d !== dep);
-                                                                 try {
-                                                                     const updated = { ...viewingEntity, visual_dependencies: newDeps };
-                                                                     setViewingEntity(updated);
-                                                                     setEntities(prev => prev.map(e => e.id === updated.id ? updated : e));
-                                                                     setAllEntities(prev => prev.map(e => e.id === updated.id ? updated : e));
-                                                                     await updateEntity(viewingEntity.id, { visual_dependencies: newDeps });
-                                                                 } catch(e) { console.error(e); }
+                                                                 handleFieldUpdate('visual_dependencies', newDeps);
                                                             }} 
                                                             className="hover:text-white opacity-50 group-hover:opacity-100"
                                                         >
@@ -3854,22 +3830,15 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
                                                      placeholder="Type Entity Name & Enter..." 
                                                      className="w-full bg-transparent text-xs outline-none text-white/90 placeholder:text-white/20"
                                                      id="dep-input"
-                                                     onKeyDown={async (e) => {
+                                                     onKeyDown={(e) => {
                                                          if (e.key === 'Enter') {
-                                                             const val = e.target.value.trim();
+                                                             const val = e.currentTarget.value.trim();
                                                              if(val) {
                                                                 const current = Array.isArray(viewingEntity.visual_dependencies) ? viewingEntity.visual_dependencies : [];
                                                                 if(!current.includes(val)) {
-                                                                     const newDeps = [...current, val];
-                                                                     const updated = { ...viewingEntity, visual_dependencies: newDeps };
-                                                                     setViewingEntity(updated);
-                                                                     setEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
-                                                                     setAllEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
-                                                                     try {
-                                                                        await updateEntity(viewingEntity.id, { visual_dependencies: newDeps }); 
-                                                                     } catch(err) { console.error(err); }
+                                                                     handleFieldUpdate('visual_dependencies', [...current, val]);
                                                                 }
-                                                                e.target.value = '';
+                                                                e.currentTarget.value = '';
                                                              }
                                                          }
                                                      }}
@@ -3879,12 +3848,34 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
                                                      if (!input) return;
                                                      const val = input.value.trim();
                                                      if (val) {
-                                                         input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+                                                         const current = Array.isArray(viewingEntity.visual_dependencies) ? viewingEntity.visual_dependencies : [];
+                                                         if(!current.includes(val)) {
+                                                             handleFieldUpdate('visual_dependencies', [...current, val]);
+                                                         }
+                                                         input.value = '';
                                                      }
                                                  }}/>
                                              </div>
                                          </div>
                                     </div>
+                                    {/* Create Mode Actions */}
+                                    {viewingEntity.id === 'new' && (
+                                        <div className="mt-8 pt-4 border-t border-white/10 flex justify-end gap-3 sticky bottom-0 bg-[#1e1e1e] pb-2 z-10">
+                                            <button 
+                                                onClick={() => setViewingEntity(null)}
+                                                className="px-4 py-2 rounded-lg font-bold text-xs text-muted-foreground hover:bg-white/10 transition-colors uppercase"
+                                            >
+                                                Cancel
+                                            </button>
+                                            <button 
+                                                onClick={handleCommitCreate}
+                                                className="px-6 py-2 rounded-lg font-bold text-xs bg-primary text-black hover:brightness-110 flex items-center gap-2 uppercase tracking-wide shadow-lg shadow-primary/20 transition-all active:scale-95"
+                                            >
+                                                <Plus size={14} strokeWidth={3} /> Create Subject
+                                            </button>
+                                        </div>
+                                    )}
+
                                     {/* Attributes Display - Show ALL fields except the ones already shown above */
                                     (() => {
                                         const hiddenFields = ['id', 'project_id', 'image_url', 'created_at', 'updated_at', 'name', 'name_en', 'description', 
