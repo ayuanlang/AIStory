@@ -230,6 +230,18 @@ export const deleteSetting = async (id) => {
     return response.data;
 }
 
+export const analyzeEntityImage = async (entityId) => {
+    console.log(`[API CALL] analyzeEntityImage for ${entityId}`);
+    try {
+        const response = await api.post(`/entities/${entityId}/analyze`);
+        console.log(`[API SUCCESS] analyzeEntityImage response:`, response);
+        return response.data;
+    } catch (e) {
+        console.error(`[API FAIL] analyzeEntityImage failed:`, e);
+        throw e;
+    }
+}
+
 export default api;
 
 

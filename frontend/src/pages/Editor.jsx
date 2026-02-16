@@ -55,7 +55,8 @@ import {
     refinePrompt,
     analyzeScene,
     fetchPrompt,
-    fetchMe
+    fetchMe,
+    analyzeEntityImage
 } from '../services/api';
 
 import RefineControl from '../components/RefineControl.jsx';
@@ -2997,6 +2998,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
 };
 
 const SubjectLibrary = ({ projectId, currentEpisode }) => {
+    const { addLog: onLog } = useLog();
     const [subTab, setSubTab] = useState('character');
     const [entities, setEntities] = useState([]);
     const [allEntities, setAllEntities] = useState([]); // Store ALL entities for cross-reference
@@ -3060,6 +3062,31 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
     }, [allEntities, subTab]);
 
     // Create Entity
+    const [isAnalyzingEntity, setIsAnalyzingEntity] = useState(false);
+
+    const handleAnalyzeEntity = async (entity) => {
+        if (!entity || !entity.id || !entity.image_url) {
+            alert("No entity or image selected.");
+            return;
+        }
+        
+        setIsAnalyzingEntity(true);
+        if (onLog) onLog(`Analyzing image for subject ${entity.name}...`, "process");
+        
+        try {
+            const updated = await analyzeEntityImage(entity.id);
+            setViewingEntity(updated);
+            setEntities(prev => prev.map(e => e.id === updated.id ? updated : e));
+            if (onLog) onLog("Subject updated from analysis.", "success");
+        } catch (e) {
+            console.error(e);
+            alert("Analysis failed: " + (e.response?.data?.detail || e.message));
+            if (onLog) onLog("Analysis failed.", "error");
+        } finally {
+            setIsAnalyzingEntity(false);
+        }
+    };
+
     const handleCreate = async () => {
         // Create a temporary "New Entity" state to open the modal in "Create Mode"
         // We use a special ID 'new' to signal that this is not yet in DB
@@ -3612,6 +3639,14 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
                                             title="Change Image"
                                          >
                                              <ImageIcon size={20} />
+                                         </button>
+                                         <button 
+                                            onClick={(e) => { e.stopPropagation(); handleAnalyzeEntity(viewingEntity); }}
+                                            disabled={isAnalyzingEntity}
+                                            className="p-3 bg-indigo-500/80 hover:bg-indigo-500 text-white rounded-full backdrop-blur-md transition-colors disabled:opacity-50 shadow-lg border border-white/10"
+                                            title="Analyze Image & Refine Subject Info (Generates new prompt file)"
+                                         >
+                                             {isAnalyzingEntity ? <Loader2 size={20} className="animate-spin" /> : <Sparkles size={20} />}
                                          </button>
                                     </div>
                                 )}

@@ -398,19 +398,29 @@ const ProjectList = () => {
                                                     transition={{ type: "spring", stiffness: 300, damping: 20 }}
                                                     className="group relative bg-card/40 backdrop-blur-md border border-white/5 rounded-3xl overflow-hidden hover:border-primary/50 transition-all shadow-lg hover:shadow-2xl hover:shadow-primary/10"
                                                 >
-                                                    {/* Card Image Area */}
-                                                    <div className="aspect-[2.35/1] bg-black/60 relative overflow-hidden group-hover:bg-black/40 transition-colors">
-                                                       {/* Gradient Overlay */}
-                                                       <div className="absolute inset-0 bg-gradient-to-t from-card via-transparent to-transparent opacity-90 z-10" />
-                                                       <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-primary/10 opacity-0 group-hover:opacity-100 transition-opacity z-10" />
+                                                    {/* Card Image Area - Increased Height */}
+                                                    <div className="h-64 bg-black/60 relative overflow-hidden group-hover:bg-black/40 transition-colors">
+
+
+                                                       {/* Cover Image or Fallback */}
+                                                       {p.cover_image && (
+                                                           <img 
+                                                               src={p.cover_image.startsWith('http') ? p.cover_image : `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}${p.cover_image}`} 
+                                                               alt={p.title} 
+                                                               className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 z-10"
+                                                               onError={(e) => { e.target.style.display = 'none'; }}
+                                                           />
+                                                       )}
                                                        
-                                                       {/* Dynamic Grid Pattern */}
-                                                       <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] bg-[size:16px_16px] z-0 opacity-50"></div>
-                                                       
-                                                       {/* Icon or Thumbnail */}
+                                                       {/* Fallback Icon (Always rendered behind image) */}
                                                        <div className="absolute inset-0 flex items-center justify-center z-0">
                                                             <Folder className="w-12 h-12 text-white/5 group-hover:text-primary/20 transition-all duration-500 transform group-hover:scale-110" />
                                                        </div>
+
+
+
+                                                       {/* Gradient Overlay */}
+                                                       <div className="absolute inset-0 bg-gradient-to-t from-card via-transparent to-transparent opacity-90 z-10" />
 
                                                        {/* Top Badge */}
                                                        <div className="absolute top-4 right-4 z-20">
@@ -421,27 +431,31 @@ const ProjectList = () => {
                                                     </div>
 
                                                     {/* Card Content */}
-                                                    <div className="p-6 relative z-20">
-                                                        <div className="flex justify-between items-start mb-3">
-                                                            <h3 className="text-xl font-bold text-white group-hover:text-primary transition-colors truncate tracking-tight">{p.title}</h3>
+                                                    <div className="p-4 relative z-20">
+                                                        <div className="flex justify-between items-center">
+                                                            <h3 className="text-lg font-bold text-white group-hover:text-primary transition-colors truncate tracking-tight flex-1 mr-2">{p.title}</h3>
                                                             <button 
                                                                 onClick={(e) => handleDeleteProject(e, p.id)}
-                                                                className="opacity-0 group-hover:opacity-100 p-2 text-muted-foreground hover:text-red-500 hover:bg-white/10 rounded-lg transition-all"
+                                                                className="opacity-0 group-hover:opacity-100 p-1.5 text-muted-foreground hover:text-red-500 hover:bg-white/10 rounded-lg transition-all"
                                                                 title="Delete Project"
                                                             >
                                                                 <Trash2 className="w-4 h-4" />
                                                             </button>
                                                         </div>
-                                                        <p className="text-sm text-muted-foreground line-clamp-2 leading-relaxed font-light opacity-80 mb-6 min-h-[2.5em]">
-                                                            {p.global_info?.notes || "No description added."}
-                                                        </p>
                                                         
-                                                        {/* Footer Meta */}
-                                                        <div className="flex items-center justify-between text-xs text-muted-foreground/60 pt-4 border-t border-white/5 group-hover:border-white/10 transition-colors">
-                                                            <span>Edited 2m ago</span>
-                                                            <div className="flex -space-x-2">
-                                                                <div className="w-5 h-5 rounded-full bg-blue-500 border border-card"></div>
-                                                                <div className="w-5 h-5 rounded-full bg-purple-500 border border-card"></div>
+                                                        {/* Description & Footer - Reveal on Hover */}
+                                                        <div className="max-h-0 opacity-0 group-hover:max-h-32 group-hover:opacity-100 overflow-hidden transition-all duration-500 ease-in-out">
+                                                            <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed font-light opacity-80 mt-2 mb-4">
+                                                                {p.global_info?.notes || "No description added."}
+                                                            </p>
+                                                            
+                                                            {/* Footer Meta */}
+                                                            <div className="flex items-center justify-between text-[10px] text-muted-foreground/60 pt-3 border-t border-white/5 group-hover:border-white/10 transition-colors">
+                                                                <span>Edited 2m ago</span>
+                                                                <div className="flex -space-x-2">
+                                                                    <div className="w-4 h-4 rounded-full bg-blue-500 border border-card"></div>
+                                                                    <div className="w-4 h-4 rounded-full bg-purple-500 border border-card"></div>
+                                                                </div>
                                                             </div>
                                                         </div>
                                                     </div>

@@ -831,7 +831,10 @@ const Settings = () => {
                                 </h3>
                                 <p className="text-xs text-muted-foreground">Configure Baidu Translate API to enable prompt translation features.</p>
 
-                                <div className="grid grid-cols-1 gap-4 bg-white/5 p-4 rounded-lg animate-in fade-in">
+                                <form 
+                                    onSubmit={(e) => { e.preventDefault(); handleSaveTranslation(); }}
+                                    className="grid grid-cols-1 gap-4 bg-white/5 p-4 rounded-lg animate-in fade-in"
+                                >
                                     <div className="space-y-2">
                                         <label className="text-xs font-medium uppercase text-muted-foreground flex items-center justify-between">
                                             <span>Access Token</span>
@@ -842,6 +845,7 @@ const Settings = () => {
                                             value={baiduToken}
                                             onChange={(e) => setBaiduToken(e.target.value)}
                                             placeholder="Paste Baidu AI Access Token..."
+                                            autoComplete="new-password"
                                             className="w-full p-2 text-sm rounded-md bg-white/10 border border-white/10 text-white" 
                                         />
                                         <p className="text-[10px] text-muted-foreground">
@@ -851,13 +855,13 @@ const Settings = () => {
                                     </div>
                                     <div>
                                         <button 
-                                            onClick={handleSaveTranslation}
+                                            type="submit"
                                             className="text-xs bg-primary/10 text-primary hover:bg-primary/20 px-3 py-2 rounded transition-colors w-full"
                                         >
                                             Save Translation Token
                                         </button>
                                     </div>
-                                </div>
+                                </form>
                             </div>
                             
                             {/* Image Tool Section */}

@@ -123,6 +123,7 @@ const Auth = () => {
                             <User className="w-4 h-4 absolute left-3 top-3 text-muted-foreground" />
                             <input 
                                 name="username"
+                                autoComplete="username"
                                 className="w-full pl-10 pr-3 py-2 border rounded-md bg-background"
                                 placeholder="username"
                                 value={formData.username}
@@ -138,6 +139,7 @@ const Auth = () => {
                             <input 
                                 name="password"
                                 type="password"
+                                autoComplete={isLogin ? "current-password" : "new-password"}
                                 className="w-full pl-10 pr-3 py-2 border rounded-md bg-background"
                                 placeholder="••••••••"
                                 value={formData.password}

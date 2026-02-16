@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 def create_default_superuser():
     """Ensure default system user exists."""
-    print("!!! CHECKING DEFAULT SUPERUSER !!!")
+    # logger.info("Checking default superuser...")
     try:
         with engine.begin() as conn:
             # Check if user exists
@@ -16,7 +16,6 @@ def create_default_superuser():
             user = result.fetchone()
             
             if not user:
-                print("Creating default superuser: ylsystem")
                 logger.info("Creating default superuser 'ylsystem'...")
                 
                 # Hash password using bcrypt
@@ -41,25 +40,20 @@ def create_default_superuser():
                     "system": True
                 })
                 logger.info("Default superuser created.")
-                print("Default superuser 'ylsystem' created.")
-            else:
-                logger.info("Default superuser 'ylsystem' already exists.")
-                print("Default superuser exists.")
+            # else:
+                # logger.info("Default superuser 'ylsystem' already exists.")
 
     except Exception as e:
         logger.error(f"Failed to create default superuser: {e}")
-        print(f"SUPERUSER CREATION FAILED: {e}")
 
 def check_and_migrate_tables():
-    print("!!! MIGRATION CHECK STARTED !!!") # stdout for visibility
-    logger.info(f"Starting migration check. Dialect: {engine.dialect.name}")
+    # logger.info(f"Starting migration check. Dialect: {engine.dialect.name}")
     
     try:
         # 1. Get current columns using Inspector (works for both)
         inspector = inspect(engine)
         existing_columns = [c['name'] for c in inspector.get_columns('users')]
-        logger.info(f"Existing columns in 'users': {existing_columns}")
-        print(f"Existing columns: {existing_columns}")
+        # logger.info(f"Existing columns in 'users': {existing_columns}")
 
         # format: (column_name, sql_type_and_default)
         columns_to_check = [
@@ -75,14 +69,13 @@ def check_and_migrate_tables():
                 columns_to_add.append((col_name, col_def))
 
         if not columns_to_add:
-            logger.info("No user-table migrations needed. Columns exist.")
-            print("No user-table migrations needed.")
+            pass
+            # logger.info("No user-table migrations needed. Columns exist.")
 
         if columns_to_add:
             # 2. Apply Changes
             with engine.begin() as conn: # Transactional
                 for col_name, col_type in columns_to_add:
-                    print(f"Migrating {col_name}...")
                     logger.info(f"Adding column {col_name}...")
                     
                     # Try Postgres Syntax first (most likely for Render)
@@ -107,10 +100,9 @@ def check_and_migrate_tables():
         # 3. Verify Users
         inspector = inspect(engine)
         final_cols = [c['name'] for c in inspector.get_columns('users')]
-        print(f"Final users columns: {final_cols}")
 
         # --- MIGRATE SHOTS TABLE ---
-        logger.info("Checking 'shots' table for missing columns...")
+        # logger.info("Checking 'shots' table for missing columns...")
         
         # Robust Strategy for Postgres (Render)
         if engine.dialect.name == 'postgresql':
@@ -139,7 +131,6 @@ def check_and_migrate_tables():
         else:
             # Inspection-based Strategy for SQLite/Other
             existing_shot_columns = [c['name'] for c in inspector.get_columns('shots')]
-            print(f"Existing columns in 'shots': {existing_shot_columns}")
 
             # format: (column_name, sql_type_and_default)
             shot_columns_to_check = [
@@ -157,7 +148,6 @@ def check_and_migrate_tables():
             if shot_columns_to_add:
                 with engine.begin() as conn:
                     for col_name, col_type in shot_columns_to_add:
-                        print(f"Migrating shots.{col_name}...")
                         logger.info(f"Adding column shots.{col_name}...")
                         try:
                             conn.execute(text(f"ALTER TABLE shots ADD COLUMN {col_name} {col_type}"))
@@ -167,8 +157,6 @@ def check_and_migrate_tables():
                             # Don't re-raise immediately so we can try others? No, DB might be in bad state.
                         
         final_shot_cols = [c['name'] for c in inspector.get_columns('shots')]
-        print(f"Final shots columns: {final_shot_cols}")
         
     except Exception as e:
         logger.critical(f"Migration CRITICAL FAILURE: {e}")
-        print(f"MIGRATION FAILED: {e}")

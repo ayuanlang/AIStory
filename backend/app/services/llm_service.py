@@ -232,49 +232,10 @@ class LLMService:
         if not api_key:
              raise ValueError("API Key missing in config")
 
+        extra_config = config.get("config", {})
+
         try:
-            # Re-use the openai compatible caller but just extract content
-            # This is a bit of a hack to reuse existing code which expects a specific JSON format
-            # But the _call_openai_compatible method parses JSON for agents. 
-            # We need a simpler caller for raw text generation.
-            
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            }
-            
-            # OpenAI specific headers
-            if "openai" in (base_url or "").lower():
-                 pass 
-            
-            payload = {
-                "model": model,
-                "messages": messages,
-                "temperature": 0.7,
-                # "stream": True # TODO: Support streaming?
-            }
-            if extra_config := config.get("config", {}):
-                  # Merge extra config like max_tokens etc if needed
-                  payload.update(extra_config)
-
-            timeout = 300 # 5 minutes for long analysis
-            
-            logger.info(f"LLM Completion Request to {base_url} model {model}")
-            
-            # Using synchronous requests for simplicity in async wrapper, or use aiohttp
-            # LLMService methods are async def, so we should run blocking IO in executor if using requests,
-            # but for now let's just do a direct call. Since this runs in FastAPI async route, 
-            # blocking here is bad. But _call_openai_compatible uses run_in_executor? 
-            # Actually _call_openai_compatible logic below uses requests.post which blocks.
-            # We should probably fix that broadly, but for now let's follow the pattern.
-            
-            response = requests.post(f"{base_url}/chat/completions", headers=headers, json=payload, timeout=timeout)
-            response.raise_for_status()
-            
-            data = response.json()
-            content = data["choices"][0]["message"]["content"]
-            return content
-
+            return await self._raw_llm_request(base_url, api_key, model, messages, extra_config)
         except Exception as e:
             logger.error(f"LLM Raw Completion failed: {e}")
             raise e
@@ -335,13 +296,12 @@ class LLMService:
 
     async def _raw_llm_request(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> str:
         # Ensure base_url ends with correct chat endpoint if not specific
-        url = base_url
+        if not base_url:
+             base_url = "https://api.openai.com/v1" # Default to OpenAI if not set
+             
+        url = base_url.rstrip("/")
         if not url.endswith("/chat/completions"):
-            # Handle trailing slash
-            if url.endswith("/"):
-                url = url + "chat/completions"
-            elif "chat/completions" not in url:
-                url = url + "/chat/completions"
+             url = f"{url}/chat/completions"
         
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -363,6 +323,22 @@ class LLMService:
                     payload[k] = v
         
         logger.info(f"Calling LLM: {url} model={model}")
+        print(f"Calling LLM DIRECT PRINT: {url} model={model}", flush=True)
+
+        # Debug Payload (Masking potentially large image data if we were sending base64, but here it is URL)
+        import copy
+        debug_payload = copy.deepcopy(payload)
+        if "messages" in debug_payload:
+            for m in debug_payload["messages"]:
+                 if isinstance(m.get("content"), list):
+                      for c in m["content"]:
+                           if isinstance(c, dict) and c.get("type") == "image_url":
+                                # Truncate long data urls if any
+                                url_val = c.get("image_url", {}).get("url", "")
+                                if url_val and url_val.startswith("data:"):
+                                     c["image_url"]["url"] = url_val[:50] + "...(truncated)"
+        
+        logger.info(f"LLM Payload Body: {json.dumps(debug_payload, ensure_ascii=False)}")
 
         def _request(bypass_proxy=False):
             kwargs = {
@@ -384,6 +360,9 @@ class LLMService:
             raise Exception(f"API Error {response.status_code}: {response.text}")
 
         data = response.json()
+        print(f"LLM Response DIRECT PRINT: {json.dumps(data, ensure_ascii=False)}", flush=True)
+        # Also log
+        logging.getLogger("app").info(f"LLM Response: {json.dumps(data, ensure_ascii=False)}")
         
         if "choices" in data and len(data["choices"]) > 0:
             return data["choices"][0]["message"]["content"]

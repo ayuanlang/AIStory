@@ -352,18 +352,45 @@ async def process_agent_command(
 class ProjectCreate(BaseModel):
     title: str
     global_info: dict = {}
+    aspectRatio: Optional[str] = None
 
 class ProjectUpdate(BaseModel):
     title: Optional[str] = None
     global_info: Optional[dict] = None
+    aspectRatio: Optional[str] = None
 
 class ProjectOut(BaseModel):
     id: int
     title: str
     global_info: dict
+    aspectRatio: Optional[str] = None
+    cover_image: Optional[str] = None
     
     class Config:
         from_attributes = True
+
+def get_project_cover_image(db: Session, project_id: int) -> Optional[str]:
+    # 1. Try to find first valid image in Shots
+    # Check if project_id is populated in shots first (optimization)
+    shot = db.query(Shot).filter(Shot.project_id == project_id, Shot.image_url != None, Shot.image_url != "").first()
+    if shot:
+        return shot.image_url
+        
+    # If project_id not reliable in shots, try join (fallback)
+    shot = db.query(Shot).join(Scene).join(Episode).filter(Episode.project_id == project_id, Shot.image_url != None, Shot.image_url != "").first()
+    if shot:
+        return shot.image_url
+
+    # 2. Try Scenes? (Scene logic currently undefined as no direct image column, skip to Entities)
+    
+    # 3. Try Entities (Subjects)
+    entity = db.query(Entity).filter(Entity.project_id == project_id, Entity.image_url != None, Entity.image_url != "").first()
+    if entity:
+        return entity.image_url
+        
+    # 4. Try Assets? (Maybe, but user said Shots, Scenes, Subjects)
+    
+    return None
 
 @router.post("/projects/", response_model=ProjectOut)
 def create_project(
@@ -371,11 +398,22 @@ def create_project(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    # If aspectRatio is provided, merge it into global_info
+    if project.aspectRatio:
+        if not project.global_info:
+            project.global_info = {}
+        project.global_info['aspectRatio'] = project.aspectRatio
+        
     db_project = Project(title=project.title, global_info=project.global_info, owner_id=current_user.id) 
     db.add(db_project)
     db.commit()
     db.refresh(db_project)
+    # New project has no images
+    db_project.cover_image = None
+    # Extract aspectRatio for response from global_info
+    db_project.aspectRatio = db_project.global_info.get('aspectRatio') if db_project.global_info else None
     return db_project
+
 
 @router.get("/projects/", response_model=List[ProjectOut])
 def read_projects(
@@ -385,7 +423,17 @@ def read_projects(
     current_user: User = Depends(get_current_user)
 ):
     projects = db.query(Project).filter(Project.owner_id == current_user.id).offset(skip).limit(limit).all()
+    for p in projects:
+        p.cover_image = get_project_cover_image(db, p.id)
+        # Populate alias field
+        if p.global_info:
+             p.aspectRatio = p.global_info.get('aspectRatio')
+        
+        # Debug logging
+        # logger.info(f"Project {p.id}: Cover={p.cover_image}")
+        
     return projects
+
 
 @router.get("/projects/{project_id}", response_model=ProjectOut)
 def read_project(
@@ -396,6 +444,10 @@ def read_project(
     project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
+    
+    project.cover_image = get_project_cover_image(db, project.id)
+    if project.global_info:
+         project.aspectRatio = project.global_info.get('aspectRatio')
     return project
 
 @router.put("/projects/{project_id}", response_model=ProjectOut)
@@ -411,18 +463,30 @@ def update_project(
     
     if project_in.title is not None:
         project.title = project_in.title
-    # Use generic dict update or replace entire json? 
-    # Usually replacing entire JSON field is safer/expected for "global_info" which is a dict.
-    # But if we want partial updates to keys inside global_info, we have to do it manually in python.
-    # For now, let's assume the frontend sends the COMPLETE new global_info object.
-    if project_in.global_info is not None:
-         # Ensure we don't overwrite if it's just partial, but Pydantic sends what is provided.
-         # Actually for JSON columns in SQL, we typically replace the whole blob.
-         # So we expect frontend to send the full updated state of global_info.
-         project.global_info = project_in.global_info
+    
+    # Merge global_info updates - handle aspectRatio specially if provided separately
+    new_global_info = project.global_info # dict or None
+    if new_global_info is None:
+         # If generic global_info not provided, maybe we init with existing?
+         # But usually PUT overwrites or PATCH updates partial. 
+         # Assuming logic: "if provided, update".
+         # However, we also have project_in.aspectRatio now.
+         if project_in.aspectRatio is not None:
+              # We need to update just that key in the existing JSON
+              current_info = dict(project.global_info) if project.global_info else {}
+              current_info['aspectRatio'] = project_in.aspectRatio
+              project.global_info = current_info
+    else:
+         # global_info IS provided. Check if aspectRatio is also provided separately
+         if project_in.aspectRatio is not None:
+             new_global_info['aspectRatio'] = project_in.aspectRatio
+         project.global_info = new_global_info
     
     db.commit()
     db.refresh(project)
+    project.cover_image = get_project_cover_image(db, project.id)
+    if project.global_info:
+         project.aspectRatio = project.global_info.get('aspectRatio')
     return project
 
 @router.delete("/projects/{project_id}", status_code=204)
@@ -2357,10 +2421,16 @@ async def analyze_asset_image(
     if asset.user_id != current_user.id and not current_user.is_superuser:
          raise HTTPException(status_code=403, detail="Not authorized")
 
-    # 2. Get LLM Config
-    api_setting = get_effective_api_setting(db, current_user, category="LLM")
+    # 2. Get Vision Tool Config
+    # If not found, fallback to LLM (assuming LLM might support vision e.g. GPT-4o)
+    api_setting = get_effective_api_setting(db, current_user, category="Vision")
     if not api_setting:
-         raise HTTPException(status_code=400, detail="LLM Settings not configured (No active LLM provider found). Please configure one in Settings.")
+         # Fallback to LLM as backup, but log warning
+         logger.warning("Vision tool not configured, falling back to LLM setting.")
+         api_setting = get_effective_api_setting(db, current_user, category="LLM")
+    
+    if not api_setting:
+         raise HTTPException(status_code=400, detail="Vision Tool (or LLM) not configured. Please configure 'Vision / Image Recognition Tool' in Settings.")
     
     llm_config = {
         "api_key": api_setting.api_key,
@@ -2382,13 +2452,67 @@ async def analyze_asset_image(
     
     image_url_raw = asset.url
     if image_url_raw and image_url_raw.startswith("http"):
-        image_url = image_url_raw
+         # Check if it is localhost and we are not in a local env (heuristic)
+         # If the backend is local and the LLM is remote, the LLM cannot see 'localhost'.
+         # We must assume the LLM cannot access localhost.
+         # For production/render, RENDER_EXTERNAL_URL should be set.
+         # For local dev with remote LLM, we might need to upload the image to the LLM or use a tunnel.
+         # Many Vision APIs (OfferAI, Gemini) require a public URL or Base64.
+         image_url = image_url_raw
     else:
         # Local path
         path_part = image_url_raw if image_url_raw.startswith("/") else f"/{image_url_raw}"
         image_url = f"{base_url}{path_part}"
-    
-    logger.info(f"Analyzing Image: {image_url}")
+
+    # CRITICAL FIX: If image_url is localhost, external LLMs (OpenAI/Gemini/Claude) CANNOT access it.
+    # We must convert to Base64 if it's a local file.
+    if "localhost" in image_url or "127.0.0.1" in image_url:
+         import base64
+         # Try to find the local file path from the URL
+         # URL: http://localhost:8000/uploads/1/gen_xxx.png
+         # File: backend/data/uploads/1/gen_xxx.png OR backend/uploads/...
+         
+         # 1. Parse relative path
+         try:
+             # removing http://localhost:8000/
+             relative_path = image_url.replace(base_url, "")
+             if relative_path.startswith("/"): relative_path = relative_path[1:]
+             
+             # 2. Heuristic search for file
+             # We mounted /uploads map to settings.UPLOAD_DIR
+             # But asset.url might include 'uploads/' prefix or might not depending on how it was saved.
+             # Typically asset.url = "/uploads/filename.png"
+             
+             # If exact match fails, try prepending upload dir
+             possible_paths = [
+                 os.path.join(settings.UPLOAD_DIR, relative_path.replace("uploads/", "", 1)), # strip 'uploads/' prefix if dir is 'uploads'
+                 os.path.join(settings.BASE_DIR, relative_path),
+                 relative_path
+             ]
+             
+             local_file_path = None
+             for p in possible_paths:
+                 if os.path.exists(p):
+                     local_file_path = p
+                     break
+            
+             if local_file_path:
+                 logger.info(f"Localhost URL detected. Converting local file {local_file_path} to Base64 for remote LLM.")
+                 with open(local_file_path, "rb") as image_file:
+                     encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
+                     # Determine mime type
+                     ext = os.path.splitext(local_file_path)[1].lower().replace(".", "")
+                     mime = "image/png" if ext == "png" else "image/jpeg"
+                     image_url = f"data:{mime};base64,{encoded_string}"
+             else:
+                 logger.warning(f"Could not find local file for {image_url} to convert to Base64. Remote LLM might fail to fetch.")
+
+         except Exception as e:
+             logger.error(f"Failed to convert localhost image to base64: {e}")
+
+    logger.info(f"Analyzing Image: {image_url[:100]}...") # Log truncate
+    logger.info(f"Using LLM Config: Model={llm_config.get('model')}, BaseURL={llm_config.get('base_url')}")
+
 
     # 5. Call Service
     try:
@@ -2401,4 +2525,359 @@ async def analyze_asset_image(
     except Exception as e:
         logger.error(f"Image analysis failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/entities/{entity_id}/analyze")
+async def analyze_entity_image(
+    entity_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Analyzes an entity (subject) image using Vision model and updates its attributes based on visual content.
+    Returns the updated entity data.
+    """
+    logger.info(f"analyze_entity_image called for ID {entity_id}")
+    
+    # 1. Fetch Entity
+    entity = db.query(Entity).filter(Entity.id == entity_id).first()
+    if not entity:
+        raise HTTPException(status_code=404, detail="Entity not found")
+        
+    project = db.query(Project).filter(Project.id == entity.project_id).first()
+    if project.owner_id != current_user.id:
+         raise HTTPException(status_code=403, detail="Not authorized")
+
+    if not entity.image_url:
+        raise HTTPException(status_code=400, detail="Entity has no image to analyze.")
+
+    logger.info(f"Entity found: {entity.name}, Image: {entity.image_url}")
+
+    # 2. Get Vision Tool Config
+    api_setting = get_effective_api_setting(db, current_user, category="Vision")
+    if not api_setting:
+         api_setting = get_effective_api_setting(db, current_user, category="LLM")
+    
+    if not api_setting:
+         raise HTTPException(status_code=400, detail="Vision Tool or LLM not configured.")
+    
+    llm_config = {
+        "api_key": api_setting.api_key,
+        "base_url": api_setting.base_url,
+        "model": api_setting.model
+    }
+    logger.info(f"Using Model: {api_setting.model}")
+
+    # 3. Construct System Prompt based on Entity Type
+    entity_type = (entity.type or "character").lower()
+    
+    base_instruction = "You are an expert visual analyst and script breakdown specialist. Your task is to analyze the provided image of a project subject and UPDATE the existing subject information to match the visual details in the image. You must merge the visual evidence with the existing data."
+    
+    # Templates from scene_analysis.txt
+    char_prompt_template = """
+    [Global Style], 6-view character sheet — all six views must show the same character, outfit, proportions, and anchors consistently.
+    1. Full-body Front: standing pose with 【Expression 1: Character's Core Trait】, including footwear, face visible, key facial features.
+    2. Full-body Back: rear standing pose, showing clothing seams, skirt hem, shoes, collar, and necklace placement.
+    3. Half-body (Waist-up): torso view with 【Expression 2: Plot-relevant Emotion A】, shirt opening, necklace, hand position, fabric texture.
+    4. Close-up: facial close-up with Neutral/Standard expression (Mandatory for reference), clear eyes, lips, makeup, and skin detail.
+    5. Side Profile: true side view with 【Expression 3: Plot-relevant Emotion B】, showing full facial profile, ear, hairline, and shoulder slope.
+    6. Back Detail: rear detail of upper back and collar area, showing collar turn-out, necklace, and stitching.
+    Height: 【cm】; head-to-body ratio: 【ratio】.
+    Clothing: 【layers, materials, colors, wear】; include footwear and skirt fit.
+    Distinctive anchors: 【scar, tattoo, accessory, emblem】 at 【location】.
+    Action traits: poised, controlled movements.
+    Lighting: soft front light + rim light for silhouette.
+    Background: white.
+    anchor_description：【thumbnail_readability】.
+    Style: follow [Global Style].
+    Output: six high-resolution PNGs or a 6-panel composite; include neutral T-pose reference and scale marker; no text, watermark, or layout; End note: white background, high quality, large files, no text, no layout.
+    """
+
+    prop_prompt_template = """
+    [Global Style] Prop: 【PropName (state)】. Material: 【primary_material】; secondary materials: 【list】. Size: ~【dimensions cm or relative to reference】. Relative scale reference: 【reference_subject e.g., belt buckle, chair】. Visible details: 【surface texture, wear, markings, seams, labels】. Lighting for capture: 【direction, intensity, color_temp】; shadow behavior: 【soft/hard】. Camera framing: 【view e.g., front 3/4; macro insert】. anchor_description：【thumbnail_readability】. Background: white. **Strictly Object Only: No characters, no hands, no body parts visible.** Output: single object PNG with alpha; include scale ruler overlay; End note: white background, high quality, large file, no text, no layout.
+    """
+
+    env_prompt_template = """
+    [Global Style] Camera at 【camera_height_and_angle】 looking 【view_direction】 into 【environment_name】; focal point 【primary_anchor_feature】 at 【relative_position】; entrance 【position】; main circulation width ≈ 【width】; actionable area (m) 【action_area_dimensions】; architectural anchors 【key_features】; materials: floor 【floor_material】, walls 【wall_finish】, ceiling 【ceiling_detail】; scale reference 【scale_reference】 (include 1m scale bar); depth: foreground 【foreground_elements】, midground 【midground_elements】, background 【background_elements】, negative space 【negative_space】; time 【time_of_day】; lighting: key 【position,intensity,color_temp】, fill 【position,intensity,color_temp】, backlight 【position,intensity,color_temp】; shadow quality 【soft/hard】; color palette: dominant 【dominant_colors】, accents 【accent_colors】; mood 【mood_adjectives】; anchor_description：【thumbnail_readability】. **No people or characters in scene.**
+    """
+
+    schema_instruction = ""
+    if "char" in entity_type:
+        schema_instruction = f"""
+Output MUST be a valid JSON object matching this structure EXACTLY:
+{{
+  "characters": [
+    {{
+      "name": "Current Name",
+      "name_en": "English Name",
+      "gender": "M/F",
+      "role": "Role",
+      "archetype": "Archetype",
+      "appearance_cn": "Detailed Chinese Description (Must include height & head-to-body ratio)",
+      "clothing": "Detailed Description of clothing (Must include layers, materials, colors, wear)",
+      "action_characteristics": "Inferred action traits (e.g. poised, controlled movements)",
+      "generation_prompt_en": "STRICTLY FOLLOW THIS TEMPLATE, replacing placeholders with visual details from image:\\n{char_prompt_template}",
+      "anchor_description": "Distinct Visual Feature (e.g., 'Red Scarf', 'Scar on Cheek'). MAX 20 words. Must be obvious for AI recognition.",
+      "visual_dependencies": [],
+      "dependency_strategy": {{
+        "type": "Original",
+        "logic": "Base Design"
+      }}
+    }}
+  ]
+}}
+"""
+    elif "prop" in entity_type:
+        schema_instruction = f"""
+Output MUST be a valid JSON object matching this structure EXACTLY:
+{{
+  "props": [
+    {{
+      "name": "Current Name",
+      "name_en": "English Name",
+      "type": "held/static",
+      "description_cn": "Chinese Description (Must define Mobility & Mutable States)",
+      "generation_prompt_en": "STRICTLY FOLLOW THIS TEMPLATE, replacing placeholders with visual details from image:\\n{prop_prompt_template}",
+      "anchor_description": "Distinct Visual Marker (e.g., 'Golden Dragon Handle'). MAX 20 words. Must be obvious for AI recognition.",
+      "visual_dependencies": [],
+      "dependency_strategy": {{
+        "type": "Original",
+        "logic": "Base Design"
+      }}
+    }}
+  ]
+}}
+"""
+    elif "env" in entity_type or "scene" in entity_type:
+        schema_instruction = f"""
+Output MUST be a valid JSON object matching this structure EXACTLY:
+{{
+  "environments": [
+    {{
+      "name": "Current Name",
+      "name_en": "English Name",
+      "atmosphere": "Atmosphere",
+      "visual_params": "Wide/Interior/Day",
+      "description_cn": "Chinese Description",
+      "generation_prompt_en": "STRICTLY FOLLOW THIS TEMPLATE, replacing placeholders with visual details from image:\\n{env_prompt_template}",
+      "anchor_description": "Distinct Visual Landmark (e.g., 'Giant Red Statue'). MAX 20 words. Must be obvious for AI recognition.",
+      "visual_dependencies": [],
+      "dependency_strategy": {{
+        "type": "Original",
+        "logic": "Base Design"
+      }}
+    }}
+  ]
+}}
+"""
+    else:
+         # Fallback generic
+         schema_instruction = "Return a JSON object with keys: name_en, description_cn, generation_prompt_en."
+
+    system_prompt = f"{base_instruction}\n\n{schema_instruction}\n\nConstraint: Return ONLY the raw JSON object. Do not include markdown formatting (like ```json), no <think> tags, no reasoning process, and no conversational text."
+
+    # 4. Construct Image URL & Current Info
+    
+    # Prepare Current Info Context
+    # Include Project Context for style consistency
+    project_context = {}
+    if project.global_info:
+         project_context = {
+             "Global_Style": project.global_info.get("Global_Style"),
+             "Tone": project.global_info.get("tone")
+         }
+
+    current_info = {
+        "name": entity.name,
+        "name_en": entity.name_en,
+        "type": entity.type,
+        "description": entity.description,
+        "appearance_cn": entity.appearance_cn,
+        "clothing": entity.clothing,
+        "role": entity.role,
+        "generation_prompt_en": entity.generation_prompt_en,
+        "project_context": project_context
+    }
+    
+    current_info_str = json.dumps(current_info, ensure_ascii=False)
+
+    try:
+        from urllib.parse import urlparse
+        import base64
+        
+        base_url = os.getenv("RENDER_EXTERNAL_URL", "http://localhost:8000").rstrip("/")
+        image_url_raw = entity.image_url
+        image_url_final = image_url_raw
+        
+        local_file_path = None
+        path_part = None
+
+        if image_url_raw:
+            if image_url_raw.startswith("http"):
+                parsed_url = urlparse(image_url_raw)
+                if parsed_url.hostname in ["localhost", "127.0.0.1", "0.0.0.0"]:
+                    path_part = parsed_url.path.lstrip("/")
+            else:
+                # Relative path (e.g. /uploads/...)
+                path_part = image_url_raw.lstrip("/")
+        
+        if path_part:
+            possible_paths = [
+                os.path.join(settings.BASE_DIR, "app", path_part),
+                os.path.join(settings.BASE_DIR, path_part),
+                os.path.join(os.getcwd(), "app", path_part),
+                os.path.join(os.getcwd(), path_part),
+                # Try finding in uploads dir explicitly if path starts with uploads
+                os.path.join(settings.UPLOAD_DIR, path_part.replace("uploads/", "", 1))
+            ]
+            
+            for p in possible_paths:
+                # Resolve possible double slashes
+                p = os.path.normpath(p)
+                if os.path.exists(p) and os.path.isfile(p):
+                    local_file_path = p
+                    break
+        
+        if local_file_path:
+            try:
+                with open(local_file_path, "rb") as image_file:
+                    encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
+                    ext = os.path.splitext(local_file_path)[1].lower().replace(".", "")
+                    mime = "image/png" if ext == "png" else "image/jpeg"
+                    # Handle jpg as jpeg for mime
+                    if ext == "jpg": mime = "image/jpeg"
+                    if ext == "webp": mime = "image/webp"
+                    
+                    image_url_final = f"data:{mime};base64,{encoded_string}"
+                    logger.info(f"Converted local image {local_file_path} to Base64 (Size: {len(image_url_final)} chars)")
+            except Exception as e:
+                logger.error(f"Failed to encode local image {local_file_path}: {e}")
+                
+    except Exception as e:
+        logger.warning(f"Error resolving entity image path: {e}")
+        # Continue with original URL
+        pass
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {
+            "role": "user", 
+            "content": [
+                {"type": "text", "text": f"Here is the CURRENT information for subject '{entity.name}':\n{current_info_str}\n\nPlease analyze the image. Fuse the visual details from the image with the current information. \nIMPORTANT: Rewrite 'generation_prompt_en' to strictly follow the style and format of the current prompt, but update the content to match the image visually."},
+                {"type": "image_url", "image_url": {"url": image_url_final}}
+            ]
+        }
+    ]
+    
+    try:
+        logger.info("Sending request to LLM...")
+        result_content = await llm_service.chat_completion(messages, llm_config)
+        logger.info(f"LLM Reply Length: {len(result_content)}")
+        
+        # Remove <think> blocks if present (common in reasoning models)
+        import re
+        content = re.sub(r"<think>.*?</think>", "", result_content, flags=re.DOTALL)
+
+        # Parse JSON
+        content = content.replace("```json", "").replace("```", "").strip()
+        # Find start and end of JSON if extra text
+        start_idx = content.find("{")
+        end_idx = content.rfind("}")
+        if start_idx != -1 and end_idx != -1:
+            content = content[start_idx:end_idx+1]
+
+        data = json.loads(content)
+                  
+        # Extract the core object based on type
+        updated_info = {}
+        if "characters" in data and isinstance(data["characters"], list) and len(data["characters"]) > 0:
+            updated_info = data["characters"][0]
+        elif "props" in data and isinstance(data["props"], list) and len(data["props"]) > 0:
+            updated_info = data["props"][0]
+        elif "environments" in data and isinstance(data["environments"], list) and len(data["environments"]) > 0:
+            updated_info = data["environments"][0]
+        else:
+            updated_info = data # Fallback if direct object
+            
+        logger.info(f"Parsed Updated Info for Entity {entity.id}: {json.dumps(updated_info, ensure_ascii=False)[:300]}...")
+
+        if not updated_info:
+             logger.warning("updated_info is empty! LLM response might not match expected JSON schema.")
+
+        # Update Entity Fields
+        if "name_en" in updated_info: entity.name_en = updated_info["name_en"]
+        if "description_cn" in updated_info: entity.description = updated_info["description_cn"] # Map description_cn to description
+        if "appearance_cn" in updated_info: entity.appearance_cn = updated_info["appearance_cn"]
+        if "clothing" in updated_info: entity.clothing = updated_info["clothing"]
+        if "action_characteristics" in updated_info: entity.action_characteristics = updated_info["action_characteristics"]
+        if "role" in updated_info: entity.role = updated_info["role"]
+        if "archetype" in updated_info: entity.archetype = updated_info["archetype"]
+        if "gender" in updated_info: entity.gender = updated_info["gender"]
+        
+        if "atmosphere" in updated_info: entity.atmosphere = updated_info["atmosphere"]
+        if "visual_params" in updated_info: entity.visual_params = updated_info["visual_params"]
+        
+        if "generation_prompt_en" in updated_info: entity.generation_prompt_en = updated_info["generation_prompt_en"]
+        if "anchor_description" in updated_info: entity.anchor_description = updated_info["anchor_description"]
+        
+        if "visual_dependencies" in updated_info and isinstance(updated_info["visual_dependencies"], list): 
+             entity.visual_dependencies = updated_info["visual_dependencies"]
+        if "dependency_strategy" in updated_info and isinstance(updated_info["dependency_strategy"], dict):
+             entity.dependency_strategy = updated_info["dependency_strategy"]
+
+        logger.info(f"Entity Updated. New Prompt Length: {len(entity.generation_prompt_en) if entity.generation_prompt_en else 0}")
+        
+        # --- Save Prompt as Separate File (Asset) ---
+        new_prompt_content = entity.generation_prompt_en
+        if new_prompt_content:
+            try:
+                # 1. Create Directory
+                prompts_dir = os.path.join(settings.BASE_DIR, "app", "data", "prompts")
+                os.makedirs(prompts_dir, exist_ok=True)
+                
+                # 2. Save File
+                timestamp = int(datetime.utcnow().timestamp())
+                filename = f"entity_{entity.id}_prompt_{timestamp}.txt"
+                file_path = os.path.join(prompts_dir, filename)
+                
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(new_prompt_content)
+                
+                # 3. Create Asset Record
+                # Relative URL from backend perspective: /data/prompts/filename
+                # Ensure static mount includes data/prompts if needed, or we just store path. 
+                # Our generic file serving usually serves 'uploads', let's stick to 'uploads' for accessibility.
+                
+                uploads_prompts_dir = os.path.join(settings.BASE_DIR, "app", "data", "uploads", "prompts")
+                os.makedirs(uploads_prompts_dir, exist_ok=True)
+                filename = f"entity_{entity.id}_prompt_{timestamp}.txt"
+                public_file_path = os.path.join(uploads_prompts_dir, filename)
+                
+                with open(public_file_path, "w", encoding="utf-8") as f:
+                    f.write(new_prompt_content)
+                
+                relative_url = f"/data/uploads/prompts/{filename}" # Assuming configured static path
+                
+                new_asset = Asset(
+                    user_id=current_user.id,
+                    type="prompt",
+                    url=relative_url,
+                    filename=filename,
+                    meta_info={"entity_id": entity.id, "entity_name": entity.name},
+                    remark="Auto-generated prompt from image analysis"
+                )
+                db.add(new_asset)
+                logger.info(f"Saved new prompt asset: {filename}")
+                
+            except Exception as fe:
+                logger.error(f"Failed to save prompt file: {fe}")
+
+        db.commit()
+        db.refresh(entity)
+        
+        return entity
+        
+    except Exception as e:
+        logger.error(f"Entity Analysis failed: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
