@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { useStore } from '@/lib/store';
-import { Save, Info, Upload, Download } from 'lucide-react';
+import { Save, Info, Upload, Download, Coins, History } from 'lucide-react';
 import { API_URL } from '@/config';
-import { updateSetting, getSettings } from '../services/api';
+import { updateSetting, getSettings, getTransactions, fetchMe } from '../services/api';
+import RechargeModal from '../components/RechargeModal'; // Import RechargeModal
 
 const Settings = () => {
     const { llmConfig, setLLMConfig, savedConfigs, saveProviderConfig, addLog, generationConfig, setGenerationConfig, savedToolConfigs, saveToolConfig } = useStore();
@@ -52,6 +53,36 @@ const Settings = () => {
 
     // State for tabs
     const [activeTab, setActiveTab] = useState('api');
+    
+    // Billing State
+    const [userCredits, setUserCredits] = useState(0);
+    const [transactions, setTransactions] = useState([]);
+    const [isBillingLoading, setIsBillingLoading] = useState(false);
+    const [showRecharge, setShowRecharge] = useState(false); // Recharge Modal State
+
+    // Helper: Refresh Billing Data
+    const refreshBilling = () => {
+        setIsBillingLoading(true);
+        Promise.all([fetchMe(), getTransactions()]).then(([userRes, transRes]) => {
+            if (userRes && userRes.credits !== undefined) {
+                 setUserCredits(userRes.credits);
+            }
+            if (transRes) {
+                 setTransactions(transRes);
+            }
+        }).catch(err => {
+            console.error("Failed to load billing data", err);
+        }).finally(() => setIsBillingLoading(false));
+    };
+
+    useEffect(() => {
+        if (activeTab === 'billing') {
+            refreshBilling();
+        } else {
+             // For non-billing tabs, we still want to load general settings
+             // ... existing logic ...
+        }
+    }, [activeTab]);
 
     // UI Notification State
     const [notification, setNotification] = useState(null);
@@ -780,13 +811,87 @@ const Settings = () => {
                     >
                         Prompt Optimizers
                     </button>
+                    <button 
+                         onClick={() => setActiveTab('billing')}
+                         className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'billing' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
+                    >
+                        <span className="flex items-center gap-2"><Coins size={14}/> Usage</span>
+                    </button>
                 </div>
             </header>
             
-            {activeTab === 'api' ? (
+            {activeTab === 'billing' ? (
+                <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div className="bg-black/20 p-6 rounded-xl border border-white/10 shadow-sm flex flex-col items-center justify-center text-center">
+                             <Coins className="w-12 h-12 text-yellow-400 mb-4" />
+                             <h3 className="text-muted-foreground font-medium">Available Credits</h3>
+                             <p className="text-4xl font-bold text-white mt-2">{userCredits}</p>
+                             <p className="text-xs text-muted-foreground mt-2">Credits are deducted for generation tasks.</p>
+                             <button
+                                onClick={() => setShowRecharge(true)}
+                                className="mt-6 w-full bg-green-500 hover:bg-green-600 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
+                             >
+                                <Coins size={16} />
+                                Top Up Credits
+                             </button>
+                        </div>
+                        <div className="bg-black/20 p-6 rounded-xl border border-white/10 shadow-sm col-span-2">
+                             <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+                                <History className="w-5 h-5" /> Recent Transactions
+                             </h3>
+                             {isBillingLoading ? (
+                                <div className="text-center py-10 text-muted-foreground">Loading history...</div>
+                             ) : (
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-left border-collapse text-sm">
+                                        <thead>
+                                            <tr className="border-b border-white/10 text-muted-foreground">
+                                                <th className="p-3">Time</th>
+                                                <th className="p-3">Type</th>
+                                                <th className="p-3">Details</th>
+                                                <th className="p-3 text-right">Amount</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-white/5">
+                                            {transactions.length === 0 ? (
+                                                <tr><td colSpan="4" className="text-center p-8 text-muted-foreground">No transactions found</td></tr>
+                                            ) : transactions.map(t => (
+                                                <tr key={t.id} className="hover:bg-white/[0.02]">
+                                                    <td className="p-3 text-muted-foreground">{new Date(t.created_at).toLocaleString()}</td>
+                                                    <td className="p-3">
+                                                        <span className="bg-white/5 px-2 py-0.5 rounded text-xs uppercase border border-white/10">{t.task_type}</span>
+                                                    </td>
+                                                    <td className="p-3 text-xs opacity-70 max-w-[200px] truncate">{JSON.stringify(t.details)}</td>
+                                                    <td className={`p-3 text-right font-mono font-bold ${t.amount < 0 ? 'text-red-400' : 'text-green-400'}`}>
+                                                        {t.amount > 0 ? '+' : ''}{t.amount}
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                             )}
+                        </div>
+                    </div>
+
+                    {showRecharge && (
+                        <RechargeModal 
+                            onClose={() => setShowRecharge(false)} 
+                            onSuccess={() => {
+                                refreshBilling();
+                                showNotification("Recharge successful!", "success");
+                            }}
+                        />                                
+                    )}
+                </div>
+            ) : activeTab === 'api' ? (
                 <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
                     <div className="space-y-4">
-                        <h2 className="text-xl font-semibold flex items-center gap-2">Core LLM Configuration</h2>
+                        <h2 className="text-xl font-semibold flex items-center gap-2">
+                            Core LLM Configuration
+                            <span className="text-xs bg-primary/20 text-primary px-2 py-0.5 rounded-full border border-primary/30 font-mono">Task: llm_chat</span>
+                        </h2>
                         <div className="bg-black/20 p-6 rounded-xl border border-white/10 space-y-4 shadow-sm">
                             <div className="space-y-2">
                                 <label className="text-sm font-medium">Text Model Provider</label>
@@ -867,7 +972,10 @@ const Settings = () => {
                             {/* Image Tool Section */}
                             <div className="space-y-4 border-b border-white/10 pb-6">
                                 <div className="space-y-2">
-                                    <label className="text-sm font-medium text-blue-400">Image Generation Tool</label>
+                                    <label className="text-sm font-medium text-blue-400 flex items-center gap-2">
+                                        Image Generation Tool
+                                        <span className="text-[10px] bg-blue-500/20 text-blue-300 px-1.5 py-0.5 rounded border border-blue-500/30 font-mono">Task: image_gen</span>
+                                    </label>
                                     <select 
                                         value={imageModel}
                                         onChange={(e) => handleImageToolChange(e.target.value)}
@@ -977,7 +1085,10 @@ const Settings = () => {
                             {/* Video Tool Section */}
                             <div className="space-y-4">
                                 <div className="space-y-2">
-                                    <label className="text-sm font-medium text-orange-400">Video Generation Tool</label>
+                                    <label className="text-sm font-medium text-orange-400 flex items-center gap-2">
+                                        Video Generation Tool
+                                        <span className="text-[10px] bg-orange-500/20 text-orange-300 px-1.5 py-0.5 rounded border border-orange-500/30 font-mono">Task: video_gen</span>
+                                    </label>
                                     <select 
                                         value={videoModel}
                                         onChange={(e) => handleVideoToolChange(e.target.value)}
@@ -1108,7 +1219,10 @@ const Settings = () => {
                             {/* Vision Tool Section */}
                             <div className="space-y-4">
                                 <div className="space-y-2">
-                                    <label className="text-sm font-medium text-pink-400">Vision / Image Recognition Tool</label>
+                                    <label className="text-sm font-medium text-pink-400 flex items-center gap-2">
+                                        Vision / Image Recognition Tool
+                                        <span className="text-[10px] bg-pink-500/20 text-pink-300 px-1.5 py-0.5 rounded border border-pink-500/30 font-mono">Task: analysis</span>
+                                    </label>
                                     <select 
                                         value={visionModel}
                                         onChange={(e) => setVisionModel(e.target.value)}

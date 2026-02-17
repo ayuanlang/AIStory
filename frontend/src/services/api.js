@@ -1,4 +1,3 @@
-
 import axios from 'axios';
 import { API_URL } from '../config';
 
@@ -357,6 +356,19 @@ export const injectEntityFeatures = (prompt, entities = []) => {
         }
         return match; // No change if not found
     });
-
-    return { text, modified };
+    
+    return text;
 };
+
+// Billing API
+export const getPricingRules = async () => (await api.get('/billing/rules')).data;
+export const createPricingRule = async (data) => (await api.post('/billing/rules', data)).data;
+export const syncPricingRules = async () => (await api.post('/billing/rules/sync')).data;
+export const updatePricingRule = async (id, data) => (await api.put(`/billing/rules/${id}`, data)).data;
+export const deletePricingRule = async (id) => (await api.delete(`/billing/rules/${id}`)).data;
+export const getTransactions = async (limit=100, userId=null) => {
+    let url = `/billing/transactions?limit=${limit}`;
+    if (userId) url += `&user_id=${userId}`;
+    return (await api.get(url)).data;
+};
+export const updateUserCredits = async (userId, credits, mode='set') => (await api.post(`/billing/users/${userId}/credits`, { amount: credits, mode })).data;

@@ -4,7 +4,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Clapperboard, Menu, X } from 'lucide-react';
 import { motion } from 'framer-motion';
 
-const Navbar = () => {
+const Navbar = ({ forceSolid = false, hideMenu = false, className = '' }) => {
     const [scrolled, setScrolled] = useState(false);
     const [isOpen, setIsOpen] = useState(false);
     const navigate = useNavigate();
@@ -22,7 +22,7 @@ const Navbar = () => {
     };
 
     return (
-        <nav className={`fixed w-full z-50 transition-all duration-300 ${scrolled ? 'bg-background/80 backdrop-blur-md border-b shadow-sm' : 'bg-transparent'}`}>
+        <nav className={`fixed w-full z-50 transition-all duration-300 ${scrolled || forceSolid ? 'bg-background/80 backdrop-blur-md border-b shadow-sm' : 'bg-transparent'} ${className}`}>
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                 <div className="flex items-center justify-between h-16">
                     <Link to="/" className="flex items-center space-x-2 text-primary font-bold text-xl">
@@ -32,20 +32,27 @@ const Navbar = () => {
 
                     {/* Desktop Menu */}
                     <div className="hidden md:flex items-center space-x-8">
-                        <Link to="/" className="text-foreground/80 hover:text-primary transition-colors">Features</Link>
-                        <Link to="/" className="text-foreground/80 hover:text-primary transition-colors">Showcase</Link>
-                        <Link to="/" className="text-foreground/80 hover:text-primary transition-colors">Pricing</Link>
+                        {!hideMenu && (
+                            <>
+                                <Link to="/" className="text-foreground/80 hover:text-primary transition-colors">Features</Link>
+                                <Link to="/" className="text-foreground/80 hover:text-primary transition-colors">Showcase</Link>
+                                <Link to="/" className="text-foreground/80 hover:text-primary transition-colors">Pricing</Link>
+                            </>
+                        )}
+                        
                         {isLoggedIn ? (
-                            <div className="flex items-center space-x-4">
-                                <Link to="/projects">
-                                    <button className="px-4 py-2 rounded-full bg-primary/10 text-primary hover:bg-primary/20 transition-colors font-medium">
-                                        Dashboard
+                            !hideMenu && (
+                                <div className="flex items-center space-x-4">
+                                    <Link to="/projects">
+                                        <button className="px-4 py-2 rounded-full bg-primary/10 text-primary hover:bg-primary/20 transition-colors font-medium">
+                                            Dashboard
+                                        </button>
+                                    </Link>
+                                    <button onClick={handleLogout} className="text-sm text-foreground/60 hover:text-destructive transition-colors">
+                                        Sign Out
                                     </button>
-                                </Link>
-                                <button onClick={handleLogout} className="text-sm text-foreground/60 hover:text-destructive transition-colors">
-                                    Sign Out
-                                </button>
-                            </div>
+                                </div>
+                            )
                         ) : (
                             <div className="flex items-center space-x-4">
                                 <Link to="/auth" className="text-foreground/80 hover:text-primary transition-colors">Log in</Link>
@@ -75,11 +82,18 @@ const Navbar = () => {
                     className="md:hidden bg-background border-b"
                 >
                     <div className="px-4 pt-2 pb-6 space-y-2">
-                        <Link to="/" className="block py-2 text-foreground/80">Features</Link>
-                        <Link to="/" className="block py-2 text-foreground/80">Pricing</Link>
-                        <hr className="border-border my-2"/>
+                        {!hideMenu && (
+                            <>
+                                <Link to="/" className="block py-2 text-foreground/80">Features</Link>
+                                <Link to="/" className="block py-2 text-foreground/80">Pricing</Link>
+                                <hr className="border-border my-2"/>
+                            </>
+                        )}
+                        
                         {isLoggedIn ? (
-                             <Link to="/projects" className="block py-2 text-primary font-semibold">Go to Dashboard</Link>
+                             !hideMenu && (
+                                <Link to="/projects" className="block py-2 text-primary font-semibold">Go to Dashboard</Link>
+                             )
                         ) : (
                             <>
                                 <Link to="/auth" className="block py-2 text-foreground/80">Log in</Link>
