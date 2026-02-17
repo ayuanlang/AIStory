@@ -55,22 +55,23 @@ If the user's request is not clear or does not require a tool, return an empty p
 """
 
 class LLMService:
-    async def analyze_multimodal(self, prompt: str, image_url: str, config: Dict[str, Any]) -> str:
+    async def analyze_multimodal(self, prompt: str, image_url: str, config: Dict[str, Any]) -> Dict[str, Any]:
         """
         Analyzes an image with a prompt using multimodal LLM capabilities.
+        Returns Dict with 'content' and 'usage'.
         Supports:
         1. Doubao/Ark format (if 'doubao' in model name or 'responses' endpoint used)
         2. Standard OpenAI Vision format (fallback)
         """
         if not config:
-            return "Error: No LLM configuration found."
+            return {"content": "Error: No LLM configuration found.", "usage": {}}
 
         api_key = config.get("api_key")
         base_url = config.get("base_url")
         model = config.get("model")
 
         if not api_key:
-             return "Error: Please configure your LLM API Key in Settings."
+             return {"content": "Error: Please configure your LLM API Key in Settings.", "usage": {}}
 
         # Detect Doubao / Ark specific mode based on user instruction
         is_doubao = "doubao" in (model or "").lower() or "ark.cn-" in (base_url or "").lower()
@@ -80,7 +81,7 @@ class LLMService:
         else:
             return await self._call_openai_vision(base_url, api_key, model, prompt, image_url)
 
-    async def _call_doubao_prop(self, base_url: str, api_key: str, model: str, prompt: str, image_url: str) -> str:
+    async def _call_doubao_prop(self, base_url: str, api_key: str, model: str, prompt: str, image_url: str) -> Dict[str, Any]:
         """
         Specific implementation for Doubao/Ark /api/v3/responses endpoint
         Structure:
@@ -138,15 +139,17 @@ class LLMService:
             # Doubao responses format might differ?
             # Usually Ark /responses returns similar to /chat/completions but 'choices' key exists
             if "choices" in data and len(data["choices"]) > 0:
-                return data["choices"][0]["message"]["content"]
+                content = data["choices"][0]["message"]["content"]
+                usage = data.get("usage", {})
+                return {"content": content, "usage": usage}
             else:
-                 return f"Error: Unexpected response format from Doubao: {data}"
+                 return {"content": f"Error: Unexpected response format from Doubao: {data}", "usage": {}}
                  
         except Exception as e:
             logger.error(f"Doubao Multimodal failed: {e}")
-            return f"Error: {e}"
+            return {"content": f"Error: {e}", "usage": {}}
 
-    async def _call_openai_vision(self, base_url: str, api_key: str, model: str, prompt: str, image_url: str) -> str:
+    async def _call_openai_vision(self, base_url: str, api_key: str, model: str, prompt: str, image_url: str) -> Dict[str, Any]:
         """Standard OpenAI Vision Format"""
         messages = [
             {
@@ -170,10 +173,14 @@ class LLMService:
         # The existing _raw_llm_request takes `messages` list and sends it as JSON.
         # So it should simply work if we call it.
         try:
-             return await self._raw_llm_request(base_url, api_key, model, messages)
+             # Use _raw_llm_request_full to get usage
+             full_response = await self._raw_llm_request_full(base_url, api_key, model, messages)
+             content = full_response["choices"][0]["message"]["content"]
+             usage = full_response.get("usage", {})
+             return {"content": content, "usage": usage}
         except Exception as e:
              logger.error(f"OpenAI Vision call failed: {e}")
-             return f"Error: {e}"
+             return {"content": f"Error: {e}", "usage": {}}
 
     async def analyze_intent(self, query: str, context: Dict[str, Any], history: List[Dict[str, str]], config: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -218,9 +225,9 @@ class LLMService:
             }
 
 
-    async def chat_completion(self, messages: List[Dict], config: Dict[str, Any]) -> str:
+    async def chat_completion(self, messages: List[Dict], config: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Direct chat completion that returns raw content string.
+        Direct chat completion that returns Dict with 'content' and 'usage'.
         """
         if not config:
             raise ValueError("No LLM config provided")
@@ -235,13 +242,18 @@ class LLMService:
         extra_config = config.get("config", {})
 
         try:
-            return await self._raw_llm_request(base_url, api_key, model, messages, extra_config)
+            full_response = await self._raw_llm_request_full(base_url, api_key, model, messages, extra_config)
+            content = full_response["choices"][0]["message"]["content"]
+            usage = full_response.get("usage", {})
+            return {"content": content, "usage": usage}
         except Exception as e:
             logger.error(f"LLM Raw Completion failed: {e}")
             raise e
 
     async def _call_openai_compatible(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> Dict[str, Any]:
-        content = await self._raw_llm_request(base_url, api_key, model, messages, extra_config)
+        full_response = await self._raw_llm_request_full(base_url, api_key, model, messages, extra_config)
+        content = full_response["choices"][0]["message"]["content"]
+        usage = full_response.get("usage", {})
         
         # Parse JSON from content
         # LLM might wrap in ```json ... ```
@@ -262,24 +274,30 @@ class LLMService:
                 result["reply"] = clean_content
             if "plan" not in result:
                 result["plan"] = []
+            
+            # Inject Usage
+            result["usage"] = usage
             return result
+
         except json.JSONDecodeError:
             # Fallback if not valid JSON
             return {
                 "reply": clean_content,
-                "plan": [] # specific heuristics could be applied here
+                "plan": [],
+                "usage": usage
             }
 
-    async def generate_content(self, prompt: str, system_prompt: str, config: Dict[str, Any]) -> str:
+
+    async def generate_content(self, prompt: str, system_prompt: str, config: Dict[str, Any]) -> Dict[str, Any]:
         if not config:
-            return "Error: No LLM configuration found."
+            return {"content": "Error: No LLM configuration found.", "usage": {}}
 
         api_key = config.get("api_key")
         base_url = config.get("base_url")
         model = config.get("model")
 
         if not api_key:
-             return "Error: Please configure your LLM API Key in Settings."
+             return {"content": "Error: Please configure your LLM API Key in Settings.", "usage": {}}
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -289,12 +307,19 @@ class LLMService:
         extra_config = config.get("config", {})
 
         try:
-            return await self._raw_llm_request(base_url, api_key, model, messages, extra_config)
+            full_response = await self._raw_llm_request_full(base_url, api_key, model, messages, extra_config)
+            content = full_response["choices"][0]["message"]["content"]
+            usage = full_response.get("usage", {})
+            return {"content": content, "usage": usage}
         except Exception as e:
             logger.error(f"LLM Call failed: {e}")
-            return f"Error: {str(e)}"
+            return {"content": f"Error: {str(e)}", "usage": {}}
 
     async def _raw_llm_request(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> str:
+        data = await self._raw_llm_request_full(base_url, api_key, model, messages, extra_config)
+        return data["choices"][0]["message"]["content"]
+
+    async def _raw_llm_request_full(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> Dict[str, Any]:
         # Ensure base_url ends with correct chat endpoint if not specific
         if not base_url:
              base_url = "https://api.openai.com/v1" # Default to OpenAI if not set
@@ -365,7 +390,7 @@ class LLMService:
         logging.getLogger("app").info(f"LLM Response: {json.dumps(data, ensure_ascii=False)}")
         
         if "choices" in data and len(data["choices"]) > 0:
-            return data["choices"][0]["message"]["content"]
+            return data
         else:
              raise Exception(f"Invalid API Response: {data}")
 

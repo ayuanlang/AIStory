@@ -19,6 +19,7 @@ class AgentResponse(BaseModel):
     reply: str
     actions: List[AgentAction] = []
     updated_data: Optional[Dict[str, Any]] = None
+    usage: Optional[Dict[str, Any]] = None
 
 class AnalyzeSceneRequest(BaseModel):
     text: str

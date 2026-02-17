@@ -17,6 +17,8 @@ from app.services.llm_service import llm_service
 from app.db.session import SessionLocal
 from app.models.all_models import APISetting, Entity, User
 from app.core.config import settings
+from app.services.billing_service import billing_service
+from sqlalchemy.orm import Session
 # from app.db.session import db as legacy_db 
 # Mock legacy_db to prevent import error during refactor
 class MockLegacyDB:
@@ -125,7 +127,7 @@ class AgentService:
         # Fallback to OpenAI if nothing active
         return self.get_api_config("openai", user_id)
 
-    async def process_command(self, request: AgentRequest) -> AgentResponse:
+    async def process_command(self, request: AgentRequest, db: Session, user_id: int) -> AgentResponse:
         project_id = request.context.get("project_id")
         
         # Resolve LLM Config
@@ -133,7 +135,7 @@ class AgentService:
         if not llm_config or not llm_config.get("api_key"):
             # Assuming user_id=1 for single user desktop app context, 
             # or extract from request if available in future
-            llm_config = self.get_active_llm_config(user_id=1)
+            llm_config = self.get_active_llm_config(user_id=user_id)
 
         if request.context.get("is_refinement"):
             llm_result = {
@@ -169,7 +171,7 @@ class AgentService:
                 parameters=params
             )
             
-            execution_result = await self._execute_tool(action, project_id, request.llm_config, request.context)
+            execution_result = await self._execute_tool(action, db, user_id, project_id, request.llm_config, request.context)
             
             action.result = execution_result["result"]
             action.status = execution_result["status"]
@@ -188,14 +190,27 @@ class AgentService:
         return AgentResponse(
             reply=final_reply,
             actions=actions,
-            updated_data=updated_data
+            updated_data=updated_data,
+            usage=llm_result.get("usage")
         )
 
-    async def _execute_tool(self, action: AgentAction, project_id: str = None, llm_config: Any = None, context: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def _execute_tool(self, action: AgentAction, db: Session, user_id: int, project_id: str = None, llm_config: Any = None, context: Dict[str, Any] = None) -> Dict[str, Any]:
         tool = action.tool
         params = action.parameters
         if context is None: context = {}
         
+        # Helper for billing checks
+        def check_and_deduct_callback(task_type, details, operation):
+            provider = llm_config.get("provider") if llm_config else None
+            model = llm_config.get("model") if llm_config else None
+            # 1. Check Balance
+            billing_service.check_balance(db, user_id, task_type, provider, model)
+            # 2. Execute
+            result = operation()
+            # 3. Deduct
+            billing_service.deduct_credits(db, user_id, task_type, provider, model, details)
+            return result
+
         if tool == "generate_project_asset":
             print(f"DEBUG: Executing generate_project_asset. ProjectID: {project_id}, Target: {params.get('target_id')}")
             prompt = params.get("prompt", "")
@@ -245,106 +260,160 @@ class AgentService:
             
             print(f"DEBUG: Cleaned Target ID: '{target_id}'")
             
-            gen_result = await self._generate_image_with_metadata(prompt, llm_config, reference_image_url=reference_image_url)
-            generated_url = gen_result["url"]
-            gen_meta = gen_result["metadata"]
+            # --- Billing Injection ---
+            # Determine provider/model used in internal generator
+            # This is tricky because _generate_image_with_metadata resolves provider internally
+            # We will use the main llm_config provider as a proxy OR default to 'stability' to be safe
+            # But wait, _generate_image_with_metadata uses llm_config to pick provider
+            gen_provider = llm_config.get("provider", "stability") if llm_config else "stability"
+            gen_model = llm_config.get("model", "") if llm_config else ""
             
-            return self._save_and_bind_asset(
-                project_id, generated_url, "image", prompt, 
-                {**gen_meta, "target_id": target_id, "target_type": target_type},
-                target_id, target_type, target_field
-            )
+            # 1. Check Balance
+            billing_service.check_balance(db, user_id, "image_gen", gen_provider, gen_model)
+            
+            try:
+                gen_result = await self._generate_image_with_metadata(prompt, llm_config, reference_image_url=reference_image_url)
+                
+                # 2. Deduct Credits
+                # Only if successful
+                billing_service.deduct_credits(db, user_id, "image_gen", gen_provider, gen_model, {"item": "image_from_chat"})
+                
+                generated_url = gen_result["url"]
+                gen_meta = gen_result["metadata"]
+                
+                return self._save_and_bind_asset(
+                    project_id, generated_url, "image", prompt, 
+                    {**gen_meta, "target_id": target_id, "target_type": target_type},
+                    target_id, target_type, target_field
+                )
+            except Exception as e:
+                # No Charge on Failure
+                return {"status": "failed", "result": f"Failed to generate asset: {str(e)}"}
             
         elif tool == "generate_image_text_to_image":
-            prompt = params.get("prompt", "")
-            prompt = self._enrich_prompt_if_possible(prompt, project_id)
-            gen_result = await self._generate_image_with_metadata(prompt, llm_config)
+            gen_provider = llm_config.get("provider", "stability") if llm_config else "stability"
+            gen_model = llm_config.get("model", "") if llm_config else ""
+            billing_service.check_balance(db, user_id, "image_gen", gen_provider, gen_model)
             
-            return self._save_and_bind_asset(
-                project_id, gen_result["url"], "image", prompt, 
-                gen_result["metadata"], 
-                None, "generic"
-            )
+            try:
+                prompt = params.get("prompt", "")
+                prompt = self._enrich_prompt_if_possible(prompt, project_id)
+                gen_result = await self._generate_image_with_metadata(prompt, llm_config)
+                
+                billing_service.deduct_credits(db, user_id, "image_gen", gen_provider, gen_model, {"item": "image_from_tool"})
+
+                return self._save_and_bind_asset(
+                    project_id, gen_result["url"], "image", prompt, 
+                    gen_result["metadata"], 
+                    None, "generic"
+                )
+            except Exception as e:
+                return {"status": "failed", "result": f"Failed: {str(e)}"}
 
         elif tool == "generate_image_image_to_image":
-            prompt = params.get("prompt", "")
-            prompt = self._enrich_prompt_if_possible(prompt, project_id)
-            image_url = params.get("image_url", "")
-            gen_result = await self._generate_image_with_metadata(prompt, llm_config, reference_image_url=image_url)
+            gen_provider = llm_config.get("provider", "stability") if llm_config else "stability"
+            gen_model = llm_config.get("model", "") if llm_config else ""
+            billing_service.check_balance(db, user_id, "image_gen", gen_provider, gen_model)
             
-            return self._save_and_bind_asset(
-                project_id, gen_result["url"], "image", prompt, 
-                gen_result["metadata"], 
-                None, "generic"
-            )
+            try:
+                prompt = params.get("prompt", "")
+                prompt = self._enrich_prompt_if_possible(prompt, project_id)
+                image_url = params.get("image_url", "")
+                gen_result = await self._generate_image_with_metadata(prompt, llm_config, reference_image_url=image_url)
+                
+                billing_service.deduct_credits(db, user_id, "image_gen", gen_provider, gen_model, {"item": "i2i_from_tool"})
+                
+                return self._save_and_bind_asset(
+                    project_id, gen_result["url"], "image", prompt, 
+                    gen_result["metadata"], 
+                    None, "generic"
+                )
+            except Exception as e:
+                return {"status": "failed", "result": f"Failed: {str(e)}"}
 
         elif tool == "generate_video_text_to_video":
-            prompt = params.get("prompt", "")
-            prompt = self._enrich_prompt_if_possible(prompt, project_id)
-            target_id = context.get("target_id")
-            target_type = context.get("target_type", "scene_item")
-            duration = -1
-            
-            gen_result = await self._generate_video_with_metadata(prompt, llm_config, duration=duration)
-            
-            return self._save_and_bind_asset(
-                project_id, gen_result["url"], "video", prompt, 
-                {**gen_result["metadata"], "target_id": target_id, "target_type": target_type},
-                target_id, target_type
-            )
+             gen_provider = llm_config.get("provider", "runway") if llm_config else "runway"
+             gen_model = llm_config.get("model", "") if llm_config else ""
+             billing_service.check_balance(db, user_id, "video_gen", gen_provider, gen_model)
+             
+             try:
+                prompt = params.get("prompt", "")
+                prompt = self._enrich_prompt_if_possible(prompt, project_id)
+                target_id = context.get("target_id")
+                target_type = context.get("target_type", "scene_item")
+                duration = -1
+                
+                gen_result = await self._generate_video_with_metadata(prompt, llm_config, duration=duration)
+                
+                billing_service.deduct_credits(db, user_id, "video_gen", gen_provider, gen_model, {"item": "video_from_tool"})
+                
+                return self._save_and_bind_asset(
+                    project_id, gen_result["url"], "video", prompt, 
+                    {**gen_result["metadata"], "target_id": target_id, "target_type": target_type},
+                    target_id, target_type
+                )
+             except Exception as e:
+                return {"status": "failed", "result": f"Failed: {str(e)}"}
 
         elif tool == "generate_video_image_to_video":
-            prompt = params.get("prompt", "")
-            prompt = self._enrich_prompt_if_possible(prompt, project_id)
+            gen_provider = llm_config.get("provider", "runway") if llm_config else "runway"
+            gen_model = llm_config.get("model", "") if llm_config else ""
+            billing_service.check_balance(db, user_id, "video_gen", gen_provider, gen_model)
             
-            image_candidate = params.get("image_url")
-            if not image_candidate:
-                image_candidate = context.get("start_frame") or context.get("reference_image_url")
-            
-            last_frame_candidate = params.get("last_frame_url")
-            if not last_frame_candidate:
-                last_frame_candidate = context.get("end_frame")
+            try:
+                prompt = params.get("prompt", "")
+                prompt = self._enrich_prompt_if_possible(prompt, project_id)
                 
-            target_id = context.get("target_id")
-            video_mode = context.get("video_mode", "default")
-            
-            if video_mode == "cross_scene" and target_id:
-                prev_end = self._find_previous_scene_end_frame(project_id, target_id)
-                if prev_end:
-                    image_candidate = prev_end 
-            elif video_mode == "first_frame":
-                last_frame_candidate = None
+                image_candidate = params.get("image_url")
+                if not image_candidate:
+                    image_candidate = context.get("start_frame") or context.get("reference_image_url")
                 
-            image_url = None
-            last_frame_url = last_frame_candidate
-            
-            if isinstance(image_candidate, list):
-                if len(image_candidate) > 0:
-                    image_url = image_candidate[0]
-                    if len(image_candidate) > 1 and not last_frame_url:
-                        last_frame_url = image_candidate[1]
-            else:
-                image_url = image_candidate
+                last_frame_candidate = params.get("last_frame_url")
+                if not last_frame_candidate:
+                    last_frame_candidate = context.get("end_frame")
+                    
+                target_id = context.get("target_id")
+                video_mode = context.get("video_mode", "default")
+                
+                if video_mode == "cross_scene" and target_id:
+                    pass # logic placeholder
+                elif video_mode == "first_frame":
+                    last_frame_candidate = None
+                    
+                image_url = None
+                last_frame_url = last_frame_candidate
+                
+                if isinstance(image_candidate, list):
+                    if len(image_candidate) > 0:
+                        image_url = image_candidate[0]
+                        if len(image_candidate) > 1 and not last_frame_url:
+                            last_frame_url = image_candidate[1]
+                else:
+                    image_url = image_candidate
 
-            if isinstance(last_frame_url, list):
-                 last_frame_url = last_frame_url[0] if len(last_frame_url) > 0 else None
+                if isinstance(last_frame_url, list):
+                    last_frame_url = last_frame_url[0] if len(last_frame_url) > 0 else None
 
-            target_type = context.get("target_type", "scene_item")
-            duration = -1
+                target_type = context.get("target_type", "scene_item")
+                duration = -1
 
-            gen_result = await self._generate_video_with_metadata(
-                prompt, 
-                llm_config, 
-                reference_image_url=image_url, 
-                last_frame_url=last_frame_url,
-                duration=duration
-            )
-            
-            return self._save_and_bind_asset(
-                project_id, gen_result["url"], "video", prompt, 
-                {**gen_result["metadata"], "target_id": target_id, "target_type": target_type},
-                target_id, target_type
-            )
+                gen_result = await self._generate_video_with_metadata(
+                    prompt, 
+                    llm_config, 
+                    reference_image_url=image_url, 
+                    last_frame_url=last_frame_url,
+                    duration=duration
+                )
+                
+                billing_service.deduct_credits(db, user_id, "video_gen", gen_provider, gen_model, {"item": "i2v_from_tool"})
+                
+                return self._save_and_bind_asset(
+                    project_id, gen_result["url"], "video", prompt, 
+                    {**gen_result["metadata"], "target_id": target_id, "target_type": target_type},
+                    target_id, target_type
+                )
+            except Exception as e:
+                return {"status": "failed", "result": f"Failed: {str(e)}"}
             
         elif tool == "create_project":
             new_id = f"proj_{uuid.uuid4().hex[:8]}"

@@ -127,7 +127,9 @@
 
 ### 1. 情感对话 (Dialogue & Emotion)
 - **Core Logic**: "Relation & Reaction". 重点往往不在说话的人，而在听话的人（反应）。
-- **Sequence Logic**: Establishing -> Master/Two-shot -> OTS -> ECU (Eyes/Lips).
+- **Sequence Logic (Revised)**:
+  - **Prioritize OTS (Over-the-Shoulder)**: 对于对话场景（尤其是带有肢体动作或物体交互时），**必须优先采用过肩镜头 (Over-the-Shoulder Shot)** 及其正反打 (Reverse Shot) 结构。相比于单人特写，OTS 能更好呈现角色间的空间关系与动作互动。
+  - **Structure**: Establishing (Optional) -> Master/Two-shot -> **OTS Pattern (A over B's shoulder -> B over A's shoulder)** -> ECU (Climax).
 - **Advanced Technical Planning (高级规划)**:
   - **Rack Focus (Advanced FX)**: 用于多人对话。Start Frame 聚焦前景角色 A (Blur B)，Video Content 描述焦点平滑滑向后景角色 B (Blur A)，End Frame 聚焦角色 B。有效引导注意力转移。
   - **Slow Dolly In (Standard)**: 情绪高潮时刻。Start Frame 为 Medium Shot，Video Content 描述 "Camera slowly pushes in 15cm over 3 seconds" 压缩空间，End Frame 变为 Close-up，以此强化心理压迫或亲密感。
@@ -398,8 +400,12 @@
       - *Bad*: 拳头挥在半空模糊不清。
       - *Good*: 拳头已经击中目标或收势，姿态清晰定格。
     - **Rule 2: Physics Stability (物理落地)**: 所有的物体和角色必须有稳固的物理支撑。严禁以违背重力的状态（如跳跃至最高点悬停且无动势线）收尾，除非剧情特定需求（如定格画面）。
-    - **Rule 3: Motion Zeroing (动态归零)**: 尽量避免在剧烈的 Motion Blur (动态模糊) 中结束。Video Content 的最后 0.5s 应隐含一个 "Slow down to hold" 的趋势，确保 End Frame 生成出的图像清晰锐利，适合作为下一镜头的参考底图 (Image-to-Image Reference)。
-    - **Rule 4: Mandatory Close-Range Convergence (原则性近景收束)**: 所有的 Video Content 运镜轨迹**原则上必须**引导结束于 **Medium Shot** 或 **Close-up**。
+    - **Rule 3: Multi-Person Focus Shift (多人受力原则)**:
+      - 若 Shot 涉及多人动作/交互（如打斗、争吵、施法），End Frame 的视觉重心**必须转移**至：
+        1. **受力者反应 (Reaction of the Receiver)**：优先展示承受动作的人的状态（如被击倒在地、震惊表情）。
+        2. **施力者结果 (Aftermath of the Doer)**：若强调发力方，则必须给予施力结束后的**特写 (Close-up)** 或 **近景 (Medium Close-up)**，展示其最终定格状态（如落拳后的喘息、收剑后的冷峻），严禁停留在原本的全景或中远景。
+    - **Rule 4: Motion Zeroing (动态归零)**: 尽量避免在剧烈的 Motion Blur (动态模糊) 中结束。Video Content 的最后 0.5s 应隐含一个 "Slow down to hold" 的趋势，确保 End Frame 生成出的图像清晰锐利，适合作为下一镜头的参考底图 (Image-to-Image Reference)。
+    - **Rule 5: Mandatory Close-Range Convergence (原则性近景收束)**: 所有的 Video Content 运镜轨迹**原则上必须**引导结束于 **Medium Shot** 或 **Close-up**。
       - **Rationale**: 相比于远景，近景/特写 End Frame 具有极高的像素稳定性与细节控制力，是下一镜头生成连贯性 (Consistency) 的最佳视觉锚点。
       - **Exception**: 仅在剧情明确要求 "Reveal Logic" (拉远揭示环境) 或 "Exit" (角色远离消失) 时才允许以 Wide Shot 结束。否则，默认采取 "Push In to End" 策略。
 - **逻辑校验 (Consistency Check)**：

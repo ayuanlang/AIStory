@@ -4,9 +4,10 @@ import logging
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from app.db.session import get_db
-from app.models.all_models import Project, User, Episode, Scene, Shot, Entity, Asset, APISetting, ScriptSegment
+from app.models.all_models import Project, User, Episode, Scene, Shot, Entity, Asset, APISetting, ScriptSegment, PricingRule, TransactionHistory
 from app.schemas.agent import AgentRequest, AgentResponse, AnalyzeSceneRequest
 from app.services.agent_service import agent_service
+from app.services.billing_service import billing_service
 from app.services.llm_service import llm_service
 from app.db.init_db import check_and_migrate_tables  # EMERGENCY FIX IMPORT
 import os
@@ -151,6 +152,26 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 
             with open(prompt_path, "r", encoding="utf-8") as f:
                 system_instruction = f.read()
+
+            # Inject Templates if using the standard scene_analysis.txt
+            if "scene_analysis.txt" in prompt_filename:
+                try:
+                    from app.core.prompts.templates import (
+                        CHARACTER_PROMPT_TEMPLATE as char_tmpl, 
+                        PROP_PROMPT_TEMPLATE as prop_tmpl, 
+                        ENVIRONMENT_PROMPT_TEMPLATE as env_tmpl
+                    )
+                    # Replace placeholders or specific sections
+                    # We will use simple string replacement or format if placeholders exist
+                    # For backward compatibility, check if placeholders exist first
+                    if "{char_prompt_template}" in system_instruction:
+                        system_instruction = system_instruction.replace("{char_prompt_template}", char_tmpl)
+                    if "{prop_prompt_template}" in system_instruction:
+                        system_instruction = system_instruction.replace("{prop_prompt_template}", prop_tmpl)
+                    if "{env_prompt_template}" in system_instruction:
+                        system_instruction = system_instruction.replace("{env_prompt_template}", env_tmpl)
+                except Exception as e:
+                    logger.warning(f"Failed to inject templates into scene analysis prompt: {e}")
         
         # Prepare user content with optional project metadata
         user_content = f"Script to Analyze:\n\n{request.text}"
@@ -207,8 +228,20 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         if not config:
              raise HTTPException(status_code=400, detail="LLM Configuration missing. Please check your settings.")
 
+        # Billing Check
+        provider = config.get("provider") if config else None
+        model = config.get("model") if config else None
+        billing_service.check_balance(db, current_user.id, "analysis", provider, model)
+
         logger.info(f"Analyzing scene for user {current_user.id} with model {config.get('model')}")
-        result_content = await llm_service.chat_completion(messages, config)
+        llm_resp = await llm_service.chat_completion(messages, config)
+        result_content = llm_resp.get("content", "")
+        usage = llm_resp.get("usage", {})
+        
+        # Billing Deduct
+        details = {"item": "scene_analysis"}
+        if usage: details.update(usage)
+        billing_service.deduct_credits(db, current_user.id, "analysis", provider, model, details)
         
         return {"result": result_content}
 
@@ -346,7 +379,36 @@ async def process_agent_command(
         if project.owner_id != current_user.id:
             raise HTTPException(status_code=403, detail="Not authorized to access this project")
 
-    return await agent_service.process_command(request)
+    # Resolve Provider/Model for Billing
+    provider = request.llm_config.get("provider") if request.llm_config else None
+    model = request.llm_config.get("model") if request.llm_config else None
+    
+    if not provider:
+        api_config = get_effective_api_setting(db, current_user, category="LLM")
+        if api_config:
+            provider = api_config.provider
+            model = api_config.model
+    
+    # Billing Check
+    billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+
+    try:
+        result = await agent_service.process_command(request, db, current_user.id)
+        
+        # Billing Deduct (with actual usage if available)
+        details = {"query": request.query[:50]}
+        if result.usage:
+             details["input_tokens"] = result.usage.get("prompt_tokens", 0)
+             details["output_tokens"] = result.usage.get("completion_tokens", 0)
+             details["total_tokens"] = result.usage.get("total_tokens", 0)
+        
+        billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, details)
+        
+        return result
+    except Exception as e:
+        logger.error(f"Agent Command Failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # --- Projects ---
 class ProjectCreate(BaseModel):
@@ -1145,11 +1207,26 @@ async def ai_generate_shots(
 
         # 4. Call LLM
         llm_config = agent_service.get_active_llm_config(current_user.id)
-        response_content = await llm_service.generate_content(user_input, system_prompt, llm_config)
+        
+        # Billing Check
+        provider = llm_config.get("provider") 
+        model = llm_config.get("model")
+        # Ensure we have at least a default task type if provider is missing (though check_balance handles None)
+        billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+
+        response_dict = await llm_service.generate_content(user_input, system_prompt, llm_config)
+        response_content = response_dict.get("content", "")
+        usage = response_dict.get("usage", {})
+
         logger.info(f"[ai_generate_shots] llm_response_len={len(response_content)}")
 
         if response_content.startswith("Error:"):
             raise HTTPException(status_code=500, detail=response_content)
+
+        # Billing Deduct
+        details = {"item": "generate_shots"}
+        if usage: details.update(usage)
+        billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, details)
 
         # 5. Parse Table
         lines = response_content.split('\n')
@@ -1621,9 +1698,10 @@ class UserOut(BaseModel):
     is_superuser: bool
     is_authorized: bool
     is_system: bool
+    credits: Optional[int] = 0
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 @router.post("/users/", response_model=UserOut)
 def create_user(user: UserCreate, db: Session = Depends(get_db)):
@@ -2105,6 +2183,362 @@ def update_asset(
     }
 
 
+
+from app.schemas.billing import PricingRuleCreate, PricingRuleUpdate, PricingRuleOut, TransactionOut
+from app.models.all_models import RechargePlan, PaymentOrder
+import uuid
+import io
+
+class RechargePlanOut(BaseModel):
+    id: int
+    min_amount: int
+    max_amount: int
+    credit_rate: int
+    bonus: int
+
+    class Config:
+        from_attributes = True
+
+class PaymentOrderOut(BaseModel):
+    order_no: str
+    amount: int
+    credits: int
+    status: str
+    pay_url: Optional[str] = None
+    created_at: str
+
+    class Config:
+        from_attributes = True
+
+class RechargeRequest(BaseModel):
+    amount: int
+
+@router.get("/billing/recharge/plans", response_model=List[RechargePlanOut])
+def get_recharge_plans(db: Session = Depends(get_db)):
+    return db.query(RechargePlan).filter(RechargePlan.is_active == True).all()
+
+@router.post("/billing/recharge/create", response_model=PaymentOrderOut)
+def create_recharge_order(
+    req: RechargeRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if req.amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be positive")
+
+    # Find applicable plan
+    plan = db.query(RechargePlan).filter(
+        RechargePlan.min_amount <= req.amount,
+        RechargePlan.max_amount >= req.amount,
+        RechargePlan.is_active == True
+    ).first()
+    
+    if not plan:
+        # Fallback to default (100) if no matching range found? Or error?
+        # User requirement implies continuous ranges. 
+        # If amount < 1, reject. If > max, check highest. 
+        # Let's use a safe default of 100 if inside hole, but ideally there are no holes.
+        credit_rate = 100
+        bonus = 0
+    else:
+        credit_rate = plan.credit_rate
+        bonus = plan.bonus
+        
+    total_credits = (req.amount * credit_rate) + bonus
+    
+    # Generate Order No
+    order_no = f"ORD_{uuid.uuid4().hex[:16]}"
+    
+    # Mock Pay URL (Simulate a WeChat URL)
+    # In real world this comes from WeChat API
+    mock_url = f"weixin://wxpay/bizpayurl?pr={order_no}"
+    
+    # Generate QR Code Base64? Or just return the URL for frontend to render?
+    # Let's return the URL string. Frontend can use qrcode.react
+    
+    order = PaymentOrder(
+        order_no=order_no,
+        user_id=current_user.id,
+        amount=req.amount,
+        credits=total_credits,
+        status="PENDING",
+        pay_url=mock_url,
+        provider="wechat",
+        created_at=datetime.utcnow().isoformat()
+    )
+    db.add(order)
+    db.commit()
+    db.refresh(order)
+    
+    return order
+
+@router.get("/billing/recharge/status/{order_no}")
+def check_order_status(
+    order_no: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    order = db.query(PaymentOrder).filter(PaymentOrder.order_no == order_no).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+        
+    if order.user_id != current_user.id and not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
+    return {"status": order.status, "paid_at": order.paid_at}
+
+@router.post("/billing/recharge/mock_pay/{order_no}")
+def mock_pay_order(
+    order_no: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # Dev only or check config?
+    # For now allow any user to pay their own order for testing
+    order = db.query(PaymentOrder).filter(
+        PaymentOrder.order_no == order_no,
+        PaymentOrder.status == "PENDING"
+    ).first()
+    
+    if not order:
+        raise HTTPException(status_code=404, detail="Pending order not found")
+        
+    if order.user_id != current_user.id and not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
+    # Process Payment
+    order.status = "PAID"
+    order.paid_at = datetime.utcnow().isoformat()
+    
+    # Add Credits
+    user = db.query(User).filter(User.id == order.user_id).first()
+    old_credits = user.credits or 0
+    user.credits = old_credits + order.credits
+    
+    # Log Transaction
+    trans = TransactionHistory(
+        user_id=user.id,
+        amount=order.credits,
+        balance_after=user.credits,
+        task_type="recharge",
+        provider="wechat",
+        model="cny",
+        details={"order_no": order_no, "amount_cny": order.amount}
+    )
+    db.add(trans)
+    
+    db.commit()
+    
+    return {"status": "success", "new_balance": user.credits}
+
+
+# --- Billing Management ---
+
+@router.get("/billing/rules", response_model=List[PricingRuleOut])
+def get_pricing_rules(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    return db.query(PricingRule).all()
+
+@router.post("/billing/rules", response_model=PricingRuleOut)
+def create_pricing_rule(
+    rule_in: PricingRuleCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    try:
+        rule = PricingRule(**rule_in.dict())
+        db.add(rule)
+        db.commit()
+        db.refresh(rule)
+        return rule
+    except Exception as e:
+        logger.error(f"Error creating pricing rule: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/billing/rules/sync", response_model=List[PricingRuleOut])
+def sync_pricing_rules(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Sync system API Settings into Pricing Rules.
+    If a provider/model exists in system settings but not in pricing rules, add it.
+    """
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    # 1. Fetch System Settings (from System Users)
+    system_users = db.query(User).filter(User.is_system == True).all()
+    system_user_ids = [u.id for u in system_users]
+    
+    if not system_user_ids:
+        return []
+
+    settings = db.query(APISetting).filter(
+        APISetting.user_id.in_(system_user_ids),
+        APISetting.is_active == True
+    ).all()
+    
+    added_rules = []
+    
+    category_map = {
+        "LLM": "llm_chat",
+        "Image": "image_gen", 
+        "Video": "video_gen",
+        "Analysis": "analysis"
+    }
+
+    try:
+        for setting in settings:
+            # Determine task type
+            task_type = category_map.get(setting.category, "llm_chat")
+            
+            # Check existence (Exact match on provider+model+task)
+            # Use 'is not None' for strict checking if model can be null, but usually system settings have models
+            query = db.query(PricingRule).filter(
+                PricingRule.provider == setting.provider,
+                PricingRule.task_type == task_type
+            )
+            
+            if setting.model:
+                 query = query.filter(PricingRule.model == setting.model)
+            else:
+                 # If setting has no model (e.g. generic provider), check for rule with null model
+                 query = query.filter(PricingRule.model == None)
+            
+            existing = query.first()
+            
+            if not existing:
+                # Create new rule
+                new_rule = PricingRule(
+                    provider=setting.provider,
+                    model=setting.model,
+                    task_type=task_type,
+                    cost=1, # Default cost
+                    unit_type="per_call",
+                    is_active=True,
+                    description=f"Auto-synced from {setting.name}"
+                )
+                db.add(new_rule)
+                added_rules.append(new_rule)
+        
+        if added_rules:
+            db.commit()
+            for r in added_rules:
+                db.refresh(r)
+        
+        return added_rules
+    except Exception as e:
+        logger.error(f"Sync pricing rules failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.put("/billing/rules/{rule_id}", response_model=PricingRuleOut)
+def update_pricing_rule(
+    rule_id: int,
+    rule_in: PricingRuleUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
+    rule = db.query(PricingRule).filter(PricingRule.id == rule_id).first()
+    if not rule:
+        raise HTTPException(status_code=404, detail="Rule not found")
+        
+    update_data = rule_in.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(rule, field, value)
+    
+    db.commit()
+    db.refresh(rule)
+    return rule
+    
+    db.commit()
+    db.refresh(rule)
+    return rule
+
+@router.delete("/billing/rules/{rule_id}")
+def delete_pricing_rule(
+    rule_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
+    rule = db.query(PricingRule).filter(PricingRule.id == rule_id).first()
+    if not rule:
+        raise HTTPException(status_code=404, detail="Rule not found")
+        
+    db.delete(rule)
+    db.commit()
+    return {"status": "success"}
+
+@router.get("/billing/transactions", response_model=List[TransactionOut])
+def get_transactions(
+    user_id: Optional[int] = None,
+    limit: int = 100,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not current_user.is_superuser and (user_id and user_id != current_user.id):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    query = db.query(TransactionHistory)
+    
+    # Non-superusers can only see their own
+    target_id = user_id if user_id else (None if current_user.is_superuser else current_user.id)
+    
+    if target_id:
+        query = query.filter(TransactionHistory.user_id == target_id)
+        
+    return query.order_by(TransactionHistory.created_at.desc()).limit(limit).all()
+
+class CreditUpdate(BaseModel):
+    amount: int # Absolute value or delta? Let's say absolute set for admin simplicity, or add functionality
+    mode: str = "set" # set, add
+
+@router.post("/billing/users/{user_id}/credits")
+def update_user_credits(
+    user_id: int,
+    credit_update: CreditUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    old_credits = user.credits or 0
+    if credit_update.mode == "add":
+        user.credits = old_credits + credit_update.amount
+    else:
+        user.credits = credit_update.amount
+        
+    # Log administrative transaction
+    trans = TransactionHistory(
+        user_id=user_id,
+        amount=user.credits - old_credits,
+        balance_after=user.credits,
+        task_type="admin_adjustment",
+        details={"admin_id": current_user.id, "reason": "Manual Update"}
+    )
+    db.add(trans)
+    
+    db.commit()
+    return {"credits": user.credits}
+
 # --- Generation ---
 
 class GenerationRequest(BaseModel):
@@ -2204,6 +2638,10 @@ async def generate_image_endpoint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    # Billing Check
+    cost = billing_service.estimate_cost(db, "image_gen", req.provider, req.model)
+    billing_service.check_can_proceed(current_user, cost)
+
     try:
         # Assuming generate_image returns {"url": "...", ...}
         result = await media_service.generate_image(
@@ -2221,7 +2659,10 @@ async def generate_image_endpoint(
              logger.error(f"[GenerateImage] Failed: {detail}")
              
              raise HTTPException(status_code=400, detail=detail)
-        
+
+        # Billing Deduct
+        billing_service.deduct_credits(db, current_user.id, "image_gen", req.provider, req.model, {"item": "image"})
+
         # Register Asset
         if result.get("url"):
             _register_asset_helper(db, current_user.id, result["url"], req, result.get("metadata"))
@@ -2306,6 +2747,10 @@ async def generate_video_endpoint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    # Billing
+    cost = billing_service.estimate_cost(db, "video_gen", req.provider, req.model)
+    billing_service.check_can_proceed(current_user, cost)
+
     print(f"DEBUG: Backend Received Video Prompt: {req.prompt}")
     try:
         # 1. Resolve Context for Aspect Ratio
@@ -2369,6 +2814,9 @@ async def generate_video_endpoint(
         if result.get("url"):
             _register_asset_helper(db, current_user.id, result["url"], req, result.get("metadata"))
             
+        # Billing Deduct
+        billing_service.deduct_credits(db, current_user.id, "video_gen", req.provider, req.model, {"duration": req.duration})
+
         return result
     except HTTPException:
         raise
@@ -2432,6 +2880,10 @@ async def analyze_asset_image(
     if not api_setting:
          raise HTTPException(status_code=400, detail="Vision Tool (or LLM) not configured. Please configure 'Vision / Image Recognition Tool' in Settings.")
     
+    # Billing Check
+    cost = billing_service.estimate_cost(db, "analysis", api_setting.provider, api_setting.model)
+    billing_service.check_can_proceed(current_user, cost)
+
     llm_config = {
         "api_key": api_setting.api_key,
         "base_url": api_setting.base_url,
@@ -2516,11 +2968,23 @@ async def analyze_asset_image(
 
     # 5. Call Service
     try:
-        result = await llm_service.analyze_multimodal(
+        response_data = await llm_service.analyze_multimodal(
             prompt=system_prompt,
             image_url=image_url,
             config=llm_config
         )
+        
+        result = response_data.get("content", "")
+        usage = response_data.get("usage", {})
+        
+        # Billing Deduct - Include Usage
+        billing_details = {"item": "asset_analysis"}
+        if usage:
+             billing_details.update(usage) # e.g. input_tokens, output_tokens
+             # Add image tokens if not explicitly in input_tokens (some APIs like OpenAI include image tokens in input_tokens)
+        
+        billing_service.deduct_credits(db, current_user.id, "analysis", api_setting.provider, api_setting.model, billing_details)
+
         return {"result": result}
     except Exception as e:
         logger.error(f"Image analysis failed: {e}")
@@ -2561,6 +3025,10 @@ async def analyze_entity_image(
     if not api_setting:
          raise HTTPException(status_code=400, detail="Vision Tool or LLM not configured.")
     
+    # Billing Check
+    cost = billing_service.estimate_cost(db, "analysis_character", api_setting.provider, api_setting.model)
+    billing_service.check_can_proceed(current_user, cost)
+
     llm_config = {
         "api_key": api_setting.api_key,
         "base_url": api_setting.base_url,
@@ -2570,36 +3038,25 @@ async def analyze_entity_image(
 
     # 3. Construct System Prompt based on Entity Type
     entity_type = (entity.type or "character").lower()
+
     
     base_instruction = "You are an expert visual analyst and script breakdown specialist. Your task is to analyze the provided image of a project subject and UPDATE the existing subject information to match the visual details in the image. You must merge the visual evidence with the existing data."
     
-    # Templates from scene_analysis.txt
-    char_prompt_template = """
-    [Global Style], 6-view character sheet — all six views must show the same character, outfit, proportions, and anchors consistently.
-    1. Full-body Front: standing pose with 【Expression 1: Character's Core Trait】, including footwear, face visible, key facial features.
-    2. Full-body Back: rear standing pose, showing clothing seams, skirt hem, shoes, collar, and necklace placement.
-    3. Half-body (Waist-up): torso view with 【Expression 2: Plot-relevant Emotion A】, shirt opening, necklace, hand position, fabric texture.
-    4. Close-up: facial close-up with Neutral/Standard expression (Mandatory for reference), clear eyes, lips, makeup, and skin detail.
-    5. Side Profile: true side view with 【Expression 3: Plot-relevant Emotion B】, showing full facial profile, ear, hairline, and shoulder slope.
-    6. Back Detail: rear detail of upper back and collar area, showing collar turn-out, necklace, and stitching.
-    Height: 【cm】; head-to-body ratio: 【ratio】.
-    Clothing: 【layers, materials, colors, wear】; include footwear and skirt fit.
-    Distinctive anchors: 【scar, tattoo, accessory, emblem】 at 【location】.
-    Action traits: poised, controlled movements.
-    Lighting: soft front light + rim light for silhouette.
-    Background: white.
-    anchor_description：【thumbnail_readability】.
-    Style: follow [Global Style].
-    Output: six high-resolution PNGs or a 6-panel composite; include neutral T-pose reference and scale marker; no text, watermark, or layout; End note: white background, high quality, large files, no text, no layout.
-    """
-
-    prop_prompt_template = """
-    [Global Style] Prop: 【PropName (state)】. Material: 【primary_material】; secondary materials: 【list】. Size: ~【dimensions cm or relative to reference】. Relative scale reference: 【reference_subject e.g., belt buckle, chair】. Visible details: 【surface texture, wear, markings, seams, labels】. Lighting for capture: 【direction, intensity, color_temp】; shadow behavior: 【soft/hard】. Camera framing: 【view e.g., front 3/4; macro insert】. anchor_description：【thumbnail_readability】. Background: white. **Strictly Object Only: No characters, no hands, no body parts visible.** Output: single object PNG with alpha; include scale ruler overlay; End note: white background, high quality, large file, no text, no layout.
-    """
-
-    env_prompt_template = """
-    [Global Style] Camera at 【camera_height_and_angle】 looking 【view_direction】 into 【environment_name】; focal point 【primary_anchor_feature】 at 【relative_position】; entrance 【position】; main circulation width ≈ 【width】; actionable area (m) 【action_area_dimensions】; architectural anchors 【key_features】; materials: floor 【floor_material】, walls 【wall_finish】, ceiling 【ceiling_detail】; scale reference 【scale_reference】 (include 1m scale bar); depth: foreground 【foreground_elements】, midground 【midground_elements】, background 【background_elements】, negative space 【negative_space】; time 【time_of_day】; lighting: key 【position,intensity,color_temp】, fill 【position,intensity,color_temp】, backlight 【position,intensity,color_temp】; shadow quality 【soft/hard】; color palette: dominant 【dominant_colors】, accents 【accent_colors】; mood 【mood_adjectives】; anchor_description：【thumbnail_readability】. **No people or characters in scene.**
-    """
+    # Import Templates from shared module
+    # Make sure to create app/core/prompts/__init__.py if needed or import directly if in python path
+    try:
+        from app.core.prompts.templates import (
+            CHARACTER_PROMPT_TEMPLATE as char_prompt_template, 
+            PROP_PROMPT_TEMPLATE as prop_prompt_template, 
+            ENVIRONMENT_PROMPT_TEMPLATE as env_prompt_template
+        )
+    except ImportError:
+        logger.error("Could not import prompt templates. Using fallbacks.")
+        # Fallback empty strings or error out - for robustness we'll define minimal fallbacks here if import fails,
+        # but in dev environment it should work.
+        char_prompt_template = "[Global Style] 6-view character sheet..."
+        prop_prompt_template = "[Global Style] Prop object..."
+        env_prompt_template = "[Global Style] Environment background..."
 
     schema_instruction = ""
     if "char" in entity_type:
@@ -2771,8 +3228,12 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
     
     try:
         logger.info("Sending request to LLM...")
-        result_content = await llm_service.chat_completion(messages, llm_config)
-        logger.info(f"LLM Reply Length: {len(result_content)}")
+        llm_response = await llm_service.chat_completion(messages, llm_config)
+        
+        result_content = llm_response.get("content", "")
+        usage = llm_response.get("usage", {})
+        
+        logger.info(f"LLM Reply Length: {len(result_content)}. Usage: {usage}")
         
         # Remove <think> blocks if present (common in reasoning models)
         import re
@@ -2825,54 +3286,19 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
         if "dependency_strategy" in updated_info and isinstance(updated_info["dependency_strategy"], dict):
              entity.dependency_strategy = updated_info["dependency_strategy"]
 
+
         logger.info(f"Entity Updated. New Prompt Length: {len(entity.generation_prompt_en) if entity.generation_prompt_en else 0}")
         
-        # --- Save Prompt as Separate File (Asset) ---
-        new_prompt_content = entity.generation_prompt_en
-        if new_prompt_content:
-            try:
-                # 1. Create Directory
-                prompts_dir = os.path.join(settings.BASE_DIR, "app", "data", "prompts")
-                os.makedirs(prompts_dir, exist_ok=True)
-                
-                # 2. Save File
-                timestamp = int(datetime.utcnow().timestamp())
-                filename = f"entity_{entity.id}_prompt_{timestamp}.txt"
-                file_path = os.path.join(prompts_dir, filename)
-                
-                with open(file_path, "w", encoding="utf-8") as f:
-                    f.write(new_prompt_content)
-                
-                # 3. Create Asset Record
-                # Relative URL from backend perspective: /data/prompts/filename
-                # Ensure static mount includes data/prompts if needed, or we just store path. 
-                # Our generic file serving usually serves 'uploads', let's stick to 'uploads' for accessibility.
-                
-                uploads_prompts_dir = os.path.join(settings.BASE_DIR, "app", "data", "uploads", "prompts")
-                os.makedirs(uploads_prompts_dir, exist_ok=True)
-                filename = f"entity_{entity.id}_prompt_{timestamp}.txt"
-                public_file_path = os.path.join(uploads_prompts_dir, filename)
-                
-                with open(public_file_path, "w", encoding="utf-8") as f:
-                    f.write(new_prompt_content)
-                
-                relative_url = f"/data/uploads/prompts/{filename}" # Assuming configured static path
-                
-                new_asset = Asset(
-                    user_id=current_user.id,
-                    type="prompt",
-                    url=relative_url,
-                    filename=filename,
-                    meta_info={"entity_id": entity.id, "entity_name": entity.name},
-                    remark="Auto-generated prompt from image analysis"
-                )
-                db.add(new_asset)
-                logger.info(f"Saved new prompt asset: {filename}")
-                
-            except Exception as fe:
-                logger.error(f"Failed to save prompt file: {fe}")
+        # We no longer save the prompt as a separate asset file to avoid clutter.
+        # The prompt is already saved in the entity.generation_prompt_en field.
 
-        db.commit()
+        # Billing Deduct (This will commit the transaction and entity updates)
+        billing_details = {"entity_id": entity.id}
+        if usage:
+             billing_details.update(usage)
+        
+        billing_service.deduct_credits(db, current_user.id, "analysis_character", api_setting.provider, api_setting.model, billing_details)
+
         db.refresh(entity)
         
         return entity

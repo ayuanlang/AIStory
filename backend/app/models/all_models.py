@@ -1,5 +1,5 @@
 
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, JSON, Boolean
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, JSON, Boolean, Float
 from sqlalchemy.orm import relationship
 from app.db.session import Base
 import datetime
@@ -16,11 +16,56 @@ class User(Base):
     is_superuser = Column(Boolean, default=False)
     is_authorized = Column(Boolean, default=False) # Can reuse system keys
     is_system = Column(Boolean, default=False) # Provider of shared keys
+    
+    credits = Column(Integer, default=0) # User points/credits
 
     projects = relationship("Project", back_populates="owner")
     api_settings = relationship("APISetting", back_populates="user")
     assets = relationship("Asset", back_populates="owner")
     system_logs = relationship("SystemLog", back_populates="user")
+    transactions = relationship("TransactionHistory", back_populates="user")
+
+
+class PricingRule(Base):
+    __tablename__ = "pricing_rules"
+    id = Column(Integer, primary_key=True, index=True)
+    
+    provider = Column(String, nullable=True, index=True) # e.g. "openai", "midjourney"
+    model = Column(String, nullable=True, index=True)    # e.g. "gpt-4", "mj-v6"
+    task_type = Column(String, nullable=False, index=True) # "llm_chat", "image_gen", "video_gen", "analysis"
+    
+    cost = Column(Integer, default=1) # Points per unit (Base/Total if n/a)
+    cost_input = Column(Integer, default=0) # For LLM, per unit input tokens
+    cost_output = Column(Integer, default=0) # For LLM, per unit output tokens
+    
+    # Reference fields for UI auto-calculation (Store user inputs)
+    ref_cost_cny = Column(Float, nullable=True)
+    ref_cost_input_cny = Column(Float, nullable=True)
+    ref_cost_output_cny = Column(Float, nullable=True)
+    ref_markup = Column(Float, default=1.5)
+    ref_exchange_rate = Column(Float, default=10.0)
+
+    unit_type = Column(String, default="per_call") # per_call, per_token, per_million_tokens
+    
+    description = Column(String, nullable=True)
+    is_active = Column(Boolean, default=True)
+
+class TransactionHistory(Base):
+    __tablename__ = "transaction_history"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True)
+    
+    amount = Column(Integer, nullable=False) # Negative for cost, positive for refill
+    balance_after = Column(Integer, nullable=False) # Snapshot of balance
+    
+    task_type = Column(String, index=True)
+    provider = Column(String, nullable=True)
+    model = Column(String, nullable=True)
+    details = Column(JSON, default={}) # Extra metadata (e.g. prompt length, status)
+    
+    created_at = Column(String, default=datetime.datetime.utcnow().isoformat)
+    
+    user = relationship("User", back_populates="transactions")
 
 class SystemLog(Base):
     __tablename__ = "system_logs"
@@ -198,3 +243,29 @@ class APISetting(Base):
     is_active = Column(Boolean, default=False)
     
     user = relationship("User", back_populates="api_settings")
+
+class RechargePlan(Base):
+    __tablename__ = "recharge_plans"
+    id = Column(Integer, primary_key=True, index=True)
+    min_amount = Column(Integer, nullable=False) # In CNY
+    max_amount = Column(Integer, nullable=False) # In CNY
+    credit_rate = Column(Integer, default=100)   # Credits per 1 CNY
+    bonus = Column(Integer, default=0)           # Extra fixed credits
+    is_active = Column(Boolean, default=True)
+
+class PaymentOrder(Base):
+    __tablename__ = "payment_orders"
+    id = Column(Integer, primary_key=True, index=True)
+    order_no = Column(String, unique=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    
+    amount = Column(Integer, nullable=False) # In CNY
+    credits = Column(Integer, nullable=False) # Total credits to add
+    status = Column(String, default="PENDING") # PENDING, PAID, CANCELLED
+    pay_url = Column(String, nullable=True) # QR Code Content
+    
+    provider = Column(String, default="wechat")
+    created_at = Column(String, default=datetime.datetime.utcnow().isoformat)
+    paid_at = Column(String, nullable=True)
+    
+    user = relationship("User")
