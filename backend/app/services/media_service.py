@@ -90,7 +90,7 @@ class MediaGenerationService:
         
         return defaults.get(provider, {})
 
-    async def generate_image(self, prompt: str, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None):
+    async def generate_image(self, prompt: str, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, width: int = None, height: int = None, aspect_ratio: str = None):
         user_id = 1
         provider = None
         if llm_config and "provider" in llm_config and llm_config["provider"]:
@@ -125,14 +125,20 @@ class MediaGenerationService:
         # Override model if specified in request
         if llm_config and llm_config.get("model"):
             api_config["model"] = llm_config["model"]
+            
+        # Optimization: Inject resolution into config if provided
+        if width and height:
+            if not api_config.get("config"): api_config["config"] = {}
+            api_config["config"]["width"] = width
+            api_config["config"]["height"] = height
         
         # Ensure reference_image_url is passed correctly
-        print(f"[MediaService] Generating Image. Provider: {provider}, Refs Type: {type(reference_image_url)}, Refs: {reference_image_url}")
+        print(f"[MediaService] Generating Image. Provider: {provider}, Refs Type: {type(reference_image_url)}, Refs: {reference_image_url}, W: {width}, H: {height}, AR: {aspect_ratio}")
 
         if provider in ["doubao", "ark"]:
-             result = await self._handle_doubao_generation("image", prompt, api_config, reference_image_url)
+             result = await self._handle_doubao_generation("image", prompt, api_config, reference_image_url, aspect_ratio=aspect_ratio)
         elif provider == "grsai":
-              result = await self._handle_grsai_generation("image", prompt, api_config, reference_image_url)
+              result = await self._handle_grsai_generation("image", prompt, api_config, reference_image_url, aspect_ratio=aspect_ratio)
         elif provider == "tencent":
              result = await self._handle_tencent_generation("image", prompt, api_config, reference_image_url)
         elif provider == "stability" or provider == "stable diffusion":
@@ -564,10 +570,30 @@ class MediaGenerationService:
                 print(f"[Grsai] Final Base64 Refs Count: {len(base64_refs)}")
                 payload["urls"] = base64_refs
             
-            if is_banana:
-                payload["imageSize"] = "1K" # simplification
+            # Resolution Logic
+            w = tool_conf.get("width")
+            h = tool_conf.get("height")
+            
+            if w and h:
+                res_str = f"{w}x{h}"
+            elif aspect_ratio:
+                 # Minimal mapping for Grsai (Assuming it supports standard sizes or 1024 based aspect)
+                 if aspect_ratio == "16:9": res_str = "1280x720"
+                 elif aspect_ratio == "9:16": res_str = "720x1280"
+                 elif aspect_ratio == "4:3": res_str = "1024x768"
+                 elif aspect_ratio == "3:4": res_str = "768x1024"
+                 elif aspect_ratio == "21:9": res_str = "1536x640" 
+                 else: res_str = "1024x1024"
             else:
-                payload["size"] = "1024x1024" # simplification
+                 res_str = "1024x1024"
+
+            if is_banana:
+                # Banana might expect "1K" or specific strings.
+                # If specialized model, maybe fallback to defaults unless sure.
+                # Assuming Banana supports size param or defaults to 1K
+                payload["imageSize"] = "1K" # simplification (Custom logic for Banana if needed)
+            else:
+                payload["size"] = res_str
             
             # Create a log-friendly copy of the payload to hide base64 content
             log_payload = payload.copy()

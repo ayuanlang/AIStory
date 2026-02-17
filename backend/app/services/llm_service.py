@@ -288,16 +288,83 @@ class LLMService:
             }
 
 
-    async def generate_content(self, prompt: str, system_prompt: str, config: Dict[str, Any]) -> Dict[str, Any]:
+    async def generate_content(self, user_prompt: str, system_prompt: str, config: Dict[str, Any], image_urls: List[str] = None, video_urls: List[str] = None) -> Dict[str, Any]:
+        """
+        Generates content (Text or structured) based on prompts and optional multimedia context.
+        """
         if not config:
             return {"content": "Error: No LLM configuration found.", "usage": {}}
-
+        
+        # Backwards compatibility if called with positional args as (prompt, system_prompt, config)
+        # Note: 'prompt' named argument in old signature maps to 'user_prompt' here if passed positional
+        
         api_key = config.get("api_key")
         base_url = config.get("base_url")
         model = config.get("model")
 
         if not api_key:
              return {"content": "Error: Please configure your LLM API Key in Settings.", "usage": {}}
+
+        messages = []
+        if system_prompt:
+             messages.append({"role": "system", "content": system_prompt})
+             
+        user_content = []
+        if user_prompt:
+             user_content.append({"type": "text", "text": user_prompt})
+        
+        if image_urls:
+            for url in image_urls:
+                if url:
+                    user_content.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": url
+                        }
+                    })
+        
+        # Note: Video URLs support varies by provider (Gemini 1.5, GPT-4o typically don't take video URL directly in standard Chat completions yet, 
+        # but specialized endpoints do. We append them as text or specific block if supported)
+        if video_urls:
+             for url in video_urls:
+                  if url:
+                       # Fallback: Just mention the URL or use specific provider logic
+                       # For now, append as text context
+                       user_content.append({
+                           "type": "text", 
+                           "text": f"Reference Video URL: {url}"
+                       })
+        
+        # Compress if single text item (Standard format)
+        if len(user_content) == 1 and user_content[0]["type"] == "text":
+             messages.append({"role": "user", "content": user_content[0]["text"]})
+        else:
+             messages.append({"role": "user", "content": user_content})
+
+        extra_config = config.get("config", {})
+        
+        # Handle specialized "sora-create-character" if detected in system prompt
+        if system_prompt == "sora-create-character":
+             # This is where we would call the specialized library or endpoint
+             # For now, we pass it to the generic LLM hoping it understands or we mock it
+             # If provider is Doubao/Grsai Video, we might need specific payload.
+             pass
+
+        try:
+             # Using the generic call which handles standard messages
+             response = await self._call_openai_compatible(base_url, api_key, model, messages, extra_config)
+             
+             # Unpack
+             content = response.get("reply", "")
+             usage = response.get("usage", {})
+             if not content and "content" in response:
+                 content = response["content"] # fallback if _call_openai_compatible returns typical dict
+             
+             return {"content": content, "usage": usage}
+
+        except Exception as e:
+             logger.error(f"Generate Content Error: {e}")
+             return {"content": f"Error: {e}", "usage": {}}
 
         messages = [
             {"role": "system", "content": system_prompt},

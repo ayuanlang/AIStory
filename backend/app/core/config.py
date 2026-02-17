@@ -29,6 +29,14 @@ class Settings(BaseSettings):
     # Render Specific
     RENDER_EXTERNAL_URL: str = os.getenv("RENDER_EXTERNAL_URL", "")
 
+    # WeChat Pay
+    WECHAT_APPID: str = os.getenv("WECHAT_APPID", "")
+    WECHAT_MCHID: str = os.getenv("WECHAT_MCHID", "")
+    WECHAT_API_V3_KEY: str = os.getenv("WECHAT_API_V3_KEY", "")
+    WECHAT_PRIVATE_KEY_PATH: str = os.getenv("WECHAT_PRIVATE_KEY_PATH", "") # Path to .pem
+    WECHAT_CERT_SERIAL_NO: str = os.getenv("WECHAT_CERT_SERIAL_NO", "")
+    WECHAT_NOTIFY_URL: str = os.getenv("WECHAT_NOTIFY_URL", "") 
+    
     class Config:
         env_file = ".env"
 

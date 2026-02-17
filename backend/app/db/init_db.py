@@ -2,7 +2,8 @@
 import logging
 import bcrypt
 from sqlalchemy import text, inspect
-from app.db.session import engine
+from app.db.session import engine, SessionLocal
+from app.models.all_models import PricingRule, APISetting, User
 
 logger = logging.getLogger(__name__)
 
@@ -160,3 +161,140 @@ def check_and_migrate_tables():
         
     except Exception as e:
         logger.critical(f"Migration CRITICAL FAILURE: {e}")
+
+def init_pricing_rules(db):
+    if db.query(PricingRule).first():
+        return
+
+    logger.info("Initializing default pricing rules (Native Data)...")
+    
+    rules = [
+        PricingRule(
+            provider='doubao', model='doubao-pro-32k', task_type='llm_chat',        
+            cost=1, cost_input=200, cost_output=250,
+            unit_type='per_million_tokens',
+            ref_markup=1.5, ref_exchange_rate=10.0,
+            description='None'
+        ),
+        PricingRule(
+            provider='Grsai-Video', model='veo3.1-fast', task_type='video_gen',     
+            cost=100, cost_input=0, cost_output=0,
+            unit_type='per_call',
+            ref_markup=1.5, ref_exchange_rate=10.0,
+            description='Auto-synced from Grsai Video (Sora)'
+        ),
+        PricingRule(
+            provider='Grsai-Image', model='nano-banana-fast', task_type='image_gen',
+            cost=10, cost_input=0, cost_output=0,
+            unit_type='per_call',
+            ref_markup=1.5, ref_exchange_rate=10.0,
+            description='Auto-synced from Grsai (Dakka)'
+        ),
+        PricingRule(
+            provider='baidu_translate', model='None', task_type='llm_chat',
+            cost=1, cost_input=0, cost_output=0,
+            unit_type='per_call',
+            ref_markup=1.5, ref_exchange_rate=10.0,
+            description='Auto-synced from baidu_translate'
+        ),
+        PricingRule(
+            provider='doubao', model='glm-4-7-251222', task_type='llm_chat',        
+            cost=1, cost_input=200, cost_output=200,
+            unit_type='per_call',
+            ref_markup=1.5, ref_exchange_rate=10.0,
+            description='Auto-synced from doubao'
+        ),
+        PricingRule(
+            provider='grsai', model='gemini-3-pro', task_type='llm_chat',
+            cost=1, cost_input=200, cost_output=1200,
+            unit_type='per_million_tokens',
+            ref_markup=1.5, ref_exchange_rate=10.0,
+            description='Auto-synced from Grsai (Sora)'
+        ),
+    ]
+    
+    for r in rules:
+        db.add(r)
+    db.commit()
+    logger.info("Default pricing rules created.")
+
+def init_api_settings(db):
+    # Check if system user has settings
+    system_user = db.query(User).filter(User.username == "ylsystem").first()
+    if not system_user:
+        logger.warning("System user not found, skipping api settings init.")
+        return
+
+    if db.query(APISetting).filter(APISetting.user_id == system_user.id).first():
+        return
+
+    logger.info("Initializing default API settings for system user...")
+    
+    # Defaults
+    settings_list = [
+        APISetting(
+            user_id=system_user.id,
+            name="System OpenAI",
+            category="LLM",
+            provider="openai",
+            model="gpt-4o",
+            api_key="sk-CHANGE_ME",
+            is_active=True
+        ),
+        APISetting(
+            user_id=system_user.id,
+            name="System Midjourney",
+            category="Image",
+            provider="midjourney",
+            api_key="CHANGE_ME",
+            base_url="https://api.midjourney.com",
+            is_active=True
+        ),
+        APISetting(
+            user_id=system_user.id,
+            name="Runway Gen3",
+            category="Video",
+            provider="runway",
+            api_key="CHANGE_ME",
+            is_active=True
+        ),
+        APISetting(
+            user_id=system_user.id,
+            name="Doubao System",
+            category="LLM",
+            provider="doubao",
+            api_key="CHANGE_ME",
+            is_active=True
+        ),
+        APISetting(
+            user_id=system_user.id,
+            name="Grsai System",
+            category="LLM",
+            provider="grsai",
+            api_key="CHANGE_ME",
+            is_active=True
+        ),
+        APISetting(
+            user_id=system_user.id,
+            name="Baidu Translate",
+            category="LLM",
+            provider="baidu_translate",
+            api_key="CHANGE_ME",
+            is_active=True
+        )
+    ]
+    
+    for s in settings_list:
+        db.add(s)
+    db.commit()
+    logger.info("Default API settings created.")
+
+def init_initial_data():
+    db = SessionLocal()
+    try:
+        init_pricing_rules(db)
+        init_api_settings(db)
+    except Exception as e:
+        logger.error(f"Failed to initialize data: {e}")
+    finally:
+        db.close()
