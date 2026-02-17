@@ -69,29 +69,48 @@ class BillingService:
                 # If specific input/output costs are set, use them
                 if rule.cost_input is not None and rule.cost_output is not None:
                      # Calculate based on unit_type (usually per_million_tokens for LLMs)
-                    divisor = 1_000_000 if rule.unit_type == 'per_million_tokens' else \
-                              1_000 if rule.unit_type == 'per_1k_tokens' else 1
+                    divisor = 1_000_000.0 if rule.unit_type == 'per_million_tokens' else \
+                              1_000.0 if rule.unit_type == 'per_1k_tokens' else 1.0
                     
-                    cost_in = (input_tokens / divisor) * rule.cost_input
-                    cost_out = (output_tokens / divisor) * rule.cost_output
-                    return int(max(1, cost_in + cost_out)) # Ensure at least 1 credit if used
+                    cost_in = (float(input_tokens) / divisor) * float(rule.cost_input)
+                    cost_out = (float(output_tokens) / divisor) * float(rule.cost_output)
+                    
+                    # User requirement: Calculate exact cost for small amounts (e.g. 0.3M -> 0.3 * unit_cost)
+                    # However, credits are strictly Integers.
+                    # We will sum them first as float, then round.
+                    # Standard policy: Ceil to 1 if > 0 but < 1? Or standard round?
+                    # "0.3M should be 1/3" implies precise ratio.
+                    # If cost_input=100 (for 1M), then 0.3M -> 30 credits.
+                    # If cost_input=1 (for 1M), then 0.3M -> 0.3 credits -> 0 or 1?
+                    # Generally billing systems floor or round. 
+                    # If the user emphasizes "0.3M should be 1/3", they likely have high unit costs (like 200/250)
+                    # So precise float calculation is key.
+                    
+                    total_calculated = cost_in + cost_out
+                    
+                    # If total > 0 but < 1, we must charge at least 1 if we charge anything?
+                    # Or we allow 0 for very small usage? 
+                    # Usually 'max(1, ...)' is safe to avoid free usage loopholes.
+                    # But if total is 60.5, we should probably round to 61 or 60.
+                    
+                    return int(max(1, round(total_calculated)))
 
             # Standard Unit Multipliers
-            quantity = 1
+            quantity = 1.0
             if details:
                 if rule.unit_type == 'per_second':
-                    quantity = details.get('duration_seconds', 0)
+                    quantity = float(details.get('duration_seconds', 0))
                 elif rule.unit_type == 'per_minute':
-                    quantity = details.get('duration_seconds', 0) / 60
+                    quantity = float(details.get('duration_seconds', 0)) / 60.0
                 elif rule.unit_type == 'per_token':
-                    quantity = details.get('total_tokens', 0)
+                    quantity = float(details.get('total_tokens', 0))
                 elif rule.unit_type == 'per_1k_tokens':
-                    quantity = details.get('total_tokens', 0) / 1000
+                    quantity = float(details.get('total_tokens', 0)) / 1000.0
                 elif rule.unit_type == 'per_million_tokens':
-                    quantity = details.get('total_tokens', 0) / 1_000_000
+                    quantity = float(details.get('total_tokens', 0)) / 1_000_000.0
             
-            total = rule.cost * quantity
-            return int(max(1, total)) if total > 0 else 0
+            total = float(rule.cost) * quantity
+            return int(max(1, round(total))) if total > 0 else 0
 
         except Exception as e:
             logger.error(f"Error calculating cost: {e}")

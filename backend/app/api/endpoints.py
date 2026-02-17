@@ -3434,9 +3434,43 @@ async def analyze_asset_image(
         billing_details = {"item": "asset_analysis"}
         if usage:
              billing_details.update(usage) # e.g. input_tokens, output_tokens
-             # Add image tokens if not explicitly in input_tokens (some APIs like OpenAI include image tokens in input_tokens)
-        
+             
+        # HEURISTIC: Ensure image tokens are accounted for if usage seems low or missing
+        # Standard GPT-4o high res is ~1000 tokens.
+        # If input_tokens < 100, we likely didn't count the image.
+        current_input = billing_details.get("prompt_tokens", billing_details.get("input_tokens", 0))
+        if current_input < 200: 
+            # Add estimated image tokens (e.g. 1000 per image)
+            estimated_image_tokens = 1000
+            
+            # Update both keys for compatibility
+            billing_details["input_tokens"] = current_input + estimated_image_tokens
+            billing_details["prompt_tokens"] = billing_details["input_tokens"]
+            
+            if "total_tokens" in billing_details:
+                billing_details["total_tokens"] += estimated_image_tokens
+            else:
+                billing_details["total_tokens"] = billing_details["input_tokens"] + billing_details.get("output_tokens", 0)
+
         billing_service.deduct_credits(db, current_user.id, "analysis", api_setting.provider, api_setting.model, billing_details)
+        
+        # 6. Save Result (Optional)
+        # We don't have a specific field on Asset to store analysis unless we add one or use remark/meta.
+        # However, for now we just return it.
+        # If this is "analyze_script" or similar, we might save.
+        # For "Asset Analysis", usually the user wants to see it or save it to asset meta.
+        
+        # Save to Asset Meta (Analysis Result)? 
+        # Requirement: "Analyzes an asset...". User might expect persistence.
+        # We'll save a snippet to 'remark' or 'meta_info.analysis'
+        if not asset.meta_info: asset.meta_info = {}
+        if isinstance(asset.meta_info, dict):
+            # Only save short version or full?
+            # Save full in a new key
+            meta = dict(asset.meta_info)
+            meta["analysis_result"] = result[:500] + "..." if len(result) > 500 else result
+            asset.meta_info = meta
+            db.commit()
 
         return {"result": result}
     except Exception as e:

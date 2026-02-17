@@ -513,7 +513,11 @@ const UserAdmin = () => {
                                                 <td className="p-3 text-gray-400">{new Date(t.created_at).toLocaleString()}</td>
                                                 <td className="p-3">{t.user_id}</td>
                                                 <td className="p-3"><span className="bg-gray-800 px-2 py-0.5 rounded text-xs uppercase text-gray-300">{t.task_type}</span></td>
-                                                <td className="p-3 text-xs text-gray-500 max-w-[200px] truncate">{JSON.stringify(t.details)}</td>
+                                                <td className="p-3 text-xs text-gray-500">
+                                                    <div className="max-h-[150px] overflow-y-auto whitespace-pre-wrap break-all w-[350px] bg-gray-900/50 p-1 rounded border border-gray-800 font-mono">
+                                                        {JSON.stringify(t.details, null, 2)}
+                                                    </div>
+                                                </td>
                                                 <td className={`p-3 text-right font-mono ${t.amount < 0 ? 'text-red-400' : 'text-green-400'}`}>
                                                     {t.amount > 0 ? '+' : ''}{t.amount}
                                                 </td>

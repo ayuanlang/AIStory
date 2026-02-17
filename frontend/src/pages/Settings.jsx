@@ -862,7 +862,11 @@ const Settings = () => {
                                                     <td className="p-3">
                                                         <span className="bg-white/5 px-2 py-0.5 rounded text-xs uppercase border border-white/10">{t.task_type}</span>
                                                     </td>
-                                                    <td className="p-3 text-xs opacity-70 max-w-[200px] truncate">{JSON.stringify(t.details)}</td>
+                                                    <td className="p-3 text-xs opacity-70">
+                                                        <div className="max-h-[120px] overflow-y-auto whitespace-pre-wrap break-all w-[300px] bg-black/20 p-2 rounded border border-white/10 font-mono text-[10px]">
+                                                            {JSON.stringify(t.details, null, 2)}
+                                                        </div>
+                                                    </td>
                                                     <td className={`p-3 text-right font-mono font-bold ${t.amount < 0 ? 'text-red-400' : 'text-green-400'}`}>
                                                         {t.amount > 0 ? '+' : ''}{t.amount}
                                                     </td>
