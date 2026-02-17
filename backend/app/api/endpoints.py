@@ -3554,6 +3554,20 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
         if "dependency_strategy" in updated_info and isinstance(updated_info["dependency_strategy"], dict):
              entity.dependency_strategy = updated_info["dependency_strategy"]
 
+        # Update Custom Attributes with Analysis Result (Save latest)
+        custom_attrs = entity.custom_attributes or {}
+        # Ensure dict if it came from DB as string (unlikely with SQLAlchemy JSON type but possible with SQLite text)
+        if isinstance(custom_attrs, str):
+            try: custom_attrs = json.loads(custom_attrs)
+            except: custom_attrs = {}
+            
+        custom_attrs['analysis_result'] = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "content": updated_info
+        }
+        # Re-assign to trigger SQLAlchemy detection of mutation if needed
+        entity.custom_attributes = dict(custom_attrs)
+
 
         logger.info(f"Entity Updated. New Prompt Length: {len(entity.generation_prompt_en) if entity.generation_prompt_en else 0}")
         
@@ -3574,4 +3588,142 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
     except Exception as e:
         logger.error(f"Entity Analysis failed: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+
+class AnalysisContent(BaseModel):
+    content: Dict[str, Any]
+
+@router.get("/entities/{entity_id}/latest_analysis")
+def get_entity_latest_analysis(
+    entity_id: int, 
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get the latest saved analysis result for an entity.
+    """
+    entity = db.query(Entity).filter(Entity.id == entity_id).first()
+    if not entity:
+        raise HTTPException(status_code=404, detail="Entity not found")
+        
+    project = db.query(Project).filter(Project.id == entity.project_id).first()
+    if project.owner_id != current_user.id:
+         raise HTTPException(status_code=403, detail="Not authorized")
+         
+    custom_attrs = entity.custom_attributes or {}
+    # Handle DB Storage format (Text vs JSON)
+    if isinstance(custom_attrs, str):
+        try: custom_attrs = json.loads(custom_attrs)
+        except: custom_attrs = {}
+        
+    result = custom_attrs.get('analysis_result')
+    return result or {}
+
+@router.put("/entities/{entity_id}/latest_analysis")
+def update_entity_latest_analysis(
+    entity_id: int,
+    data: AnalysisContent,
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Update (Save/Edit) the latest analysis result without applying it.
+    """
+    entity = db.query(Entity).filter(Entity.id == entity_id).first()
+    if not entity:
+        raise HTTPException(status_code=404, detail="Entity not found")
+        
+    project = db.query(Project).filter(Project.id == entity.project_id).first()
+    if project.owner_id != current_user.id:
+         raise HTTPException(status_code=403, detail="Not authorized")
+         
+    custom_attrs = entity.custom_attributes or {}
+    if isinstance(custom_attrs, str):
+        try: custom_attrs = json.loads(custom_attrs)
+        except: custom_attrs = {}
+    
+    # Update analysis result with timestamp
+    result = custom_attrs.get('analysis_result', {})
+    if not isinstance(result, dict): result = {}
+    
+    result['content'] = data.content
+    result['timestamp'] = datetime.utcnow().isoformat() # Update timestamp on edit
+    
+    custom_attrs['analysis_result'] = result
+    entity.custom_attributes = custom_attrs  # Reassign for SQLAlchemy detection if Dict
+    
+    db.commit()
+    return custom_attrs['analysis_result']
+
+@router.post("/entities/{entity_id}/apply_analysis")
+def apply_entity_analysis(
+    entity_id: int,
+    data: Optional[AnalysisContent] = None, # Optional payload to override stored
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Apply the stored (or provided) analysis result to update Entity fields.
+    """
+    entity = db.query(Entity).filter(Entity.id == entity_id).first()
+    if not entity:
+        raise HTTPException(status_code=404, detail="Entity not found")
+    
+    project = db.query(Project).filter(Project.id == entity.project_id).first()
+    if project.owner_id != current_user.id:
+         raise HTTPException(status_code=403, detail="Not authorized")
+    
+    updated_info = {}
+    
+    # 1. Determine Source
+    if data and data.content:
+        updated_info = data.content
+        # Optionally save this new content as latest too? YES.
+        custom_attrs = entity.custom_attributes or {}
+        if isinstance(custom_attrs, str):
+            try: custom_attrs = json.loads(custom_attrs)
+            except: custom_attrs = {}
+        
+        custom_attrs['analysis_result'] = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "content": updated_info
+        }
+        entity.custom_attributes = custom_attrs
+    else:
+        # Load from stored
+        custom_attrs = entity.custom_attributes or {}
+        if isinstance(custom_attrs, str):
+            try: custom_attrs = json.loads(custom_attrs)
+            except: custom_attrs = {}
+        
+        result = custom_attrs.get('analysis_result', {})
+        if isinstance(result, dict):
+            updated_info = result.get('content', {})
+    
+    if not updated_info:
+        raise HTTPException(status_code=400, detail="No analysis content provided or found to apply.")
+
+    # 2. Apply Updates (Same logic as analyze_entity_image)
+    if "name_en" in updated_info: entity.name_en = updated_info["name_en"]
+    if "description_cn" in updated_info: entity.description = updated_info["description_cn"] 
+    if "appearance_cn" in updated_info: entity.appearance_cn = updated_info["appearance_cn"]
+    if "clothing" in updated_info: entity.clothing = updated_info["clothing"]
+    if "action_characteristics" in updated_info: entity.action_characteristics = updated_info["action_characteristics"]
+    if "role" in updated_info: entity.role = updated_info["role"]
+    if "archetype" in updated_info: entity.archetype = updated_info["archetype"]
+    if "gender" in updated_info: entity.gender = updated_info["gender"]
+    
+    if "atmosphere" in updated_info: entity.atmosphere = updated_info["atmosphere"]
+    if "visual_params" in updated_info: entity.visual_params = updated_info["visual_params"]
+    
+    if "generation_prompt_en" in updated_info: entity.generation_prompt_en = updated_info["generation_prompt_en"]
+    if "anchor_description" in updated_info: entity.anchor_description = updated_info["anchor_description"]
+    
+    if "visual_dependencies" in updated_info and isinstance(updated_info["visual_dependencies"], list): 
+            entity.visual_dependencies = updated_info["visual_dependencies"]
+    if "dependency_strategy" in updated_info and isinstance(updated_info["dependency_strategy"], dict):
+            entity.dependency_strategy = updated_info["dependency_strategy"]
+
+    db.commit()
+    db.refresh(entity)
+    return entity
 
