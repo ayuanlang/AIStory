@@ -1392,10 +1392,59 @@ def apply_scene_ai_result(
             except:
                  pass
                  
-    if not shots_data:
-        raise HTTPException(status_code=400, detail="No shot data provided or found to apply.")
+    # 2. Extract and Auto-Link Entities (System Import Feature)
+    try:
+        if shots_data:
+            existing_entities = db.query(Entity).filter(Entity.project_id == project.id).all()
+            entity_map = {e.name: e for e in existing_entities}
+            
+            new_entities_buffer = set()
+            
+            for s_data in shots_data:
+                assoc_str = s_data.get("Associated Entities", "")
+                if assoc_str and assoc_str.lower() != "none" and assoc_str.strip():
+                    # Split by comma or common separators
+                    potential_names = [n.strip() for n in re.split(r'[,\uff0c]', assoc_str) if n.strip()]
+                    
+                    cleaned_names = []
+                    for name in potential_names:
+                        # Check exist
+                        if name in entity_map:
+                            cleaned_names.append(name)
+                        elif name in new_entities_buffer:
+                            cleaned_names.append(name)
+                        else:
+                            # Auto-create entity? 
+                            # User asked for "Auto identify subjects". Usually means extraction.
+                            # We create a placeholder entity if it looks like a proper name (not generic 'room')
+                            # For safety, enabled by default per user request
+                            new_ent = Entity(
+                                project_id=project.id,
+                                name=name,
+                                type="character", # Default, user can change later
+                                description="Auto-extracted from AI Shot Generation"
+                            )
+                            db.add(new_ent)
+                            # We need to commit to get ID or just trust the name for now?
+                            # Committing inside loop is fine for small batches
+                            try:
+                                db.commit()
+                                db.refresh(new_ent)
+                                entity_map[name] = new_ent
+                                cleaned_names.append(name)
+                                logger.info(f"[Import] Auto-created entity: {name}")
+                            except Exception as e:
+                                logger.warning(f"[Import] Failed to auto-create entity {name}: {e}")
+                                db.rollback()
+                    
+                    # Update data with cleaned names (optional, normalized)
+                    s_data["Associated Entities"] = ", ".join(cleaned_names)
 
-    # 2. Apply to DB (Delete old, Insert new)
+    except Exception as e:
+        logger.error(f"[Import] Entity auto-linking failed: {e}")
+        # Continue with raw data if linking fails
+
+    # 3. Apply to DB (Delete old, Insert new)
     # Note: We should probably keep existing shots if the user wants partial update, 
     # but the requirement implies "Modify and Re-import", which usually means "This is the new list".
     # Existing logic was "delete all", so we stick to that for "Apply".
