@@ -276,8 +276,8 @@ const ProjectOverview = ({ id, onProjectUpdate }) => {
         Global_Style: "Photorealistic, Cinematic Lighting, 8k, Masterpiece",
         tech_params: {
             visual_standard: {
-                horizontal_resolution: "3840",
-                vertical_resolution: "2160",
+                horizontal_resolution: "720",
+                vertical_resolution: "1080",
                 frame_rate: "24",
                 aspect_ratio: "9:16",
                 quality: "Ultra High"
