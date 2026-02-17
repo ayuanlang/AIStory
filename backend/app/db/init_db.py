@@ -200,10 +200,47 @@ def check_and_migrate_tables():
         logger.critical(f"Migration CRITICAL FAILURE: {e}")
 
 def init_pricing_rules(db):
-    if db.query(PricingRule).first():
+    # 1. Ensure Generic Fallback Rules Exist (Provider=None, Model=None)
+    # These are critical to prevent "No pricing rule found" errors when usage doesn't match specific providers.
+    generic_defaults = [
+        {"task_type": "image_gen", "cost": 10, "unit_type": "per_call", "description": "Default Image Gen Cost"},
+        {"task_type": "video_gen", "cost": 50, "unit_type": "per_call", "description": "Default Video Gen Cost"},
+        {"task_type": "llm_chat", "cost": 1, "unit_type": "per_call", "description": "Default LLM Chat Cost"},
+        {"task_type": "analysis", "cost": 1, "unit_type": "per_call", "description": "Default Analysis Cost"},
+    ]
+
+    for rule_def in generic_defaults:
+        exists = db.query(PricingRule).filter(
+            PricingRule.task_type == rule_def["task_type"],
+            PricingRule.provider == None,
+            PricingRule.model == None
+        ).first()
+        
+        if not exists:
+            logger.info(f"Adding missing generic pricing rule for {rule_def['task_type']}")
+            new_rule = PricingRule(
+                task_type=rule_def["task_type"],
+                provider=None,
+                model=None,
+                cost=rule_def["cost"],
+                unit_type=rule_def["unit_type"],
+                description=rule_def["description"],
+                ref_markup=1.0,
+                ref_exchange_rate=1.0,
+                is_active=True
+            )
+            db.add(new_rule)
+    
+    db.commit()
+
+    # 2. Add sample specific rules ONLY if table was completely empty (legacy behavior preservation)
+    # We check if there are any PROVIDER-specific rules to determine "fresh install" vs "update"
+    has_specific_rules = db.query(PricingRule).filter(PricingRule.provider != None).first()
+    
+    if has_specific_rules:
         return
 
-    logger.info("Initializing default pricing rules (Native Data)...")
+    logger.info("Initializing default specific pricing rules...")
     
     rules = [
         PricingRule(
@@ -253,7 +290,7 @@ def init_pricing_rules(db):
     for r in rules:
         db.add(r)
     db.commit()
-    logger.info("Default pricing rules created.")
+    logger.info("Default specific pricing rules created.")
 
 def init_api_settings(db):
     # Check if system user has settings

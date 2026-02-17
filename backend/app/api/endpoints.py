@@ -248,6 +248,15 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
 
     except Exception as e:
         logger.error(f"Scene Analysis Failed: {e}", exc_info=True)
+        # Log failure
+        try:
+             # Need to safely extract Provider/Model if config exists, else generic
+             conf_log = locals().get("config") or {}
+             p_log = conf_log.get("provider")
+             m_log = conf_log.get("model")
+             billing_service.log_failed_transaction(db, current_user.id, "analysis", p_log, m_log, str(e))
+        except: 
+             pass # Fail safe
         raise HTTPException(status_code=500, detail=str(e))
 
 # --- Tools ---
@@ -302,7 +311,8 @@ class RefinePromptRequest(BaseModel):
 @router.post("/tools/refine_prompt")
 async def refine_prompt(
     req: RefinePromptRequest,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     # 1. Get LLM Config
     config = agent_service.get_active_llm_config(current_user.id)
@@ -360,6 +370,7 @@ async def refine_prompt(
         
         return {"refined_prompt": content}
     except Exception as e:
+        billing_service.log_failed_transaction(db, current_user.id, "llm_chat", config.get("provider"), model, str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 # --- Agent ---
@@ -408,6 +419,7 @@ async def process_agent_command(
         return result
     except Exception as e:
         logger.error(f"Agent Command Failed: {e}")
+        billing_service.log_failed_transaction(db, current_user.id, "llm_chat", provider, model, str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1289,6 +1301,12 @@ async def ai_generate_shots(
         import traceback
         traceback.print_exc()
         logger.error(f"[ai_generate_shots] error={e}")
+        # Log failure
+        try:
+            p_log = locals().get('provider')
+            m_log = locals().get('model')
+            billing_service.log_failed_transaction(db, current_user.id, "llm_chat", p_log, m_log, str(e))
+        except: pass
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/scenes/{scene_id}/latest_ai_result")
@@ -1970,6 +1988,7 @@ async def generate_sora_character(
 
     except Exception as e:
         logger.error(f"Sora Gen Failed: {e}")
+        billing_service.log_failed_transaction(db, current_user.id, "video_gen", llm_config.get("provider"), llm_config.get("model"), str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/entities/{entity_id}")
@@ -2533,6 +2552,94 @@ class PaymentOrderOut(BaseModel):
     class Config:
         from_attributes = True
 
+
+class PaymentConfig(BaseModel):
+    mchid: Optional[str] = ""
+    appid: Optional[str] = ""
+    api_v3_key: Optional[str] = ""
+    cert_serial_no: Optional[str] = ""
+    private_key: Optional[str] = ""
+    notify_url: Optional[str] = ""
+    use_mock: bool = True
+
+@router.get("/admin/payment-config", response_model=PaymentConfig)
+def get_payment_config(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
+    setting = db.query(APISetting).filter(
+        APISetting.category == "System_Payment",
+        APISetting.provider == "wechat_pay"
+    ).first()
+    
+    if not setting:
+        return PaymentConfig()
+        
+    config = setting.config or {}
+    return PaymentConfig(
+        mchid=config.get("mchid", ""),
+        appid=config.get("appid", ""),
+        api_v3_key=setting.api_key or "",
+        cert_serial_no=config.get("cert_serial_no", ""),
+        private_key=config.get("private_key", ""),
+        notify_url=config.get("notify_url", ""),
+        use_mock=config.get("use_mock", True)
+    )
+
+@router.post("/admin/payment-config", response_model=PaymentConfig)
+def update_payment_config(
+    idx: PaymentConfig,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
+    setting = db.query(APISetting).filter(
+        APISetting.category == "System_Payment",
+        APISetting.provider == "wechat_pay"
+    ).first()
+    
+    if not setting:
+        setting = APISetting(
+            user_id=current_user.id, # Associate with admin
+            category="System_Payment",
+            provider="wechat_pay",
+            name="WeChat Pay System Config",
+            is_active=True
+        )
+        db.add(setting)
+    
+    setting.api_key = idx.api_v3_key
+    setting.config = {
+        "mchid": idx.mchid,
+        "appid": idx.appid,
+        "cert_serial_no": idx.cert_serial_no,
+        "private_key": idx.private_key,
+        "notify_url": idx.notify_url,
+        "use_mock": idx.use_mock
+    }
+    
+    db.commit()
+    db.refresh(setting)
+    
+    # Update Service Immediately
+    payment_service.update_config({
+        "mchid": idx.mchid,
+        "appid": idx.appid,
+        "api_v3_key": idx.api_v3_key,
+        "cert_serial_no": idx.cert_serial_no,
+        "private_key": idx.private_key,
+        "notify_url": idx.notify_url,
+        "use_mock": idx.use_mock
+    })
+    
+    return idx
+
+
 class RechargeRequest(BaseModel):
     amount: int
 
@@ -2548,6 +2655,40 @@ def create_recharge_order(
 ):
     if req.amount <= 0:
         raise HTTPException(status_code=400, detail="Amount must be positive")
+
+    # Load System Payment Config
+    # Explicitly look for the system user's config or global config
+    # Assuming user_id=None or user_id=3 (system) or just find ANY row for System_Payment
+    all_settings = db.query(APISetting).filter(
+        APISetting.category == "System_Payment",
+        APISetting.provider == "wechat_pay"
+    ).all()
+    
+    setting = None
+    if all_settings:
+        # Prefer the one with active settings
+        setting = all_settings[0] # Simply take the first one found
+        logger.info(f"Found System Payment Settings: ID={setting.id}, Provider={setting.provider}")
+    else:
+        logger.warning("No System Payment Settings found in DB query!")
+
+    if setting:
+        conf = setting.config or {}
+        # log what we found
+        logger.info(f"Loading Config: mchid={conf.get('mchid')}, use_mock={conf.get('use_mock')}")
+        
+        payment_service.update_config({
+            "mchid": conf.get("mchid"),
+            "appid": conf.get("appid"),
+            "api_v3_key": setting.api_key,
+            "cert_serial_no": conf.get("cert_serial_no"),
+            "private_key": conf.get("private_key"),
+            "notify_url": conf.get("notify_url"),
+            "use_mock": conf.get("use_mock", True)
+        })
+    else:
+        # Default to Mock if no config found
+        payment_service.update_config({"use_mock": True})
 
     # Find applicable plan
     plan = db.query(RechargePlan).filter(
@@ -2579,6 +2720,9 @@ def create_recharge_order(
     if not pay_url:
         logger.warning(f"Real WeChat Pay failed for {order_no}. Falling back to mock.")
         # Mock Pay URL (Simulate a WeChat URL)
+        # Reverting to the format that looks like a real URL, even if it might fail scanning if not registered with WeChat,
+        # as user requested "actual WeChat address" format.
+        # But for it to actually WORK, the payment_service MUST be configured correctly.
         pay_url = f"weixin://wxpay/bizpayurl?pr={order_no}"
     
     order = PaymentOrder(
@@ -2646,6 +2790,28 @@ async def wechat_notify(request: Request, db: Session = Depends(get_db)):
     WeChat Pay Callback
     """
     try:
+        # Load Config First
+        setting = db.query(APISetting).filter(
+            APISetting.category == "System_Payment",
+            APISetting.provider == "wechat_pay"
+        ).first()
+        
+        if setting:
+            conf = setting.config or {}
+            payment_service.update_config({
+                "mchid": conf.get("mchid"),
+                "appid": conf.get("appid"),
+                "api_v3_key": setting.api_key,
+                "cert_serial_no": conf.get("cert_serial_no"),
+                "private_key": conf.get("private_key"),
+                "notify_url": conf.get("notify_url"),
+                "use_mock": conf.get("use_mock", True)
+            })
+        else:
+            logger.warning("Notification received but no Payment Config found. Assuming Mock or Invalid.")
+            # If no config, we can't verify signature.
+            raise HTTPException(status_code=500, detail="Configuration Missing")
+
         headers = request.headers
         body = await request.body()
         
@@ -2654,9 +2820,13 @@ async def wechat_notify(request: Request, db: Session = Depends(get_db)):
         
         if result:
             logger.info(f"WeChat Notify Received: {result}")
+            # Reference: {"appid": "...", "mchid": "...", "out_trade_no": "...", "transaction_id": "...", "trade_state": "SUCCESS", ...}
+            
+            # Check trade_state
+            trade_state = result.get('trade_state')
             out_trade_no = result.get('out_trade_no')
             
-            if out_trade_no:
+            if trade_state == "SUCCESS" and out_trade_no:
                 order = db.query(PaymentOrder).filter(
                     PaymentOrder.order_no == out_trade_no,
                     PaymentOrder.status == "PENDING"
@@ -2665,6 +2835,8 @@ async def wechat_notify(request: Request, db: Session = Depends(get_db)):
                 if order:
                     order.status = "PAID"
                     order.paid_at = datetime.utcnow().isoformat()
+                    # Store transaction_id from WeChat
+                    wx_transaction_id = result.get('transaction_id')
                     
                     user = db.query(User).filter(User.id == order.user_id).first()
                     if user:
@@ -2677,11 +2849,19 @@ async def wechat_notify(request: Request, db: Session = Depends(get_db)):
                         task_type="recharge",
                         provider="wechat",
                         model="cny",
-                        details={"order_no": out_trade_no, "method": "notify"}
+                        details={
+                            "order_no": out_trade_no, 
+                            "method": "notify", 
+                            "wx_transaction_id": wx_transaction_id,
+                            "payer_openid": result.get("payer", {}).get("openid"),
+                            # "raw": result # Store raw data if needed (careful with size)
+                        }
                     )
                     db.add(trans)
                     db.commit()
                     logger.info(f"Order {out_trade_no} confirmed via Notify")
+            else:
+                logger.warning(f"Notify received but trade_state is {trade_state}")
                     
         return {"code": "SUCCESS", "message": "OK"}
     except Exception as e:
@@ -2903,7 +3083,7 @@ def get_transactions(
     if target_id:
         query = query.filter(TransactionHistory.user_id == target_id)
         
-    return query.order_by(TransactionHistory.created_at.desc()).limit(limit).all()
+    return query.order_by(TransactionHistory.id.desc()).limit(limit).all()
 
 class CreditUpdate(BaseModel):
     amount: int # Absolute value or delta? Let's say absolute set for admin simplicity, or add functionality
@@ -3110,14 +3290,16 @@ async def generate_image_endpoint(
              
              # Log full error for image gen
              logger.error(f"[GenerateImage] Failed: {detail}")
+             billing_service.log_failed_transaction(db, current_user.id, "image_gen", req.provider, req.model, detail)
              
              raise HTTPException(status_code=400, detail=detail)
 
         # Billing Deduct
         billing_service.deduct_credits(db, current_user.id, "image_gen", req.provider, req.model, {"item": "image"})
-
+        
         # Register Asset
         if result.get("url"):
+            # Only register if not error? result.get("url") check handles it.
             _register_asset_helper(db, current_user.id, result["url"], req, result.get("metadata"))
 
         return result
@@ -3126,6 +3308,7 @@ async def generate_image_endpoint(
     except Exception as e:
         import traceback
         traceback.print_exc()
+        billing_service.log_failed_transaction(db, current_user.id, "image_gen", req.provider, req.model, str(e))
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 
@@ -3260,6 +3443,7 @@ async def generate_video_endpoint(
              
              # Log the full error detail for debugging
              logger.error(f"[GenerateVideo] Failed: {detail}") 
+             billing_service.log_failed_transaction(db, current_user.id, "video_gen", req.provider, req.model, detail)
              
              raise HTTPException(status_code=400, detail=detail)
 
@@ -3276,6 +3460,7 @@ async def generate_video_endpoint(
     except Exception as e:
         import traceback
         traceback.print_exc()
+        billing_service.log_failed_transaction(db, current_user.id, "video_gen", req.provider, req.model, str(e))
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 class MontageItem(BaseModel):

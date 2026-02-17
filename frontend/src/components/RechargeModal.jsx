@@ -9,7 +9,7 @@ const RechargeModal = ({ onClose, onSuccess }) => {
     const [plans, setPlans] = useState([]);
     const [order, setOrder] = useState(null);
     const [loading, setLoading] = useState(false);
-    const [pollInterval, setPollInterval] = useState(null);
+    const pollIntervalRef = React.useRef(null);
 
     // Initial load: Get plans
     useEffect(() => {
@@ -18,7 +18,7 @@ const RechargeModal = ({ onClose, onSuccess }) => {
         }).catch(err => console.error("Failed to load plans", err));
         
         return () => {
-             if (pollInterval) clearInterval(pollInterval);
+             if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
         };
     }, []);
 
@@ -62,7 +62,7 @@ const RechargeModal = ({ onClose, onSuccess }) => {
                 console.error("Poll failed", e);
             }
         }, 2000);
-        setPollInterval(interval);
+        pollIntervalRef.current = interval;
     };
 
     const handleMockPay = async () => {
@@ -155,11 +155,16 @@ const RechargeModal = ({ onClose, onSuccess }) => {
                 {step === 'pay' && order && (
                     <div className="text-center space-y-6">
                         <h3 className="text-xl font-bold">Scan to Pay</h3>
-                        <div className="bg-white p-4 rounded-xl inline-block">
-                             {/* Mock QR Code */}
+                        <div className="bg-white p-4 rounded-xl inline-block relative">
+                             {/* Mock QR Code Overlay */}
+                             {order.pay_url && order.pay_url.includes("mock") && (
+                                <div className="absolute inset-0 bg-black/60 flex items-center justify-center rounded-xl z-10 m-4">
+                                    <p className="text-white text-xs font-bold text-center px-2">Mock Mode<br/>Use Button Below</p>
+                                </div>
+                             )}
                              <div className="w-48 h-48 bg-zinc-100 flex items-center justify-center relative overflow-hidden">
-                                {order.pay_url && order.pay_url.startsWith("http") ? (
-                                    <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(order.pay_url)}`} alt="QR Code" className="w-full h-full" />
+                                {order.pay_url ? (
+                                    <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(order.pay_url)}`} alt="QR Code" className="w-full h-full opacity-80" />
                                 ) : (
                                     <div className="text-black text-xs p-4 break-all">
                                         <p className="font-bold mb-2">Simulated QR Code</p>
@@ -174,13 +179,21 @@ const RechargeModal = ({ onClose, onSuccess }) => {
                         </div>
                         
                         <div className="pt-4 border-t border-white/10">
-                             <p className="text-xs text-orange-400 mb-3">Development Mode: Click below to simulate successful payment.</p>
-                             <button 
-                                onClick={handleMockPay}
-                                className="w-full py-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-sm text-zinc-300 transition-colors"
-                             >
-                                 Simulate Scan & Pay Success
-                             </button>
+                             {order.pay_url && order.pay_url.includes("mock") ? (
+                                <>
+                                    <p className="text-xs text-orange-400 mb-3">Development Mode: Click below to simulate successful payment.</p>
+                                    <button 
+                                        onClick={handleMockPay}
+                                        className="w-full py-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-sm text-zinc-300 transition-colors"
+                                    >
+                                        Simulate Scan & Pay Success
+                                    </button>
+                                </>
+                             ) : (
+                                <p className="text-xs text-zinc-500">
+                                    Please verify payment on your phone.
+                                </p>
+                             )}
                         </div>
                     </div>
                 )}

@@ -68,7 +68,9 @@ const Settings = () => {
                  setUserCredits(userRes.credits);
             }
             if (transRes) {
-                 setTransactions(transRes);
+                 // Ensure sorted by ID desc to show recent first
+                 const sorted = [...transRes].sort((a, b) => b.id - a.id);
+                 setTransactions(sorted);
             }
         }).catch(err => {
             console.error("Failed to load billing data", err);
@@ -759,7 +761,7 @@ const Settings = () => {
     };
 
     return (
-        <div className="max-w-4xl space-y-8 h-full overflow-y-auto p-1 flex flex-col text-white relative">
+        <div className="w-full max-w-7xl mx-auto space-y-6 h-full overflow-y-auto p-4 flex flex-col text-white relative">
             {/* Notification Toast */}
             {notification && (
                 <div className={`fixed top-10 left-1/2 transform -translate-x-1/2 z-[200] px-6 py-3 rounded-lg shadow-2xl border font-bold flex items-center gap-2 animate-in slide-in-from-top-4 fade-in duration-300 ${
@@ -769,74 +771,83 @@ const Settings = () => {
                     {notification.message}
                 </div>
             )}
-            <header className="flex justify-between items-center bg-card p-4 rounded-xl border border-white/10 shadow-sm bg-black/20">
-                <div className="flex items-center gap-4">
-                    <h1 className="text-3xl font-bold">Settings</h1>
-                    <div className="flex gap-2">
+            <header className="flex flex-col md:flex-row justify-between items-center gap-4 bg-card p-4 rounded-xl border border-white/10 shadow-sm bg-black/20">
+                <div className="flex items-center gap-6 overflow-x-auto w-full md:w-auto no-scrollbar">
+                    <div className="flex bg-white/5 p-1 rounded-lg shrink-0">
                         <button 
-                            onClick={handleImportClick}
-                            className="flex items-center space-x-2 bg-white/5 border border-white/10 px-3 py-1.5 rounded-lg hover:bg-white/10 text-xs transition-colors"
-                            title="Import Settings JSON"
+                            onClick={() => setActiveTab('api')}
+                            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'api' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
                         >
-                            <Upload size={14} />
-                            <span>Import</span>
+                            General
                         </button>
                         <button 
-                            onClick={handleExportSettings}
-                            className="flex items-center space-x-2 bg-white/5 border border-white/10 px-3 py-1.5 rounded-lg hover:bg-white/10 text-xs transition-colors"
-                            title="Export Settings JSON"
+                             onClick={() => setActiveTab('prompts')}
+                             className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'prompts' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
                         >
-                            <Download size={14} />
-                            <span>Export</span>
+                            Prompt Optimizers
                         </button>
-                        <input 
-                            type="file" 
-                            ref={fileInputRef} 
-                            className="hidden" 
-                            accept=".json" 
-                            onChange={handleFileChange} 
-                        />
+                        <button 
+                             onClick={() => setActiveTab('billing')}
+                             className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'billing' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
+                        >
+                            <span className="flex items-center gap-2"><Coins size={14}/> Usage</span>
+                        </button>
                     </div>
                 </div>
-                <div className="flex bg-white/5 p-1 rounded-lg">
+
+                <div className="flex gap-2 shrink-0">
                     <button 
-                        onClick={() => setActiveTab('api')}
-                        className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'api' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
+                        onClick={handleImportClick}
+                        className="flex items-center space-x-2 bg-white/5 border border-white/10 px-3 py-1.5 rounded-lg hover:bg-white/10 text-xs transition-colors"
+                        title="Import Settings JSON"
                     >
-                        API Configuration
+                        <Upload size={14} />
+                        <span>Import</span>
                     </button>
                     <button 
-                         onClick={() => setActiveTab('prompts')}
-                         className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'prompts' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
+                        onClick={handleExportSettings}
+                        className="flex items-center space-x-2 bg-white/5 border border-white/10 px-3 py-1.5 rounded-lg hover:bg-white/10 text-xs transition-colors"
+                        title="Export Settings JSON"
                     >
-                        Prompt Optimizers
+                        <Download size={14} />
+                        <span>Export</span>
                     </button>
-                    <button 
-                         onClick={() => setActiveTab('billing')}
-                         className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'billing' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
-                    >
-                        <span className="flex items-center gap-2"><Coins size={14}/> Usage</span>
-                    </button>
+                    <input 
+                        type="file" 
+                        ref={fileInputRef} 
+                        className="hidden" 
+                        accept=".json" 
+                        onChange={handleFileChange} 
+                    />
                 </div>
             </header>
             
             {activeTab === 'billing' ? (
                 <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                        <div className="bg-black/20 p-6 rounded-xl border border-white/10 shadow-sm flex flex-col items-center justify-center text-center">
-                             <Coins className="w-12 h-12 text-yellow-400 mb-4" />
+                    <div className="grid grid-cols-1 gap-6">
+                        <div className="bg-black/20 p-6 rounded-xl border border-white/10 shadow-sm flex flex-col items-center justify-center text-center relative">
+                             <div className="absolute top-4 right-4">
+                                <button
+                                    onClick={() => setShowRecharge(true)}
+                                    className="bg-green-500 hover:bg-green-600 text-white font-medium py-1.5 px-3 rounded-lg transition-colors flex items-center justify-center gap-1 text-xs shadow-lg shadow-green-500/20"
+                                >
+                                    <Coins size={14} />
+                                    Top Up
+                                </button>
+                             </div>
+                             <Coins className="w-12 h-12 text-yellow-400 mb-4 mt-2" />
                              <h3 className="text-muted-foreground font-medium">Available Credits</h3>
                              <p className="text-4xl font-bold text-white mt-2">{userCredits}</p>
-                             <p className="text-xs text-muted-foreground mt-2">Credits are deducted for generation tasks.</p>
+                             <p className="text-xs text-muted-foreground mt-2 mb-4">Credits are deducted for generation tasks.</p>
                              <button
                                 onClick={() => setShowRecharge(true)}
-                                className="mt-6 w-full bg-green-500 hover:bg-green-600 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
+                                className="w-full bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 font-medium py-2 px-4 rounded-lg transition-colors flex items-center justify-center gap-2 text-sm"
                              >
-                                <Coins size={16} />
-                                Top Up Credits
+                                <Coins size={14} />
+                                Recharge Bundle
                              </button>
                         </div>
-                        <div className="bg-black/20 p-6 rounded-xl border border-white/10 shadow-sm col-span-2">
+                        <div className="bg-black/20 p-6 rounded-xl border border-white/10 shadow-sm">
                              <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
                                 <History className="w-5 h-5" /> Recent Transactions
                              </h3>
@@ -858,7 +869,9 @@ const Settings = () => {
                                                 <tr><td colSpan="4" className="text-center p-8 text-muted-foreground">No transactions found</td></tr>
                                             ) : transactions.map(t => (
                                                 <tr key={t.id} className="hover:bg-white/[0.02]">
-                                                    <td className="p-3 text-muted-foreground">{new Date(t.created_at).toLocaleString()}</td>
+                                                    <td className="p-3 text-muted-foreground">
+                                                        {new Date(t.created_at.endsWith('Z') ? t.created_at : t.created_at + 'Z').toLocaleString()}
+                                                    </td>
                                                     <td className="p-3">
                                                         <span className="bg-white/5 px-2 py-0.5 rounded text-xs uppercase border border-white/10">{t.task_type}</span>
                                                     </td>

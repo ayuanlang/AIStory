@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { fetchScenes, fetchShots } from '../services/api';
+import { fetchScenes, fetchShots, api } from '../services/api';
 import { Loader2, Play, Plus, Trash2, Film, Save, Clock, Scissors, ChevronRight, GripVertical, Download } from 'lucide-react';
-import axios from 'axios';
 
 const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
     const [scenes, setScenes] = useState([]);
@@ -83,16 +82,13 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
         
         try {
             // We'll add this endpoint to api.js later, calling it directly for now or via helper
-            const token = localStorage.getItem('token');
-            const response = await axios.post(`/api/v1/projects/${projectId}/montage`, {
+            const response = await api.post(`/projects/${projectId}/montage`, {
                 items: playlist.map(item => ({
                     url: item.url,
                     speed: parseFloat(item.speed),
                     trim_start: parseFloat(item.trimStart),
                     trim_end: parseFloat(item.trimEnd)
                 }))
-            }, {
-                headers: { Authorization: `Bearer ${token}` }
             });
             
             if (response.data.url) {

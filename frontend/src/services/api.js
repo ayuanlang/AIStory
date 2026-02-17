@@ -27,9 +27,14 @@ api.interceptors.request.use(
 api.interceptors.response.use(
     (response) => response,
     (error) => {
-        if (error.response && error.response.status === 401) {
-            localStorage.removeItem('token');
-            window.location.href = '/auth';
+        if (error.response) {
+            if (error.response.status === 401) {
+                localStorage.removeItem('token');
+                window.location.href = '/auth';
+            } else if (error.response.status === 402) {
+                // Dispatch event for UI to handle (Show Recharge Modal)
+                window.dispatchEvent(new Event('SHOW_RECHARGE_MODAL'));
+            }
         }
         return Promise.reject(error);
     }

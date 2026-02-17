@@ -9,54 +9,36 @@ class BillingService:
     @staticmethod
     def get_pricing_rule(db: Session, task_type: str, provider: str = None, model: str = None) -> PricingRule:
         """
-        Finds the most specific pricing rule for the given parameters.
-        Priority:
-        1. Exact match (task_type, provider, model)
-        2. Provider match (task_type, provider, NULL)
-        3. Generic match (task_type, NULL, NULL)
+        Finds the pricing rule for the given parameters.
+        STRICT MATCH only. 
+        If provider/model are provided, we look for that exact combination.
+        If they are None, we look for None.
+        We do NOT fallback to generic rules if specific ones are missing.
         """
-        # 1. Exact Match
-        if provider and model:
-            rule = db.query(PricingRule).filter(
-                PricingRule.task_type == task_type,
-                PricingRule.provider == provider,
-                PricingRule.model == model,
-                PricingRule.is_active == True
-            ).first()
-            if rule: return rule
-            
-        # 2. Provider Match
-        if provider:
-            rule = db.query(PricingRule).filter(
-                PricingRule.task_type == task_type,
-                PricingRule.provider == provider,
-                PricingRule.model == None,
-                PricingRule.is_active == True
-            ).first()
-            if rule: return rule
-            
-        # 3. Generic Match
-        rule = db.query(PricingRule).filter(
+        query = db.query(PricingRule).filter(
             PricingRule.task_type == task_type,
-            PricingRule.provider == None,
-            PricingRule.model == None,
             PricingRule.is_active == True
-        ).first()
+        )
         
-        return rule
+        if provider:
+            query = query.filter(PricingRule.provider == provider)
+        else:
+            query = query.filter(PricingRule.provider == None)
+            
+        if model:
+            query = query.filter(PricingRule.model == model)
+        else:
+            query = query.filter(PricingRule.model == None)
+            
+        return query.first()
 
     @staticmethod
     def estimate_cost(db: Session, task_type: str, provider: str = None, model: str = None, details: dict = None) -> int:
         rule = BillingService.get_pricing_rule(db, task_type, provider, model)
         if not rule:
-            # Fallback defaults if no rule exists at all
-            defaults = {
-                "image_gen": 5,
-                "video_gen": 20,
-                "llm_chat": 1,
-                "analysis": 1
-            }
-            return defaults.get(task_type, 1)
+            error_msg = f"No pricing rule found for task: {task_type}, provider: {provider}, model: {model}"
+            logger.error(error_msg)
+            raise HTTPException(status_code=500, detail="Pricing configuration error. Please contact support.")
 
         # Advanced Calculation Logic
         try:
@@ -183,5 +165,44 @@ class BillingService:
         
         logger.info(f"Deducted {final_cost} credits from user {user_id} for {task_type}. New Balance: {user.credits}")
         return transaction
+
+    @staticmethod
+    def log_failed_transaction(
+        db: Session, 
+        user_id: int, 
+        task_type: str, 
+        provider: str = None, 
+        model: str = None, 
+        error_msg: str = None,
+        details: dict = None
+    ):
+        """
+        Logs a failed transaction for visibility in recent transactions.
+        """
+        try:
+            user = db.query(User).filter(User.id == user_id).first()
+            if not user:
+                logger.error(f"Cannot log failure for non-existent user {user_id}")
+                return
+
+            fail_details = details or {}
+            fail_details["status"] = "FAILED"
+            fail_details["error"] = str(error_msg)[:500] # Truncate error
+
+            transaction = TransactionHistory(
+                user_id=user_id,
+                amount=0,
+                balance_after=user.credits or 0,
+                task_type=task_type,
+                provider=provider,
+                model=model,
+                details=fail_details
+            )
+            db.add(transaction)
+            db.commit()
+            logger.info(f"Logged failed transaction for user {user_id}: {error_msg}")
+        except Exception as e:
+            logger.error(f"Failed to log transaction failure: {e}")
+            db.rollback()
 
 billing_service = BillingService()

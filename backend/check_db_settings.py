@@ -35,5 +35,23 @@ def check_settings():
         for s in user_settings:
             print(f"  - {s.provider} ({s.category})")
 
+
+    # 2. Check System Payments
+    print("\nSystem Payments:")
+    payments = db.query(APISetting).filter(APISetting.category == "System_Payment").all()
+    if not payments:
+        print(" > No System Payment settings found!")
+    else:
+        for p in payments:
+            print(f" > Provider: '{p.provider}' | Config: {p.config} | API Key len: {len(p.api_key) if p.api_key else 0}")
+            if p.provider == 'wechat_pay':
+                # Show keys in config
+                if p.config:
+                    print(f"   Config Keys: {list(p.config.keys())}")
+                    # Show partial values
+                    for k,v in p.config.items():
+                        v_str = str(v)
+                        print(f"   - {k}: {v_str[:5]}...{v_str[-5:] if len(v_str)>10 else ''}")
+
 if __name__ == "__main__":
     check_settings()

@@ -1,5 +1,5 @@
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Home from './pages/Home';
 import ProjectList from './pages/ProjectList';
@@ -10,6 +10,7 @@ import UserAdmin from './pages/UserAdmin';
 import SystemLogs from './pages/SystemLogs';
 import { LogProvider } from './context/LogContext';
 import LogPanel from './components/LogPanel';
+import RechargeModal from './components/RechargeModal';
 
 // Helper component to protect routes that require authentication
 const PrivateRoute = ({ children }) => {
@@ -24,6 +25,14 @@ const PublicRoute = ({ children }) => {
 };
 
 function App() {
+  const [showRecharge, setShowRecharge] = useState(false);
+
+  useEffect(() => {
+    const handleRecharge = () => setShowRecharge(true);
+    window.addEventListener('SHOW_RECHARGE_MODAL', handleRecharge);
+    return () => window.removeEventListener('SHOW_RECHARGE_MODAL', handleRecharge);
+  }, []);
+
   return (
     <LogProvider>
       <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
@@ -38,6 +47,12 @@ function App() {
             <Route path="/admin/logs" element={<PrivateRoute><SystemLogs /></PrivateRoute>} />
           </Routes>
           <LogPanel />
+          {showRecharge && (
+             <RechargeModal 
+               onClose={() => setShowRecharge(false)} 
+               onSuccess={() => setShowRecharge(false)} 
+             />
+          )}
         </div>
       </Router>
     </LogProvider>

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { api, getPricingRules, createPricingRule, updatePricingRule, deletePricingRule, getTransactions, updateUserCredits, syncPricingRules } from '../services/api';
 import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
-import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw } from 'lucide-react';
+import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard } from 'lucide-react';
 
 const UserAdmin = () => {
     const [activeTab, setActiveTab] = useState('users');
@@ -24,6 +24,53 @@ const UserAdmin = () => {
     const [calcPriceOutput, setCalcPriceOutput] = useState('');
     const [exchangeRate, setExchangeRate] = useState(10); // Default: ￥1 = 10 Credits
     const [markup, setMarkup] = useState('1.0'); // Default: 1.0x (No markup) - String for better input handling
+
+    // Payment Config State
+    const [paymentConfig, setPaymentConfig] = useState({
+        mchid: '',
+        appid: '',
+        api_v3_key: '',
+        cert_serial_no: '',
+        private_key: '',
+        notify_url: '',
+        use_mock: true
+    });
+    const [isPaymentConfigLoading, setIsPaymentConfigLoading] = useState(false);
+
+    // ... existing code ...
+
+    const fetchPaymentConfig = async () => {
+        setIsPaymentConfigLoading(true);
+        try {
+            const res = await api.get('/admin/payment-config');
+            if (res.data) {
+                setPaymentConfig(res.data);
+            }
+        } catch (e) {
+            console.error("Failed to load payment config", e);
+            // If 404 or empty, we use defaults
+        } finally {
+            setIsPaymentConfigLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        if (activeTab === 'payment') {
+            fetchPaymentConfig();
+        }
+    }, [activeTab]);
+
+    const handleSavePaymentConfig = async () => {
+        try {
+            await api.post('/admin/payment-config', paymentConfig);
+            alert("Payment configuration saved successfully!");
+        } catch (e) {
+            console.error("Failed to save payment config", e);
+            alert("Failed to save payment configuration.");
+        }
+    };
+
+    // ... existing fetchAllData ...
 
     // Effect to auto-calculate
     useEffect(() => {
@@ -187,7 +234,7 @@ const UserAdmin = () => {
                 // Making it editable (or creatable) is best.
             }
 
-            if (transRes.status === 'fulfilled') setTransactions(transRes.value);
+            if (transRes.status === 'fulfilled') setTransactions(transRes.value.sort((a,b)=>b.id-a.id));
         } catch (e) {
             setError(e.message);
         } finally {
@@ -198,7 +245,7 @@ const UserAdmin = () => {
     const fetchTransactionsOnly = async () => {
         try {
             const data = await getTransactions(50, transactionFilterUser || null);
-            setTransactions(data);
+            setTransactions(data.sort((a,b)=>b.id-a.id));
         } catch (e) {
             console.error("Failed to load transactions", e);
         }
@@ -337,12 +384,135 @@ const UserAdmin = () => {
                         <TabButton id="users" label="Users" icon={User} />
                         <TabButton id="pricing" label="Pricing" icon={DollarSign} />
                         <TabButton id="transactions" label="History" icon={Activity} />
+                        <TabButton id="payment" label="Payment" icon={CreditCard} />
                     </div>
                 </div>
 
                 {/* Content Area */}
                 <div className="bg-[#18181b] rounded-xl border border-gray-800 p-6 min-h-[500px]">
                     
+                    {/* PAYMENT TAB */}
+                    {activeTab === 'payment' && (
+                        <div className="bg-white/5 border border-white/10 rounded-xl p-6">
+                            <h2 className="text-xl font-bold mb-6 flex items-center gap-2 text-white">
+                                <CreditCard className="text-primary"/> WeChat Pay Configuration
+                            </h2>
+
+                            <div className="space-y-6 max-w-4xl">
+                                {/* Mode Selection */}
+                                <div className="bg-black/20 p-4 rounded-lg border border-white/10">
+                                    <label className="block text-sm font-medium mb-3 text-primary">Payment Environment</label>
+                                    <div className="flex items-center gap-6">
+                                        <label className={`flex items-center gap-2 cursor-pointer p-3 rounded-lg border transition-all ${paymentConfig.use_mock ? 'bg-primary/20 border-primary' : 'border-gray-700 hover:bg-white/5'}`}>
+                                            <input 
+                                                type="radio" 
+                                                checked={paymentConfig.use_mock} 
+                                                onChange={() => setPaymentConfig({...paymentConfig, use_mock: true})}
+                                                className="hidden"
+                                            />
+                                            <div className="w-4 h-4 rounded-full border border-gray-400 flex items-center justify-center">
+                                                {paymentConfig.use_mock && <div className="w-2 h-2 rounded-full bg-primary" />}
+                                            </div>
+                                            <span className="font-bold text-yellow-400">Mock / Sandbox</span>
+                                        </label>
+                                        <label className={`flex items-center gap-2 cursor-pointer p-3 rounded-lg border transition-all ${!paymentConfig.use_mock ? 'bg-primary/20 border-primary' : 'border-gray-700 hover:bg-white/5'}`}>
+                                            <input 
+                                                type="radio" 
+                                                checked={!paymentConfig.use_mock} 
+                                                onChange={() => setPaymentConfig({...paymentConfig, use_mock: false})}
+                                                className="hidden"
+                                            />
+                                            <div className="w-4 h-4 rounded-full border border-gray-400 flex items-center justify-center">
+                                                {!paymentConfig.use_mock && <div className="w-2 h-2 rounded-full bg-primary" />}
+                                            </div>
+                                            <span className="font-bold text-green-400">Live Production</span>
+                                        </label>
+                                    </div>
+                                    <p className="text-xs text-gray-500 mt-2">
+                                        Mock mode simulates payment success immediately. Live mode connects to WeChat Pay API.
+                                    </p>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div className="space-y-4">
+                                        <div>
+                                            <label className="block text-xs uppercase font-bold text-gray-500 mb-1">App ID (WeChat AppID)</label>
+                                            <input 
+                                                type="text" 
+                                                value={paymentConfig.appid}
+                                                onChange={(e) => setPaymentConfig({...paymentConfig, appid: e.target.value})}
+                                                className="w-full bg-black/40 border border-gray-700 rounded p-2.5 text-sm focus:border-primary outline-none focus:ring-1 focus:ring-primary"
+                                                placeholder="wx8888888888888888"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs uppercase font-bold text-gray-500 mb-1">Merchant ID (MchID)</label>
+                                            <input 
+                                                type="text" 
+                                                value={paymentConfig.mchid}
+                                                onChange={(e) => setPaymentConfig({...paymentConfig, mchid: e.target.value})}
+                                                className="w-full bg-black/40 border border-gray-700 rounded p-2.5 text-sm focus:border-primary outline-none focus:ring-1 focus:ring-primary"
+                                                placeholder="1600000000"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs uppercase font-bold text-gray-500 mb-1">API V3 Key</label>
+                                            <input 
+                                                type="password" 
+                                                value={paymentConfig.api_v3_key}
+                                                onChange={(e) => setPaymentConfig({...paymentConfig, api_v3_key: e.target.value})}
+                                                className="w-full bg-black/40 border border-gray-700 rounded p-2.5 text-sm focus:border-primary outline-none focus:ring-1 focus:ring-primary"
+                                                placeholder="32 characters API Key"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs uppercase font-bold text-gray-500 mb-1">Notify URL</label>
+                                            <input 
+                                                type="text" 
+                                                value={paymentConfig.notify_url}
+                                                onChange={(e) => setPaymentConfig({...paymentConfig, notify_url: e.target.value})}
+                                                className="w-full bg-black/40 border border-gray-700 rounded p-2.5 text-sm focus:border-primary outline-none focus:ring-1 focus:ring-primary"
+                                                placeholder="https://api.yourdomain.com/billing/recharge/notify"
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="space-y-4">
+                                        <div>
+                                            <label className="block text-xs uppercase font-bold text-gray-500 mb-1">Certificate Serial No.</label>
+                                            <input 
+                                                type="text" 
+                                                value={paymentConfig.cert_serial_no}
+                                                onChange={(e) => setPaymentConfig({...paymentConfig, cert_serial_no: e.target.value})}
+                                                className="w-full bg-black/40 border border-gray-700 rounded p-2.5 text-sm focus:border-primary outline-none focus:ring-1 focus:ring-primary"
+                                                placeholder="XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs uppercase font-bold text-gray-500 mb-1">Private Key (PEM Content)</label>
+                                            <textarea 
+                                                value={paymentConfig.private_key}
+                                                onChange={(e) => setPaymentConfig({...paymentConfig, private_key: e.target.value})}
+                                                className="w-full h-48 bg-black/40 border border-gray-700 rounded p-2.5 text-xs font-mono focus:border-primary outline-none resize-none focus:ring-1 focus:ring-primary"
+                                                placeholder="-----BEGIN PRIVATE KEY-----&#10;...&#10;-----END PRIVATE KEY-----"
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="pt-6 flex justify-end border-t border-white/10">
+                                    <button 
+                                        onClick={handleSavePaymentConfig}
+                                        disabled={isPaymentConfigLoading}
+                                        className="bg-primary text-black px-6 py-2.5 rounded-lg font-bold hover:opacity-90 disabled:opacity-50 flex items-center gap-2 transform active:scale-95 transition-all"
+                                    >
+                                        {isPaymentConfigLoading ? <RefreshCw className="animate-spin" size={18}/> : <Check size={18}/>}
+                                        Save Configuration
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     {/* USERS TAB */}
                     {activeTab === 'users' && (
                         <div className="overflow-x-auto">
@@ -547,7 +717,9 @@ const UserAdmin = () => {
                                     <tbody>
                                         {transactions.map(t => (
                                             <tr key={t.id} className="border-b border-gray-800/50 hover:bg-gray-800/50">
-                                                <td className="p-3 text-gray-400">{new Date(t.created_at).toLocaleString()}</td>
+                                                <td className="p-3 text-gray-400">
+                                                    {new Date(t.created_at.endsWith('Z') ? t.created_at : t.created_at + 'Z').toLocaleString()}
+                                                </td>
                                                 <td className="p-3">{t.user_id}</td>
                                                 <td className="p-3"><span className="bg-gray-800 px-2 py-0.5 rounded text-xs uppercase text-gray-300">{t.task_type}</span></td>
                                                 <td className="p-3 text-xs text-gray-500">
