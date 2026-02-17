@@ -145,7 +145,24 @@ export const fetchSceneShotsPrompt = async (sceneId) => {
 }
 
 export const generateSceneShots = async (sceneId, promptData = null) => {
+    // This now returns the Staging result (timestamp, content=[]), not the applied shots
     const response = await api.post(`/scenes/${sceneId}/ai_generate_shots`, promptData);
+    return response.data;
+}
+
+export const getSceneLatestAIResult = async (sceneId) => {
+    const response = await api.get(`/scenes/${sceneId}/latest_ai_result`);
+    return response.data;
+}
+
+export const updateSceneLatestAIResult = async (sceneId, content) => {
+    const response = await api.put(`/scenes/${sceneId}/latest_ai_result`, { content });
+    return response.data;
+}
+
+export const applySceneAIResult = async (sceneId, data = null) => {
+    // data is optional { content: [] } to override stored
+    const response = await api.post(`/scenes/${sceneId}/apply_ai_result`, data);
     return response.data;
 }
 

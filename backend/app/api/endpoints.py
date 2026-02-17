@@ -1177,6 +1177,9 @@ def ai_prompt_preview(
     system, user = _build_shot_prompts(db, scene, project)
     return {"system_prompt": system, "user_prompt": user}
 
+class AnalysisContent(BaseModel):
+    content: Union[Dict[str, Any], List[Any]]
+
 @router.post("/scenes/{scene_id}/ai_generate_shots")
 async def ai_generate_shots(
     scene_id: int,
@@ -1258,54 +1261,187 @@ async def ai_generate_shots(
                     logger.warning(f"[ai_generate_shots] Skipping malformed line (cols={len(cols)}, headers={len(headers)}): {line[:50]}...")
 
         if not shots_data:
-             print("DEBUG: No table found. Content:", response_content)
-             # If no table, maybe it failed to generate strict format?
-             # For now, return empty or parsing error
+             logger.warning(f"DEBUG: No table found using delimiter |. Content snippet: {response_content[:200]}")
+             # Fallback: Try Parse using Markdown table logic more loosely or return raw
              pass
+             
         logger.info(f"[ai_generate_shots] parsed_shots={len(shots_data)}")
 
-        # 6. Update DB
-        db.query(Shot).filter(Shot.scene_id == scene_id).delete()
+        # 6. Save to Staging (Do NOT apply to DB yet)
+        # Store the raw "shots_data" list in the scene's ai_shots_result column
+        import json
+        from datetime import datetime
         
-        new_shots = []
-        for idx, s_data in enumerate(shots_data):
-            try:
-                dur_str = s_data.get("Duration (s)", "2.0")
-                match = re.search(r"[\d\.]+", dur_str)
-                duration_val = float(match.group()) if match else 2.0
-            except:
-                duration_val = 2.0
-            
-            shot_id_val = s_data.get("Shot ID", str(idx + 1))
-
-            shot = Shot(
-                scene_id=scene_id,
-                project_id=project.id,
-                episode_id=episode.id,
-                shot_id=shot_id_val,
-                shot_name=s_data.get("Shot Name", "Shot"),
-                scene_code=scene.scene_no,
-                start_frame=s_data.get("Start Frame", ""),
-                end_frame=s_data.get("End Frame", ""),
-                video_content=s_data.get("Video Content", ""),
-                duration=str(duration_val),
-                associated_entities=s_data.get("Associated Entities", ""),
-                shot_logic_cn=s_data.get("Shot Logic (CN)", ""),
-                keyframes=s_data.get("Keyframes", "NO"),
-                prompt=s_data.get("Video Content", "")
-            )
-            db.add(shot)
-            
+        result_wrapper = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "content": shots_data
+        }
+        
+        scene.ai_shots_result = json.dumps(result_wrapper, ensure_ascii=False)
         db.commit()
-        logger.info(f"[ai_generate_shots] saved_shots={len(shots_data)} scene_id={scene_id}")
         
-        return db.query(Shot).filter(Shot.scene_id == scene_id).all()
+        logger.info(f"[ai_generate_shots] Saved {len(shots_data)} shots to staging for scene {scene_id}")
+        
+        # Return the raw data so frontend can display it in the "Edit" modal
+        return result_wrapper
 
     except Exception as e:
         import traceback
         traceback.print_exc()
         logger.error(f"[ai_generate_shots] error={e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/scenes/{scene_id}/latest_ai_result")
+def get_scene_latest_ai_result(
+    scene_id: int, 
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get the latest saved AI shot generation result for a scene.
+    Pulls from scene.ai_shots_result.
+    """
+    scene = db.query(Scene).filter(Scene.id == scene_id).first()
+    if not scene:
+        raise HTTPException(status_code=404, detail="Scene not found")
+        
+    episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
+    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
+    if not project:
+         raise HTTPException(status_code=403, detail="Not authorized")
+         
+    raw_result = scene.ai_shots_result
+    if not raw_result:
+        return {}
+        
+    try:
+        data = json.loads(raw_result)
+        return data
+    except:
+        return {"content": [], "error": "Failed to parse stored result"}
+
+@router.put("/scenes/{scene_id}/latest_ai_result")
+def update_scene_latest_ai_result(
+    scene_id: int,
+    data: AnalysisContent, # Reusing this schema: { "content": ... }
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Update (Save/Edit) the latest shot generation result without applying it.
+    Expects data.content to be the list of shot dictionaries.
+    """
+    scene = db.query(Scene).filter(Scene.id == scene_id).first()
+    if not scene:
+        raise HTTPException(status_code=404, detail="Scene not found")
+        
+    episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
+    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
+    if not project:
+         raise HTTPException(status_code=403, detail="Not authorized")
+    
+    # Update result with timestamp
+    result_wrapper = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "content": data.content  # This should be the List[Dict] of shots
+    }
+    
+    scene.ai_shots_result = json.dumps(result_wrapper, ensure_ascii=False)
+    db.commit()
+    
+    return result_wrapper
+
+@router.post("/scenes/{scene_id}/apply_ai_result")
+def apply_scene_ai_result(
+    scene_id: int,
+    data: Optional[AnalysisContent] = None, # Optional: apply provided content instead of stored
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Apply the stored (or provided) shot list to the actual Shots table.
+    WARNING: This replaces existing shots for the scene.
+    """
+    scene = db.query(Scene).filter(Scene.id == scene_id).first()
+    if not scene:
+        raise HTTPException(status_code=404, detail="Scene not found")
+        
+    episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
+    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
+    if not project:
+         raise HTTPException(status_code=403, detail="Not authorized")
+         
+    shots_data = []
+    
+    # 1. Determine Source
+    if data and data.content:
+        shots_data = data.content
+        # Update Staging too
+        result_wrapper = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "content": shots_data
+        }
+        scene.ai_shots_result = json.dumps(result_wrapper, ensure_ascii=False)
+    else:
+        # User stored
+        raw_result = scene.ai_shots_result
+        if raw_result:
+            try:
+                wrapper = json.loads(raw_result)
+                shots_data = wrapper.get("content", [])
+            except:
+                 pass
+                 
+    if not shots_data:
+        raise HTTPException(status_code=400, detail="No shot data provided or found to apply.")
+
+    # 2. Apply to DB (Delete old, Insert new)
+    # Note: We should probably keep existing shots if the user wants partial update, 
+    # but the requirement implies "Modify and Re-import", which usually means "This is the new list".
+    # Existing logic was "delete all", so we stick to that for "Apply".
+    
+    db.query(Shot).filter(Shot.scene_id == scene_id).delete()
+    
+    for idx, s_data in enumerate(shots_data):
+        # Dur parsing
+        try:
+            dur_val = 2.0
+            if "Duration (s)" in s_data:
+                match = re.search(r"[\d\.]+", str(s_data["Duration (s)"]))
+                dur_val = float(match.group()) if match else 2.0
+        except:
+            dur_val = 2.0
+        
+        # Mapping Keys from LLM Table Headers to DB Columns
+        # Headers: Shot ID, Shot Name, Start Frame, End Frame, Video Content, Duration (s), Keyframes, Associated Entities, Shot Logic (CN)
+        
+        shot = Shot(
+            scene_id=scene_id,
+            project_id=project.id,
+            episode_id=episode.id,
+            
+            shot_id=s_data.get("Shot ID", str(idx+1)),
+            shot_name=s_data.get("Shot Name", "Shot"),
+            scene_code=scene.scene_no,
+            
+            start_frame=s_data.get("Start Frame", ""),
+            end_frame=s_data.get("End Frame", ""),
+            video_content=s_data.get("Video Content", ""),
+            duration=str(dur_val),
+            
+            associated_entities=s_data.get("Associated Entities", ""),
+            shot_logic_cn=s_data.get("Shot Logic (CN)", ""),
+            keyframes=s_data.get("Keyframes", "NO"),
+            
+            # Legacy/Internal
+            prompt=s_data.get("Video Content", "") 
+        )
+        db.add(shot)
+        
+    db.commit()
+    
+    # Return the real shots
+    return db.query(Shot).filter(Shot.scene_id == scene_id).all()
 
 @router.get("/scenes/{scene_id}/shots", response_model=List[ShotOut])
 def read_shots(
@@ -3588,9 +3724,6 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
     except Exception as e:
         logger.error(f"Entity Analysis failed: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
-
-class AnalysisContent(BaseModel):
-    content: Dict[str, Any]
 
 @router.get("/entities/{entity_id}/latest_analysis")
 def get_entity_latest_analysis(

@@ -51,6 +51,26 @@ def check_and_migrate_tables():
     # logger.info(f"Starting migration check. Dialect: {engine.dialect.name}")
     
     try:
+        is_postgres = engine.dialect.name == 'postgresql'
+        
+        if is_postgres:
+            # Robust Postgres Strategy
+            user_columns_pg = [
+                ("is_active", "BOOLEAN DEFAULT TRUE"),
+                ("is_superuser", "BOOLEAN DEFAULT FALSE"),
+                ("is_authorized", "BOOLEAN DEFAULT FALSE"),
+                ("is_system", "BOOLEAN DEFAULT FALSE"),
+                ("credits", "INTEGER DEFAULT 0")
+            ]
+            with engine.begin() as conn:
+                 for col_name, col_type in user_columns_pg:
+                     try:
+                        conn.execute(text(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col_name} {col_type}"))
+                        # logger.info(f"Ensured users.{col_name} exists")
+                     except Exception as e:
+                        logger.error(f"Failed to ensure users.{col_name}: {e}")
+        
+        # Fallback / Original logic for non-postgres or extra checks
         # 1. Get current columns using Inspector (works for both)
         inspector = inspect(engine)
         existing_columns = [c['name'] for c in inspector.get_columns('users')]
@@ -61,7 +81,8 @@ def check_and_migrate_tables():
             ("is_active", "BOOLEAN DEFAULT TRUE"),
             ("is_superuser", "BOOLEAN DEFAULT FALSE"),
             ("is_authorized", "BOOLEAN DEFAULT FALSE"),
-            ("is_system", "BOOLEAN DEFAULT FALSE")
+            ("is_system", "BOOLEAN DEFAULT FALSE"),
+            ("credits", "INTEGER DEFAULT 0")
         ]
 
         columns_to_add = []
@@ -158,6 +179,22 @@ def check_and_migrate_tables():
                             # Don't re-raise immediately so we can try others? No, DB might be in bad state.
                         
         final_shot_cols = [c['name'] for c in inspector.get_columns('shots')]
+        
+        # --- MIGRATE SCENES TABLE ---
+        try:
+             inspector = inspect(engine)
+             existing_scene_columns = [c['name'] for c in inspector.get_columns('scenes')]
+             
+             if 'ai_shots_result' not in existing_scene_columns:
+                 logger.info("Adding ai_shots_result to scenes table...")
+                 with engine.begin() as conn:
+                     # Use TEXT for general compatibility (SQLite/Postgres)
+                     # For Postgres, we can make it TEXT or JSONB if we wanted, but TEXT is safe
+                     # If existing table is Postgres, ALTER TABLE ADD COLUMN ... TEXT works fine
+                     conn.execute(text("ALTER TABLE scenes ADD COLUMN ai_shots_result TEXT"))
+                     logger.info("Successfully added scenes.ai_shots_result")
+        except Exception as e:
+             logger.error(f"Failed to migrate scenes table: {e}")
         
     except Exception as e:
         logger.critical(f"Migration CRITICAL FAILURE: {e}")

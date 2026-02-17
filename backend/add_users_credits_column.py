@@ -6,7 +6,7 @@ import os
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(current_dir)
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, inspect
 from app.core.config import settings
 
 def add_credits_column():
@@ -22,42 +22,35 @@ def add_credits_column():
     
     with engine.connect() as conn:
         try:
+            # Use SQLAlchemy Inspector for reliable column check
+            inspector = inspect(engine)
+            existing_columns = [c['name'] for c in inspector.get_columns('users')]
+            print(f"Existing columns in 'users': {existing_columns}")
+
             # Check database type
             db_url_str = str(engine.url)
             
+            if 'credits' in existing_columns:
+                print("Column 'credits' already exists in users table.")
+                return
+
+            print("Adding 'credits' column to users table...")
+            
             if 'postgresql' in db_url_str or 'postgres' in db_url_str:
-                # Postgres check
-                check_sql = text("SELECT column_name FROM information_schema.columns WHERE table_name='users' AND column_name='credits';")
-                result = conn.execute(check_sql).fetchone()
-                
-                if result:
-                    print("Column 'credits' already exists in users table (Postgres).")
-                else:
-                    print("Adding 'credits' column to users table (Postgres instruction)...")
-                    # Postgres requires commit for ALTER
-                    trans = conn.begin()
-                    try:
-                        conn.execute(text("ALTER TABLE users ADD COLUMN credits INTEGER DEFAULT 0;"))
-                        trans.commit()
-                        print("Successfully added 'credits' column.")
-                    except Exception as e:
-                        trans.rollback()
-                        raise e
-                    
-            else:
-                # SQLite check
-                check_sql = text("PRAGMA table_info(users);")
-                columns = conn.execute(check_sql).fetchall()
-                # columns result format: (cid, name, type, notnull, dflt_value, pk)
-                column_names = [col[1] for col in columns]
-                
-                if 'credits' in column_names:
-                    print("Column 'credits' already exists in users table (SQLite).")
-                else:
-                    print("Adding 'credits' column to users table (SQLite)...")
+                # Postgres requires commit for ALTER
+                trans = conn.begin()
+                try:
                     conn.execute(text("ALTER TABLE users ADD COLUMN credits INTEGER DEFAULT 0;"))
-                    conn.commit()
-                    print("Successfully added 'credits' column.")
+                    trans.commit()
+                    print("Successfully added 'credits' column (Postgres).")
+                except Exception as e:
+                    trans.rollback()
+                    raise e
+            else:
+                # SQLite
+                conn.execute(text("ALTER TABLE users ADD COLUMN credits INTEGER DEFAULT 0;"))
+                # conn.commit() # SQLite autocommits DDL usually, but some drivers separate it
+                print("Successfully added 'credits' column (SQLite).")
 
         except Exception as e:
             print(f"Error during migration: {e}")

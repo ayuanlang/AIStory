@@ -56,7 +56,9 @@ import {
     analyzeScene,
     fetchPrompt,
     fetchMe,
-    analyzeEntityImage
+    analyzeEntityImage,
+    applySceneAIResult, // New import
+    updateSceneLatestAIResult // New import
 } from '../services/api';
 
 import RefineControl from '../components/RefineControl.jsx';
@@ -2530,6 +2532,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
     const [entities, setEntities] = useState([]);
     const [editingScene, setEditingScene] = useState(null);
     const [shotPromptModal, setShotPromptModal] = useState({ open: false, sceneId: null, data: null, loading: false });
+    const [shotReviewModal, setShotReviewModal] = useState({ open: false, sceneId: null, data: null, loading: false });
 
     // Debug: Monitor Data State
     useEffect(() => {
@@ -2815,13 +2818,22 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
          setShotPromptModal(prev => ({ ...prev, loading: true }));
          onLog?.(`SceneManager: Generating shots for Scene ${sceneId}...`, 'info');
          try {
-             await generateSceneShots(sceneId, { 
+             // Now returns { content: [...], timestamp }
+             const result = await generateSceneShots(sceneId, { 
                  user_prompt: data.user_prompt,
                  system_prompt: data.system_prompt 
              });
-             onLog?.(`SceneManager: Shot list generated for Scene ${sceneId}.`, 'success');
+             onLog?.(`SceneManager: Shot list generated for Scene ${sceneId}. Please Review/Apply.`, 'success');
+             
+             // Close Prompt Modal, Open Review Modal
              setShotPromptModal({ open: false, sceneId: null, data: null, loading: false });
-             // No need to refresh scenes usually, but maybe good idea?
+             
+             setShotReviewModal({
+                 open: true,
+                 sceneId: sceneId,
+                 data: result.content || [],
+                 loading: false
+             });
          } catch (e) {
              console.error(e);
              onLog?.(`SceneManager: Failed to generate shots - ${e.message}`, 'error');
@@ -2988,6 +3000,126 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
                             >
                                 {shotPromptModal.loading ? <Loader2 className="animate-spin" size={16}/> : <Wand2 size={16}/>}
                                 {shotPromptModal.loading ? "Generating..." : "Generate Shots"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {shotReviewModal.open && (
+                <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+                    <div className="bg-[#1e1e1e] border border-white/10 rounded-lg w-full max-w-[90vw] h-[90vh] flex flex-col shadow-2xl">
+                         <div className="p-4 border-b border-white/10 flex justify-between items-center bg-black/40">
+                            <h3 className="font-bold flex items-center gap-2"><TableIcon size={16} className="text-primary"/> Review AI Generated Shots</h3>
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs text-muted-foreground bg-yellow-500/10 text-yellow-500 px-2 py-1 rounded">Staging Area</span>
+                                <button onClick={() => setShotReviewModal({open: false, sceneId: null, data: null, loading: false})}><X size={18}/></button>
+                            </div>
+                        </div>
+                        
+                        <div className="flex-1 overflow-hidden relative bg-[#121212]">
+                            {/* Simple Table Editor for Staging */}
+                            <div className="absolute inset-0 overflow-auto p-4 custom-scrollbar">
+                                <table className="w-full text-xs text-left border-collapse">
+                                    <thead className="sticky top-0 bg-[#252525] z-10 shadow-md">
+                                        <tr>
+                                            {["Shot ID", "Shot Name", "Content", "Duration", "Entities", "Logic", "Keyframes"].map(h => (
+                                                <th key={h} className="p-2 border-b border-white/10 font-bold text-white/70">{h}</th>
+                                            ))}
+                                            <th className="p-2 border-b border-white/10 w-10"></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-white/5">
+                                        {(shotReviewModal.data || []).map((shot, idx) => (
+                                            <tr key={idx} className="hover:bg-white/5 group">
+                                                <td className="p-1"><input className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded" value={shot["Shot ID"] || shot.shot_id || ''} onChange={e => {
+                                                    const newData = [...shotReviewModal.data];
+                                                    newData[idx] = { ...shot, "Shot ID": e.target.value };
+                                                    setShotReviewModal(prev => ({...prev, data: newData}));
+                                                }} /></td>
+                                                <td className="p-1"><input className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded" value={shot["Shot Name"] || shot.shot_name || ''} onChange={e => {
+                                                    const newData = [...shotReviewModal.data];
+                                                    newData[idx] = { ...shot, "Shot Name": e.target.value };
+                                                    setShotReviewModal(prev => ({...prev, data: newData}));
+                                                }} /></td>
+                                                <td className="p-1"><textarea className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded resize-y min-h-[40px]" value={shot["Video Content"] || shot.video_content || ''} onChange={e => {
+                                                    const newData = [...shotReviewModal.data];
+                                                    newData[idx] = { ...shot, "Video Content": e.target.value };
+                                                    setShotReviewModal(prev => ({...prev, data: newData}));
+                                                }} /></td>
+                                                <td className="p-1 w-20"><input className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded" value={shot["Duration (s)"] || shot.duration || ''} onChange={e => {
+                                                    const newData = [...shotReviewModal.data];
+                                                    newData[idx] = { ...shot, "Duration (s)": e.target.value };
+                                                    setShotReviewModal(prev => ({...prev, data: newData}));
+                                                }} /></td>
+                                                <td className="p-1"><input className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded" value={shot["Associated Entities"] || shot.associated_entities || ''} onChange={e => {
+                                                    const newData = [...shotReviewModal.data];
+                                                    newData[idx] = { ...shot, "Associated Entities": e.target.value };
+                                                    setShotReviewModal(prev => ({...prev, data: newData}));
+                                                }} /></td>
+                                                <td className="p-1"><input className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded" value={shot["Shot Logic (CN)"] || shot.shot_logic_cn || ''} onChange={e => {
+                                                    const newData = [...shotReviewModal.data];
+                                                    newData[idx] = { ...shot, "Shot Logic (CN)": e.target.value };
+                                                    setShotReviewModal(prev => ({...prev, data: newData}));
+                                                }} /></td>
+                                                <td className="p-1"><input className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded" value={shot["Keyframes"] || shot.keyframes || ''} onChange={e => {
+                                                    const newData = [...shotReviewModal.data];
+                                                    newData[idx] = { ...shot, "Keyframes": e.target.value };
+                                                    setShotReviewModal(prev => ({...prev, data: newData}));
+                                                }} /></td>
+                                                <td className="p-1 text-center">
+                                                    <button onClick={() => {
+                                                        const newData = shotReviewModal.data.filter((_, i) => i !== idx);
+                                                        setShotReviewModal(prev => ({...prev, data: newData}));
+                                                    }} className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-500"><Trash2 size={14}/></button>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                                <button onClick={() => {
+                                     const newData = [...(shotReviewModal.data || []), { "Shot ID": (shotReviewModal.data?.length||0)+1, "Video Content": "" }];
+                                     setShotReviewModal(prev => ({...prev, data: newData}));
+                                }} className="mt-4 px-3 py-1 bg-white/5 hover:bg-white/10 rounded flex items-center gap-2 text-xs">
+                                    <Plus size={14}/> Add Row
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="p-4 border-t border-white/10 flex justify-end gap-3 bg-black/20">
+                             <button
+                                onClick={async () => {
+                                    try {
+                                        await updateSceneLatestAIResult(shotReviewModal.sceneId, shotReviewModal.data);
+                                        onLog?.("Staged draft saved.", "success");
+                                    } catch(e) {
+                                        onLog?.("Failed to save draft.", "error");
+                                    }
+                                }}
+                                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded text-sm font-medium"
+                            >
+                                Save Draft
+                            </button>
+                            <button 
+                                onClick={async () => {
+                                    if(!confirm("Apply these shots? This will replace existing shots.")) return;
+                                    setShotReviewModal(prev => ({...prev, loading: true}));
+                                    try {
+                                        await applySceneAIResult(shotReviewModal.sceneId, { content: shotReviewModal.data });
+                                        onLog?.("Shots applied to database.", "success");
+                                        setShotReviewModal({open: false, sceneId: null, data: null, loading: false});
+                                        // Trigger refresh if needed (this component doesn't have refreshShots prop, maybe just relies on parent fetch)
+                                        // The user will likely navigate or refresh
+                                    } catch(e) {
+                                        onLog?.("Failed to apply shots: " + e.message, "error");
+                                        setShotReviewModal(prev => ({...prev, loading: false}));
+                                    }
+                                }}
+                                disabled={shotReviewModal.loading}
+                                className="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-sm font-medium flex items-center gap-2"
+                            >
+                                {shotReviewModal.loading ? <Loader2 className="animate-spin" size={16}/> : <CheckCircle size={16}/>}
+                                Apply to Scene
                             </button>
                         </div>
                     </div>
@@ -4376,6 +4508,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
     // AI Prompt Preview Modal State
     const [shotPromptModal, setShotPromptModal] = useState({ open: false, sceneId: null, data: null, loading: false });
+    const [shotReviewModal, setShotReviewModal] = useState({ open: false, sceneId: null, data: null, loading: false });
 
     // Media Handling
     const [viewMedia, setViewMedia] = useState(null);
@@ -4456,15 +4589,23 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
          setShotPromptModal(prev => ({ ...prev, loading: true }));
          onLog?.(`Generating shots for Scene ${sceneId}...`, 'info');
          try {
-             await generateSceneShots(sceneId, { 
+             // Now returns { content: [], timestamp }
+             const result = await generateSceneShots(sceneId, { 
                  user_prompt: data.user_prompt,
                  system_prompt: data.system_prompt 
              });
-             onLog?.(`Shot list generated for Scene ${sceneId}.`, 'success');
+             onLog?.(`Shot list generated for Scene ${sceneId}. Please Review/Apply.`, 'success');
+             
              setShotPromptModal({ open: false, sceneId: null, data: null, loading: false });
              
-             // Refresh Logic
-             refreshShots();
+             // Open Review
+             setShotReviewModal({
+                 open: true,
+                 sceneId: sceneId,
+                 data: result.content || [],
+                 loading: false
+             });
+             
          } catch (e) {
              console.error(e);
              onLog?.(`Failed to generate shots - ${e.message}`, 'error');
@@ -7042,6 +7183,124 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                             >
                                 {shotPromptModal.loading ? <Loader2 className="animate-spin" size={16}/> : <Wand2 size={16}/>}
                                 {shotPromptModal.loading ? "Generating..." : "Generate Shots"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {shotReviewModal.open && (
+                <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+                    <div className="bg-[#1e1e1e] border border-white/10 rounded-lg w-full max-w-[90vw] h-[90vh] flex flex-col shadow-2xl">
+                         <div className="p-4 border-b border-white/10 flex justify-between items-center bg-black/40">
+                            <h3 className="font-bold flex items-center gap-2"><TableIcon size={16} className="text-primary"/> Review AI Generated Shots</h3>
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs text-muted-foreground bg-yellow-500/10 text-yellow-500 px-2 py-1 rounded">Staging Area</span>
+                                <button onClick={() => setShotReviewModal({open: false, sceneId: null, data: null, loading: false})}><X size={18}/></button>
+                            </div>
+                        </div>
+                        
+                        <div className="flex-1 overflow-hidden relative bg-[#121212]">
+                            <div className="absolute inset-0 overflow-auto p-4 custom-scrollbar">
+                                <table className="w-full text-xs text-left border-collapse">
+                                    <thead className="sticky top-0 bg-[#252525] z-10 shadow-md">
+                                        <tr>
+                                            {["Shot ID", "Shot Name", "Content", "Duration", "Entities", "Logic", "Keyframes"].map(h => (
+                                                <th key={h} className="p-2 border-b border-white/10 font-bold text-white/70">{h}</th>
+                                            ))}
+                                            <th className="p-2 border-b border-white/10 w-10"></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-white/5">
+                                        {(shotReviewModal.data || []).map((shot, idx) => (
+                                            <tr key={idx} className="hover:bg-white/5 group">
+                                                <td className="p-1"><input className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded" value={shot["Shot ID"] || shot.shot_id || ''} onChange={e => {
+                                                    const newData = [...shotReviewModal.data];
+                                                    newData[idx] = { ...shot, "Shot ID": e.target.value };
+                                                    setShotReviewModal(prev => ({...prev, data: newData}));
+                                                }} /></td>
+                                                <td className="p-1"><input className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded" value={shot["Shot Name"] || shot.shot_name || ''} onChange={e => {
+                                                    const newData = [...shotReviewModal.data];
+                                                    newData[idx] = { ...shot, "Shot Name": e.target.value };
+                                                    setShotReviewModal(prev => ({...prev, data: newData}));
+                                                }} /></td>
+                                                <td className="p-1"><textarea className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded resize-y min-h-[40px]" value={shot["Video Content"] || shot.video_content || ''} onChange={e => {
+                                                    const newData = [...shotReviewModal.data];
+                                                    newData[idx] = { ...shot, "Video Content": e.target.value };
+                                                    setShotReviewModal(prev => ({...prev, data: newData}));
+                                                }} /></td>
+                                                <td className="p-1 w-20"><input className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded" value={shot["Duration (s)"] || shot.duration || ''} onChange={e => {
+                                                    const newData = [...shotReviewModal.data];
+                                                    newData[idx] = { ...shot, "Duration (s)": e.target.value };
+                                                    setShotReviewModal(prev => ({...prev, data: newData}));
+                                                }} /></td>
+                                                <td className="p-1"><input className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded" value={shot["Associated Entities"] || shot.associated_entities || ''} onChange={e => {
+                                                    const newData = [...shotReviewModal.data];
+                                                    newData[idx] = { ...shot, "Associated Entities": e.target.value };
+                                                    setShotReviewModal(prev => ({...prev, data: newData}));
+                                                }} /></td>
+                                                <td className="p-1"><input className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded" value={shot["Shot Logic (CN)"] || shot.shot_logic_cn || ''} onChange={e => {
+                                                    const newData = [...shotReviewModal.data];
+                                                    newData[idx] = { ...shot, "Shot Logic (CN)": e.target.value };
+                                                    setShotReviewModal(prev => ({...prev, data: newData}));
+                                                }} /></td>
+                                                <td className="p-1"><input className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded" value={shot["Keyframes"] || shot.keyframes || ''} onChange={e => {
+                                                    const newData = [...shotReviewModal.data];
+                                                    newData[idx] = { ...shot, "Keyframes": e.target.value };
+                                                    setShotReviewModal(prev => ({...prev, data: newData}));
+                                                }} /></td>
+                                                <td className="p-1 text-center">
+                                                    <button onClick={() => {
+                                                        const newData = shotReviewModal.data.filter((_, i) => i !== idx);
+                                                        setShotReviewModal(prev => ({...prev, data: newData}));
+                                                    }} className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-500"><Trash2 size={14}/></button>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                                <button onClick={() => {
+                                     const newData = [...(shotReviewModal.data || []), { "Shot ID": (shotReviewModal.data?.length||0)+1, "Video Content": "" }];
+                                     setShotReviewModal(prev => ({...prev, data: newData}));
+                                }} className="mt-4 px-3 py-1 bg-white/5 hover:bg-white/10 rounded flex items-center gap-2 text-xs">
+                                    <Plus size={14}/> Add Row
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="p-4 border-t border-white/10 flex justify-end gap-3 bg-black/20">
+                             <button
+                                onClick={async () => {
+                                    try {
+                                        await updateSceneLatestAIResult(shotReviewModal.sceneId, { content: shotReviewModal.data });
+                                        onLog?.("Staged draft saved.", "success");
+                                    } catch(e) {
+                                        onLog?.("Failed to save draft.", "error");
+                                    }
+                                }}
+                                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded text-sm font-medium"
+                            >
+                                Save Draft
+                            </button>
+                             <button 
+                                onClick={async () => {
+                                    if(!confirm("Apply these shots? This will replace existing shots.")) return;
+                                    setShotReviewModal(prev => ({...prev, loading: true}));
+                                    try {
+                                        await applySceneAIResult(shotReviewModal.sceneId, { content: shotReviewModal.data });
+                                        onLog?.("Shots applied to database.", "success");
+                                        setShotReviewModal({open: false, sceneId: null, data: null, loading: false});
+                                        if (typeof refreshShots === 'function') refreshShots();
+                                    } catch(e) {
+                                        onLog?.("Failed to apply shots: " + e.message, "error");
+                                        setShotReviewModal(prev => ({...prev, loading: false}));
+                                    }
+                                }}
+                                disabled={shotReviewModal.loading}
+                                className="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-sm font-medium flex items-center gap-2"
+                            >
+                                {shotReviewModal.loading ? <Loader2 className="animate-spin" size={16}/> : <CheckCircle size={16}/>}
+                                Apply to Scene
                             </button>
                         </div>
                     </div>

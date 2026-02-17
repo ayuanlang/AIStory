@@ -140,7 +140,8 @@ class Scene(Base):
     environment_name = Column(Text, nullable=True) # was environment_anchor
     
     linked_characters = Column(Text, nullable=True) 
-    key_props = Column(Text, nullable=True)         
+    key_props = Column(Text, nullable=True)
+    ai_shots_result = Column(Text, nullable=True)         
 
     episode = relationship("Episode", back_populates="scenes")
     shots = relationship("Shot", back_populates="scene")
