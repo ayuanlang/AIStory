@@ -2,35 +2,346 @@ from sqlalchemy.orm import Session
 from app.models.all_models import User, PricingRule, TransactionHistory
 from fastapi import HTTPException
 import logging
+import math
+import re
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
 class BillingService:
+    TOKEN_UNIT_TYPES = {'per_token', 'per_1k_tokens', 'per_million_tokens'}
+
+    @staticmethod
+    def _estimate_tokens_from_text(text: str) -> int:
+        if not text:
+            return 0
+
+        # Normalize whitespace; bytes-based heuristic works reasonably across CJK/EN.
+        normalized = re.sub(r"\s+", " ", str(text)).strip()
+        if not normalized:
+            return 0
+
+        # Heuristic: ~4 bytes per token on average.
+        return max(1, int(math.ceil(len(normalized.encode("utf-8")) / 4.0)))
+
+    @staticmethod
+    def estimate_input_output_tokens_from_messages(
+        messages: List[Dict[str, Any]],
+        output_ratio: float = 1.5
+    ) -> Dict[str, int]:
+        """
+        Estimates token usage based on the *actual system/user prompts* we send.
+        Output tokens are estimated as input_tokens * output_ratio.
+
+        Notes:
+        - Counts only textual parts for multimodal messages.
+        - Adds a small per-message overhead to reduce underestimation.
+        """
+        input_tokens = 0
+        overhead_per_message = 4
+
+        for msg in messages or []:
+            input_tokens += overhead_per_message
+            content = msg.get("content")
+
+            if isinstance(content, str):
+                input_tokens += BillingService._estimate_tokens_from_text(content)
+                continue
+
+            # Multimodal / structured content
+            if isinstance(content, list):
+                for part in content:
+                    if not isinstance(part, dict):
+                        continue
+                    # OpenAI: {type: text, text: "..."}
+                    if part.get("type") == "text" and "text" in part:
+                        input_tokens += BillingService._estimate_tokens_from_text(part.get("text"))
+                    # Ark/Doubao style: {type: input_text, text: "..."}
+                    if part.get("type") == "input_text" and "text" in part:
+                        input_tokens += BillingService._estimate_tokens_from_text(part.get("text"))
+                continue
+
+        output_tokens = int(math.ceil(float(input_tokens) * float(output_ratio))) if input_tokens > 0 else 0
+        return {
+            "input_tokens": int(input_tokens),
+            "output_tokens": int(output_tokens),
+            "total_tokens": int(input_tokens + output_tokens)
+        }
+
+    @staticmethod
+    def is_token_pricing(db: Session, task_type: str, provider: str = None, model: str = None) -> bool:
+        rule = BillingService.get_pricing_rule(db, task_type, provider, model)
+        return bool(rule and rule.unit_type in BillingService.TOKEN_UNIT_TYPES)
+
+    @staticmethod
+    def reserve_credits(
+        db: Session,
+        user_id: int,
+        task_type: str,
+        provider: str = None,
+        model: str = None,
+        details: dict = None
+    ) -> TransactionHistory:
+        """Pre-deduct (freeze) estimated credits and create a RESERVED transaction."""
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        reserve_details = dict(details or {})
+        reserve_details.setdefault("status", "RESERVED")
+        reserve_details.setdefault("billing_mode", "RESERVE")
+
+        reserved_cost = BillingService.estimate_cost(db, task_type, provider, model, details=reserve_details)
+        BillingService.check_can_proceed(user, reserved_cost)
+
+        user.credits -= reserved_cost
+
+        tx = TransactionHistory(
+            user_id=user_id,
+            amount=-reserved_cost,
+            balance_after=user.credits or 0,
+            task_type=task_type,
+            provider=provider,
+            model=model,
+            details=reserve_details
+        )
+        db.add(tx)
+        db.commit()
+        db.refresh(tx)
+        logger.info(
+            f"Reserved {reserved_cost} credits from user {user_id} for {task_type}. New Balance: {user.credits}"
+        )
+        return tx
+
+    @staticmethod
+    def cancel_reservation(db: Session, reservation_tx_id: int, error_msg: str = None) -> Optional[TransactionHistory]:
+        """Refunds a reservation when an upstream call fails."""
+        tx = db.query(TransactionHistory).filter(TransactionHistory.id == reservation_tx_id).first()
+        if not tx:
+            return None
+
+        if tx.amount >= 0:
+            return tx
+
+        user = db.query(User).filter(User.id == tx.user_id).first()
+        if not user:
+            return tx
+
+        reserved_cost = int(abs(tx.amount))
+        user.credits = (user.credits or 0) + reserved_cost
+
+        refund_details = {
+            "status": "REFUND",
+            "reason": "RESERVATION_CANCELED",
+            "reservation_tx_id": tx.id,
+        }
+        if error_msg:
+            refund_details["error"] = str(error_msg)[:500]
+
+        refund_tx = TransactionHistory(
+            user_id=tx.user_id,
+            amount=reserved_cost,
+            balance_after=user.credits or 0,
+            task_type=tx.task_type,
+            provider=tx.provider,
+            model=tx.model,
+            details=refund_details,
+        )
+        db.add(refund_tx)
+
+        tx_details = dict(tx.details or {})
+        tx_details["status"] = "CANCELED"
+        tx_details["refund_tx_id"] = refund_tx.id  # may be None until commit
+        if error_msg:
+            tx_details["error"] = str(error_msg)[:500]
+        tx.details = tx_details
+
+        db.commit()
+        db.refresh(refund_tx)
+
+        # Backfill link after we know refund id
+        tx_details = dict(tx.details or {})
+        tx_details["refund_tx_id"] = refund_tx.id
+        tx.details = tx_details
+        db.commit()
+
+        return refund_tx
+
+    @staticmethod
+    def settle_reservation(
+        db: Session,
+        reservation_tx_id: int,
+        actual_details: dict = None
+    ) -> Dict[str, Any]:
+        """
+        Reconciles a RESERVED transaction using actual token usage.
+        Creates a settlement transaction if refund/extra charge is needed.
+        Updates the reservation transaction's details with actual usage and settlement refs.
+        """
+        reservation_tx = db.query(TransactionHistory).filter(TransactionHistory.id == reservation_tx_id).first()
+        if not reservation_tx:
+            raise HTTPException(status_code=404, detail="Reservation transaction not found")
+
+        user = db.query(User).filter(User.id == reservation_tx.user_id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        reserved_cost = int(abs(reservation_tx.amount or 0))
+        details = dict(actual_details or {})
+        details.setdefault("billing_mode", "ACTUAL")
+
+        # Normalize usage keys
+        if "input_tokens" not in details and "prompt_tokens" in details:
+            details["input_tokens"] = details.get("prompt_tokens", 0)
+        if "output_tokens" not in details and "completion_tokens" in details:
+            details["output_tokens"] = details.get("completion_tokens", 0)
+
+        actual_cost = BillingService.estimate_cost(
+            db,
+            reservation_tx.task_type,
+            reservation_tx.provider,
+            reservation_tx.model,
+            details=details
+        )
+
+        delta = int(actual_cost - reserved_cost)
+        settlement_tx = None
+        outstanding = 0
+
+        if delta < 0:
+            refund = -delta
+            user.credits = (user.credits or 0) + refund
+            settlement_tx = TransactionHistory(
+                user_id=user.id,
+                amount=refund,
+                balance_after=user.credits or 0,
+                task_type=reservation_tx.task_type,
+                provider=reservation_tx.provider,
+                model=reservation_tx.model,
+                details={
+                    "status": "REFUND",
+                    "reason": "RESERVATION_SETTLEMENT",
+                    "reservation_tx_id": reservation_tx.id,
+                    "reserved_cost": reserved_cost,
+                    "actual_cost": actual_cost,
+                }
+            )
+            db.add(settlement_tx)
+        elif delta > 0:
+            extra = delta
+            can_deduct = min(int(user.credits or 0), extra)
+            if can_deduct > 0:
+                user.credits -= can_deduct
+                settlement_tx = TransactionHistory(
+                    user_id=user.id,
+                    amount=-can_deduct,
+                    balance_after=user.credits or 0,
+                    task_type=reservation_tx.task_type,
+                    provider=reservation_tx.provider,
+                    model=reservation_tx.model,
+                    details={
+                        "status": "CHARGE",
+                        "reason": "RESERVATION_SETTLEMENT",
+                        "reservation_tx_id": reservation_tx.id,
+                        "reserved_cost": reserved_cost,
+                        "actual_cost": actual_cost,
+                        "delta": delta,
+                    }
+                )
+                db.add(settlement_tx)
+
+            outstanding = extra - can_deduct
+            if outstanding > 0:
+                logger.warning(
+                    f"User {user.id} could not cover settlement delta={extra}. outstanding={outstanding}"
+                )
+
+        # Update reservation details for audit
+        res_details = dict(reservation_tx.details or {})
+        res_details["status"] = "SETTLED"
+        res_details["reserved_cost"] = reserved_cost
+        res_details["actual_cost"] = actual_cost
+        res_details["delta"] = delta
+        if outstanding > 0:
+            res_details["outstanding_delta"] = outstanding
+
+        if settlement_tx is not None:
+            # Will be populated after commit/refresh, but keep placeholder for clarity.
+            res_details["settlement_tx_id"] = None
+
+        # Add actual usage details (token counts, etc)
+        res_details.update({
+            "actual_input_tokens": int(details.get("input_tokens", 0) or 0),
+            "actual_output_tokens": int(details.get("output_tokens", 0) or 0),
+            "actual_total_tokens": int(details.get("total_tokens", 0) or 0),
+        })
+        reservation_tx.details = res_details
+
+        db.commit()
+        if settlement_tx:
+            db.refresh(settlement_tx)
+
+            # Backfill settlement id into reservation details
+            res_details = dict(reservation_tx.details or {})
+            res_details["settlement_tx_id"] = settlement_tx.id
+            reservation_tx.details = res_details
+            db.commit()
+
+        return {
+            "reserved_cost": reserved_cost,
+            "actual_cost": actual_cost,
+            "delta": delta,
+            "settlement_tx_id": settlement_tx.id if settlement_tx else None,
+            "outstanding_delta": outstanding,
+        }
     @staticmethod
     def get_pricing_rule(db: Session, task_type: str, provider: str = None, model: str = None) -> PricingRule:
         """
         Finds the pricing rule for the given parameters.
-        STRICT MATCH only. 
-        If provider/model are provided, we look for that exact combination.
-        If they are None, we look for None.
-        We do NOT fallback to generic rules if specific ones are missing.
+        Matching priority:
+        1) Exact match on (task_type, provider, model)
+        2) Fallback on (task_type, provider, model=None) if model-specific not found
+        3) Fallback on generic (task_type, provider=None, model=None) if provider-specific not found
         """
-        query = db.query(PricingRule).filter(
+        base = db.query(PricingRule).filter(
             PricingRule.task_type == task_type,
             PricingRule.is_active == True
         )
-        
-        if provider:
-            query = query.filter(PricingRule.provider == provider)
+
+        # 1) Exact
+        if provider is not None:
+            q = base.filter(PricingRule.provider == provider)
         else:
-            query = query.filter(PricingRule.provider == None)
-            
-        if model:
-            query = query.filter(PricingRule.model == model)
+            q = base.filter(PricingRule.provider == None)
+
+        if model is not None:
+            q = q.filter(PricingRule.model == model)
         else:
-            query = query.filter(PricingRule.model == None)
-            
-        return query.first()
+            q = q.filter(PricingRule.model == None)
+
+        rule = q.first()
+        if rule:
+            return rule
+
+        # 2) Provider-level fallback (model=None)
+        if provider is not None and model is not None:
+            rule = base.filter(
+                PricingRule.provider == provider,
+                PricingRule.model == None
+            ).first()
+            if rule:
+                return rule
+
+        # 3) Generic fallback
+        if provider is not None or model is not None:
+            rule = base.filter(
+                PricingRule.provider == None,
+                PricingRule.model == None
+            ).first()
+            if rule:
+                return rule
+
+        return None
 
     @staticmethod
     def estimate_cost(db: Session, task_type: str, provider: str = None, model: str = None, details: dict = None) -> int:
@@ -42,40 +353,35 @@ class BillingService:
 
         # Advanced Calculation Logic
         try:
-            # LLM Dual Pricing (Input/Output Tokens) - Applies to any text/vision task with token details
-            task_type_allowed_for_tokens = task_type in ['llm_chat', 'analysis', 'analysis_character']
-            if task_type_allowed_for_tokens and details and ('input_tokens' in details or 'output_tokens' in details):
-                input_tokens = details.get('input_tokens', 0)
-                output_tokens = details.get('output_tokens', 0)
-                
-                # If specific input/output costs are set, use them
-                if rule.cost_input is not None and rule.cost_output is not None:
-                     # Calculate based on unit_type (usually per_million_tokens for LLMs)
-                    divisor = 1_000_000.0 if rule.unit_type == 'per_million_tokens' else \
-                              1_000.0 if rule.unit_type == 'per_1k_tokens' else 1.0
-                    
-                    cost_in = (float(input_tokens) / divisor) * float(rule.cost_input)
-                    cost_out = (float(output_tokens) / divisor) * float(rule.cost_output)
-                    
-                    # User requirement: Calculate exact cost for small amounts (e.g. 0.3M -> 0.3 * unit_cost)
-                    # However, credits are strictly Integers.
-                    # We will sum them first as float, then round.
-                    # Standard policy: Ceil to 1 if > 0 but < 1? Or standard round?
-                    # "0.3M should be 1/3" implies precise ratio.
-                    # If cost_input=100 (for 1M), then 0.3M -> 30 credits.
-                    # If cost_input=1 (for 1M), then 0.3M -> 0.3 credits -> 0 or 1?
-                    # Generally billing systems floor or round. 
-                    # If the user emphasizes "0.3M should be 1/3", they likely have high unit costs (like 200/250)
-                    # So precise float calculation is key.
-                    
-                    total_calculated = cost_in + cost_out
-                    
-                    # If total > 0 but < 1, we must charge at least 1 if we charge anything?
-                    # Or we allow 0 for very small usage? 
-                    # Usually 'max(1, ...)' is safe to avoid free usage loopholes.
-                    # But if total is 60.5, we should probably round to 61 or 60.
-                    
-                    return int(max(1, round(total_calculated)))
+            # Token-unit dual pricing (Input/Output) is driven by unit_type, not task_type.
+            if details and rule.unit_type in BillingService.TOKEN_UNIT_TYPES and (
+                'input_tokens' in details or 'output_tokens' in details or 'total_tokens' in details
+            ):
+                input_tokens = details.get('input_tokens', None)
+                output_tokens = details.get('output_tokens', None)
+
+                # Back-compat: if caller only provides total_tokens, treat as input.
+                if input_tokens is None and output_tokens is None:
+                    input_tokens = details.get('total_tokens', 0)
+                    output_tokens = 0
+                else:
+                    input_tokens = input_tokens or 0
+                    output_tokens = output_tokens or 0
+
+                if rule.cost_input is None or rule.cost_output is None or rule.cost_input <= 0 or rule.cost_output <= 0:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Pricing configuration error: token unit type requires positive cost_input and cost_output."
+                    )
+
+                divisor = 1_000_000.0 if rule.unit_type == 'per_million_tokens' else \
+                          1_000.0 if rule.unit_type == 'per_1k_tokens' else 1.0
+
+                cost_in = (float(input_tokens) / divisor) * float(rule.cost_input)
+                cost_out = (float(output_tokens) / divisor) * float(rule.cost_output)
+
+                total_calculated = cost_in + cost_out
+                return int(max(1, round(total_calculated)))
 
             # Standard Unit Multipliers
             quantity = 1.0

@@ -6,7 +6,7 @@ from app.core.config import settings
 from app.api import endpoints, settings as settings_api
 from app.db.session import engine
 from app.models.all_models import Base
-from app.core.logging import LoggingMiddleware, logger
+from app.core.logging import LoggingMiddleware, logger, configure_uvicorn_logging_noise_reduction
 from app.db.init_db import check_and_migrate_tables, create_default_superuser, init_initial_data
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
@@ -27,6 +27,11 @@ app.add_middleware(LoggingMiddleware)
 import os
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads")
+
+
+@app.on_event("startup")
+async def _startup_logging_noise_reduction():
+    configure_uvicorn_logging_noise_reduction()
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):

@@ -119,6 +119,38 @@ def check_and_migrate_tables():
                             logger.error(f"Failed to add {col_name} with SQLite syntax: {e_sqlite}")
                             raise e_sqlite # Re-raise if both fail
 
+        # --- Episodes table migrations ---
+        try:
+            inspector = inspect(engine)
+            existing_episode_columns = [c['name'] for c in inspector.get_columns('episodes')]
+            episode_columns_to_check = [
+                ("ai_scene_analysis_result", "TEXT"),
+                ("character_profiles", "JSON")
+            ]
+
+            missing_episode_cols = [(n, t) for (n, t) in episode_columns_to_check if n not in existing_episode_columns]
+            if missing_episode_cols:
+                with engine.begin() as conn:
+                    for col_name, col_type in missing_episode_cols:
+                        try:
+                            # Postgres: IF NOT EXISTS is safe; SQLite will fail and we fallback.
+                            if engine.dialect.name == 'postgresql':
+                                conn.execute(text(f"ALTER TABLE episodes ADD COLUMN IF NOT EXISTS {col_name} {col_type}"))
+                            else:
+                                conn.execute(text(f"ALTER TABLE episodes ADD COLUMN {col_name} {col_type}"))
+                            logger.info(f"Ensured episodes.{col_name} exists")
+                        except Exception as e1:
+                            # SQLite fallback (no IF NOT EXISTS)
+                            if engine.dialect.name != 'postgresql':
+                                logger.error(f"Failed to add episodes.{col_name}: {e1}")
+                                raise
+                            logger.error(f"Failed to add episodes.{col_name}: {e1}")
+                            raise
+        except Exception as e:
+            logger.error(f"Episodes table migration failed: {e}")
+            # Do not crash startup; but keep visibility
+            # raise
+
         # 3. Verify Users
         inspector = inspect(engine)
         final_cols = [c['name'] for c in inspector.get_columns('users')]
@@ -193,6 +225,7 @@ def check_and_migrate_tables():
                      # If existing table is Postgres, ALTER TABLE ADD COLUMN ... TEXT works fine
                      conn.execute(text("ALTER TABLE scenes ADD COLUMN ai_shots_result TEXT"))
                      logger.info("Successfully added scenes.ai_shots_result")
+
         except Exception as e:
              logger.error(f"Failed to migrate scenes table: {e}")
         
@@ -372,3 +405,14 @@ def init_initial_data():
         logger.error(f"Failed to initialize data: {e}")
     finally:
         db.close()
+
+
+def init_db():
+    """Convenience entrypoint used by scripts/ops.
+
+    Runs schema checks/migrations and seeds required initial data.
+    Safe to call multiple times.
+    """
+    check_and_migrate_tables()
+    create_default_superuser()
+    init_initial_data()

@@ -19,11 +19,11 @@ Lighting: soft front light + rim light for silhouette.
 Background: white.
 anchor_description：【thumbnail_readability】.
 Style: follow [Global Style].
-Output: six high-resolution PNGs or a 6-panel composite; include neutral T-pose reference and scale marker; no text, watermark, or layout; End note: white background, high quality, large files, no text, no layout.
+Output: six high-resolution PNGs or a 6-panel composite; include a neutral T-pose reference and a simple scale marker; no labels, no captions, no watermark; End note: white background, high quality, large files, no text.
 """
 
 PROP_PROMPT_TEMPLATE = """
-[Global Style] Prop: 【PropName (state)】. Material: 【primary_material】; secondary materials: 【list】. Size: ~【dimensions cm or relative to reference】. Relative scale reference: 【reference_subject e.g., belt buckle, chair】. Visible details: 【surface texture, wear, markings, seams, labels】. Lighting for capture: 【direction, intensity, color_temp】; shadow behavior: 【soft/hard】. Camera framing: 【view e.g., front 3/4; macro insert】. anchor_description：【thumbnail_readability】. Background: white. **Strictly Object Only: No characters, no hands, no body parts visible.** Output: single object PNG with alpha; include scale ruler overlay; End note: white background, high quality, large file, no text, no layout.
+[Global Style] Prop: 【PropName (state)】. Material: 【primary_material】; secondary materials: 【list】. Size: ~【dimensions cm or relative to reference】. Relative scale reference: 【reference_subject e.g., belt buckle, chair】. Visible details: 【surface texture, wear, markings, seams, labels】. Lighting for capture: 【direction, intensity, color_temp】; shadow behavior: 【soft/hard】. Camera framing: 【view e.g., front 3/4; macro insert】. anchor_description：【thumbnail_readability】. Background: white. **Strictly Object Only: No characters, no hands, no body parts visible.** Output: single object PNG with alpha; include a simple, unobtrusive scale marker (no numbers/text); End note: white background, high quality, large file, no text.
 """
 
 ENVIRONMENT_PROMPT_TEMPLATE = """

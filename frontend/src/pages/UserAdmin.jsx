@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { api, getPricingRules, createPricingRule, updatePricingRule, deletePricingRule, getTransactions, updateUserCredits, syncPricingRules } from '../services/api';
+import { api, getPricingRules, createPricingRule, updatePricingRule, deletePricingRule, getTransactions, updateUserCredits, syncPricingRules, getBillingOptions } from '../services/api';
 import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
 import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard } from 'lucide-react';
@@ -8,6 +8,7 @@ const UserAdmin = () => {
     const [activeTab, setActiveTab] = useState('users');
     const [users, setUsers] = useState([]);
     const [pricingRules, setPricingRules] = useState([]);
+    const [billingOptions, setBillingOptions] = useState(null);
     const [transactions, setTransactions] = useState([]);
     const [transactionFilterUser, setTransactionFilterUser] = useState(''); // User ID filter
     const [loading, setLoading] = useState(true);
@@ -16,7 +17,7 @@ const UserAdmin = () => {
     // New/Edit Rule State
     const [isRuleModalOpen, setIsRuleModalOpen] = useState(false);
     const [editingRule, setEditingRule] = useState(null);
-    const [ruleForm, setRuleForm] = useState({ task_type: 'llm_chat', provider: '', model: '', cost: 1, unit_type: 'per_call' });
+    const [ruleForm, setRuleForm] = useState({ task_type: 'llm_chat', provider: '', model: '', cost: 1, cost_input: 0, cost_output: 0, unit_type: 'per_call' });
     
     // Calculator State
     const [calcPriceUSD, setCalcPriceUSD] = useState('');
@@ -38,6 +39,13 @@ const UserAdmin = () => {
     const [isPaymentConfigLoading, setIsPaymentConfigLoading] = useState(false);
 
     // ... existing code ...
+
+    const isTokenUnitType = (unitType) => ['per_token', 'per_1k_tokens', 'per_million_tokens'].includes(unitType);
+    const tokenUnitLabel = (unitType) => {
+        if (unitType === 'per_1k_tokens') return '1K';
+        if (unitType === 'per_token') return 'token';
+        return '1M';
+    };
 
     const fetchPaymentConfig = async () => {
         setIsPaymentConfigLoading(true);
@@ -92,8 +100,8 @@ const UserAdmin = () => {
             validUpdate = true;
         }
 
-        // Dual Cost Calculation (LLM)
-        if (ruleForm.task_type === 'llm_chat') {
+        // Dual Cost Calculation (Token-based)
+        if (isTokenUnitType(ruleForm.unit_type)) {
             const pInput = parseFloat(calcPriceInput);
             const pOutput = parseFloat(calcPriceOutput);
             
@@ -112,85 +120,30 @@ const UserAdmin = () => {
         if (validUpdate) {
             setRuleForm(prev => ({ ...prev, ...updates }));
         }
-    }, [calcPriceUSD, calcPriceInput, calcPriceOutput, exchangeRate, markup, ruleForm.task_type]);
+    }, [calcPriceUSD, calcPriceInput, calcPriceOutput, exchangeRate, markup, ruleForm.unit_type]);
 
     // Credit Edit State
     const [creditEditUser, setCreditEditUser] = useState(null);
     const [creditAmount, setCreditAmount] = useState(0);
 
-    const PROVIDER_OPTIONS = {
-        llm_chat: [
-            { value: 'openai', label: 'OpenAI / Compatible' },
-            { value: 'doubao', label: 'Doubao (Volcengine)' },
-            { value: 'ollama', label: 'Ollama (Local)' },
-            { value: 'deepseek', label: 'DeepSeek' },
-            { value: 'grsai', label: 'Grsai (Aggregation)' }
-        ],
-        image_gen: [
-            { value: 'Midjourney', label: 'Midjourney' },
-            { value: 'Doubao', label: 'Doubao (Volcengine)' },
-            { value: 'Grsai-Image', label: 'Grsai (Aggregation)' },
-            { value: 'DALL-E 3', label: 'DALL-E 3' },
-            { value: 'Stable Diffusion', label: 'Stable Diffusion' },
-            { value: 'Flux', label: 'Flux.1' },
-            { value: 'Tencent Hunyuan', label: 'Tencent Hunyuan' }
-        ],
-        video_gen: [
-            { value: 'Runway', label: 'Runway Gen-2/Gen-3' },
-            { value: 'Luma', label: 'Luma Dream Machine' },
-            { value: 'Kling', label: 'Kling AI' },
-            { value: 'Sora', label: 'Sora (OpenAI)' },
-            { value: 'Grsai-Video', label: 'Grsai (Standard)' },
-            { value: 'Grsai-Video (Upload)', label: 'Grsai (Upload)' },
-            { value: 'Stable Video', label: 'Stable Video' },
-            { value: 'Doubao Video', label: 'Doubao (Volcengine)' },
-            { value: 'Wanxiang', label: 'Wanxiang (Aliyun)' },
-            { value: 'Vidu (Video)', label: 'Vidu (Shengshu)' }
-        ],
-        analysis: [
-            { value: 'openai', label: 'OpenAI' },
-            { value: 'grsai', label: 'Grsai' },
-            { value: 'claude', label: 'Claude' },
-            { value: 'gemini', label: 'Gemini' }
-        ],
-        analysis_character: [
-            { value: 'openai', label: 'OpenAI' },
-            { value: 'grsai', label: 'Grsai' }
-        ]
+    const providerOptionsForTask = (taskType) => {
+        const providers = billingOptions?.providersByTaskType?.[taskType] || [];
+        return providers.map(p => ({ value: p, label: p }));
     };
 
-    const MODEL_OPTIONS = {
-        'Grsai-Image': [
-            'sora-image', 'gpt-image-1.5', 'sora-create-character', 'sora-upload-character', 
-            'nano-banana-pro', 'nano-banana-pro-vt', 'nano-banana-fast', 'nano-banana-pro-cl', 
-            'nano-banana-pro-vip', 'nano-banana', 'nano-banana-pro-4k-vip'
-        ],
-        'Grsai-Video': [
-            'sora-2', 'veo3.1-pro', 'veo3.1-fast', 'veo3.1-pro-1080p', 'veo3.1-pro-4k', 
-            'veo3.1-fast-1080p', 'veo3.1-fast-4k', 'nano-banana-pro', 'nano-banana-pro-vt', 
-            'nano-banana-fast', 'nano-banana-pro-cl', 'nano-banana-pro-vip', 'nano-banana', 
-            'nano-banana-pro-4k-vip'
-        ],
-        'Grsai-Video (Upload)': [ 'sora-2', 'veo3.1-pro', 'veo3.1-fast' ],
-        'openai': ['gpt-4o', 'gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo'],
-        'doubao': ['doubao-pro-32k', 'doubao-lite-4k'],
-        'ollama': ['llama3', 'mistral', 'gemma'],
-        'grsai': ['gemini-3-pro', 'claude-3-opus', 'claude-3-sonnet', 'gpt-4-turbo'],
-        'Doubao Video': ['doubao-seedance-1-5-pro-251215'],
-        'Vidu (Video)': ['vidu2.0', 'viduq2-pro', 'viduq2-pro-fast', 'viduq2-turbo', 'viduq1'],
-        'Wanxiang': ['wanx2.1-kf2v-plus'],
-        'Doubao': ['doubao-seedream-4-5-251128'],
-        'Stable Diffusion': ['stable-diffusion-xl-1024-v1-0'],
-        'Tencent Hunyuan': ['201']
+    const modelOptionsForProvider = (provider) => {
+        if (!provider) return [];
+        return billingOptions?.modelsByProvider?.[provider] || [];
     };
 
     const fetchAllData = async () => {
         setLoading(true);
         try {
-            const [usersRes, rulesRes, transRes] = await Promise.allSettled([
+            const [usersRes, rulesRes, transRes, optionsRes] = await Promise.allSettled([
                 api.get('/users'),
                 getPricingRules(),
-                getTransactions(50, transactionFilterUser || null)
+                getTransactions(50, transactionFilterUser || null),
+                getBillingOptions()
             ]);
 
             if (usersRes.status === 'fulfilled') {
@@ -212,26 +165,10 @@ const UserAdmin = () => {
             if (rulesRes.status === 'fulfilled') {
                 const rules = rulesRes.value;
                 setPricingRules(rules);
-                
-                // Dynamically update MODEL_OPTIONS based on existing rules + Hardcoded defaults
-                // This ensures if a rule exists for a model not in hardcode, it appears.
-                const dynamicModels = { ...MODEL_OPTIONS };
-                rules.forEach(r => {
-                    if (r.provider && r.model) {
-                        if (!dynamicModels[r.provider]) dynamicModels[r.provider] = [];
-                        if (!dynamicModels[r.provider].includes(r.model)) {
-                            dynamicModels[r.provider].push(r.model);
-                        }
-                    }
-                });
-                // Force update matching properties if needed, but since MODEL_OPTIONS is const outside, 
-                // we should perhaps use a state for options.
-                // For this quick fix, I will rely on the `syncPricingRules` button logic to populate database,
-                // and here I will just make the dropdown use a verified list or allow custom input.
-                // Actually, the user says "inconsistent with settings". 
-                // Settings uses `backend/app/core/config.py` or hardcoded lists in `Settings.jsx`.
-                // I will grab the list from `Settings.jsx` logic if I can, OR just make the input editable.
-                // Making it editable (or creatable) is best.
+            }
+
+            if (optionsRes.status === 'fulfilled') {
+                setBillingOptions(optionsRes.value);
             }
 
             if (transRes.status === 'fulfilled') setTransactions(transRes.value.sort((a,b)=>b.id-a.id));
@@ -260,6 +197,15 @@ const UserAdmin = () => {
 
     const handleSaveRule = async () => {
         try {
+            if (isTokenUnitType(ruleForm.unit_type)) {
+                const ci = parseInt(ruleForm.cost_input || 0);
+                const co = parseInt(ruleForm.cost_output || 0);
+                if (ci <= 0 || co <= 0) {
+                    alert('Token unit types require both Input and Output token costs (> 0).');
+                    return;
+                }
+            }
+
             if (editingRule) {
                 await updatePricingRule(editingRule.id, ruleForm);
             } else {
@@ -597,8 +543,10 @@ const UserAdmin = () => {
                                     <button 
                                         onClick={() => { 
                                             setEditingRule(null); 
-                                            setRuleForm({ task_type: 'llm_chat', provider: '', model: '', cost: 1, unit_type: 'per_call' }); 
+                                            setRuleForm({ task_type: 'llm_chat', provider: '', model: '', cost: 1, cost_input: 0, cost_output: 0, unit_type: 'per_call' }); 
                                             setCalcPriceUSD('');
+                                            setCalcPriceInput('');
+                                            setCalcPriceOutput('');
                                             setExchangeRate(10);
                                             setMarkup('1.0');
                                             setIsRuleModalOpen(true); 
@@ -628,10 +576,10 @@ const UserAdmin = () => {
                                                 <td className="p-3">{rule.model || '* (All)'}</td>
                                                 <td className="p-3"><span className="bg-gray-700 px-2 py-0.5 rounded text-xs">{rule.task_type}</span></td>
                                                 <td className="p-3">
-                                                    {rule.task_type === 'llm_chat' && (rule.cost_input || rule.cost_output) ? (
+                                                    {isTokenUnitType(rule.unit_type) ? (
                                                         <div className="flex flex-col text-xs font-mono">
-                                                            <span className="text-blue-300" title="Input Tokens">In: {rule.cost_input} <span className="text-gray-600">/ M</span></span>
-                                                            <span className="text-green-300" title="Output Tokens">Out: {rule.cost_output} <span className="text-gray-600">/ M</span></span>
+                                                            <span className="text-blue-300" title="Input Tokens">In: {rule.cost_input} <span className="text-gray-600">/ {tokenUnitLabel(rule.unit_type)}</span></span>
+                                                            <span className="text-green-300" title="Output Tokens">Out: {rule.cost_output} <span className="text-gray-600">/ {tokenUnitLabel(rule.unit_type)}</span></span>
                                                         </div>
                                                     ) : (
                                                         <span className="font-bold text-yellow-400">
@@ -776,7 +724,7 @@ const UserAdmin = () => {
                                         onChange={e => setRuleForm({...ruleForm, provider: e.target.value || null, model: ''})}
                                     >
                                         <option value="">Any (*)</option>
-                                        {(PROVIDER_OPTIONS[ruleForm.task_type] || []).map(opt => (
+                                        {providerOptionsForTask(ruleForm.task_type).map(opt => (
                                             <option key={opt.value} value={opt.value}>{opt.label}</option>
                                         ))}
                                     </select>
@@ -789,7 +737,7 @@ const UserAdmin = () => {
                                         onChange={e => setRuleForm({...ruleForm, model: e.target.value || null})}
                                     >
                                        <option value="">Any (*)</option>
-                                       {(MODEL_OPTIONS[ruleForm.provider] || []).map(m => (
+                                       {modelOptionsForProvider(ruleForm.provider).map(m => (
                                            <option key={m} value={m}>{m}</option>
                                        ))}
                                     </select>
@@ -814,11 +762,11 @@ const UserAdmin = () => {
                             <div className="bg-black/40 p-3 rounded border border-white/5 space-y-3">
                                 <label className="block text-xs font-medium text-blue-400 uppercase">Auto-Calculate Cost (CNY)</label>
                                 
-                                {ruleForm.task_type === 'llm_chat' ? (
+                                {isTokenUnitType(ruleForm.unit_type) ? (
                                     /* LLM Dual Pricing Calculator */
                                     <div className="grid grid-cols-2 gap-3 mb-2">
                                         <div>
-                                            <label className="block text-[10px] text-gray-400 mb-1">Input Price (Per {ruleForm.unit_type === 'per_1k_tokens' ? '1K' : '1M'} Tokens)</label>
+                                            <label className="block text-[10px] text-gray-400 mb-1">Input Price (Per {tokenUnitLabel(ruleForm.unit_type)} Tokens)</label>
                                             <input 
                                                 type="number" 
                                                 step="0.0001"
@@ -829,7 +777,7 @@ const UserAdmin = () => {
                                             />
                                         </div>
                                         <div>
-                                            <label className="block text-[10px] text-gray-400 mb-1">Output Price (Per {ruleForm.unit_type === 'per_1k_tokens' ? '1K' : '1M'} Tokens)</label>
+                                            <label className="block text-[10px] text-gray-400 mb-1">Output Price (Per {tokenUnitLabel(ruleForm.unit_type)} Tokens)</label>
                                             <input 
                                                 type="number" 
                                                 step="0.0001"
@@ -904,7 +852,7 @@ const UserAdmin = () => {
                                     <div className="flex justify-between items-center border-t border-white/10 pt-1">
                                         <span className="text-yellow-500 font-bold">Final Cost:</span>
                                         <span className="font-mono text-yellow-400 font-bold text-sm">
-                                            {ruleForm.task_type === 'llm_chat' ? (
+                                            {isTokenUnitType(ruleForm.unit_type) ? (
                                                 <span>
                                                     In: {Math.ceil((parseFloat(calcPriceInput)||0) * exchangeRate * markup)} / 
                                                     Out: {Math.ceil((parseFloat(calcPriceOutput)||0) * exchangeRate * markup)}
@@ -922,12 +870,12 @@ const UserAdmin = () => {
 
                             <div>
                                 <label className="block text-sm text-gray-400 mb-1">
-                                    {ruleForm.task_type === 'llm_chat' ? 'Cost (Credits: Input / Output)' : 'Cost (Credits)'}
+                                    {isTokenUnitType(ruleForm.unit_type) ? 'Cost (Credits: Input / Output)' : 'Cost (Credits)'}
                                 </label>
-                                {ruleForm.task_type === 'llm_chat' ? (
+                                {isTokenUnitType(ruleForm.unit_type) ? (
                                      <div className="grid grid-cols-2 gap-2">
                                         <div>
-                                            <span className="text-[10px] text-gray-500">Input (per 1M)</span>
+                                            <span className="text-[10px] text-gray-500">Input (per {tokenUnitLabel(ruleForm.unit_type)})</span>
                                             <input 
                                                 type="number" 
                                                 className="w-full bg-gray-800 border border-gray-700 rounded p-2 font-mono text-yellow-400 font-bold"
@@ -936,7 +884,7 @@ const UserAdmin = () => {
                                             />
                                         </div>
                                         <div>
-                                            <span className="text-[10px] text-gray-500">Output (per 1M)</span>
+                                            <span className="text-[10px] text-gray-500">Output (per {tokenUnitLabel(ruleForm.unit_type)})</span>
                                             <input 
                                                 type="number" 
                                                 className="w-full bg-gray-800 border border-gray-700 rounded p-2 font-mono text-yellow-400 font-bold"

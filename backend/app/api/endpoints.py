@@ -33,6 +33,7 @@ import uuid
 from PIL import Image
 import requests
 import asyncio
+import urllib.parse
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/login/access-token")
 
@@ -130,12 +131,55 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
     Returns the raw analysis result (Markdown/JSON).
     """
     logger.info("Received analyze_scene request")
+    try:
+        logger.info(f"[analyze_scene] request.episode_id={getattr(request, 'episode_id', None)}")
+    except Exception:
+        pass
     if request.project_metadata:
-        logger.info(f"Project Metadata received: {request.project_metadata}")
+        try:
+            keys = list(request.project_metadata.keys())
+        except Exception:
+            keys = []
+        logger.info(f"Project Metadata received (keys only): {keys}")
     else:
         logger.info("No Project Metadata received")
 
     try:
+        def _estimate_tokens(text: str) -> int:
+            if not text:
+                return 0
+            # Heuristic: ~4 bytes per token (good enough for debug)
+            return (len(text.encode("utf-8")) + 3) // 4
+
+        def _merge_usage(total: Dict[str, Any], part: Dict[str, Any]) -> Dict[str, Any]:
+            total = dict(total or {})
+            part = dict(part or {})
+
+            def _add(key: str, value: Any):
+                if value is None:
+                    return
+                try:
+                    iv = int(value)
+                except Exception:
+                    return
+                total[key] = int(total.get(key) or 0) + iv
+
+            # Common OpenAI-style keys
+            _add("prompt_tokens", part.get("prompt_tokens"))
+            _add("completion_tokens", part.get("completion_tokens"))
+            _add("total_tokens", part.get("total_tokens"))
+            # Some providers use input/output naming
+            _add("input_tokens", part.get("input_tokens"))
+            _add("output_tokens", part.get("output_tokens"))
+
+            # Preserve provider-specific extra usage fields if they are scalar and not already present
+            for k, v in part.items():
+                if k in total:
+                    continue
+                if isinstance(v, (int, float, str)):
+                    total[k] = v
+            return total
+
         # Load the prompt template or use provided system_prompt
         system_instruction = ""
         
@@ -173,6 +217,71 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                         system_instruction = system_instruction.replace("{env_prompt_template}", env_tmpl)
                 except Exception as e:
                     logger.warning(f"Failed to inject templates into scene analysis prompt: {e}")
+
+        # Inject authoritative character canon (if provided via episode_id)
+        try:
+            ep_id = getattr(request, "episode_id", None)
+            if ep_id:
+                episode = db.query(Episode).filter(Episode.id == ep_id).first()
+                if episode:
+                    # Prefer project-level canon (Overview) and merge episode-specific overrides.
+                    project_profiles = []
+                    try:
+                        project = db.query(Project).filter(Project.id == episode.project_id).first()
+                        if project and isinstance(project.global_info, dict):
+                            project_profiles = project.global_info.get("character_profiles") or []
+                    except Exception:
+                        project_profiles = []
+
+                    episode_profiles = episode.character_profiles or []
+
+                    merged_profiles: List[Dict[str, Any]] = []
+                    by_name: Dict[str, int] = {}
+
+                    def _add_profile(p: Any) -> None:
+                        if not isinstance(p, dict):
+                            return
+                        nm = (p.get("name") or "").strip()
+                        if not nm:
+                            return
+                        if nm in by_name:
+                            merged_profiles[by_name[nm]] = p
+                        else:
+                            by_name[nm] = len(merged_profiles)
+                            merged_profiles.append(p)
+
+                    for p in (project_profiles or []):
+                        _add_profile(p)
+                    for p in (episode_profiles or []):
+                        _add_profile(p)
+
+                    canon_blocks = []
+                    for p in merged_profiles:
+                        if not isinstance(p, dict):
+                            continue
+                        nm = (p.get("name") or "").strip()
+                        if not nm:
+                            continue
+                        md = (p.get("description_md") or "").strip()
+                        if md:
+                            canon_blocks.append(md)
+                        else:
+                            canon_blocks.append(f"### {nm} (Canonical)\n- Identity: {p.get('identity') or ''}\n- Body Features: {p.get('body_features') or ''}\n- Style Tags: {', '.join(p.get('style_tags') or [])}\n")
+
+                    canon_text = "\n\n".join(canon_blocks).strip()
+                    if canon_text:
+                        # Keep the injection bounded to avoid blowing prompt size.
+                        canon_text = canon_text[:8000]
+                        system_instruction += (
+                            "\n\n"
+                            "# Character Canon (Authoritative)\n"
+                            "The following character profiles are AUTHORITATIVE for this script. "
+                            "You MUST use them as the single source of truth for character identity and appearance, "
+                            "and IGNORE conflicting character descriptions found elsewhere in the script.\n\n"
+                            + canon_text
+                        )
+        except Exception as e:
+            logger.warning(f"[analyze_scene] failed to inject character canon: {e}")
         
         # Prepare user content with optional project metadata
         user_content = f"Script to Analyze:\n\n{request.text}"
@@ -200,7 +309,12 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             
             meta_str = "\n".join(meta_parts)
             user_content = f"{meta_str}\n\n{user_content}"
-            logger.info("Injected Project Context into Prompt:\n" + meta_str)
+            logger.info(
+                "Injected Project Context into Prompt (summary): lines=%s chars=%s tokens_est=%s",
+                len(meta_parts),
+                len(meta_str),
+                _estimate_tokens(meta_str),
+            )
 
         # Construct messages
         messages = [
@@ -214,40 +328,264 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         # Ideally, we should fetch the user's preferred LLM settings from DB.
         
         config = request.llm_config
-        # If config is missing/empty, try to get from db (Simplified: assuming passed from frontend for now as typically done in this project)
+        # If config is missing/empty, fetch from DB Settings (Core LLM Configuration)
         if not config:
-            # Fallback to system default or error
-            # Try to get from APISettings table if exists
             api_setting = get_effective_api_setting(db, current_user, category="LLM")
             if api_setting:
+                # Merge with defaults so base_url/model are never missing.
+                from app.api.settings import DEFAULTS
+                default = DEFAULTS.get(api_setting.provider, {})
                 config = {
+                    "provider": api_setting.provider,
                     "api_key": api_setting.api_key,
-                    "base_url": api_setting.base_url,
-                    "model": api_setting.model
+                    "base_url": api_setting.base_url or default.get("base_url"),
+                    "model": api_setting.model or default.get("model"),
+                    "config": api_setting.config or default.get("config", {})
                 }
+
+        # If frontend passed a partial config, backfill provider/model from Core LLM settings.
+        if config and (not config.get("provider") or not config.get("model")):
+            api_setting = get_effective_api_setting(db, current_user, category="LLM")
+            if api_setting:
+                from app.api.settings import DEFAULTS
+                default = DEFAULTS.get(api_setting.provider, {})
+                config.setdefault("provider", api_setting.provider)
+                config.setdefault("model", api_setting.model or default.get("model"))
+                if not config.get("base_url"):
+                    config["base_url"] = api_setting.base_url or default.get("base_url")
+                if "config" not in config:
+                    config["config"] = api_setting.config or default.get("config", {})
         
         if not config:
              raise HTTPException(status_code=400, detail="LLM Configuration missing. Please check your settings.")
 
-        # Billing Check
-        provider = config.get("provider") if config else None
-        model = config.get("model") if config else None
-        billing_service.check_balance(db, current_user.id, "analysis", provider, model)
+        # --- Debug / Truncation tracing ---
+        debug_meta: Dict[str, Any] = {
+            "stage": "pre_llm",
+            "request_episode_id": getattr(request, "episode_id", None),
+            "provider": (config or {}).get("provider"),
+            "model": (config or {}).get("model"),
+            "system_prompt_chars": len(system_instruction or ""),
+            "user_prompt_chars": len(user_content or ""),
+            "request_text_chars": len((request.text or "")),
+            "system_prompt_tokens_est": _estimate_tokens(system_instruction or ""),
+            "user_prompt_tokens_est": _estimate_tokens(user_content or ""),
+        }
+
+        # Billing (task_type = analysis)
+        provider = (config or {}).get("provider")
+        model = (config or {}).get("model")
+        reservation_tx = None
+        if billing_service.is_token_pricing(db, "analysis", provider, model):
+            est = billing_service.estimate_input_output_tokens_from_messages(messages, output_ratio=1.5)
+            debug_meta.update({
+                "est_input_tokens": est.get("input_tokens", 0),
+                "est_output_tokens": est.get("output_tokens", 0),
+                "est_total_tokens": est.get("total_tokens", 0),
+            })
+            reserve_details = {
+                "item": "scene_analysis",
+                "estimation_method": "prompt_tokens_ratio",
+                "estimated_output_ratio": 1.5,
+                "system_prompt_len": len(system_instruction or ""),
+                "user_prompt_len": len(user_content or ""),
+                "input_tokens": est.get("input_tokens", 0),
+                "output_tokens": est.get("output_tokens", 0),
+                "total_tokens": est.get("total_tokens", 0),
+            }
+            reservation_tx = billing_service.reserve_credits(db, current_user.id, "analysis", provider, model, reserve_details)
+        else:
+            billing_service.check_balance(db, current_user.id, "analysis", provider, model)
+
+        # Record max token config for diagnostics, but do not override it.
+        cfg_obj = (config or {}).get("config") or {}
+        debug_meta["config_max_tokens"] = cfg_obj.get("max_tokens")
+        debug_meta["config_max_completion_tokens"] = cfg_obj.get("max_completion_tokens")
+        debug_meta["config_max_tokens_effective"] = cfg_obj.get("max_tokens")
 
         logger.info(f"Analyzing scene for user {current_user.id} with model {config.get('model')}")
-        llm_resp = await llm_service.chat_completion(messages, config)
-        result_content = llm_resp.get("content", "")
-        usage = llm_resp.get("usage", {})
-        
-        # Billing Deduct
-        details = {"item": "scene_analysis"}
-        if usage: details.update(usage)
-        billing_service.deduct_credits(db, current_user.id, "analysis", provider, model, details)
-        
-        return {"result": result_content}
+        # Auto-continue if provider truncates (finish_reason=length).
+        # Important: keep continuation prompts small (do NOT send the entire prior output back)
+        # to avoid blowing up prompt size / hitting context window.
+        max_segments = 10
+        tail_chars = 1600
+        continuation_instruction_tpl = (
+            "Continue exactly where you left off, immediately after the following suffix. "
+            "Do NOT repeat any of the suffix text. "
+            "Return ONLY the continuation in the same format as before.\n\n"
+            "SUFFIX (do not repeat):\n{suffix}"
+        )
 
+        result_parts: List[str] = []
+        segments_meta: List[Dict[str, Any]] = []
+        usage_total: Dict[str, Any] = {}
+        finish_reason = None
+
+        def _dedupe_overlap(existing: str, incoming: str) -> str:
+            if not existing or not incoming:
+                return incoming
+            # If model repeats the suffix, strip common overlaps.
+            candidates = [
+                existing[-200:],
+                existing[-400:],
+                existing[-800:],
+            ]
+            for c in candidates:
+                if c and incoming.startswith(c):
+                    return incoming[len(c):]
+            # Some models wrap with whitespace/newlines; try trimmed
+            inc_l = incoming.lstrip()
+            for c in candidates:
+                if c and inc_l.startswith(c):
+                    return inc_l[len(c):]
+            return incoming
+
+        current_messages = list(messages)
+        system_only_messages = []
+        try:
+            if messages and isinstance(messages[0], dict) and messages[0].get("role") == "system":
+                system_only_messages = [messages[0]]
+        except Exception:
+            system_only_messages = []
+        for seg_idx in range(1, max_segments + 1):
+            llm_resp = await llm_service.chat_completion(current_messages, config)
+            raw_part = llm_resp.get("content", "") or ""
+            part_usage = llm_resp.get("usage", {}) or {}
+            part_finish = llm_resp.get("finish_reason")
+
+            usage_total = _merge_usage(usage_total, part_usage)
+            finish_reason = part_finish
+
+            existing = "".join(result_parts)
+            part_content = _dedupe_overlap(existing, raw_part)
+            result_parts.append(part_content)
+            segments_meta.append({
+                "index": seg_idx,
+                "finish_reason": part_finish,
+                "output_chars": len(raw_part),
+                "output_tokens_est": _estimate_tokens(raw_part),
+                "deduped_chars": len(part_content),
+                "usage": part_usage,
+            })
+
+            # Stop if not truncated.
+            if str(part_finish).lower() != "length":
+                break
+
+            # Stop if provider returned nothing new.
+            if not raw_part.strip():
+                break
+
+            # Ask for continuation; include only a short suffix of the accumulated output.
+            accumulated = "".join(result_parts)
+            suffix = accumulated[-tail_chars:] if len(accumulated) > tail_chars else accumulated
+            continuation_instruction = continuation_instruction_tpl.format(suffix=suffix)
+            # Continuation does not require re-sending the whole script; keep only system + tail.
+            base_for_continue = system_only_messages or list(messages)
+            current_messages = list(base_for_continue) + [
+                {"role": "assistant", "content": suffix},
+                {"role": "user", "content": continuation_instruction},
+            ]
+
+        result_content = "".join(result_parts)
+        usage = usage_total
+        debug_meta.update({
+            "stage": "post_llm",
+            "finish_reason": finish_reason,
+            "output_chars": len(result_content or ""),
+            "output_tokens_est": _estimate_tokens(result_content or ""),
+            "usage": usage,
+            "segments": segments_meta,
+        })
+
+        # Persist result to DB if caller provided episode_id.
+        saved_to_episode = False
+        if getattr(request, "episode_id", None):
+            episode_id = request.episode_id
+            q = db.query(Episode).filter(Episode.id == episode_id)
+            if not getattr(current_user, "is_superuser", False):
+                q = q.join(Project, Episode.project_id == Project.id).filter(Project.owner_id == current_user.id)
+            episode = q.first()
+            if not episode:
+                raise HTTPException(status_code=404, detail="Episode not found")
+            episode.ai_scene_analysis_result = result_content
+            saved_to_episode = True
+            debug_meta["saved_to_episode"] = True
+            debug_meta["saved_episode_id"] = episode_id
+            try:
+                db.flush()
+            except Exception:
+                db.rollback()
+                raise
+            logger.info(
+                "[analyze_scene] Saved ai_scene_analysis_result to episode_id=%s chars=%s",
+                episode_id,
+                len(result_content or ""),
+            )
+        else:
+            debug_meta["saved_to_episode"] = False
+        
+        # Billing finalize (commit happens inside billing service; will persist episode update if set above)
+        if reservation_tx:
+            actual_details = {"item": "scene_analysis"}
+            if usage:
+                actual_details.update(usage)
+            # Normalize common usage keys
+            if "prompt_tokens" in actual_details and "input_tokens" not in actual_details:
+                actual_details["input_tokens"] = actual_details.get("prompt_tokens", 0)
+            if "completion_tokens" in actual_details and "output_tokens" not in actual_details:
+                actual_details["output_tokens"] = actual_details.get("completion_tokens", 0)
+            billing_service.settle_reservation(db, reservation_tx.id, actual_details)
+        else:
+            details = {"item": "scene_analysis"}
+            if usage:
+                details.update(usage)
+            # Normalize usage keys for token-based calculation if provider returns OpenAI-style usage
+            if "prompt_tokens" in details and "input_tokens" not in details:
+                details["input_tokens"] = details.get("prompt_tokens", 0)
+            if "completion_tokens" in details and "output_tokens" not in details:
+                details["output_tokens"] = details.get("completion_tokens", 0)
+            billing_service.deduct_credits(db, current_user.id, "analysis", provider, model, details)
+
+        # Ensure episode save is committed even if billing is disabled/mocked.
+        if saved_to_episode:
+            try:
+                db.commit()
+                try:
+                    db.refresh(episode)
+                except Exception:
+                    pass
+            except Exception:
+                db.rollback()
+                raise
+        
+        return {"result": result_content, "meta": debug_meta}
+
+    except HTTPException as e:
+        # Preserve original status codes (e.g., 402 insufficient credits)
+        logger.warning(f"Scene Analysis HTTPException: {e.detail}")
+        try:
+            reservation_tx = locals().get("reservation_tx")
+            if reservation_tx:
+                billing_service.cancel_reservation(db, reservation_tx.id, str(e.detail))
+        except:
+            pass
+        try:
+            conf_log = locals().get("config") or {}
+            p_log = conf_log.get("provider")
+            m_log = conf_log.get("model")
+            billing_service.log_failed_transaction(db, current_user.id, "analysis", p_log, m_log, str(e.detail))
+        except:
+            pass
+        raise
     except Exception as e:
         logger.error(f"Scene Analysis Failed: {e}", exc_info=True)
+        try:
+            reservation_tx = locals().get("reservation_tx")
+            if reservation_tx:
+                billing_service.cancel_reservation(db, reservation_tx.id, str(e))
+        except:
+            pass
         # Log failure
         try:
              # Need to safely extract Provider/Model if config exists, else generic
@@ -255,7 +593,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
              p_log = conf_log.get("provider")
              m_log = conf_log.get("model")
              billing_service.log_failed_transaction(db, current_user.id, "analysis", p_log, m_log, str(e))
-        except: 
+        except:
              pass # Fail safe
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -401,24 +739,68 @@ async def process_agent_command(
             provider = api_config.provider
             model = api_config.model
     
-    # Billing Check
-    billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+    reservation_tx = None
+    # Billing Check / Reserve
+    # Only reserve for intent-analysis LLM call (skip refinement flow which doesn't call LLM)
+    if (not request.context.get("is_refinement")) and billing_service.is_token_pricing(db, "llm_chat", provider, model):
+        try:
+            from app.services.llm_service import SYSTEM_PROMPT
+        except Exception:
+            SYSTEM_PROMPT = ""
+
+        import json as _json
+        messages_est = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": f"Current Project Context: {_json.dumps(request.context or {}, default=str)}"},
+        ]
+        for msg in (request.history or [])[-5:]:
+            messages_est.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
+        messages_est.append({"role": "user", "content": request.query})
+
+        est = billing_service.estimate_input_output_tokens_from_messages(messages_est, output_ratio=1.5)
+        reserve_details = {
+            "item": "agent_intent",
+            "estimation_method": "prompt_tokens_ratio",
+            "estimated_output_ratio": 1.5,
+            "query_len": len(request.query or ""),
+            "input_tokens": est.get("input_tokens", 0),
+            "output_tokens": est.get("output_tokens", 0),
+            "total_tokens": est.get("total_tokens", 0),
+        }
+        reservation_tx = billing_service.reserve_credits(db, current_user.id, "llm_chat", provider, model, reserve_details)
+    else:
+        billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
 
     try:
         result = await agent_service.process_command(request, db, current_user.id)
         
-        # Billing Deduct (with actual usage if available)
-        details = {"query": request.query[:50]}
-        if result.usage:
-             details["input_tokens"] = result.usage.get("prompt_tokens", 0)
-             details["output_tokens"] = result.usage.get("completion_tokens", 0)
-             details["total_tokens"] = result.usage.get("total_tokens", 0)
-        
-        billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, details)
+        # Billing Finalize
+        if reservation_tx:
+            if result.usage:
+                actual_details = {"item": "agent_intent"}
+                actual_details.update(result.usage)
+                actual_details["input_tokens"] = result.usage.get("prompt_tokens", 0)
+                actual_details["output_tokens"] = result.usage.get("completion_tokens", 0)
+                actual_details["total_tokens"] = result.usage.get("total_tokens", 0)
+                billing_service.settle_reservation(db, reservation_tx.id, actual_details)
+            else:
+                billing_service.cancel_reservation(db, reservation_tx.id, "No usage returned")
+        else:
+            details = {"query": request.query[:50]}
+            if result.usage:
+                details["input_tokens"] = result.usage.get("prompt_tokens", 0)
+                details["output_tokens"] = result.usage.get("completion_tokens", 0)
+                details["total_tokens"] = result.usage.get("total_tokens", 0)
+            billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, details)
         
         return result
     except Exception as e:
         logger.error(f"Agent Command Failed: {e}")
+        try:
+            if reservation_tx:
+                billing_service.cancel_reservation(db, reservation_tx.id, str(e))
+        except:
+            pass
         billing_service.log_failed_transaction(db, current_user.id, "llm_chat", provider, model, str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -488,6 +870,126 @@ def create_project(
     # Extract aspectRatio for response from global_info
     db_project.aspectRatio = db_project.global_info.get('aspectRatio') if db_project.global_info else None
     return db_project
+
+
+@router.post("/projects/{project_id}/story_generator/global", response_model=ProjectOut)
+async def generate_project_story_dna_global(
+    project_id: int,
+    req: "StoryGeneratorRequest",
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Force global mode for this endpoint
+    episodes_count = req.episodes_count
+    if not episodes_count or int(episodes_count) <= 0:
+        raise HTTPException(status_code=400, detail="episodes_count is required")
+
+    prompt_dir = os.path.join(str(settings.BASE_DIR), "app", "core", "prompts")
+    prompt_path = os.path.join(prompt_dir, "story_generator_global.txt")
+    if not os.path.exists(prompt_path):
+        logger.error(f"Story generator prompt not found at: {prompt_path}")
+        raise HTTPException(status_code=404, detail="Prompt file 'story_generator_global.txt' not found.")
+    with open(prompt_path, "r", encoding="utf-8") as f:
+        sys_prompt = f.read()
+
+    user_prompt = (
+        f"Mode: global\n"
+        f"Episodes Count: {int(episodes_count)}\n"
+        f"Foreshadowing: {req.foreshadowing or ''}\n"
+        f"Background: {req.background or ''}\n"
+        f"Setup: {req.setup or ''}\n"
+        f"Development: {req.development or ''}\n"
+        f"Turning Points: {req.turning_points or ''}\n"
+        f"Climax: {req.climax or ''}\n"
+        f"Resolution: {req.resolution or ''}\n"
+        f"Suspense: {req.suspense or ''}\n"
+        f"Extra Notes: {req.extra_notes or ''}\n"
+    )
+
+    llm_config = agent_service.get_active_llm_config(current_user.id)
+    provider = llm_config.get("provider") if llm_config else None
+    model = llm_config.get("model") if llm_config else None
+    billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+
+    resp = await llm_service.generate_content(user_prompt, sys_prompt, llm_config)
+    generated_md = (resp.get("content") or "").strip()
+    if not generated_md:
+        raise HTTPException(status_code=500, detail="LLM returned empty content")
+
+    # Persist both output and the inputs that produced it.
+    # This ensures a successful generation is durable across refresh even
+    # if the user doesn't click the separate "Save Changes" button.
+    try:
+        story_input = req.model_dump()
+    except AttributeError:
+        story_input = req.dict()
+    story_input["mode"] = "global"
+
+    now_iso = datetime.utcnow().isoformat()
+    gi = dict(project.global_info or {})
+    gi["story_generator_global_input"] = story_input
+    gi["story_dna_global_md"] = generated_md
+    gi["story_dna_global_updated_at"] = now_iso
+    project.global_info = gi
+
+    db.add(project)
+    db.commit()
+    db.refresh(project)
+
+    # Populate response aliases to match other endpoints
+    try:
+        project.cover_image = get_project_cover_image(db, project.id)
+    except Exception:
+        project.cover_image = None
+    try:
+        project.aspectRatio = project.global_info.get('aspectRatio') if project.global_info else None
+    except Exception:
+        project.aspectRatio = None
+    return project
+
+
+@router.put("/projects/{project_id}/story_generator/global/input", response_model=ProjectOut)
+def save_project_story_generator_global_input(
+    project_id: int,
+    req: "StoryGeneratorRequest",
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Persist Story Generator (Global/Project) draft inputs without calling the LLM."""
+    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    try:
+        story_input = req.model_dump()
+    except AttributeError:
+        story_input = req.dict()
+    story_input["mode"] = "global"
+
+    now_iso = datetime.utcnow().isoformat()
+    gi = dict(project.global_info or {})
+    gi["story_generator_global_input"] = story_input
+    gi["story_generator_global_input_updated_at"] = now_iso
+    project.global_info = gi
+
+    db.add(project)
+    db.commit()
+    db.refresh(project)
+
+    # Populate response aliases to match other endpoints
+    try:
+        project.cover_image = get_project_cover_image(db, project.id)
+    except Exception:
+        project.cover_image = None
+    try:
+        project.aspectRatio = project.global_info.get('aspectRatio') if project.global_info else None
+    except Exception:
+        project.aspectRatio = None
+    return project
 
 
 @router.get("/projects/", response_model=List[ProjectOut])
@@ -573,9 +1075,97 @@ def delete_project(
     project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    
-    db.delete(project)
-    db.commit()
+
+    # Cascade delete related data (scenes, shots, subjects/entities, etc.)
+    # Note: We do not delete user-level assets unless they are explicitly referenced by the project.
+    try:
+        # Collect related IDs
+        episode_ids = [row[0] for row in db.query(Episode.id).filter(Episode.project_id == project_id).all()]
+        scene_ids: List[int] = []
+        if episode_ids:
+            scene_ids = [row[0] for row in db.query(Scene.id).filter(Scene.episode_id.in_(episode_ids)).all()]
+
+        # Collect referenced upload URLs/paths before deleting rows
+        candidate_urls: List[str] = []
+        if scene_ids:
+            for (img_url, vid_url) in db.query(Shot.image_url, Shot.video_url).filter(Shot.scene_id.in_(scene_ids)).all():
+                if img_url:
+                    candidate_urls.append(img_url)
+                if vid_url:
+                    candidate_urls.append(vid_url)
+        for (img_url,) in db.query(Entity.image_url).filter(Entity.project_id == project_id).all():
+            if img_url:
+                candidate_urls.append(img_url)
+
+        # Delete DB rows bottom-up to avoid FK constraints
+        if scene_ids:
+            db.query(Shot).filter(Shot.scene_id.in_(scene_ids)).delete(synchronize_session=False)
+            db.query(Scene).filter(Scene.id.in_(scene_ids)).delete(synchronize_session=False)
+
+        if episode_ids:
+            db.query(ScriptSegment).filter(ScriptSegment.episode_id.in_(episode_ids)).delete(synchronize_session=False)
+            db.query(Episode).filter(Episode.id.in_(episode_ids)).delete(synchronize_session=False)
+
+        db.query(Entity).filter(Entity.project_id == project_id).delete(synchronize_session=False)
+
+        db.delete(project)
+        db.commit()
+
+    except Exception as e:
+        db.rollback()
+        logger.error(f"[delete_project] Cascade delete failed project_id={project_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Best-effort file cleanup after DB commit
+    try:
+        upload_root = settings.UPLOAD_DIR
+        if not os.path.isabs(upload_root):
+            upload_root = os.path.abspath(upload_root)
+
+        def _to_upload_path(url_or_path: str) -> Optional[str]:
+            if not url_or_path:
+                return None
+            raw = str(url_or_path).strip()
+            if not raw:
+                return None
+
+            # If it's a URL, strip scheme/host
+            try:
+                parsed = urllib.parse.urlparse(raw)
+                path_part = parsed.path if parsed.scheme else raw
+            except Exception:
+                path_part = raw
+
+            path_part = urllib.parse.unquote(path_part)
+            path_part = path_part.lstrip("/")
+
+            # Normalize common forms:
+            # - uploads/<user>/<file>
+            # - /uploads/<user>/<file>
+            # - <user>/<file> (relative already)
+            if path_part.startswith("uploads/"):
+                rel = path_part.replace("uploads/", "", 1)
+            elif "/uploads/" in path_part:
+                rel = path_part.split("/uploads/", 1)[1]
+            else:
+                rel = path_part
+
+            abs_path = os.path.abspath(os.path.join(upload_root, rel))
+            # Safety: only delete within upload_root
+            if not abs_path.startswith(upload_root):
+                return None
+            return abs_path
+
+        for u in set(candidate_urls):
+            p = _to_upload_path(u)
+            if p and os.path.exists(p) and os.path.isfile(p):
+                try:
+                    os.remove(p)
+                except Exception as fe:
+                    logger.warning(f"[delete_project] Failed to delete file {p}: {fe}")
+    except Exception as e:
+        logger.warning(f"[delete_project] File cleanup skipped/failed project_id={project_id}: {e}")
+
     return None
 
 # --- Episodes (Script) ---
@@ -597,11 +1187,15 @@ class EpisodeCreate(BaseModel):
     title: str = "Episode 1"
     script_content: Optional[str] = ""
     episode_info: Optional[Dict] = {}
+    ai_scene_analysis_result: Optional[str] = None
+    character_profiles: Optional[List[Dict[str, Any]]] = None
 
 class EpisodeUpdate(BaseModel):
     title: Optional[str] = None
     script_content: Optional[str] = None
     episode_info: Optional[Dict] = None
+    ai_scene_analysis_result: Optional[str] = None
+    character_profiles: Optional[List[Dict[str, Any]]] = None
 
 class EpisodeOut(BaseModel):
     id: int
@@ -609,9 +1203,17 @@ class EpisodeOut(BaseModel):
     title: str
     script_content: Optional[str]
     episode_info: Optional[Dict] = {}
+    ai_scene_analysis_result: Optional[str] = None
+    character_profiles: Optional[List[Dict[str, Any]]] = []
     script_segments: List[ScriptSegmentOut] = []
     class Config:
         from_attributes = True
+
+
+class ProjectEpisodeScriptsGenerateRequest(BaseModel):
+    episodes_count: Optional[int] = None
+    overwrite_existing: bool = False
+    extra_notes: Optional[str] = None
 
 @router.get("/projects/{project_id}/episodes", response_model=List[EpisodeOut])
 def read_episodes(
@@ -678,7 +1280,9 @@ def create_episode(
         project_id=project_id, 
         title=episode.title, 
         script_content=episode.script_content,
-        episode_info=episode.episode_info
+        episode_info=episode.episode_info,
+        ai_scene_analysis_result=episode.ai_scene_analysis_result,
+        character_profiles=episode.character_profiles or []
     )
     db.add(db_episode)
     db.commit()
@@ -707,10 +1311,931 @@ def update_episode(
         episode.script_content = episode_in.script_content
     if episode_in.episode_info is not None:
         episode.episode_info = episode_in.episode_info
+    if episode_in.ai_scene_analysis_result is not None:
+        episode.ai_scene_analysis_result = episode_in.ai_scene_analysis_result
+    if episode_in.character_profiles is not None:
+        episode.character_profiles = episode_in.character_profiles
     
     db.commit()
     db.refresh(episode)
     return episode
+
+
+class CharacterProfileGenerateRequest(BaseModel):
+    name: str
+    identity: Optional[str] = None
+    body_features: Optional[str] = None
+    style_tags: Optional[List[str]] = []
+    extra_notes: Optional[str] = None
+
+
+class CharacterProfilesUpdateRequest(BaseModel):
+    character_profiles: List[Dict[str, Any]]
+
+
+class CharacterCanonInputRequest(BaseModel):
+    name: Optional[str] = None
+    selected_tag_ids: Optional[List[str]] = None
+    selected_identity_ids: Optional[List[str]] = None
+    custom_identity: Optional[str] = None
+    body_features: Optional[str] = None
+    custom_style_tags: Optional[str] = None
+    extra_notes: Optional[str] = None
+
+
+class CharacterCanonCategoriesRequest(BaseModel):
+    tag_categories: Optional[List[Dict[str, Any]]] = None
+    identity_categories: Optional[List[Dict[str, Any]]] = None
+
+
+@router.get("/projects/{project_id}/character_profiles", response_model=List[Dict[str, Any]])
+def get_project_character_profiles(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    gi = project.global_info or {}
+    if not isinstance(gi, dict):
+        return []
+    profiles = gi.get("character_profiles")
+    return profiles if isinstance(profiles, list) else []
+
+
+@router.put("/projects/{project_id}/character_profiles", response_model=List[Dict[str, Any]])
+def update_project_character_profiles(
+    project_id: int,
+    req: CharacterProfilesUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    def _render_canon_md(items: List[Dict[str, Any]]) -> str:
+        blocks: List[str] = []
+        for it in items or []:
+            if not isinstance(it, dict):
+                continue
+            nm = (it.get("name") or "").strip()
+            if not nm:
+                continue
+            md = (it.get("description_md") or "").strip()
+            if md:
+                blocks.append(md)
+            else:
+                blocks.append(f"### {nm} (Canonical)\n- Identity: {it.get('identity') or ''}\n")
+        return "\n\n".join(blocks).strip()
+
+    gi = dict(project.global_info or {})
+    profiles = req.character_profiles or []
+    gi["character_profiles"] = profiles
+    gi["character_profiles_updated_at"] = datetime.utcnow().isoformat()
+    gi["character_canon_md"] = _render_canon_md(profiles)
+    project.global_info = gi
+
+    db.add(project)
+    db.commit()
+    db.refresh(project)
+
+    profiles = gi.get("character_profiles")
+    return profiles if isinstance(profiles, list) else []
+
+
+@router.put("/projects/{project_id}/character_canon/input", response_model=ProjectOut)
+def save_project_character_canon_input(
+    project_id: int,
+    req: CharacterCanonInputRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Persist Project Character Canon draft inputs without calling the LLM."""
+    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    now_iso = datetime.utcnow().isoformat()
+    gi = dict(project.global_info or {})
+    gi["character_canon_input"] = {
+        "name": req.name or "",
+        "selected_tag_ids": req.selected_tag_ids or [],
+        "selected_identity_ids": req.selected_identity_ids or [],
+        "custom_identity": req.custom_identity or "",
+        "body_features": req.body_features or "",
+        "custom_style_tags": req.custom_style_tags or "",
+        "extra_notes": req.extra_notes or "",
+    }
+    gi["character_canon_input_updated_at"] = now_iso
+    project.global_info = gi
+
+    db.add(project)
+    db.commit()
+    db.refresh(project)
+
+    # Populate response aliases
+    try:
+        project.cover_image = get_project_cover_image(db, project.id)
+    except Exception:
+        project.cover_image = None
+    try:
+        project.aspectRatio = project.global_info.get('aspectRatio') if project.global_info else None
+    except Exception:
+        project.aspectRatio = None
+    return project
+
+
+@router.put("/projects/{project_id}/character_canon/categories", response_model=ProjectOut)
+def save_project_character_canon_categories(
+    project_id: int,
+    req: CharacterCanonCategoriesRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Persist Project Character Canon tag/identity category configuration."""
+    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    now_iso = datetime.utcnow().isoformat()
+    gi = dict(project.global_info or {})
+    if req.tag_categories is not None:
+        gi["character_canon_tag_categories"] = req.tag_categories
+    if req.identity_categories is not None:
+        gi["character_canon_identity_categories"] = req.identity_categories
+    gi["character_canon_categories_updated_at"] = now_iso
+    project.global_info = gi
+
+    db.add(project)
+    db.commit()
+    db.refresh(project)
+
+    # Populate response aliases
+    try:
+        project.cover_image = get_project_cover_image(db, project.id)
+    except Exception:
+        project.cover_image = None
+    try:
+        project.aspectRatio = project.global_info.get('aspectRatio') if project.global_info else None
+    except Exception:
+        project.aspectRatio = None
+    return project
+
+
+@router.post("/projects/{project_id}/character_profiles/generate", response_model=ProjectOut)
+async def generate_project_character_profile(
+    project_id: int,
+    req: CharacterProfileGenerateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    name = (req.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Character name is required")
+
+    tags = [t.strip() for t in (req.style_tags or []) if isinstance(t, str) and t.strip()]
+    tags_str = ", ".join(tags)
+
+    sys_prompt = (
+        "You are a professional character bible writer for film storyboarding. "
+        "Write a CANONICAL character profile that will be treated as the single source of truth for this project. "
+        "Return ONLY Markdown (no JSON, no code fences). "
+        "Keep it concise but specific. Avoid NSFW/explicit sexual content; if the user requests 'sexy', express it in non-explicit, cinematic terms. "
+        "Do not invent backstory not implied by inputs; focus on identity, silhouette/body proportions, face/hair, clothing, signature mannerisms, and on-screen presence."
+    )
+
+    user_prompt = (
+        f"Character Name: {name}\n"
+        f"Identity/Role: {req.identity or ''}\n"
+        f"Body Features: {req.body_features or ''}\n"
+        f"Style Tags: {tags_str}\n"
+        f"Extra Notes: {req.extra_notes or ''}\n\n"
+        "Output format (Markdown):\n"
+        f"### {name} (Canonical)\n"
+        "- Identity: ...\n"
+        "- Body & silhouette: ...\n"
+        "- Face & hair: ...\n"
+        "- Outfit & materials: ...\n"
+        "- Screen presence (cinematic, non-explicit): ...\n"
+        "- Do/Don't (hard constraints): ...\n"
+    )
+
+    llm_config = agent_service.get_active_llm_config(current_user.id)
+    provider = llm_config.get("provider") if llm_config else None
+    model = llm_config.get("model") if llm_config else None
+    billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+
+    resp = await llm_service.generate_content(user_prompt, sys_prompt, llm_config)
+    description_md = (resp.get("content") or "").strip()
+    if not description_md:
+        raise HTTPException(status_code=500, detail="LLM returned empty content")
+
+    now_iso = datetime.utcnow().isoformat()
+    gi = dict(project.global_info or {})
+    profiles = gi.get("character_profiles")
+    profiles = list(profiles) if isinstance(profiles, list) else []
+
+    updated = False
+    for p in profiles:
+        if isinstance(p, dict) and (p.get("name") == name):
+            p.update({
+                "name": name,
+                "identity": req.identity,
+                "body_features": req.body_features,
+                "style_tags": tags,
+                "extra_notes": req.extra_notes,
+                "description_md": description_md,
+                "updated_at": now_iso,
+            })
+            updated = True
+            break
+    if not updated:
+        profiles.append({
+            "name": name,
+            "identity": req.identity,
+            "body_features": req.body_features,
+            "style_tags": tags,
+            "extra_notes": req.extra_notes,
+            "description_md": description_md,
+            "updated_at": now_iso,
+        })
+
+    def _render_canon_md(items: List[Dict[str, Any]]) -> str:
+        blocks = []
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            nm = (it.get("name") or "").strip()
+            if not nm:
+                continue
+            md = (it.get("description_md") or "").strip()
+            if md:
+                blocks.append(md)
+            else:
+                blocks.append(f"### {nm} (Canonical)\n- Identity: {it.get('identity') or ''}\n")
+        return "\n\n".join(blocks).strip()
+
+    gi["character_profiles"] = profiles
+    gi["character_profiles_updated_at"] = now_iso
+    gi["character_canon_md"] = _render_canon_md(profiles)
+    project.global_info = gi
+
+    db.add(project)
+    db.commit()
+    db.refresh(project)
+
+    # Populate response aliases
+    try:
+        project.cover_image = get_project_cover_image(db, project.id)
+    except Exception:
+        project.cover_image = None
+    try:
+        project.aspectRatio = project.global_info.get('aspectRatio') if project.global_info else None
+    except Exception:
+        project.aspectRatio = None
+    return project
+
+
+class StoryGeneratorRequest(BaseModel):
+    mode: str  # 'global' | 'episode'
+    episodes_count: Optional[int] = None
+    episode_number: Optional[int] = None
+    foreshadowing: Optional[str] = None
+    background: Optional[str] = None
+    setup: Optional[str] = None
+    development: Optional[str] = None
+    turning_points: Optional[str] = None
+    climax: Optional[str] = None
+    resolution: Optional[str] = None
+    suspense: Optional[str] = None
+    extra_notes: Optional[str] = None
+
+
+class ScriptScenesGenerateRequest(BaseModel):
+    scene_count: Optional[int] = None
+    background: Optional[str] = None
+    setup: Optional[str] = None
+    development: Optional[str] = None
+    turning_points: Optional[str] = None
+    climax: Optional[str] = None
+    resolution: Optional[str] = None
+    suspense: Optional[str] = None
+    foreshadowing: Optional[str] = None
+    extra_notes: Optional[str] = None
+    replace_existing_scenes: Optional[bool] = True
+
+
+@router.get("/episodes/{episode_id}/character_profiles", response_model=List[Dict[str, Any]])
+def get_episode_character_profiles(
+    episode_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    episode = db.query(Episode).filter(Episode.id == episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
+    if not project:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    return episode.character_profiles or []
+
+
+@router.put("/episodes/{episode_id}/character_profiles", response_model=List[Dict[str, Any]])
+def update_episode_character_profiles(
+    episode_id: int,
+    req: CharacterProfilesUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    episode = db.query(Episode).filter(Episode.id == episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
+    if not project:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    episode.character_profiles = req.character_profiles or []
+    db.commit()
+    db.refresh(episode)
+    return episode.character_profiles or []
+
+
+@router.post("/episodes/{episode_id}/character_profiles/generate", response_model=EpisodeOut)
+async def generate_episode_character_profile(
+    episode_id: int,
+    req: CharacterProfileGenerateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    episode = db.query(Episode).filter(Episode.id == episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
+    if not project:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    name = (req.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Character name is required")
+
+    # Build a strict, safe prompt: canonical character sheet used as ground truth.
+    tags = [t.strip() for t in (req.style_tags or []) if isinstance(t, str) and t.strip()]
+    tags_str = ", ".join(tags)
+
+    sys_prompt = (
+        "You are a professional character bible writer for film storyboarding. "
+        "Write a CANONICAL character profile that will be treated as the single source of truth for this script. "
+        "Return ONLY Markdown (no JSON, no code fences). "
+        "Keep it concise but specific. Avoid NSFW/explicit sexual content; if the user requests 'sexy', express it in non-explicit, cinematic terms. "
+        "Do not invent backstory not implied by inputs; focus on identity, silhouette/body proportions, face/hair, clothing, signature mannerisms, and on-screen presence."
+    )
+
+    user_prompt = (
+        f"Character Name: {name}\n"
+        f"Identity/Role: {req.identity or ''}\n"
+        f"Body Features: {req.body_features or ''}\n"
+        f"Style Tags: {tags_str}\n"
+        f"Extra Notes: {req.extra_notes or ''}\n\n"
+        "Output format (Markdown):\n"
+        f"### {name} (Canonical)\n"
+        "- Identity: ...\n"
+        "- Body & silhouette: ...\n"
+        "- Face & hair: ...\n"
+        "- Outfit & materials: ...\n"
+        "- Screen presence (cinematic, non-explicit): ...\n"
+        "- Do/Don't (hard constraints): ...\n"
+    )
+
+    llm_config = agent_service.get_active_llm_config(current_user.id)
+    provider = llm_config.get("provider") if llm_config else None
+    model = llm_config.get("model") if llm_config else None
+    billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+
+    resp = await llm_service.generate_content(user_prompt, sys_prompt, llm_config)
+    description_md = (resp.get("content") or "").strip()
+    if not description_md:
+        raise HTTPException(status_code=500, detail="LLM returned empty content")
+
+    now_iso = datetime.utcnow().isoformat()
+    profiles = list(episode.character_profiles or [])
+    updated = False
+    for p in profiles:
+        if isinstance(p, dict) and (p.get("name") == name):
+            p.update({
+                "name": name,
+                "identity": req.identity,
+                "body_features": req.body_features,
+                "style_tags": tags,
+                "extra_notes": req.extra_notes,
+                "description_md": description_md,
+                "updated_at": now_iso,
+            })
+            updated = True
+            break
+    if not updated:
+        profiles.append({
+            "name": name,
+            "identity": req.identity,
+            "body_features": req.body_features,
+            "style_tags": tags,
+            "extra_notes": req.extra_notes,
+            "description_md": description_md,
+            "updated_at": now_iso,
+        })
+
+    def _render_canon_md(items: List[Dict[str, Any]]) -> str:
+        blocks = []
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            nm = (it.get("name") or "").strip()
+            if not nm:
+                continue
+            md = (it.get("description_md") or "").strip()
+            if md:
+                blocks.append(md)
+            else:
+                blocks.append(f"### {nm} (Canonical)\n- Identity: {it.get('identity') or ''}\n")
+        return "\n\n".join(blocks).strip()
+
+    canon_body = _render_canon_md(profiles)
+    canon_section = (
+        "## Character Canon (Authoritative)\n"
+        "\n"
+        "<!-- CHARACTER_CANON_START -->\n"
+        "The following character profiles are AUTHORITATIVE for this script. Scene analysis and downstream generation MUST use these descriptions as ground truth and IGNORE conflicting character info elsewhere in the script.\n\n"
+        f"{canon_body}\n"
+        "<!-- CHARACTER_CANON_END -->\n"
+    )
+
+    script = episode.script_content or ""
+    if "<!-- CHARACTER_CANON_START -->" in script and "<!-- CHARACTER_CANON_END -->" in script:
+        script = re.sub(
+            r"## Character Canon \(Authoritative\)[\s\S]*?<!-- CHARACTER_CANON_END -->\n?",
+            canon_section + "\n",
+            script,
+            count=1,
+        )
+    else:
+        script = canon_section + "\n\n" + script
+
+    episode.character_profiles = profiles
+    episode.script_content = script
+    db.commit()
+    db.refresh(episode)
+    return episode
+
+
+@router.post("/episodes/{episode_id}/story_generator", response_model=EpisodeOut)
+async def generate_episode_story_dna(
+    episode_id: int,
+    req: "StoryGeneratorRequest",
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    episode = db.query(Episode).filter(Episode.id == episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
+    if not project:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    mode = (req.mode or "").strip().lower()
+    if mode not in ("global", "episode"):
+        raise HTTPException(status_code=400, detail="mode must be 'global' or 'episode'")
+
+    if mode == "global":
+        # Backward compatible: allow generating global from any episode, but store to project.global_info
+        if not req.episodes_count or int(req.episodes_count) <= 0:
+            raise HTTPException(status_code=400, detail="episodes_count is required for global mode")
+        prompt_filename = "story_generator_global.txt"
+    else:
+        if not req.episode_number or int(req.episode_number) <= 0:
+            raise HTTPException(status_code=400, detail="episode_number is required for episode mode")
+        prompt_filename = "story_generator_episode.txt"
+
+    prompt_dir = os.path.join(str(settings.BASE_DIR), "app", "core", "prompts")
+    prompt_path = os.path.join(prompt_dir, prompt_filename)
+    if not os.path.exists(prompt_path):
+        logger.error(f"Story generator prompt not found at: {prompt_path}")
+        raise HTTPException(status_code=404, detail=f"Prompt file '{prompt_filename}' not found.")
+
+    with open(prompt_path, "r", encoding="utf-8") as f:
+        sys_prompt = f.read()
+
+    user_prompt = (
+        f"Mode: {mode}\n"
+        f"Episodes Count: {req.episodes_count or ''}\n"
+        f"Episode Number: {req.episode_number or ''}\n"
+        f"Foreshadowing: {req.foreshadowing or ''}\n"
+        f"Background: {req.background or ''}\n"
+        f"Setup: {req.setup or ''}\n"
+        f"Development: {req.development or ''}\n"
+        f"Turning Points: {req.turning_points or ''}\n"
+        f"Climax: {req.climax or ''}\n"
+        f"Resolution: {req.resolution or ''}\n"
+        f"Suspense: {req.suspense or ''}\n"
+        f"Extra Notes: {req.extra_notes or ''}\n"
+    )
+
+    llm_config = agent_service.get_active_llm_config(current_user.id)
+    provider = llm_config.get("provider") if llm_config else None
+    model = llm_config.get("model") if llm_config else None
+    billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+
+    resp = await llm_service.generate_content(user_prompt, sys_prompt, llm_config)
+    generated_md = (resp.get("content") or "").strip()
+    if not generated_md:
+        raise HTTPException(status_code=500, detail="LLM returned empty content")
+
+    # Persist both output and the inputs that produced it.
+    try:
+        story_input = req.model_dump()
+    except AttributeError:
+        story_input = req.dict()
+    story_input["mode"] = mode
+
+    now_iso = datetime.utcnow().isoformat()
+    if mode == "global":
+        gi = dict(project.global_info or {})
+        gi["story_generator_global_input"] = story_input
+        gi["story_dna_global_md"] = generated_md
+        gi["story_dna_global_updated_at"] = now_iso
+        project.global_info = gi
+        db.add(project)
+    else:
+        ei = dict(episode.episode_info or {})
+        ei["story_generator_episode_input"] = story_input
+        ei["story_generator_episode_input_updated_at"] = now_iso
+        ei["story_dna_episode_md"] = generated_md
+        ei["story_dna_episode_updated_at"] = now_iso
+        # Also store the episode_number used to generate
+        ei["story_dna_episode_number"] = int(req.episode_number)
+        episode.episode_info = ei
+        db.add(episode)
+
+    db.commit()
+    db.refresh(episode)
+    return episode
+
+
+@router.put("/episodes/{episode_id}/story_generator/input", response_model=EpisodeOut)
+def save_episode_story_generator_input(
+    episode_id: int,
+    req: "StoryGeneratorRequest",
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Persist Story Generator draft inputs without calling the LLM.
+
+    This is used to avoid losing in-progress inputs before the user clicks Generate.
+    """
+    episode = db.query(Episode).filter(Episode.id == episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
+    if not project:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    mode = (req.mode or "").strip().lower()
+    if mode not in ("global", "episode"):
+        raise HTTPException(status_code=400, detail="mode must be 'global' or 'episode'")
+
+    try:
+        story_input = req.model_dump()
+    except AttributeError:
+        story_input = req.dict()
+    story_input["mode"] = mode
+
+    now_iso = datetime.utcnow().isoformat()
+    if mode == "global":
+        gi = dict(project.global_info or {})
+        gi["story_generator_global_input"] = story_input
+        gi["story_generator_global_input_updated_at"] = now_iso
+        project.global_info = gi
+        db.add(project)
+    else:
+        ei = dict(episode.episode_info or {})
+        ei["story_generator_episode_input"] = story_input
+        ei["story_generator_episode_input_updated_at"] = now_iso
+        episode.episode_info = ei
+        db.add(episode)
+
+    db.commit()
+    db.refresh(episode)
+    return episode
+
+
+@router.post("/episodes/{episode_id}/script_generator/scenes", response_model=Dict[str, Any])
+async def generate_episode_scenes_from_story(
+    episode_id: int,
+    req: ScriptScenesGenerateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    episode = db.query(Episode).filter(Episode.id == episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
+    if not project:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    prompt_dir = os.path.join(str(settings.BASE_DIR), "app", "core", "prompts")
+    prompt_path = os.path.join(prompt_dir, "script_generator_scenes.txt")
+    if not os.path.exists(prompt_path):
+        logger.error(f"Script generator prompt not found at: {prompt_path}")
+        raise HTTPException(status_code=404, detail="Prompt file 'script_generator_scenes.txt' not found.")
+    with open(prompt_path, "r", encoding="utf-8") as f:
+        sys_prompt = f.read()
+
+    global_md = ""
+    try:
+        global_md = (project.global_info or {}).get("story_dna_global_md") or ""
+    except Exception:
+        global_md = ""
+    episode_md = ""
+    try:
+        episode_md = (episode.episode_info or {}).get("story_dna_episode_md") or ""
+    except Exception:
+        episode_md = ""
+
+    user_prompt = (
+        f"Project Title: {project.title}\n"
+        f"Episode Title: {episode.title}\n"
+        f"Scene Count Target: {req.scene_count or ''}\n"
+        f"Background: {req.background or ''}\n"
+        f"Setup: {req.setup or ''}\n"
+        f"Development: {req.development or ''}\n"
+        f"Turning Points: {req.turning_points or ''}\n"
+        f"Climax: {req.climax or ''}\n"
+        f"Resolution: {req.resolution or ''}\n"
+        f"Suspense: {req.suspense or ''}\n"
+        f"Foreshadowing: {req.foreshadowing or ''}\n"
+        f"Extra Notes: {req.extra_notes or ''}\n\n"
+        f"Global Story DNA (if any):\n{global_md}\n\n"
+        f"Episode Story DNA (if any):\n{episode_md}\n"
+    )
+
+    llm_config = agent_service.get_active_llm_config(current_user.id)
+    provider = llm_config.get("provider") if llm_config else None
+    model = llm_config.get("model") if llm_config else None
+    billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+
+    resp = await llm_service.generate_content(user_prompt, sys_prompt, llm_config)
+    raw = (resp.get("content") or "").strip()
+    if not raw:
+        raise HTTPException(status_code=500, detail="LLM returned empty content")
+
+    # Parse strict JSON (strip fences if model ignored instruction)
+    content = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+    content = content.replace("```json", "").replace("```", "").strip()
+    start_idx = content.find("{")
+    end_idx = content.rfind("}")
+    if start_idx != -1 and end_idx != -1:
+        content = content[start_idx:end_idx + 1]
+    try:
+        data = json.loads(content)
+    except Exception as e:
+        logger.error(f"[script_generator] JSON parse failed: {e}. Raw len={len(raw)}")
+        raise HTTPException(status_code=500, detail="Failed to parse LLM JSON for scenes")
+
+    scenes = data.get("scenes") if isinstance(data, dict) else None
+    if not isinstance(scenes, list) or len(scenes) == 0:
+        raise HTTPException(status_code=500, detail="LLM JSON did not include a non-empty 'scenes' list")
+
+    if req.replace_existing_scenes:
+        db.query(Scene).filter(Scene.episode_id == episode_id).delete()
+
+    created = []
+    for i, s in enumerate(scenes, start=1):
+        if not isinstance(s, dict):
+            continue
+        scene_no = str(s.get("scene_no") or i)
+        original_script_text = str(s.get("original_script_text") or "").strip()
+        if not original_script_text:
+            continue
+        db_scene = Scene(
+            episode_id=episode_id,
+            scene_no=scene_no,
+            scene_name=(s.get("scene_name") or None),
+            original_script_text=original_script_text,
+            equivalent_duration=(s.get("equivalent_duration") or None),
+            core_scene_info=(s.get("core_scene_info") or None),
+            environment_name=(s.get("environment_name") or None),
+            linked_characters=(s.get("linked_characters") or None),
+            key_props=(s.get("key_props") or None),
+        )
+        db.add(db_scene)
+        created.append(db_scene)
+
+    db.commit()
+    for sc in created:
+        db.refresh(sc)
+
+    return {
+        "episode_id": episode_id,
+        "scenes_created": len(created),
+        "scenes": [
+            {
+                "id": sc.id,
+                "scene_no": sc.scene_no,
+                "scene_name": sc.scene_name,
+                "original_script_text": sc.original_script_text,
+                "equivalent_duration": sc.equivalent_duration,
+                "core_scene_info": sc.core_scene_info,
+                "environment_name": sc.environment_name,
+                "linked_characters": sc.linked_characters,
+                "key_props": sc.key_props,
+            }
+            for sc in created
+        ],
+    }
+
+
+@router.post("/projects/{project_id}/script_generator/episodes/scripts", response_model=Dict[str, Any])
+async def generate_project_episode_scripts_from_global_framework(
+    project_id: int,
+    req: ProjectEpisodeScriptsGenerateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Generate per-episode script drafts from Project Overview artifacts.
+
+    Uses:
+    - project.global_info.story_dna_global_md (Generated Global Framework)
+    - project.global_info.character_canon_md OR project.global_info.character_profiles (Character Canon Project)
+
+    Creates missing episodes up to N and writes each draft into Episode.script_content.
+    """
+    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    gi = dict(project.global_info or {})
+
+    # Determine target episode count
+    target_n: Optional[int] = None
+    if req.episodes_count is not None:
+        try:
+            target_n = int(req.episodes_count)
+        except Exception:
+            raise HTTPException(status_code=400, detail="episodes_count must be an integer")
+    else:
+        try:
+            saved = (gi.get("story_generator_global_input") or {}).get("episodes_count")
+            if saved is not None:
+                target_n = int(saved)
+        except Exception:
+            target_n = None
+
+    if not target_n or target_n <= 0:
+        raise HTTPException(status_code=400, detail="episodes_count is required (or generate/save Global Story first)")
+
+    global_md = str(gi.get("story_dna_global_md") or "").strip()
+    if not global_md:
+        raise HTTPException(status_code=400, detail="Generated Global Framework (story_dna_global_md) is empty")
+
+    character_canon_md = str(gi.get("character_canon_md") or "").strip()
+    if not character_canon_md:
+        # Best-effort build from profiles
+        profiles = gi.get("character_profiles") or []
+        blocks: List[str] = []
+        if isinstance(profiles, list):
+            for p in profiles:
+                if not isinstance(p, dict):
+                    continue
+                name = str(p.get("name") or "").strip()
+                md = str(p.get("description_md") or "").strip()
+                if name and md:
+                    blocks.append(f"## {name}\n\n{md}")
+        character_canon_md = "\n\n".join(blocks).strip()
+
+    if not character_canon_md:
+        raise HTTPException(status_code=400, detail="Character Canon (Project) is empty. Generate characters first.")
+
+    relationships = str(gi.get("character_relationships") or "").strip()
+
+    prompt_dir = os.path.join(str(settings.BASE_DIR), "app", "core", "prompts")
+    prompt_path = os.path.join(prompt_dir, "script_generator_episode_script.txt")
+    if not os.path.exists(prompt_path):
+        logger.error(f"Episode script generator prompt not found at: {prompt_path}")
+        raise HTTPException(status_code=404, detail="Prompt file 'script_generator_episode_script.txt' not found.")
+    with open(prompt_path, "r", encoding="utf-8") as f:
+        sys_prompt = f.read()
+
+    # Ensure episodes exist (match by title "Episode X"; create missing)
+    existing_eps = db.query(Episode).filter(Episode.project_id == project_id).all()
+    by_title: Dict[str, Episode] = {str(e.title or ""): e for e in existing_eps}
+
+    created_episodes: List[int] = []
+    episodes_in_order: List[Episode] = []
+    for i in range(1, target_n + 1):
+        title = f"Episode {i}"
+        ep = by_title.get(title)
+        if not ep:
+            ep = Episode(project_id=project_id, title=title, script_content="")
+            db.add(ep)
+            db.commit()
+            db.refresh(ep)
+            created_episodes.append(ep.id)
+            by_title[title] = ep
+        episodes_in_order.append(ep)
+
+    llm_config = agent_service.get_active_llm_config(current_user.id)
+    provider = llm_config.get("provider") if llm_config else None
+    model = llm_config.get("model") if llm_config else None
+
+    results: List[Dict[str, Any]] = []
+    errors: List[Dict[str, Any]] = []
+
+    for idx, ep in enumerate(episodes_in_order, start=1):
+        should_write = True
+        if not req.overwrite_existing and (ep.script_content or "").strip():
+            should_write = False
+
+        if not should_write:
+            results.append({
+                "episode_id": ep.id,
+                "episode_title": ep.title,
+                "generated": False,
+                "skipped": True,
+                "reason": "script_content already exists",
+            })
+            continue
+
+        # Balance check per call (may raise 402)
+        billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+
+        user_prompt = (
+            f"Project Title: {project.title}\n"
+            f"Episode Number: {idx}\n"
+            f"Episode Title: {ep.title}\n"
+            f"Extra Notes: {req.extra_notes or ''}\n\n"
+            f"Global Story DNA (Markdown):\n{global_md}\n\n"
+            f"Character Canon (Markdown):\n{character_canon_md}\n\n"
+            + (f"Character Relationships (Plain Text):\n{relationships}\n\n" if relationships else "")
+            + "Write the episode script draft now."
+        )
+
+        try:
+            sys_prompt_episode = sys_prompt.format(episode_number=idx, episode_title=ep.title)
+        except Exception:
+            sys_prompt_episode = sys_prompt
+
+        try:
+            resp = await llm_service.generate_content(user_prompt, sys_prompt_episode, llm_config)
+            raw = (resp.get("content") or "").strip()
+            if not raw:
+                raise RuntimeError("LLM returned empty content")
+            content = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+
+            ep.script_content = content
+            ei = dict(ep.episode_info or {})
+            ei["episode_script_generated_at"] = datetime.utcnow().isoformat()
+            ei["episode_script_source"] = "project_global_framework_plus_project_character_canon"
+            ep.episode_info = ei
+            db.add(ep)
+            db.commit()
+            db.refresh(ep)
+
+            results.append({
+                "episode_id": ep.id,
+                "episode_title": ep.title,
+                "generated": True,
+                "skipped": False,
+                "output_chars": len(content),
+            })
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"[episode_script_generator] Episode {idx} failed: {e}")
+            errors.append({
+                "episode_number": idx,
+                "episode_id": ep.id,
+                "episode_title": ep.title,
+                "error": str(e),
+            })
+            results.append({
+                "episode_id": ep.id,
+                "episode_title": ep.title,
+                "generated": False,
+                "skipped": False,
+                "error": str(e),
+            })
+
+    return {
+        "project_id": project_id,
+        "episodes_target": target_n,
+        "episodes_created": len(created_episodes),
+        "created_episode_ids": created_episodes,
+        "results": results,
+        "errors": errors,
+    }
 
 @router.delete("/episodes/{episode_id}", status_code=204)
 def delete_episode(
@@ -1224,11 +2749,30 @@ async def ai_generate_shots(
         # 4. Call LLM
         llm_config = agent_service.get_active_llm_config(current_user.id)
         
-        # Billing Check
+        # Billing (Reserve for token pricing)
         provider = llm_config.get("provider") 
         model = llm_config.get("model")
-        # Ensure we have at least a default task type if provider is missing (though check_balance handles None)
-        billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+        reservation_tx = None
+        if billing_service.is_token_pricing(db, "llm_chat", provider, model):
+            messages_est = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_input},
+            ]
+            est = billing_service.estimate_input_output_tokens_from_messages(messages_est, output_ratio=1.5)
+            reserve_details = {
+                "item": "generate_shots",
+                "estimation_method": "prompt_tokens_ratio",
+                "estimated_output_ratio": 1.5,
+                "system_prompt_len": len(system_prompt or ""),
+                "user_prompt_len": len(user_input or ""),
+                "input_tokens": est.get("input_tokens", 0),
+                "output_tokens": est.get("output_tokens", 0),
+                "total_tokens": est.get("total_tokens", 0),
+            }
+            reservation_tx = billing_service.reserve_credits(db, current_user.id, "llm_chat", provider, model, reserve_details)
+        else:
+            # Ensure we have at least a default task type if provider is missing (though check_balance handles None)
+            billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
 
         response_dict = await llm_service.generate_content(user_input, system_prompt, llm_config)
         response_content = response_dict.get("content", "")
@@ -1237,12 +2781,29 @@ async def ai_generate_shots(
         logger.info(f"[ai_generate_shots] llm_response_len={len(response_content)}")
 
         if response_content.startswith("Error:"):
+            if reservation_tx:
+                billing_service.cancel_reservation(db, reservation_tx.id, response_content)
             raise HTTPException(status_code=500, detail=response_content)
 
-        # Billing Deduct
-        details = {"item": "generate_shots"}
-        if usage: details.update(usage)
-        billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, details)
+        # Billing finalize
+        if reservation_tx:
+            actual_details = {"item": "generate_shots"}
+            if usage:
+                actual_details.update(usage)
+            if "prompt_tokens" in actual_details and "input_tokens" not in actual_details:
+                actual_details["input_tokens"] = actual_details.get("prompt_tokens", 0)
+            if "completion_tokens" in actual_details and "output_tokens" not in actual_details:
+                actual_details["output_tokens"] = actual_details.get("completion_tokens", 0)
+            billing_service.settle_reservation(db, reservation_tx.id, actual_details)
+        else:
+            details = {"item": "generate_shots"}
+            if usage:
+                details.update(usage)
+            if "prompt_tokens" in details and "input_tokens" not in details:
+                details["input_tokens"] = details.get("prompt_tokens", 0)
+            if "completion_tokens" in details and "output_tokens" not in details:
+                details["output_tokens"] = details.get("completion_tokens", 0)
+            billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, details)
 
         # 5. Parse Table
         lines = response_content.split('\n')
@@ -1279,20 +2840,21 @@ async def ai_generate_shots(
              
         logger.info(f"[ai_generate_shots] parsed_shots={len(shots_data)}")
 
-        # 6. Save to Staging (Do NOT apply to DB yet)
-        # Store the raw "shots_data" list in the scene's ai_shots_result column
-        import json
+        # 6. Save to DB (Scheme A)
+        # scenes.ai_shots_result stores ONLY the raw LLM Markdown table (plain text)
         from datetime import datetime
-        
+
         result_wrapper = {
             "timestamp": datetime.utcnow().isoformat(),
-            "content": shots_data
+            "raw_text": response_content,
+            "content": shots_data,
+            "usage": usage,
         }
-        
-        scene.ai_shots_result = json.dumps(result_wrapper, ensure_ascii=False)
+
+        scene.ai_shots_result = response_content
         db.commit()
         
-        logger.info(f"[ai_generate_shots] Saved {len(shots_data)} shots to staging for scene {scene_id}")
+        logger.info(f"[ai_generate_shots] Saved raw markdown to scene.ai_shots_result; parsed_shots={len(shots_data)} scene_id={scene_id}")
         
         # Return the raw data so frontend can display it in the "Edit" modal
         return result_wrapper
@@ -1315,9 +2877,10 @@ def get_scene_latest_ai_result(
     db: Session = Depends(get_db), 
     current_user: User = Depends(get_current_user)
 ):
-    """
-    Get the latest saved AI shot generation result for a scene.
-    Pulls from scene.ai_shots_result.
+    """Get the latest saved AI shot generation result for a scene.
+
+    Storage (Scheme A): scenes.ai_shots_result is the raw Markdown table text.
+    This endpoint returns a structured wrapper for the UI by parsing that Markdown.
     """
     scene = db.query(Scene).filter(Scene.id == scene_id).first()
     if not scene:
@@ -1328,15 +2891,50 @@ def get_scene_latest_ai_result(
     if not project:
          raise HTTPException(status_code=403, detail="Not authorized")
          
-    raw_result = scene.ai_shots_result
-    if not raw_result:
+    raw_value = scene.ai_shots_result
+    if not raw_value:
         return {}
-        
-    try:
-        data = json.loads(raw_result)
-        return data
-    except:
-        return {"content": [], "error": "Failed to parse stored result"}
+
+    # Backward compat: older versions stored JSON wrapper into scenes.ai_shots_result
+    if isinstance(raw_value, str) and raw_value.strip().startswith('{'):
+        try:
+            legacy = json.loads(raw_value)
+            if isinstance(legacy, dict) and ("raw_text" in legacy or "content" in legacy):
+                raw_text = legacy.get("raw_text") or ""
+                if raw_text:
+                    scene.ai_shots_result = raw_text
+                    db.commit()
+                    raw_value = raw_text
+                else:
+                    # No raw_text; best effort keep the JSON string as raw.
+                    raw_value = scene.ai_shots_result
+        except Exception:
+            pass
+
+    # Parse markdown table into list-of-dicts for the staging editor
+    lines = (raw_value or '').split('\n')
+    table_lines = [line.strip() for line in lines if line.strip().startswith('|')]
+
+    shots_data = []
+    if len(table_lines) > 2:
+        raw_headers = [h.strip() for h in table_lines[0].strip('|').split('|')]
+        headers = [h.replace('*', '').replace('_', '').strip() for h in raw_headers]
+
+        for line in table_lines[2:]:
+            if "---" in line:
+                continue
+            cols = [c.strip() for c in line.strip('|').split('|')]
+            if len(cols) >= len(headers):
+                shot_dict = {}
+                for i, h in enumerate(headers):
+                    if i < len(cols):
+                        shot_dict[h] = cols[i]
+                shots_data.append(shot_dict)
+
+    return {
+        "raw_text": raw_value,
+        "content": shots_data,
+    }
 
 @router.put("/scenes/{scene_id}/latest_ai_result")
 def update_scene_latest_ai_result(
@@ -1358,16 +2956,47 @@ def update_scene_latest_ai_result(
     if not project:
          raise HTTPException(status_code=403, detail="Not authorized")
     
-    # Update result with timestamp
-    result_wrapper = {
-        "timestamp": datetime.utcnow().isoformat(),
-        "content": data.content  # This should be the List[Dict] of shots
-    }
-    
-    scene.ai_shots_result = json.dumps(result_wrapper, ensure_ascii=False)
+    # Scheme A: Save draft by converting edited content back to Markdown and overwriting ai_shots_result.
+    headers = [
+        "Shot ID",
+        "Shot Name",
+        "Scene ID",
+        "Shot Logic (CN)",
+        "Start Frame",
+        "Video Content",
+        "Duration (s)",
+        "Keyframes",
+        "End Frame",
+        "Associated Entities",
+    ]
+
+    def esc(val: str) -> str:
+        if val is None:
+            return ""
+        s = str(val)
+        s = s.replace("|", "\\|")
+        s = s.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "<br>")
+        return s
+
+    rows = []
+    for item in (data.content or []):
+        if not isinstance(item, dict):
+            continue
+        row_vals = [esc(item.get(h, "")) for h in headers]
+        rows.append(f"| " + " | ".join(row_vals) + " |")
+
+    sep = "| " + " | ".join([":---"] * len(headers)) + " |"
+    header_line = "| " + " | ".join(headers) + " |"
+    md = "\n".join([header_line, sep] + rows)
+
+    scene.ai_shots_result = md
     db.commit()
-    
-    return result_wrapper
+
+    return {
+        "timestamp": datetime.utcnow().isoformat(),
+        "raw_text": md,
+        "content": data.content or [],
+    }
 
 @router.post("/scenes/{scene_id}/apply_ai_result")
 def apply_scene_ai_result(
@@ -1394,21 +3023,34 @@ def apply_scene_ai_result(
     # 1. Determine Source
     if data and data.content:
         shots_data = data.content
-        # Update Staging too
-        result_wrapper = {
-            "timestamp": datetime.utcnow().isoformat(),
-            "content": shots_data
-        }
-        scene.ai_shots_result = json.dumps(result_wrapper, ensure_ascii=False)
     else:
-        # User stored
-        raw_result = scene.ai_shots_result
-        if raw_result:
+        # Parse from stored Markdown table
+        raw_value = scene.ai_shots_result or ""
+        if isinstance(raw_value, str) and raw_value.strip().startswith('{'):
+            # Legacy wrapper stored in ai_shots_result
             try:
-                wrapper = json.loads(raw_result)
-                shots_data = wrapper.get("content", [])
-            except:
-                 pass
+                legacy = json.loads(raw_value)
+                if isinstance(legacy, dict) and legacy.get("raw_text"):
+                    raw_value = legacy.get("raw_text")
+                    scene.ai_shots_result = raw_value
+            except Exception:
+                pass
+
+        lines = (raw_value or '').split('\n')
+        table_lines = [line.strip() for line in lines if line.strip().startswith('|')]
+        if len(table_lines) > 2:
+            raw_headers = [h.strip() for h in table_lines[0].strip('|').split('|')]
+            headers = [h.replace('*', '').replace('_', '').strip() for h in raw_headers]
+            for line in table_lines[2:]:
+                if "---" in line:
+                    continue
+                cols = [c.strip() for c in line.strip('|').split('|')]
+                if len(cols) >= len(headers):
+                    shot_dict = {}
+                    for i, h in enumerate(headers):
+                        if i < len(cols):
+                            shot_dict[h] = cols[i]
+                    shots_data.append(shot_dict)
                  
     # 2. Extract and Auto-Link Entities (System Import Feature)
     try:
@@ -1923,7 +3565,51 @@ async def generate_sora_character(
 
     # Check Balance
     # Assuming cost is high for character training/creation
-    billing_service.check_balance(db, current_user.id, "video_gen", llm_config.get("provider"), llm_config.get("model"))
+    reservation_tx = None
+    provider = llm_config.get("provider")
+    model = llm_config.get("model")
+    if billing_service.is_token_pricing(db, "video_gen", provider, model):
+        image_count = 0
+        if req.main_image_url:
+            image_count += 1
+        if isinstance(req.ref_image_urls, list):
+            image_count += len([u for u in req.ref_image_urls if u])
+
+        video_count = 0
+        if isinstance(req.ref_video_urls, list):
+            video_count += len([u for u in req.ref_video_urls if u])
+
+        est_messages = [
+            {"role": "system", "content": "sora-create-character"},
+            {"role": "user", "content": prompt},
+        ]
+        est = billing_service.estimate_input_output_tokens_from_messages(est_messages, output_ratio=1.5)
+
+        estimated_image_tokens = 1000 * image_count
+        estimated_video_tokens = 2000 * video_count
+        est_input = int(est.get("input_tokens", 0) or 0) + int(estimated_image_tokens) + int(estimated_video_tokens)
+        est_output = int((est_input * 3 + 1) // 2) if est_input > 0 else 0
+
+        reserve_details = {
+            "item": "sora_create_character",
+            "estimation_method": "prompt_tokens_ratio",
+            "estimated_output_ratio": 1.5,
+            "estimated_image_tokens": estimated_image_tokens,
+            "estimated_video_tokens": estimated_video_tokens,
+            "input_tokens": est_input,
+            "output_tokens": est_output,
+            "total_tokens": int(est_input + est_output),
+        }
+        reservation_tx = billing_service.reserve_credits(
+            db,
+            current_user.id,
+            "video_gen",
+            provider,
+            model,
+            reserve_details,
+        )
+    else:
+        billing_service.check_balance(db, current_user.id, "video_gen", provider, model)
     
     # Execute
     # We pass the images as "multimodal_context" or similar if the service supports it.
@@ -1964,8 +3650,18 @@ async def generate_sora_character(
         content = response.get("content", "")
         usage = response.get("usage", {})
         
-        # Deduct
-        billing_service.deduct_credits(db, current_user.id, "video_gen", llm_config.get("provider"), llm_config.get("model"), usage)
+        # Billing finalize
+        if reservation_tx:
+            actual_details = {"item": "sora_create_character"}
+            if usage:
+                actual_details.update(usage)
+            if "prompt_tokens" in actual_details and "input_tokens" not in actual_details:
+                actual_details["input_tokens"] = actual_details.get("prompt_tokens", 0)
+            if "completion_tokens" in actual_details and "output_tokens" not in actual_details:
+                actual_details["output_tokens"] = actual_details.get("completion_tokens", 0)
+            billing_service.settle_reservation(db, reservation_tx.id, actual_details)
+        else:
+            billing_service.deduct_credits(db, current_user.id, "video_gen", provider, model, usage)
 
         # Save result (maybe a character ID returned in content?)
         # If content is JSON
@@ -1988,6 +3684,11 @@ async def generate_sora_character(
 
     except Exception as e:
         logger.error(f"Sora Gen Failed: {e}")
+        try:
+            if reservation_tx:
+                billing_service.cancel_reservation(db, reservation_tx.id, str(e))
+        except:
+            pass
         billing_service.log_failed_transaction(db, current_user.id, "video_gen", llm_config.get("provider"), llm_config.get("model"), str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -2917,6 +4618,15 @@ def mock_pay_order(
 
 # --- Billing Management ---
 
+def _validate_pricing_rule_token_costs(rule: PricingRule):
+    token_unit_types = {"per_token", "per_1k_tokens", "per_million_tokens"}
+    if rule.unit_type in token_unit_types:
+        if rule.cost_input is None or rule.cost_output is None or rule.cost_input <= 0 or rule.cost_output <= 0:
+            raise HTTPException(
+                status_code=422,
+                detail="For token unit types, both cost_input and cost_output must be configured (> 0)."
+            )
+
 @router.get("/billing/rules", response_model=List[PricingRuleOut])
 def get_pricing_rules(
     current_user: User = Depends(get_current_user),
@@ -2937,10 +4647,13 @@ def create_pricing_rule(
     
     try:
         rule = PricingRule(**rule_in.dict())
+        _validate_pricing_rule_token_costs(rule)
         db.add(rule)
         db.commit()
         db.refresh(rule)
         return rule
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error creating pricing rule: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -2971,46 +4684,50 @@ def sync_pricing_rules(
     
     added_rules = []
     
-    category_map = {
-        "LLM": "llm_chat",
-        "Image": "image_gen", 
-        "Video": "video_gen",
-        "Analysis": "analysis"
-    }
+    def _task_types_for_setting_category(category: str) -> List[str]:
+        # Pricing rules are keyed by (task_type, provider, model).
+        # Core rule: both chat + scene analysis use Core LLM settings.
+        if category == "LLM":
+            return ["llm_chat", "analysis"]
+        if category == "Vision":
+            # Vision analysis currently bills under analysis / analysis_character
+            return ["analysis", "analysis_character"]
+        if category == "Image":
+            return ["image_gen"]
+        if category == "Video":
+            return ["video_gen"]
+        if category == "Analysis":
+            return ["analysis"]
+        return ["llm_chat"]
 
     try:
         for setting in settings:
-            # Determine task type
-            task_type = category_map.get(setting.category, "llm_chat")
-            
-            # Check existence (Exact match on provider+model+task)
-            # Use 'is not None' for strict checking if model can be null, but usually system settings have models
-            query = db.query(PricingRule).filter(
-                PricingRule.provider == setting.provider,
-                PricingRule.task_type == task_type
-            )
-            
-            if setting.model:
-                 query = query.filter(PricingRule.model == setting.model)
-            else:
-                 # If setting has no model (e.g. generic provider), check for rule with null model
-                 query = query.filter(PricingRule.model == None)
-            
-            existing = query.first()
-            
-            if not existing:
-                # Create new rule
-                new_rule = PricingRule(
-                    provider=setting.provider,
-                    model=setting.model,
-                    task_type=task_type,
-                    cost=1, # Default cost
-                    unit_type="per_call",
-                    is_active=True,
-                    description=f"Auto-synced from {setting.name}"
+            for task_type in _task_types_for_setting_category(setting.category):
+                # Check existence (Exact match on provider+model+task)
+                query = db.query(PricingRule).filter(
+                    PricingRule.provider == setting.provider,
+                    PricingRule.task_type == task_type
                 )
-                db.add(new_rule)
-                added_rules.append(new_rule)
+
+                if setting.model:
+                    query = query.filter(PricingRule.model == setting.model)
+                else:
+                    query = query.filter(PricingRule.model == None)
+
+                existing = query.first()
+
+                if not existing:
+                    new_rule = PricingRule(
+                        provider=setting.provider,
+                        model=setting.model,
+                        task_type=task_type,
+                        cost=1,
+                        unit_type="per_call",
+                        is_active=True,
+                        description=f"Auto-synced from {setting.category}/{setting.name}"
+                    )
+                    db.add(new_rule)
+                    added_rules.append(new_rule)
         
         if added_rules:
             db.commit()
@@ -3021,6 +4738,68 @@ def sync_pricing_rules(
     except Exception as e:
         logger.error(f"Sync pricing rules failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/billing/options")
+def get_billing_options(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Return provider/model dropdown options for Pricing Rules.
+
+    Options are derived from *system* APISettings so Pricing Rules stay consistent
+    with Settings (provider/model identifiers).
+    """
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    system_users = db.query(User).filter(User.is_system == True).all()
+    system_user_ids = [u.id for u in system_users]
+    if not system_user_ids:
+        return {"providersByTaskType": {}, "modelsByProvider": {}}
+
+    all_settings = db.query(APISetting).filter(
+        APISetting.user_id.in_(system_user_ids)
+    ).all()
+
+    # Build category -> providers/models
+    providers_by_category = {}
+    models_by_provider = {}
+
+    for s in all_settings:
+        category = s.category or "LLM"
+        providers_by_category.setdefault(category, set()).add(s.provider)
+        if s.provider not in models_by_provider:
+            models_by_provider[s.provider] = set()
+        if s.model:
+            models_by_provider[s.provider].add(s.model)
+
+    def _union_categories(*cats: str):
+        out = set()
+        for c in cats:
+            out |= providers_by_category.get(c, set())
+        return out
+
+    # Task types currently used for billing.
+    source_categories_by_task_type = {
+        "llm_chat": ["LLM"],
+        "analysis": ["LLM", "Vision"],
+        "analysis_character": ["LLM", "Vision"],
+        "image_gen": ["Image"],
+        "video_gen": ["Video"],
+    }
+
+    providers_by_task_type = {
+        task_type: _union_categories(*cats)
+        for task_type, cats in source_categories_by_task_type.items()
+    }
+
+    return {
+        "taskTypes": sorted(list(providers_by_task_type.keys())),
+        "sourceCategoriesByTaskType": source_categories_by_task_type,
+        "providersByTaskType": {k: sorted(list(v)) for k, v in providers_by_task_type.items()},
+        "modelsByProvider": {k: sorted(list(v)) for k, v in models_by_provider.items()},
+    }
 
 @router.put("/billing/rules/{rule_id}", response_model=PricingRuleOut)
 def update_pricing_rule(
@@ -3039,10 +4818,8 @@ def update_pricing_rule(
     update_data = rule_in.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(rule, field, value)
-    
-    db.commit()
-    db.refresh(rule)
-    return rule
+
+    _validate_pricing_rule_token_costs(rule)
     
     db.commit()
     db.refresh(rule)
@@ -3518,9 +5295,11 @@ async def analyze_asset_image(
     if not api_setting:
          raise HTTPException(status_code=400, detail="Vision Tool (or LLM) not configured. Please configure 'Vision / Image Recognition Tool' in Settings.")
     
-    # Billing Check
-    cost = billing_service.estimate_cost(db, "analysis", api_setting.provider, api_setting.model)
-    billing_service.check_can_proceed(current_user, cost)
+    reservation_tx = None
+    # Billing Check (token rules will be reserved later once we have final prompt/messages)
+    if not billing_service.is_token_pricing(db, "analysis", api_setting.provider, api_setting.model):
+        cost = billing_service.estimate_cost(db, "analysis", api_setting.provider, api_setting.model)
+        billing_service.check_can_proceed(current_user, cost)
 
     llm_config = {
         "api_key": api_setting.api_key,
@@ -3606,6 +5385,41 @@ async def analyze_asset_image(
 
     # 5. Call Service
     try:
+        if billing_service.is_token_pricing(db, "analysis", api_setting.provider, api_setting.model):
+            # Estimate based on the actual text prompt + conservative image token budget.
+            # OpenAI vision format uses user message with [text, image_url].
+            est_messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": system_prompt},
+                        {"type": "image_url", "image_url": {"url": image_url}},
+                    ],
+                }
+            ]
+            est = billing_service.estimate_input_output_tokens_from_messages(est_messages, output_ratio=1.5)
+            estimated_image_tokens = 1000
+            est_input = int(est.get("input_tokens", 0) or 0) + estimated_image_tokens
+            est_output = int((est_input * 3 + 1) // 2) if est_input > 0 else 0
+
+            reserve_details = {
+                "item": "asset_analysis",
+                "estimation_method": "prompt_tokens_ratio",
+                "estimated_output_ratio": 1.5,
+                "estimated_image_tokens": estimated_image_tokens,
+                "input_tokens": est_input,
+                "output_tokens": est_output,
+                "total_tokens": int(est_input + est_output),
+            }
+            reservation_tx = billing_service.reserve_credits(
+                db,
+                current_user.id,
+                "analysis",
+                api_setting.provider,
+                api_setting.model,
+                reserve_details,
+            )
+
         response_data = await llm_service.analyze_multimodal(
             prompt=system_prompt,
             image_url=image_url,
@@ -3637,7 +5451,15 @@ async def analyze_asset_image(
             else:
                 billing_details["total_tokens"] = billing_details["input_tokens"] + billing_details.get("output_tokens", 0)
 
-        billing_service.deduct_credits(db, current_user.id, "analysis", api_setting.provider, api_setting.model, billing_details)
+        if reservation_tx:
+            # Normalize usage keys if provider uses OpenAI naming.
+            if "prompt_tokens" in billing_details and "input_tokens" not in billing_details:
+                billing_details["input_tokens"] = billing_details.get("prompt_tokens", 0)
+            if "completion_tokens" in billing_details and "output_tokens" not in billing_details:
+                billing_details["output_tokens"] = billing_details.get("completion_tokens", 0)
+            billing_service.settle_reservation(db, reservation_tx.id, billing_details)
+        else:
+            billing_service.deduct_credits(db, current_user.id, "analysis", api_setting.provider, api_setting.model, billing_details)
         
         # 6. Save Result (Optional)
         # We don't have a specific field on Asset to store analysis unless we add one or use remark/meta.
@@ -3660,6 +5482,12 @@ async def analyze_asset_image(
         return {"result": result}
     except Exception as e:
         logger.error(f"Image analysis failed: {e}")
+        try:
+            reservation_tx = locals().get("reservation_tx")
+            if reservation_tx:
+                billing_service.cancel_reservation(db, reservation_tx.id, str(e))
+        except:
+            pass
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -3697,9 +5525,11 @@ async def analyze_entity_image(
     if not api_setting:
          raise HTTPException(status_code=400, detail="Vision Tool or LLM not configured.")
     
-    # Billing Check
-    cost = billing_service.estimate_cost(db, "analysis_character", api_setting.provider, api_setting.model)
-    billing_service.check_can_proceed(current_user, cost)
+    reservation_tx = None
+    # Billing Check (token rules will reserve later once we have messages)
+    if not billing_service.is_token_pricing(db, "analysis_character", api_setting.provider, api_setting.model):
+        cost = billing_service.estimate_cost(db, "analysis_character", api_setting.provider, api_setting.model)
+        billing_service.check_can_proceed(current_user, cost)
 
     llm_config = {
         "api_key": api_setting.api_key,
@@ -3900,6 +5730,30 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
     
     try:
         logger.info("Sending request to LLM...")
+
+        if billing_service.is_token_pricing(db, "analysis_character", api_setting.provider, api_setting.model):
+            est = billing_service.estimate_input_output_tokens_from_messages(messages, output_ratio=1.5)
+            estimated_image_tokens = 1000
+            est_input = int(est.get("input_tokens", 0) or 0) + estimated_image_tokens
+            est_output = int((est_input * 3 + 1) // 2) if est_input > 0 else 0
+            reserve_details = {
+                "item": "entity_image_analysis",
+                "estimation_method": "prompt_tokens_ratio",
+                "estimated_output_ratio": 1.5,
+                "estimated_image_tokens": estimated_image_tokens,
+                "input_tokens": est_input,
+                "output_tokens": est_output,
+                "total_tokens": int(est_input + est_output),
+            }
+            reservation_tx = billing_service.reserve_credits(
+                db,
+                current_user.id,
+                "analysis_character",
+                api_setting.provider,
+                api_setting.model,
+                reserve_details,
+            )
+
         llm_response = await llm_service.chat_completion(messages, llm_config)
         
         result_content = llm_response.get("content", "")
@@ -3974,23 +5828,51 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
 
 
         logger.info(f"Entity Updated. New Prompt Length: {len(entity.generation_prompt_en) if entity.generation_prompt_en else 0}")
+
+        # Billing finalize (after successful parse/update)
+        billing_details = {"item": "entity_image_analysis", "entity_id": entity.id}
+        if usage:
+            billing_details.update(usage)
+        if "prompt_tokens" in billing_details and "input_tokens" not in billing_details:
+            billing_details["input_tokens"] = billing_details.get("prompt_tokens", 0)
+        if "completion_tokens" in billing_details and "output_tokens" not in billing_details:
+            billing_details["output_tokens"] = billing_details.get("completion_tokens", 0)
+
+        if reservation_tx:
+            # If usage seems to miss image tokens, add a conservative estimate to avoid under-charging.
+            current_input = billing_details.get("prompt_tokens", billing_details.get("input_tokens", 0))
+            if current_input < 200:
+                estimated_image_tokens = 1000
+                billing_details["input_tokens"] = current_input + estimated_image_tokens
+                billing_details["prompt_tokens"] = billing_details["input_tokens"]
+                if "total_tokens" in billing_details:
+                    billing_details["total_tokens"] += estimated_image_tokens
+                else:
+                    billing_details["total_tokens"] = billing_details["input_tokens"] + billing_details.get("output_tokens", 0)
+            billing_service.settle_reservation(db, reservation_tx.id, billing_details)
+        else:
+            billing_service.deduct_credits(
+                db,
+                current_user.id,
+                "analysis_character",
+                api_setting.provider,
+                api_setting.model,
+                billing_details,
+            )
         
         # We no longer save the prompt as a separate asset file to avoid clutter.
         # The prompt is already saved in the entity.generation_prompt_en field.
 
-        # Billing Deduct (This will commit the transaction and entity updates)
-        billing_details = {"entity_id": entity.id}
-        if usage:
-             billing_details.update(usage)
-        
-        billing_service.deduct_credits(db, current_user.id, "analysis_character", api_setting.provider, api_setting.model, billing_details)
-
         db.refresh(entity)
-        
         return entity
-        
+
     except Exception as e:
         logger.error(f"Entity Analysis failed: {str(e)}", exc_info=True)
+        try:
+            if reservation_tx:
+                billing_service.cancel_reservation(db, reservation_tx.id, str(e))
+        except:
+            pass
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
 @router.get("/entities/{entity_id}/latest_analysis")

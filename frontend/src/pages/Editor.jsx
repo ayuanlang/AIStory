@@ -1,6 +1,6 @@
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { useParams } from 'react-router-dom';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useLog } from '../context/LogContext';
 import { useStore } from '../lib/store';
 import LogPanel from '../components/LogPanel';
@@ -25,6 +25,8 @@ const getFullUrl = (url) => {
 import { 
     fetchProject, 
     updateProject,
+    generateProjectStoryGlobal,
+    generateProjectCharacterProfile,
     fetchEpisodes, 
     createEpisode, 
     updateEpisode,
@@ -57,16 +59,24 @@ import {
     fetchPrompt,
     fetchMe,
     analyzeEntityImage,
-    applySceneAIResult, // New import
-    updateSceneLatestAIResult // New import
+    applySceneAIResult,
+    updateSceneLatestAIResult,
+    getSceneLatestAIResult,
+    generateEpisodeCharacterProfile,
+    generateEpisodeStory,
+    saveEpisodeStoryGeneratorInput,
+    generateEpisodeScenes,
+    generateProjectEpisodeScripts,
+    saveProjectStoryGeneratorGlobalInput,
+    saveProjectCharacterCanonInput,
+    saveProjectCharacterCanonCategories,
+    updateProjectCharacterProfiles,
 } from '../services/api';
 
 import RefineControl from '../components/RefineControl.jsx';
 import VideoStudio from '../components/VideoStudio';
 
 // RefineControl moved to components/RefineControl.jsx
-
-import ReactMarkdown from 'react-markdown';
 import { processPrompt } from '../lib/promptUtils';
 import SettingsPage from './Settings';
 
@@ -267,6 +277,354 @@ const InputGroup = ({ label, value, onChange, list, placeholder, idPrefix, multi
     );
 };
 
+// Character Canon (Authoritative) generator (shared)
+const CANON_TAG_STORAGE_KEY = 'aistory_character_canon_tag_categories_v1';
+const CANON_IDENTITY_STORAGE_KEY = 'aistory_character_canon_identity_categories_v1';
+
+const DEFAULT_CANON_TAG_CATEGORIES = [
+    {
+        key: 'beauty',
+        title: '颜值/美貌（主角塑造）',
+        options: [
+            { id: 'beauty_1', label: '绝美', detail: '五官精致、比例高级、镜头感强' },
+            { id: 'beauty_2', label: '冷艳', detail: '表情克制、眼神有压迫感、气场强' },
+            { id: 'beauty_3', label: '甜美', detail: '笑容干净、亲和力强、少年感/少女感' },
+            { id: 'beauty_4', label: '高级感', detail: '皮肤质感干净、妆容克制、整体贵气' },
+            { id: 'beauty_5', label: '狐狸系', detail: '眼尾上挑、神情慵懒、带一点挑衅感' },
+            { id: 'beauty_m1', label: '硬朗帅', detail: '下颌线清晰、骨相立体、眼神坚决' },
+            { id: 'beauty_m2', label: '禁欲系', detail: '克制冷淡、距离感强、越看越上头' },
+            { id: 'beauty_m3', label: '痞帅', detail: '微挑眉、嘴角不经意上扬、危险又迷人' },
+            { id: 'beauty_m4', label: '温柔系', detail: '眼神温和、说话慢半拍、可靠感强' },
+        ],
+    },
+    {
+        key: 'skin_tone',
+        title: '肤色/质感（常用标签）',
+        options: [
+            { id: 'skin_1', label: '冷白皮', detail: '冷调白皙，通透干净' },
+            { id: 'skin_2', label: '暖白皮', detail: '暖调白皙，亲和柔和' },
+            { id: 'skin_3', label: '健康小麦', detail: '小麦色/日晒感，活力与性感' },
+            { id: 'skin_4', label: '古铜', detail: '更深一档的日晒肤色，张力强' },
+            { id: 'skin_5', label: '奶油肌', detail: '细腻柔光质感，显贵气' },
+            { id: 'skin_6', label: '冷感瓷肌', detail: '干净无瑕，光泽克制' },
+        ],
+    },
+    {
+        key: 'eye_color',
+        title: '眼睛颜色（常用标签）',
+        options: [
+            { id: 'eye_1', label: '深棕', detail: '沉稳、温柔、耐看' },
+            { id: 'eye_2', label: '浅棕/琥珀', detail: '更亮、更抓镜头' },
+            { id: 'eye_3', label: '黑色', detail: '压迫感强、眼神锋利' },
+            { id: 'eye_4', label: '灰色', detail: '冷感、高级、距离感' },
+            { id: 'eye_5', label: '蓝色', detail: '清冷或少年感，辨识度高' },
+            { id: 'eye_6', label: '绿色', detail: '稀有感、神秘感强' },
+        ],
+    },
+    {
+        key: 'hair_style',
+        title: '发型（常用标签）',
+        options: [
+            { id: 'hair_1', label: '长直发', detail: '干净利落，发丝有光泽' },
+            { id: 'hair_2', label: '长卷发', detail: '松弛性感，层次丰富' },
+            { id: 'hair_3', label: '高马尾', detail: '利落、青春、行动感' },
+            { id: 'hair_4', label: '低马尾', detail: '克制、优雅、职场感' },
+            { id: 'hair_5', label: '丸子头', detail: '露出颈部线条，清爽' },
+            { id: 'hair_6', label: '短发波波', detail: '轮廓利落，强调脸部线条' },
+            { id: 'hair_7', label: '寸头/短寸', detail: '干净硬朗，突出眉骨与眼神' },
+            { id: 'hair_8', label: '背头', detail: '成熟强势，精英气场' },
+        ],
+    },
+    {
+        key: 'hair_color',
+        title: '发色（常用标签）',
+        options: [
+            { id: 'hcol_1', label: '自然黑', detail: '干净利落，东方感强' },
+            { id: 'hcol_2', label: '深棕', detail: '更柔和、更显质感' },
+            { id: 'hcol_3', label: '栗棕', detail: '温柔氛围感，显白' },
+            { id: 'hcol_4', label: '巧克力棕', detail: '成熟高级，适配职场' },
+            { id: 'hcol_5', label: '亚麻棕', detail: '更轻盈的时髦感（可偏冷/偏暖）' },
+            { id: 'hcol_6', label: '金发', detail: '辨识度高，镜头更亮' },
+            { id: 'hcol_7', label: '银灰', detail: '冷感高级，未来感/神秘感' },
+            { id: 'hcol_8', label: '红棕', detail: '热烈、强存在感' },
+        ],
+    },
+    {
+        key: 'sexy',
+        title: '性感',
+        options: [
+            { id: 'sexy_shoulder_1', label: '露肩/一字肩', detail: '突出肩线与颈部线条，镜头更“高级性感”' },
+            { id: 'sexy_collar_1', label: '露锁骨', detail: '领口略开，锁骨清晰，胸口肌肤少量可见（尺度克制）' },
+            { id: 'sexy_collar_2', label: '开领/解一两颗扣', detail: '衬衫/外套微敞，若隐若现' },
+            { id: 'sexy_collar_3', label: '露锁骨与胸口（开领/浅V）', detail: '开领或浅V领，视觉聚焦颈胸区域（尺度克制）' },
+            { id: 'sexy_arm_1', label: '无袖/吊带（露手臂）', detail: '露出上臂线条，更轻熟、更利落' },
+            { id: 'sexy_arm_2', label: '挽袖/卷袖（露前臂）', detail: '随性、克制，有一点禁欲张力' },
+            { id: 'sexy_leg_1', label: '短裙/短裤（露腿）', detail: '腿部比例更突出（注意尺度克制）' },
+            { id: 'sexy_leg_2', label: '开衩裙（露腿）', detail: '走动时若隐若现，更“贵气”的性感' },
+        ],
+    },
+    {
+        key: 'gender',
+        title: '性别（设定）',
+        options: [
+            { id: 'gender_f', label: '女', detail: '女性角色（可用于镜头与造型提示）' },
+            { id: 'gender_m', label: '男', detail: '男性角色（可用于镜头与造型提示）' },
+            { id: 'gender_none', label: '无性别/性别不明', detail: '不以性别定义角色，或刻意模糊' },
+        ],
+    },
+    {
+        key: 'body',
+        title: '身材/比例（主角塑造）',
+        options: [
+            { id: 'body_1', label: '好身材', detail: '9头身，修长腿' },
+            { id: 'body_2', label: '肩颈线', detail: '锁骨清晰，肩线利落' },
+            { id: 'body_3', label: '体态', detail: '站姿挺拔，走路带节奏感' },
+            { id: 'body_4', label: '肌肉线条', detail: '紧致不夸张，轮廓清晰' },
+            { id: 'body_h1', label: '身高：娇小', detail: '约150–160cm，比例更显可爱/脆弱感' },
+            { id: 'body_h2', label: '身高：中等', detail: '约160–170cm，日常感强、适配多数场景' },
+            { id: 'body_h3', label: '身高：高挑', detail: '约170–180cm，镜头更有存在感与气场' },
+            { id: 'body_h4', label: '身高：很高', detail: '约180cm+，压迫感/保护感更强' },
+            { id: 'body_shape_1', label: '纤细/骨感', detail: '骨点清晰、线条冷感，适合疏离气质' },
+            { id: 'body_shape_2', label: '匀称/健康', detail: '比例自然、肌肉薄而紧，运动感' },
+            { id: 'body_shape_3', label: '微肉/丰润', detail: '柔软曲线、亲和力强' },
+            { id: 'body_shape_4', label: '健身型', detail: '肩背与核心发达，动作干净有力量' },
+            { id: 'body_shape_5', label: '厚实/壮硕', detail: '骨架大、存在感强，近景更有压迫' },
+            { id: 'body_prop_1', label: '腿长', detail: '视觉比例拉长，走路带风' },
+            { id: 'body_prop_2', label: '腰线高', detail: '上短下长，镜头更显修长' },
+            { id: 'body_prop_3', label: '腰臀比突出', detail: '曲线更明显' },
+            { id: 'body_m1', label: '宽肩窄腰', detail: '倒三角轮廓明显，西装很好看' },
+            { id: 'body_m2', label: '力量感', detail: '动作不多但很稳，抬手就有压迫感' },
+        ],
+    },
+    {
+        key: 'age',
+        title: '年龄/阶段（设定）',
+        options: [
+            { id: 'age_1', label: '少年/少女（16–19）', detail: '青春感强，情绪外露，成长线明显' },
+            { id: 'age_2', label: '青年（20–25）', detail: '锐气与试错期，冲劲足' },
+            { id: 'age_3', label: '轻熟（26–32）', detail: '自洽、边界感更强，魅力更稳定' },
+            { id: 'age_4', label: '成熟（33–40）', detail: '经验与压迫感/掌控感更强' },
+            { id: 'age_5', label: '中年（41–55）', detail: '沉稳、城府/担当更明显' },
+            { id: 'age_6', label: '长者（56+）', detail: '威望、阅历，气场不靠外放' },
+            { id: 'age_7', label: '年龄不详/看不出', detail: '刻意模糊年龄，神秘感与距离感更强' },
+        ],
+    },
+    {
+        key: 'wardrobe',
+        title: '穿搭/造型（主角塑造）',
+        options: [
+            { id: 'wardrobe_1', label: '干练', detail: '收腰西装或衬衫+长裤，剪裁利落' },
+            { id: 'wardrobe_2', label: '优雅', detail: '简洁连衣裙或套装，配饰克制' },
+            { id: 'wardrobe_3', label: '都市时髦', detail: '大衣/风衣+高跟或短靴，层次感' },
+            { id: 'wardrobe_4', label: '禁欲风', detail: '高领/长袖/长裤，颜色克制但极有气场' },
+            { id: 'wardrobe_5', label: '轻奢', detail: '面料有质感，细节讲究，不浮夸' },
+            { id: 'wardrobe_m1', label: '绅士', detail: '合身西装/大衣，领带或领结点到为止' },
+            { id: 'wardrobe_m2', label: '冷酷街头', detail: '黑色夹克/皮衣+短靴，线条硬' },
+            { id: 'wardrobe_m3', label: '少年感男主', detail: '白衬衫/针织衫/运动外套，干净清爽' },
+        ],
+    },
+    {
+        key: 'clothing_items',
+        title: '衣着/单品（常用标签）',
+        options: [
+            { id: 'cloth_1', label: '白衬衫', detail: '干净克制，越简单越高级' },
+            { id: 'cloth_2', label: '黑高领', detail: '禁欲、冷感、气场强' },
+            { id: 'cloth_3', label: '西装', detail: '合身剪裁，肩线清晰' },
+            { id: 'cloth_4', label: '大衣/风衣', detail: '压气场，走路带风' },
+            { id: 'cloth_5', label: '丝质/缎面', detail: '微光泽，性感但不露骨' },
+            { id: 'cloth_6', label: '皮衣/夹克', detail: '硬朗、叛逆、酷感' },
+            { id: 'cloth_7', label: '短裙/开衩', detail: '腿部线条更突出（注意尺度克制）' },
+            { id: 'cloth_8', label: '高跟鞋', detail: '气场与身材比例拉长' },
+            { id: 'cloth_9', label: '短靴', detail: '利落、都市、行动感' },
+            { id: 'cloth_10', label: '配饰克制', detail: '少而精，提升高级感' },
+        ],
+    },
+    {
+        key: 'combat_wear',
+        title: '战斗服装/战甲（服饰）',
+        options: [
+            { id: 'cwear_1', label: '战甲/盔甲', detail: '金属/皮革甲胄，防护与威慑感' },
+            { id: 'cwear_2', label: '轻甲', detail: '更灵活，线条更贴身、利落' },
+            { id: 'cwear_3', label: '战术背心/防弹衣', detail: '现代作战感，功能性口袋与模块' },
+            { id: 'cwear_4', label: '制服/作战服', detail: '军警/特勤气质，纪律与专业' },
+            { id: 'cwear_5', label: '披风/斗篷', detail: '英雄感/隐匿感，镜头层次更强' },
+            { id: 'cwear_6', label: '护臂/护腕', detail: '近战细节，硬朗质感' },
+            { id: 'cwear_7', label: '护膝/护腿', detail: '实战磨损感更真实' },
+            { id: 'cwear_8', label: '作战靴', detail: '落地更稳，压迫感与行动感兼具' },
+            { id: 'cwear_9', label: '战术腰带/枪套', detail: '装备挂载，专业度更高' },
+        ],
+    },
+    {
+        key: 'ancient_wear',
+        title: '古装服装/服饰',
+        options: [
+            { id: 'awear_1', label: '汉服（襦裙/交领）', detail: '飘逸层次，古风气质' },
+            { id: 'awear_2', label: '长袍/直裾', detail: '文人/谋士感，克制内敛' },
+            { id: 'awear_3', label: '官服/朝服', detail: '礼制等级与权力感更明确' },
+            { id: 'awear_4', label: '锦衣/华服', detail: '贵气、纹样精致、用料讲究' },
+            { id: 'awear_5', label: '夜行衣', detail: '暗色贴身，隐秘与危险感（不强调动作）' },
+            { id: 'awear_6', label: '甲胄（古代战甲）', detail: '甲片/扎甲，历史质感强' },
+            { id: 'awear_7', label: '披风/披肩', detail: '身份感与镜头层次' },
+            { id: 'awear_8', label: '发冠/发簪', detail: '阶层与礼制体现' },
+            { id: 'awear_9', label: '腰带/玉佩', detail: '点明身份与品味' },
+            { id: 'awear_10', label: '绣鞋/靴', detail: '细节完成度更高，时代感更真' },
+        ],
+    },
+    {
+        key: 'hair_makeup',
+        title: '妆发/细节（主角塑造）',
+        options: [
+            { id: 'hm_1', label: '红唇', detail: '饱和但干净的红，气场拉满' },
+            { id: 'hm_2', label: '淡妆', detail: '伪素颜，重点是皮肤干净与眼神' },
+            { id: 'hm_3', label: '眼妆', detail: '眼尾微上扬，强调眼神锋利/勾人' },
+            { id: 'hm_4', label: '长发', detail: '发丝有光泽，发型不凌乱' },
+            { id: 'hm_5', label: '短发', detail: '轮廓利落，露出颈部线条' },
+            { id: 'hm_m1', label: '寸头/短寸', detail: '干净利落，突出眉骨与眼神' },
+            { id: 'hm_m2', label: '胡渣', detail: '微微胡渣，成熟感与危险感' },
+        ],
+    },
+    {
+        key: 'vibe',
+        title: '气质/表现（主角塑造）',
+        options: [
+            { id: 'vibe_1', label: '神秘', detail: '信息不一次说完，表情留白' },
+            { id: 'vibe_2', label: '冷峻', detail: '少笑，语气短，目光锐利' },
+            { id: 'vibe_3', label: '阳光', detail: '笑意自然，语气轻快，亲和力强' },
+            { id: 'vibe_4', label: '专业感', detail: '用词准确，动作克制，目标导向' },
+            { id: 'vibe_5', label: '强势', detail: '话语有控制力，场面压得住' },
+            { id: 'vibe_6', label: '脆弱感', detail: '瞬间的停顿/回避眼神，让人心软' },
+        ],
+    },
+    {
+        key: 'nation',
+        title: '国籍/地区（设定）',
+        options: [
+            { id: 'nation_1', label: '中国', detail: '可细分：北方/南方口音与习惯' },
+            { id: 'nation_2', label: '日本', detail: '克制礼貌、边界感明显' },
+            { id: 'nation_3', label: '韩国', detail: '时尚敏感、表达更直接' },
+            { id: 'nation_4', label: '美国', detail: '表达直接、个人主义、行动优先' },
+            { id: 'nation_5', label: '英国', detail: '措辞克制、礼貌疏离、幽默冷' },
+            { id: 'nation_6', label: '法国', detail: '松弛浪漫、审美挑剔、有锋芒' },
+            { id: 'nation_7', label: '意大利', detail: '热情外放、注重衣着与手势' },
+        ],
+    },
+    {
+        key: 'ethnicity',
+        title: '人种/族裔（设定）',
+        options: [
+            { id: 'eth_1', label: '东亚', detail: '例如：中/日/韩常见审美与轮廓特点' },
+            { id: 'eth_2', label: '白人/欧洲裔', detail: '骨相立体、肤色与发色范围更广' },
+            { id: 'eth_3', label: '黑人/非洲裔', detail: '五官张力强、体态与气场更突出' },
+            { id: 'eth_4', label: '拉丁裔', detail: '热烈、自信、风格表达更强' },
+            { id: 'eth_5', label: '南亚裔', detail: '深邃眼神、配饰审美更鲜明' },
+            { id: 'eth_6', label: '中东/阿拉伯裔', detail: '浓眉深眼、轮廓强、气场浓烈' },
+            { id: 'eth_7', label: '混血', detail: '特征融合，辨识度高' },
+        ],
+    },
+];
+
+const DEFAULT_CANON_IDENTITY_CATEGORIES = [
+    {
+        key: 'lead_role',
+        title: '主角定位/戏份',
+        options: [
+            { id: 'lead_f', label: '女主角', detail: '故事核心视角/情感主线' },
+            { id: 'lead_m', label: '男主角', detail: '故事核心视角/推动行动线' },
+            { id: 'lead_2', label: '第二主角', detail: '重要支线/关键转折' },
+            { id: 'antagonist', label: '反派/对立面', detail: '推进冲突与悬念' },
+        ],
+    },
+    {
+        key: 'occupation',
+        title: '职业/身份',
+        options: [
+            { id: 'occ_ceo', label: 'CEO/总裁', detail: '强掌控、决策快、社交资源丰富' },
+            { id: 'occ_police', label: '刑警/警探', detail: '行动派、观察力强、压力承受高' },
+            { id: 'occ_lawyer', label: '律师', detail: '逻辑强、措辞锋利、擅长博弈' },
+            { id: 'occ_doctor', label: '医生', detail: '专业冷静、情绪克制、同理心' },
+            { id: 'occ_artist', label: '艺术家', detail: '审美敏感、情绪浓、反差感' },
+            { id: 'occ_student', label: '大学生', detail: '成长线明显、少年感/少女感' },
+            { id: 'occ_model', label: '模特/艺人', detail: '镜头感强、曝光与舆论压力' },
+        ],
+    },
+    {
+        key: 'combat_identity',
+        title: '战斗身份/背景',
+        options: [
+            { id: 'cid_1', label: '军人/士兵', detail: '训练有素，服从命令，纪律感强' },
+            { id: 'cid_2', label: '特勤/特种', detail: '高压任务，处事克制专业' },
+            { id: 'cid_3', label: '雇佣兵', detail: '利益驱动，实战经验丰富' },
+            { id: 'cid_4', label: '杀手/刺客', detail: '隐秘、冷静、边界感强' },
+            { id: 'cid_5', label: '保镖/护卫', detail: '保护优先，风险评估与站位意识强' },
+            { id: 'cid_6', label: '武术家', detail: '以技服人，克制与底线清晰' },
+            { id: 'cid_7', label: '赏金猎人', detail: '规则感强，灰色地带的执行者' },
+            { id: 'cid_8', label: '黑帮打手', detail: '狠劲、街头经验与威慑' },
+        ],
+    },
+    {
+        key: 'ancient_identity',
+        title: '古装身份/阵营',
+        options: [
+            { id: 'aid_1', label: '将军/统帅', detail: '威望与军纪，杀伐果断' },
+            { id: 'aid_2', label: '侍卫/禁军', detail: '守护要员/皇权，纪律严' },
+            { id: 'aid_3', label: '捕快/衙役', detail: '基层执法，江湖味更浓' },
+            { id: 'aid_4', label: '县令/官员', detail: '规则执行者，权力与人情博弈' },
+            { id: 'aid_5', label: '世家公子/小姐', detail: '礼制与家族利益牵引，克制体面' },
+            { id: 'aid_6', label: '王爷/皇子', detail: '权力中心，处处试探与算计' },
+            { id: 'aid_7', label: '宫女/太监', detail: '宫廷生态，信息与生存技巧' },
+            { id: 'aid_8', label: '门派弟子/修行者', detail: '师门规矩、江湖恩怨、阵营牵连' },
+            { id: 'aid_9', label: '侠客/游侠', detail: '行走江湖，讲义气也有底线' },
+        ],
+    },
+    {
+        key: 'status',
+        title: '社会身份/阶层',
+        options: [
+            { id: 'st_elite', label: '上层精英', detail: '资源多、社交圈高、习惯克制' },
+            { id: 'st_middle', label: '中产专业人士', detail: '稳健务实、重效率与边界' },
+            { id: 'st_grass', label: '草根逆袭', detail: '韧性强、行动强、野心明确' },
+            { id: 'st_mysterious', label: '身份成谜', detail: '信息分层揭示，悬念强' },
+        ],
+    },
+    {
+        key: 'personality_arc',
+        title: '主角弧光/关键词',
+        options: [
+            { id: 'arc_redemption', label: '救赎', detail: '背负过去，逐步修复与和解' },
+            { id: 'arc_growth', label: '成长', detail: '从稚嫩到成熟的可见变化' },
+            { id: 'arc_revenge', label: '复仇', detail: '目标明确，情绪压抑与爆发' },
+            { id: 'arc_power', label: '权力', detail: '争夺与控制、规则博弈' },
+        ],
+    },
+];
+
+const canonOptionValue = (opt) => `${opt.label}：${opt.detail}`;
+
+const normalizeCanonTagCategories = (raw) => {
+    if (!Array.isArray(raw)) return null;
+    const normalized = raw
+        .filter(Boolean)
+        .map((cat) => {
+            const key = String(cat?.key || '').trim();
+            const title = String(cat?.title || '').trim();
+            const options = Array.isArray(cat?.options) ? cat.options : [];
+            if (!key || !title) return null;
+            const normalizedOptions = options
+                .filter(Boolean)
+                .map((opt) => {
+                    const id = String(opt?.id || '').trim();
+                    const label = String(opt?.label || '').trim();
+                    const detail = String(opt?.detail || '').trim();
+                    if (!id || !label || !detail) return null;
+                    return { id, label, detail };
+                })
+                .filter(Boolean);
+            return { key, title, options: normalizedOptions };
+        })
+        .filter(Boolean);
+    return normalized.length > 0 ? normalized : null;
+};
+
 // Mock Data / Placeholders for Tabs
 const ProjectOverview = ({ id, onProjectUpdate }) => {
     const [project, setProject] = useState(null);
@@ -278,19 +636,326 @@ const ProjectOverview = ({ id, onProjectUpdate }) => {
         Global_Style: "Photorealistic, Cinematic Lighting, 8k, Masterpiece",
         tech_params: {
             visual_standard: {
-                horizontal_resolution: "720",
-                vertical_resolution: "1080",
+                horizontal_resolution: "1080",
+                vertical_resolution: "1920",
                 frame_rate: "24",
                 aspect_ratio: "9:16",
                 quality: "Ultra High"
             }
         },
         tone: "Skin Tone Optimized, Dreamy",
-        lighting: "",
+        lighting: "Butterfly Light, Soft Light",
         language: "English",
-        borrowed_films: ["King Kong (2005)", "Joker (2019)", "The Truman Show"],
-        notes: ""
+        borrowed_films: [],
+        character_relationships: "",
+        notes: "",
+        story_dna_global_md: "",
+        story_generator_global_input: {
+            episodes_count: 12,
+            background: "",
+            setup: "",
+            development: "",
+            turning_points: "",
+            climax: "",
+            resolution: "",
+            suspense: "",
+            foreshadowing: "",
+            extra_notes: "",
+        },
+        character_profiles: [],
+        character_canon_md: "",
+        character_canon_input: {
+            name: "",
+            selected_tag_ids: [],
+            selected_identity_ids: [],
+            custom_identity: "",
+            body_features: "",
+            custom_style_tags: "",
+            extra_notes: "",
+        },
     });
+
+    const [globalStoryInput, setGlobalStoryInput] = useState({
+        episodes_count: 12,
+        background: "",
+        setup: "",
+        development: "",
+        turning_points: "",
+        climax: "",
+        resolution: "",
+        suspense: "",
+        foreshadowing: "",
+        extra_notes: "",
+    });
+    const [isGeneratingGlobalStory, setIsGeneratingGlobalStory] = useState(false);
+    const [isGeneratingEpisodeScripts, setIsGeneratingEpisodeScripts] = useState(false);
+    const [showGlobalStoryGuide, setShowGlobalStoryGuide] = useState(false);
+    const globalStoryAutosaveTimerRef = useRef(null);
+    const skipNextGlobalStoryAutosaveRef = useRef(true);
+
+    // Project-level Character Canon (keep original tag-selection UX)
+    const [canonName, setCanonName] = useState('');
+    const [canonIdentityCategories, setCanonIdentityCategories] = useState(DEFAULT_CANON_IDENTITY_CATEGORIES);
+    const [canonSelectedIdentityIds, setCanonSelectedIdentityIds] = useState([]);
+    const [canonCustomIdentity, setCanonCustomIdentity] = useState('');
+    const [canonBody, setCanonBody] = useState('');
+    const [canonExtra, setCanonExtra] = useState('');
+    const [canonCustomTags, setCanonCustomTags] = useState('');
+    const [canonTagCategories, setCanonTagCategories] = useState(DEFAULT_CANON_TAG_CATEGORIES);
+    const [canonTagEditMode, setCanonTagEditMode] = useState(false);
+    const [canonSelectedTagIds, setCanonSelectedTagIds] = useState([]);
+    const [isGeneratingCanon, setIsGeneratingCanon] = useState(false);
+    const [showCanonModal, setShowCanonModal] = useState(false);
+
+    const renderCanonMarkdownFromProfiles = (profiles) => {
+        const items = Array.isArray(profiles) ? profiles : [];
+        const blocks = [];
+        for (const it of items) {
+            if (!it || typeof it !== 'object') continue;
+            const nm = String(it.name || '').trim();
+            if (!nm) continue;
+            const md = String(it.description_md || '').trim();
+            if (md) {
+                blocks.push(md);
+            } else {
+                blocks.push(`### ${nm} (Canonical)\n- Identity: ${it.identity || ''}\n`);
+            }
+        }
+        return blocks.join('\n\n').trim();
+    };
+
+    const handleDeleteCanonCharacter = async (characterName) => {
+        const name = String(characterName || '').trim();
+        if (!id || !name) return;
+        const ok = window.confirm(`Delete "${name}" from Character Canon? You can re-generate it later.`);
+        if (!ok) return;
+
+        try {
+            const current = Array.isArray(info.character_profiles) ? info.character_profiles : [];
+            const nextProfiles = current.filter(p => (p && typeof p === 'object' ? String(p.name || '').trim() !== name : true));
+            await updateProjectCharacterProfiles(id, nextProfiles);
+            setInfo(prev => {
+                const merged = { ...prev };
+                merged.character_profiles = nextProfiles;
+                merged.character_canon_md = renderCanonMarkdownFromProfiles(nextProfiles);
+                return merged;
+            });
+        } catch (e) {
+            console.error('[Character Canon] Delete failed:', e);
+            alert('Delete failed. Please try again.');
+        }
+    };
+
+    const canonAutosaveTimerRef = useRef(null);
+    const skipNextCanonAutosaveRef = useRef(true);
+    const canonCategoriesAutosaveTimerRef = useRef(null);
+    const skipNextCanonCategoriesAutosaveRef = useRef(true);
+
+    const persistCanonTagCategories = (categories) => {
+        try {
+            const normalized = normalizeCanonTagCategories(categories);
+            if (!normalized) return false;
+            localStorage.setItem(CANON_TAG_STORAGE_KEY, JSON.stringify(normalized));
+            return true;
+        } catch (e) {
+            return false;
+        }
+    };
+
+    const persistCanonIdentityCategories = (categories) => {
+        try {
+            const normalized = normalizeCanonTagCategories(categories);
+            if (!normalized) return false;
+            localStorage.setItem(CANON_IDENTITY_STORAGE_KEY, JSON.stringify(normalized));
+            return true;
+        } catch (e) {
+            return false;
+        }
+    };
+
+    useEffect(() => {
+        try {
+            const DEPRECATED_CANON_CATEGORY_KEYS = new Set(['combat']);
+            const LEGACY_SEXY_OPTION_IDS = new Set([
+                'sexy_1',
+                'sexy_2',
+                'sexy_3',
+                'sexy_4',
+                'sexy_m1',
+                'sexy_m2',
+            ]);
+
+            const mergeCategoriesByKey = (savedCats, defaultCats) => {
+                const byKey = new Map();
+                for (const c of (savedCats || [])) {
+                    if (!c?.key) continue;
+                    if (DEPRECATED_CANON_CATEGORY_KEYS.has(c.key)) continue;
+                    byKey.set(c.key, c);
+                }
+
+                const mergeOne = (savedCat, defCat) => {
+                    if (!savedCat) return defCat;
+                    const categoryKey = savedCat.key || defCat?.key;
+                    let savedOptions = Array.isArray(savedCat.options) ? savedCat.options : [];
+                    if (categoryKey === 'sexy') {
+                        savedOptions = savedOptions.filter(o => o?.id && !LEGACY_SEXY_OPTION_IDS.has(o.id));
+                    }
+                    const defOptions = Array.isArray(defCat?.options) ? defCat.options : [];
+                    const seenIds = new Set(savedOptions.map(o => o?.id).filter(Boolean));
+                    const mergedOptions = [...savedOptions];
+                    for (const opt of defOptions) {
+                        if (!opt?.id) continue;
+                        if (!seenIds.has(opt.id)) mergedOptions.push(opt);
+                    }
+                    return {
+                        ...savedCat,
+                        key: savedCat.key || defCat?.key,
+                        title: savedCat.title || defCat?.title,
+                        options: mergedOptions,
+                    };
+                };
+
+                const merged = [];
+                for (const def of (defaultCats || [])) {
+                    const saved = byKey.get(def.key);
+                    merged.push(mergeOne(saved, def));
+                    byKey.delete(def.key);
+                }
+                for (const rest of byKey.values()) {
+                    if (rest?.key && DEPRECATED_CANON_CATEGORY_KEYS.has(rest.key)) continue;
+                    merged.push(rest);
+                }
+                return merged;
+            };
+
+            const savedTags = localStorage.getItem(CANON_TAG_STORAGE_KEY);
+            if (savedTags) {
+                const parsed = JSON.parse(savedTags);
+                const normalized = normalizeCanonTagCategories(parsed);
+                if (normalized) {
+                    setCanonTagCategories(mergeCategoriesByKey(normalized, DEFAULT_CANON_TAG_CATEGORIES));
+                } else {
+                    setCanonTagCategories(DEFAULT_CANON_TAG_CATEGORIES);
+                }
+            } else {
+                setCanonTagCategories(DEFAULT_CANON_TAG_CATEGORIES);
+            }
+
+            const savedIdentity = localStorage.getItem(CANON_IDENTITY_STORAGE_KEY);
+            if (savedIdentity) {
+                const parsed = JSON.parse(savedIdentity);
+                const normalized = normalizeCanonTagCategories(parsed);
+                if (normalized) {
+                    setCanonIdentityCategories(mergeCategoriesByKey(normalized, DEFAULT_CANON_IDENTITY_CATEGORIES));
+                }
+            }
+        } catch (e) {
+            setCanonTagCategories(DEFAULT_CANON_TAG_CATEGORIES);
+            setCanonIdentityCategories(DEFAULT_CANON_IDENTITY_CATEGORIES);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    const toggleCanonTagId = (tagId) => {
+        setCanonSelectedTagIds(prev => (
+            prev.includes(tagId) ? prev.filter(t => t !== tagId) : [...prev, tagId]
+        ));
+    };
+
+    const toggleCanonIdentityId = (identityId) => {
+        setCanonSelectedIdentityIds(prev => (
+            prev.includes(identityId) ? prev.filter(t => t !== identityId) : [...prev, identityId]
+        ));
+    };
+
+    const canonSelectedTagStrings = () => {
+        const selected = [];
+        for (const cat of (canonTagCategories || [])) {
+            for (const opt of (cat.options || [])) {
+                if (canonSelectedTagIds.includes(opt.id)) {
+                    selected.push(canonOptionValue(opt));
+                }
+            }
+        }
+        return selected;
+    };
+
+    const canonSelectedIdentityStrings = () => {
+        const selected = [];
+        for (const cat of (canonIdentityCategories || [])) {
+            for (const opt of (cat.options || [])) {
+                if (canonSelectedIdentityIds.includes(opt.id)) {
+                    selected.push(canonOptionValue(opt));
+                }
+            }
+        }
+        return selected;
+    };
+
+    const newCanonOptionId = (prefix = 'opt') => `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+
+    const updateCanonCategoryTitle = (catKey, title) => {
+        setCanonTagCategories(prev => (prev || []).map(c => (c.key === catKey ? { ...c, title } : c)));
+    };
+    const updateCanonOption = (catKey, optId, patch) => {
+        setCanonTagCategories(prev => (prev || []).map(c => {
+            if (c.key !== catKey) return c;
+            return {
+                ...c,
+                options: (c.options || []).map(o => (o.id === optId ? { ...o, ...patch } : o)),
+            };
+        }));
+    };
+    const addCanonOption = (catKey) => {
+        const newId = newCanonOptionId(catKey);
+        setCanonTagCategories(prev => (prev || []).map(c => {
+            if (c.key !== catKey) return c;
+            return { ...c, options: [...(c.options || []), { id: newId, label: '新标签', detail: '细节描述' }] };
+        }));
+    };
+    const removeCanonOption = (catKey, optId) => {
+        setCanonSelectedTagIds(prev => prev.filter(id2 => id2 !== optId));
+        setCanonTagCategories(prev => (prev || []).map(c => {
+            if (c.key !== catKey) return c;
+            return { ...c, options: (c.options || []).filter(o => o.id !== optId) };
+        }));
+    };
+
+    const updateIdentityCategoryTitle = (catKey, title) => {
+        setCanonIdentityCategories(prev => (prev || []).map(c => (c.key === catKey ? { ...c, title } : c)));
+    };
+    const updateIdentityOption = (catKey, optId, patch) => {
+        setCanonIdentityCategories(prev => (prev || []).map(c => {
+            if (c.key !== catKey) return c;
+            return {
+                ...c,
+                options: (c.options || []).map(o => (o.id === optId ? { ...o, ...patch } : o)),
+            };
+        }));
+    };
+    const addIdentityOption = (catKey) => {
+        const newId = newCanonOptionId(catKey);
+        setCanonIdentityCategories(prev => (prev || []).map(c => {
+            if (c.key !== catKey) return c;
+            return { ...c, options: [...(c.options || []), { id: newId, label: '新身份', detail: '细节描述' }] };
+        }));
+    };
+    const removeIdentityOption = (catKey, optId) => {
+        setCanonSelectedIdentityIds(prev => prev.filter(id2 => id2 !== optId));
+        setCanonIdentityCategories(prev => (prev || []).map(c => {
+            if (c.key !== catKey) return c;
+            return { ...c, options: (c.options || []).filter(o => o.id !== optId) };
+        }));
+    };
+
+    const closeCanonModal = () => {
+        if (canonTagEditMode) {
+            persistCanonTagCategories(canonTagCategories);
+            persistCanonIdentityCategories(canonIdentityCategories);
+        }
+        setCanonTagEditMode(false);
+        setShowCanonModal(false);
+    };
 
     useEffect(() => {
     // ... no changes to rest
@@ -311,7 +976,153 @@ const ProjectOverview = ({ id, onProjectUpdate }) => {
                              }
                          }
                      };
+
+                     // Default Script Title to project.title when empty
+                     if (!merged.script_title || String(merged.script_title).trim().length === 0) {
+                         if (data?.title && String(data.title).trim().length > 0) {
+                             merged.script_title = String(data.title).trim();
+                         }
+                     }
                      setInfo(merged);
+
+                     // Restore Story Generator draft inputs (if previously saved)
+                     if (merged.story_generator_global_input && typeof merged.story_generator_global_input === 'object') {
+                         setGlobalStoryInput(prev => ({
+                             ...prev,
+                             ...merged.story_generator_global_input,
+                         }));
+                     }
+
+                     // Avoid immediately auto-saving right after hydration
+                     skipNextGlobalStoryAutosaveRef.current = true;
+
+                     // Restore Character Canon draft inputs (if previously saved)
+                     const canonDraft = merged.character_canon_input;
+                     if (canonDraft && typeof canonDraft === 'object') {
+                         if (typeof canonDraft.name === 'string') setCanonName(canonDraft.name);
+                         if (Array.isArray(canonDraft.selected_identity_ids)) setCanonSelectedIdentityIds(canonDraft.selected_identity_ids);
+                         if (Array.isArray(canonDraft.selected_tag_ids)) setCanonSelectedTagIds(canonDraft.selected_tag_ids);
+                         if (typeof canonDraft.custom_identity === 'string') setCanonCustomIdentity(canonDraft.custom_identity);
+                         if (typeof canonDraft.body_features === 'string') setCanonBody(canonDraft.body_features);
+                         if (typeof canonDraft.custom_style_tags === 'string') setCanonCustomTags(canonDraft.custom_style_tags);
+                         if (typeof canonDraft.extra_notes === 'string') setCanonExtra(canonDraft.extra_notes);
+                     }
+
+                     // Restore Character Canon tag/identity categories from DB (cross-device)
+                     if (merged.character_canon_tag_categories) {
+                         const normalized = normalizeCanonTagCategories(merged.character_canon_tag_categories);
+                         if (normalized) {
+                            const DEPRECATED_CANON_CATEGORY_KEYS = new Set(['combat']);
+                            const LEGACY_SEXY_OPTION_IDS = new Set([
+                                'sexy_1',
+                                'sexy_2',
+                                'sexy_3',
+                                'sexy_4',
+                                'sexy_m1',
+                                'sexy_m2',
+                            ]);
+
+                             const mergeCategoriesByKey = (savedCats, defaultCats) => {
+                                 const byKey = new Map();
+                                 for (const c of (savedCats || [])) {
+                                     if (!c?.key) continue;
+                                     if (DEPRECATED_CANON_CATEGORY_KEYS.has(c.key)) continue;
+                                     byKey.set(c.key, c);
+                                 }
+
+                                 const mergeOne = (savedCat, defCat) => {
+                                     if (!savedCat) return defCat;
+                                     const categoryKey = savedCat.key || defCat?.key;
+                                     let savedOptions = Array.isArray(savedCat.options) ? savedCat.options : [];
+                                     if (categoryKey === 'sexy') {
+                                         savedOptions = savedOptions.filter(o => o?.id && !LEGACY_SEXY_OPTION_IDS.has(o.id));
+                                     }
+                                     const defOptions = Array.isArray(defCat?.options) ? defCat.options : [];
+                                     const seenIds = new Set(savedOptions.map(o => o?.id).filter(Boolean));
+                                     const mergedOptions = [...savedOptions];
+                                     for (const opt of defOptions) {
+                                         if (!opt?.id) continue;
+                                         if (!seenIds.has(opt.id)) mergedOptions.push(opt);
+                                     }
+                                     return {
+                                         ...savedCat,
+                                         key: savedCat.key || defCat?.key,
+                                         title: savedCat.title || defCat?.title,
+                                         options: mergedOptions,
+                                     };
+                                 };
+
+                                 const mergedCats = [];
+                                 for (const def of (defaultCats || [])) {
+                                     const saved = byKey.get(def.key);
+                                     mergedCats.push(mergeOne(saved, def));
+                                     byKey.delete(def.key);
+                                 }
+                                 for (const rest of byKey.values()) {
+                                     if (rest?.key && DEPRECATED_CANON_CATEGORY_KEYS.has(rest.key)) continue;
+                                     mergedCats.push(rest);
+                                 }
+                                 return mergedCats;
+                             };
+
+                             const mergedCats = mergeCategoriesByKey(normalized, DEFAULT_CANON_TAG_CATEGORIES);
+                             setCanonTagCategories(mergedCats);
+                             try { localStorage.setItem(CANON_TAG_STORAGE_KEY, JSON.stringify(mergedCats)); } catch {}
+                         }
+                     }
+                     if (merged.character_canon_identity_categories) {
+                         const normalized = normalizeCanonTagCategories(merged.character_canon_identity_categories);
+                         if (normalized) {
+                            const DEPRECATED_CANON_CATEGORY_KEYS = new Set(['combat']);
+
+                             const mergeCategoriesByKey = (savedCats, defaultCats) => {
+                                 const byKey = new Map();
+                                 for (const c of (savedCats || [])) {
+                                     if (!c?.key) continue;
+                                     if (DEPRECATED_CANON_CATEGORY_KEYS.has(c.key)) continue;
+                                     byKey.set(c.key, c);
+                                 }
+
+                                 const mergeOne = (savedCat, defCat) => {
+                                     if (!savedCat) return defCat;
+                                     const savedOptions = Array.isArray(savedCat.options) ? savedCat.options : [];
+                                     const defOptions = Array.isArray(defCat?.options) ? defCat.options : [];
+                                     const seenIds = new Set(savedOptions.map(o => o?.id).filter(Boolean));
+                                     const mergedOptions = [...savedOptions];
+                                     for (const opt of defOptions) {
+                                         if (!opt?.id) continue;
+                                         if (!seenIds.has(opt.id)) mergedOptions.push(opt);
+                                     }
+                                     return {
+                                         ...savedCat,
+                                         key: savedCat.key || defCat?.key,
+                                         title: savedCat.title || defCat?.title,
+                                         options: mergedOptions,
+                                     };
+                                 };
+
+                                 const mergedCats = [];
+                                 for (const def of (defaultCats || [])) {
+                                     const saved = byKey.get(def.key);
+                                     mergedCats.push(mergeOne(saved, def));
+                                     byKey.delete(def.key);
+                                 }
+                                 for (const rest of byKey.values()) {
+                                     if (rest?.key && DEPRECATED_CANON_CATEGORY_KEYS.has(rest.key)) continue;
+                                     mergedCats.push(rest);
+                                 }
+                                 return mergedCats;
+                             };
+
+                             const mergedCats = mergeCategoriesByKey(normalized, DEFAULT_CANON_IDENTITY_CATEGORIES);
+                             setCanonIdentityCategories(mergedCats);
+                             try { localStorage.setItem(CANON_IDENTITY_STORAGE_KEY, JSON.stringify(mergedCats)); } catch {}
+                         }
+                     }
+
+                     // Avoid immediately auto-saving right after hydration
+                     skipNextCanonAutosaveRef.current = true;
+                     skipNextCanonCategoriesAutosaveRef.current = true;
                 }
             } catch (e) {
                 console.error("Failed to load project", e);
@@ -320,14 +1131,286 @@ const ProjectOverview = ({ id, onProjectUpdate }) => {
         load();
     }, [id]);
 
+    // Auto-save Character Canon tag/identity categories (debounced) when in edit mode
+    useEffect(() => {
+        if (!id) return;
+        if (!canonTagEditMode) return;
+
+        if (skipNextCanonCategoriesAutosaveRef.current) {
+            skipNextCanonCategoriesAutosaveRef.current = false;
+            return;
+        }
+
+        if (canonCategoriesAutosaveTimerRef.current) {
+            clearTimeout(canonCategoriesAutosaveTimerRef.current);
+        }
+
+        canonCategoriesAutosaveTimerRef.current = setTimeout(async () => {
+            try {
+                const normalizedTags = normalizeCanonTagCategories(canonTagCategories);
+                const normalizedIdentity = normalizeCanonTagCategories(canonIdentityCategories);
+                if (!normalizedTags || !normalizedIdentity) return;
+                await saveProjectCharacterCanonCategories(id, {
+                    tag_categories: normalizedTags,
+                    identity_categories: normalizedIdentity,
+                });
+                try { localStorage.setItem(CANON_TAG_STORAGE_KEY, JSON.stringify(normalizedTags)); } catch {}
+                try { localStorage.setItem(CANON_IDENTITY_STORAGE_KEY, JSON.stringify(normalizedIdentity)); } catch {}
+            } catch (e) {
+                console.error('[Character Canon Categories] Auto-save failed:', e);
+            }
+        }, 800);
+
+        return () => {
+            if (canonCategoriesAutosaveTimerRef.current) {
+                clearTimeout(canonCategoriesAutosaveTimerRef.current);
+            }
+        };
+    }, [id, canonTagEditMode, canonTagCategories, canonIdentityCategories]);
+
+    // Auto-save Project Character Canon draft inputs (debounced)
+    useEffect(() => {
+        if (!id) return;
+        if (isGeneratingCanon) return;
+
+        if (skipNextCanonAutosaveRef.current) {
+            skipNextCanonAutosaveRef.current = false;
+            return;
+        }
+
+        if (canonAutosaveTimerRef.current) {
+            clearTimeout(canonAutosaveTimerRef.current);
+        }
+
+        canonAutosaveTimerRef.current = setTimeout(async () => {
+            try {
+                const payload = {
+                    name: canonName || '',
+                    selected_tag_ids: Array.isArray(canonSelectedTagIds) ? canonSelectedTagIds : [],
+                    selected_identity_ids: Array.isArray(canonSelectedIdentityIds) ? canonSelectedIdentityIds : [],
+                    custom_identity: canonCustomIdentity || '',
+                    body_features: canonBody || '',
+                    custom_style_tags: canonCustomTags || '',
+                    extra_notes: canonExtra || '',
+                };
+                await saveProjectCharacterCanonInput(id, payload);
+            } catch (e) {
+                console.error('[Character Canon] Auto-save failed:', e);
+            }
+        }, 800);
+
+        return () => {
+            if (canonAutosaveTimerRef.current) {
+                clearTimeout(canonAutosaveTimerRef.current);
+            }
+        };
+    }, [
+        id,
+        isGeneratingCanon,
+        canonName,
+        canonSelectedTagIds,
+        canonSelectedIdentityIds,
+        canonCustomIdentity,
+        canonBody,
+        canonCustomTags,
+        canonExtra,
+    ]);
+
+    // Auto-save Story Generator (Global/Project) draft inputs (debounced)
+    useEffect(() => {
+        if (!id) return;
+        if (isGeneratingGlobalStory) return;
+
+        if (skipNextGlobalStoryAutosaveRef.current) {
+            skipNextGlobalStoryAutosaveRef.current = false;
+            return;
+        }
+
+        if (globalStoryAutosaveTimerRef.current) {
+            clearTimeout(globalStoryAutosaveTimerRef.current);
+        }
+
+        globalStoryAutosaveTimerRef.current = setTimeout(async () => {
+            try {
+                const payload = {
+                    mode: 'global',
+                    episodes_count: Number(globalStoryInput.episodes_count || 0) || 0,
+                    background: globalStoryInput.background,
+                    setup: globalStoryInput.setup,
+                    development: globalStoryInput.development,
+                    turning_points: globalStoryInput.turning_points,
+                    climax: globalStoryInput.climax,
+                    resolution: globalStoryInput.resolution,
+                    suspense: globalStoryInput.suspense,
+                    foreshadowing: globalStoryInput.foreshadowing,
+                    extra_notes: globalStoryInput.extra_notes,
+                };
+                await saveProjectStoryGeneratorGlobalInput(id, payload);
+            } catch (e) {
+                console.error('[Global Story Generator] Auto-save failed:', e);
+            }
+        }, 800);
+
+        return () => {
+            if (globalStoryAutosaveTimerRef.current) {
+                clearTimeout(globalStoryAutosaveTimerRef.current);
+            }
+        };
+    }, [id, globalStoryInput, isGeneratingGlobalStory]);
+
     const handleSave = async () => {
         try {
-            await updateProject(id, { global_info: info });
+            const global_info = {
+                ...info,
+                story_generator_global_input: {
+                    ...globalStoryInput,
+                    episodes_count: Number(globalStoryInput.episodes_count || 0) || 0,
+                },
+                character_canon_input: {
+                    name: canonName || '',
+                    selected_tag_ids: Array.isArray(canonSelectedTagIds) ? canonSelectedTagIds : [],
+                    selected_identity_ids: Array.isArray(canonSelectedIdentityIds) ? canonSelectedIdentityIds : [],
+                    custom_identity: canonCustomIdentity || '',
+                    body_features: canonBody || '',
+                    custom_style_tags: canonCustomTags || '',
+                    extra_notes: canonExtra || '',
+                },
+            };
+            await updateProject(id, { global_info });
             alert("Project info saved!");
             if (onProjectUpdate) onProjectUpdate();
         } catch (e) {
             console.error("Failed to save", e);
             alert("Failed to save.");
+        }
+    };
+
+    const handleGenerateGlobalStory = async () => {
+        setIsGeneratingGlobalStory(true);
+        try {
+            const payload = {
+                mode: 'global',
+                episodes_count: Number(globalStoryInput.episodes_count || 0),
+                background: globalStoryInput.background,
+                setup: globalStoryInput.setup,
+                development: globalStoryInput.development,
+                turning_points: globalStoryInput.turning_points,
+                climax: globalStoryInput.climax,
+                resolution: globalStoryInput.resolution,
+                suspense: globalStoryInput.suspense,
+                foreshadowing: globalStoryInput.foreshadowing,
+                extra_notes: globalStoryInput.extra_notes,
+            };
+            const updated = await generateProjectStoryGlobal(id, payload);
+            setProject(updated);
+            if (updated?.global_info) {
+                const merged = {
+                    ...info,
+                    ...updated.global_info,
+                    tech_params: {
+                        visual_standard: {
+                            ...info.tech_params.visual_standard,
+                            ...(updated.global_info.tech_params?.visual_standard || {})
+                        }
+                    }
+                };
+                setInfo(merged);
+            }
+            alert('Global story framework generated and saved to Overview.');
+        } catch (e) {
+            console.error(e);
+            alert(`Failed to generate global story: ${e.message}`);
+        } finally {
+            setIsGeneratingGlobalStory(false);
+        }
+    };
+
+    const handleGenerateEpisodeScripts = async () => {
+        if (!id) return;
+        const n = Number(globalStoryInput.episodes_count || 0);
+        if (!n || Number.isNaN(n) || n <= 0) {
+            alert('Please set a valid Episodes Count first.');
+            return;
+        }
+
+        setIsGeneratingEpisodeScripts(true);
+        try {
+            addLog?.(`Generating episode scripts (1..${n})...`, 'process');
+            const res = await generateProjectEpisodeScripts(id, {
+                episodes_count: n,
+                overwrite_existing: true,
+            });
+            const created = Number(res?.episodes_created ?? 0);
+            const errors = Array.isArray(res?.errors) ? res.errors : [];
+            if (errors.length > 0) {
+                addLog?.(`Episode script generation finished with ${errors.length} errors.`, 'warning');
+                alert(`Episode scripts generated with ${errors.length} errors. Check logs.`);
+            } else {
+                addLog?.(`Episode scripts generated. Episodes created: ${created}.`, 'success');
+                alert(`Episode scripts generated. Episodes created: ${created}.`);
+            }
+            await loadEpisodes();
+        } catch (e) {
+            console.error(e);
+            addLog?.(`Episode script generation failed: ${e.message}`, 'error');
+            alert(`Failed to generate episode scripts: ${e.message}`);
+        } finally {
+            setIsGeneratingEpisodeScripts(false);
+        }
+    };
+
+    const handleGenerateProjectCanon = async () => {
+        const name = (canonName || '').trim();
+        if (!name) {
+            alert('请输入角色名称');
+            return;
+        }
+
+        const custom = (canonCustomTags || '')
+            .split(/[,，\n]/)
+            .map(t => t.trim())
+            .filter(Boolean);
+        const selectedStrings = canonSelectedTagStrings();
+        const style_tags = Array.from(new Set([...(selectedStrings || []), ...custom]));
+
+        const identityCustom = (canonCustomIdentity || '')
+            .split(/[,，\n]/)
+            .map(t => t.trim())
+            .filter(Boolean);
+        const identityStrings = canonSelectedIdentityStrings();
+        const identityMerged = Array.from(new Set([...(identityStrings || []), ...identityCustom]));
+        const identity = identityMerged.join(' / ');
+
+        setIsGeneratingCanon(true);
+        try {
+            const updated = await generateProjectCharacterProfile(id, {
+                name,
+                identity,
+                body_features: canonBody || '',
+                style_tags,
+                extra_notes: canonExtra || '',
+            });
+            setProject(updated);
+            if (updated?.global_info) {
+                const merged = {
+                    ...info,
+                    ...updated.global_info,
+                    tech_params: {
+                        visual_standard: {
+                            ...info.tech_params.visual_standard,
+                            ...(updated.global_info.tech_params?.visual_standard || {})
+                        }
+                    }
+                };
+                setInfo(merged);
+            }
+            setShowCanonModal(false);
+            alert('Character Canon generated and appended in Overview.');
+        } catch (e) {
+            console.error(e);
+            alert(`Failed to generate Character Canon: ${e.message}`);
+        } finally {
+            setIsGeneratingCanon(false);
         }
     };
 
@@ -372,9 +1455,8 @@ const ProjectOverview = ({ id, onProjectUpdate }) => {
                 <div className="bg-card border border-white/10 p-6 rounded-xl space-y-6">
                     <h3 className="text-lg font-semibold text-primary border-b border-white/10 pb-2">Basic Information</h3>
                     
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 gap-4">
                         <InputGroup idPrefix={prefix} label="Script Title" value={info.script_title} onChange={v => updateField('script_title', v)} placeholder="e.g. My Sci-Fi Epic" />
-                        <InputGroup idPrefix={prefix} label="Series/Episode" value={info.series_episode} onChange={v => updateField('series_episode', v)} placeholder="e.g. Ep 01" />
                     </div>
 
                     <div className="grid grid-cols-2 gap-4">
@@ -415,6 +1497,7 @@ const ProjectOverview = ({ id, onProjectUpdate }) => {
                         label="Global Style" 
                         value={info.Global_Style} 
                         onChange={v => updateField('Global_Style', v)} 
+                        multi={true}
                         list={[
                             "Photorealistic, Cinematic Lighting, 8k, Masterpiece",
                             "Hyperrealistic Portrait, RAW Photo, Ultra Detailed",
@@ -454,7 +1537,8 @@ const ProjectOverview = ({ id, onProjectUpdate }) => {
                             label="H. Resolution" 
                             value={info.tech_params?.visual_standard?.horizontal_resolution} 
                             onChange={v => updateTech('horizontal_resolution', v)} 
-                            placeholder="3840"
+                            placeholder="1080"
+                            list={["720", "1080", "1920", "3840"]}
                         />
                         <InputGroup idPrefix={prefix}
                             label="V. Resolution" 
@@ -553,7 +1637,621 @@ const ProjectOverview = ({ id, onProjectUpdate }) => {
                         />
                     </div>
                 </div>
+
+                {/* Story Generator (Global) */}
+                <div className="bg-card border border-white/10 p-6 rounded-xl space-y-4 xl:col-span-2">
+                    <div className="flex items-center justify-between gap-3">
+                        <h3 className="text-lg font-semibold text-primary">Story Generator (Global / Project)</h3>
+                        <div className="flex items-center gap-2">
+                            <button
+                                onClick={() => setShowGlobalStoryGuide(v => !v)}
+                                className="px-3 py-2 rounded-lg text-sm font-bold bg-white/10 text-white hover:bg-white/20 flex items-center gap-2"
+                                title="创作指引 / Writing Guide"
+                            >
+                                <Info className="w-4 h-4" /> 创作指引
+                            </button>
+                            <button
+                                onClick={handleGenerateGlobalStory}
+                                disabled={isGeneratingGlobalStory}
+                                className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${isGeneratingGlobalStory ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                title="Generate an international-blockbuster story framework and store it in project Overview"
+                            >
+                                {isGeneratingGlobalStory ? <><Loader2 className="w-4 h-4 animate-spin" /> Generating...</> : <><Sparkles className="w-4 h-4" /> Generate Global Framework</>}
+                            </button>
+
+                            <button
+                                onClick={handleGenerateEpisodeScripts}
+                                disabled={isGeneratingEpisodeScripts || isGeneratingGlobalStory}
+                                className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${(isGeneratingEpisodeScripts || isGeneratingGlobalStory) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                title="Generate episode scripts from Global Framework + Project Character Canon, create missing episodes, and save each script into its episode"
+                            >
+                                {isGeneratingEpisodeScripts ? <><Loader2 className="w-4 h-4 animate-spin" /> Generating...</> : <><Wand2 className="w-4 h-4" /> Generate Episode Scripts</>}
+                            </button>
+                        </div>
+                    </div>
+
+                    {showGlobalStoryGuide && (
+                        <div className="border border-white/10 rounded-xl p-4 bg-white/[0.02] space-y-3">
+                            <div className="text-sm font-semibold text-white">创作指引 / Writing Guide</div>
+                            <div className="text-xs text-muted-foreground">
+                                中文：按“从世界观 → 角色关系 → 冲突升级 → 关键转折 → 结局回收”的顺序填写；每个字段尽量写“可拍的具体信息”。
+                                <br />
+                                English: Fill in order “World → Character dynamics → Escalation → Turning points → Payoffs”. Prefer concrete, filmable details.
+                            </div>
+
+                            <details className="border border-white/10 rounded-lg p-3 bg-black/20">
+                                <summary className="cursor-pointer text-sm text-white font-semibold">流程介绍 / Workflow</summary>
+                                <div className="mt-2 text-xs text-white/80 space-y-2">
+                                    <div>
+                                        中文（建议流程）：
+                                        <ol className="list-decimal ml-4 mt-1 space-y-1">
+                                            <li>先写 Background / World：世界规则、时代地点、核心矛盾来源。</li>
+                                            <li>再写 Setup：开场钩子 + 诱因事件 + 主角做出不可逆选择。</li>
+                                            <li>Development：障碍升级、信息揭露、情感推进，形成“必须继续”的链条。</li>
+                                            <li>Turning Points：低谷/背叛/反转 + 最终策略（怎么打、付出什么代价）。</li>
+                                            <li>Climax/Resolution：终极对决与代价、关系收束、伏笔回收。</li>
+                                        </ol>
+                                    </div>
+                                    <div>
+                                        English (suggested):
+                                        <ol className="list-decimal ml-4 mt-1 space-y-1">
+                                            <li>Background/World: rules, era, place, source of conflict.</li>
+                                            <li>Setup: hook + inciting incident + irreversible choice.</li>
+                                            <li>Development: escalating obstacles, reveals, emotional progression.</li>
+                                            <li>Turning Points: lowest point + reversal + final plan (and cost).</li>
+                                            <li>Climax/Resolution: final confrontation, payoff, new normal.</li>
+                                        </ol>
+                                    </div>
+                                </div>
+                            </details>
+
+                            <details className="border border-white/10 rounded-lg p-3 bg-black/20">
+                                <summary className="cursor-pointer text-sm text-white font-semibold">Episodes Count（集数）</summary>
+                                <div className="mt-2 text-xs text-white/80 space-y-2">
+                                    <div>中文：你想要的总集数/章节数。短剧常见 10–24 集；越短越需要强钩子与快节奏升级。</div>
+                                    <div>English: Total number of episodes/chapters. Shorter seasons need stronger hooks and faster escalation.</div>
+                                    <div className="text-xs text-muted-foreground">样例 / Example：12</div>
+                                </div>
+                            </details>
+
+                            <details className="border border-white/10 rounded-lg p-3 bg-black/20">
+                                <summary className="cursor-pointer text-sm text-white font-semibold">Foreshadowing / Payoffs（伏笔/回收）</summary>
+                                <div className="mt-2 text-xs text-white/80 space-y-2">
+                                    <div>中文：列出你想“提前埋下、后期回收”的清单：道具、秘密、旧伤、承诺、规则漏洞、未说出口的真相。</div>
+                                    <div>English: A checklist of seeds to plant early and pay off later (props, secrets, promises, rule loopholes, hidden truths).</div>
+                                    <div className="text-xs text-muted-foreground">
+                                        样例 / Example：
+                                        <br />1) 女主手腕旧伤 → 第6集搏斗触发失手
+                                        <br />2) 男主从不喝酒 → 结局为她破例象征和解
+                                    </div>
+                                </div>
+                            </details>
+
+                            <details className="border border-white/10 rounded-lg p-3 bg-black/20">
+                                <summary className="cursor-pointer text-sm text-white font-semibold">Background / World（世界观/背景）</summary>
+                                <div className="mt-2 text-xs text-white/80 space-y-2">
+                                    <div>中文：写清楚“世界规则 + 时代地点 + 这个世界为什么会产生冲突”。最好包含：规则、资源、禁忌、权力结构。</div>
+                                    <div>English: Define rules, time/place, and why conflict exists. Include constraints, resources, taboos, and power structure.</div>
+                                    <div className="text-xs text-muted-foreground">样例 / Example：近未来都市，记忆可交易；黑市记忆改写引发连环案与身份危机。</div>
+                                </div>
+                            </details>
+
+                            <details className="border border-white/10 rounded-lg p-3 bg-black/20">
+                                <summary className="cursor-pointer text-sm text-white font-semibold">Setup (Hook / Inciting Incident)（开场/诱因）</summary>
+                                <div className="mt-2 text-xs text-white/80 space-y-2">
+                                    <div>中文：观众为什么要继续看？写“开场钩子 + 诱因事件 + 主角必须做选择”。</div>
+                                    <div>English: Why keep watching? Give hook + inciting incident + forced choice.</div>
+                                    <div className="text-xs text-muted-foreground">样例 / Example：女主醒来发现记忆被卖掉；警方认定她是凶手，她只能追查买家。</div>
+                                </div>
+                            </details>
+
+                            <details className="border border-white/10 rounded-lg p-3 bg-black/20">
+                                <summary className="cursor-pointer text-sm text-white font-semibold">Development (Escalation / Midpoint)（发展/升级）</summary>
+                                <div className="mt-2 text-xs text-white/80 space-y-2">
+                                    <div>中文：障碍如何升级？关系如何变化？中点给一个重大揭露或立场反转。</div>
+                                    <div>English: How do obstacles escalate and relationships change? Add a midpoint reveal or reversal.</div>
+                                    <div className="text-xs text-muted-foreground">样例 / Example：发现买家是男主；他却在保护她，因为她记忆里藏着更大的真相。</div>
+                                </div>
+                            </details>
+
+                            <details className="border border-white/10 rounded-lg p-3 bg-black/20">
+                                <summary className="cursor-pointer text-sm text-white font-semibold">Turning Points (Low Point / Strategy)（转折/低谷/策略）</summary>
+                                <div className="mt-2 text-xs text-white/80 space-y-2">
+                                    <div>中文：主角遭遇“最糟时刻”（失败/背叛/代价），然后提出最终策略：怎么赢、要牺牲什么。</div>
+                                    <div>English: The lowest point, then the final strategy—how to win and what it costs.</div>
+                                    <div className="text-xs text-muted-foreground">样例 / Example：男主身份暴露被追杀；二人决定用公开直播交换证据，逼幕后现身。</div>
+                                </div>
+                            </details>
+
+                            <details className="border border-white/10 rounded-lg p-3 bg-black/20">
+                                <summary className="cursor-pointer text-sm text-white font-semibold">Climax（高潮）</summary>
+                                <div className="mt-2 text-xs text-white/80 space-y-2">
+                                    <div>中文：终极对抗发生在哪里？关键选择是什么？代价是什么？尽量写“可拍”的动作与情绪爆点。</div>
+                                    <div>English: Where is the final confrontation, what is the key choice, and what is the cost? Keep it filmable.</div>
+                                    <div className="text-xs text-muted-foreground">样例 / Example：天台对峙；女主选择公开真相毁掉自己名誉换取他人安全。</div>
+                                </div>
+                            </details>
+
+                            <details className="border border-white/10 rounded-lg p-3 bg-black/20">
+                                <summary className="cursor-pointer text-sm text-white font-semibold">Resolution（结局/回收）</summary>
+                                <div className="mt-2 text-xs text-white/80 space-y-2">
+                                    <div>中文：冲突如何收束？关系如何落点？哪些伏笔被回收？最后留什么余味/下一季种子（可选）。</div>
+                                    <div>English: How does conflict close, what’s the relationship end-state, which seeds are paid off, and what lingering hook remains?</div>
+                                    <div className="text-xs text-muted-foreground">样例 / Example：真相曝光，黑市被清剿；女主保留一段空白记忆，暗示更深阴谋未完。</div>
+                                </div>
+                            </details>
+
+                            <details className="border border-white/10 rounded-lg p-3 bg-black/20">
+                                <summary className="cursor-pointer text-sm text-white font-semibold">Suspense / Cliffhanger Engine（悬念引擎）</summary>
+                                <div className="mt-2 text-xs text-white/80 space-y-2">
+                                    <div>中文：用一句话描述“每集结束怎么让观众点下一集”：秘密、误会、延迟危险、倒计时、身份揭露。</div>
+                                    <div>English: The mechanism that pushes viewers to the next episode: secrets, delayed danger, countdowns, reveals.</div>
+                                    <div className="text-xs text-muted-foreground">样例 / Example：每集末尾解锁一段新记忆，指向下一个嫌疑人。</div>
+                                </div>
+                            </details>
+
+                            <details className="border border-white/10 rounded-lg p-3 bg-black/20">
+                                <summary className="cursor-pointer text-sm text-white font-semibold">Extra Notes（额外偏好/约束）</summary>
+                                <div className="mt-2 text-xs text-white/80 space-y-2">
+                                    <div>中文：风格偏好、禁忌清单、尺度、镜头语言、叙事节奏、想要的反转类型。</div>
+                                    <div>English: Preferences and constraints: tone, taboos, rating boundaries, visual language, pacing, twist style.</div>
+                                    <div className="text-xs text-muted-foreground">样例 / Example：节奏快、每集至少一个反转；情感线克制但高张力；避免血腥描写。</div>
+                                </div>
+                            </details>
+                        </div>
+                    )}
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">Episodes Count</label>
+                            <input
+                                type="number"
+                                min="1"
+                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full"
+                                value={globalStoryInput.episodes_count}
+                                onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, episodes_count: e.target.value }))}
+                                placeholder="e.g. 12"
+                            />
+                        </div>
+                        <div>
+                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">Foreshadowing / Payoffs</label>
+                            <input
+                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full"
+                                value={globalStoryInput.foreshadowing}
+                                onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, foreshadowing: e.target.value }))}
+                                placeholder="Seeds, reveals, payoff targets"
+                            />
+                        </div>
+                        <div className="sm:col-span-2">
+                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">Background / World</label>
+                            <textarea
+                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
+                                value={globalStoryInput.background}
+                                onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, background: e.target.value }))}
+                                placeholder="World rules, era, location, backstory that drives conflict"
+                            />
+                        </div>
+                        <div className="sm:col-span-2">
+                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">Setup (Hook / Inciting Incident)</label>
+                            <textarea
+                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
+                                value={globalStoryInput.setup}
+                                onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, setup: e.target.value }))}
+                                placeholder="Opening hook, inciting incident, point-of-no-return decision"
+                            />
+                        </div>
+                        <div className="sm:col-span-2">
+                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">Development (Escalation / Midpoint)</label>
+                            <textarea
+                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
+                                value={globalStoryInput.development}
+                                onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, development: e.target.value }))}
+                                placeholder="Obstacle escalation, reveals, midpoint reversal"
+                            />
+                        </div>
+                        <div className="sm:col-span-2">
+                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">Turning Points (Low Point / Strategy)</label>
+                            <textarea
+                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
+                                value={globalStoryInput.turning_points}
+                                onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, turning_points: e.target.value }))}
+                                placeholder="Second major turn, all-is-lost, final plan"
+                            />
+                        </div>
+                        <div className="sm:col-span-2">
+                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">Climax</label>
+                            <textarea
+                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
+                                value={globalStoryInput.climax}
+                                onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, climax: e.target.value }))}
+                                placeholder="Final confrontation, key choice, cost"
+                            />
+                        </div>
+                        <div className="sm:col-span-2">
+                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">Resolution</label>
+                            <textarea
+                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
+                                value={globalStoryInput.resolution}
+                                onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, resolution: e.target.value }))}
+                                placeholder="Denouement, new normal"
+                            />
+                        </div>
+                        <div className="sm:col-span-2">
+                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">Suspense / Cliffhanger Engine</label>
+                            <textarea
+                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
+                                value={globalStoryInput.suspense}
+                                onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, suspense: e.target.value }))}
+                                placeholder="Mystery/secret, delayed danger, end hooks, season seeds"
+                            />
+                        </div>
+                        <div className="sm:col-span-2">
+                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">Extra Notes</label>
+                            <textarea
+                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
+                                value={globalStoryInput.extra_notes}
+                                onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, extra_notes: e.target.value }))}
+                                placeholder="Tone, constraints, taboo list, twist style, pacing preference"
+                            />
+                        </div>
+                    </div>
+
+                    <div>
+                        <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">Generated Global Framework (Markdown)</label>
+                        <textarea
+                            className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-48 resize-none"
+                            value={info.story_dna_global_md || ''}
+                            onChange={(e) => updateField('story_dna_global_md', e.target.value)}
+                            placeholder="(After generation, the global framework will appear here. You can edit it and Save Changes.)"
+                        />
+                    </div>
+                </div>
+
+                {/* Character Canon (Project) */}
+                <div className="bg-card border border-white/10 p-6 rounded-xl space-y-4 xl:col-span-2">
+                    <div className="flex items-center justify-between gap-3">
+                        <h3 className="text-lg font-semibold text-primary">Character Canon (Project)</h3>
+                        <button
+                            onClick={() => setShowCanonModal(true)}
+                            disabled={isGeneratingCanon}
+                            className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${isGeneratingCanon ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                            title="Generate an authoritative character profile and append it to the project-level canon"
+                        >
+                            {isGeneratingCanon ? <><Loader2 className="w-4 h-4 animate-spin" /> Generating...</> : <><Sparkles className="w-4 h-4" /> Generate & Append</>}
+                        </button>
+                    </div>
+
+                    <div>
+                        <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">Canon Output (Markdown)</label>
+                        <div className="space-y-3">
+                            {Array.isArray(info.character_profiles) && info.character_profiles.length > 0 ? (
+                                info.character_profiles.map((p, idx) => {
+                                    const name = String(p?.name || '').trim() || `Character ${idx + 1}`;
+                                    const md = String(p?.description_md || '').trim();
+                                    const updatedAt = String(p?.updated_at || '').trim();
+                                    return (
+                                        <div key={`${name}-${idx}`} className="bg-black/20 border border-white/10 rounded-lg p-3 space-y-2">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <div>
+                                                    <div className="text-sm font-bold text-white">{name}</div>
+                                                    {updatedAt ? (
+                                                        <div className="text-xs text-muted-foreground">Updated: {updatedAt}</div>
+                                                    ) : null}
+                                                </div>
+                                                {String(p?.name || '').trim() ? (
+                                                    <button
+                                                        onClick={() => handleDeleteCanonCharacter(String(p.name))}
+                                                        className="px-2 py-1 rounded-md text-xs font-bold bg-white/10 text-white hover:bg-white/20 flex items-center gap-2"
+                                                        title="Delete this character from canon"
+                                                    >
+                                                        <Trash2 size={14} /> Delete
+                                                    </button>
+                                                ) : null}
+                                            </div>
+                                            <textarea
+                                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white w-full h-40 resize-none"
+                                                value={md || ''}
+                                                readOnly
+                                                placeholder="(This character's canonical markdown will appear here after generation.)"
+                                            />
+                                        </div>
+                                    );
+                                })
+                            ) : (
+                                <textarea
+                                    className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white w-full h-28 resize-none"
+                                    value={''}
+                                    readOnly
+                                    placeholder="(No characters yet. Click Generate & Append to create the first canon profile.)"
+                                />
+                            )}
+                        </div>
+                    </div>
+
+                    <div>
+                        <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">Character Relationships (Plain Text)</label>
+                        <textarea
+                            className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-28 resize-none"
+                            value={info.character_relationships || ''}
+                            onChange={(e) => updateField('character_relationships', e.target.value)}
+                            placeholder="Example: A is B's boss; B secretly loves C; C is A's rival..."
+                        />
+                    </div>
+                </div>
             </div>
+
+            {showCanonModal && (
+                <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+                    <div className="bg-[#0f0f10] border border-white/10 rounded-xl w-full max-w-5xl max-h-[90vh] overflow-y-auto custom-scrollbar">
+                        <div className="p-6 space-y-5">
+                            <div className="flex items-center justify-between gap-3">
+                                <div>
+                                    <h3 className="text-lg font-semibold text-primary">Character Canon (Project)</h3>
+                                    <div className="text-xs text-muted-foreground">选择身份标签 + 外观/风格标签，生成后会追加到项目 Canon。</div>
+                                </div>
+                                <button
+                                    className="p-2 rounded-md hover:bg-white/10 text-white/80"
+                                    onClick={closeCanonModal}
+                                    title="Close"
+                                >
+                                    <X size={18} />
+                                </button>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">角色名称</label>
+                                    <input
+                                        className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full"
+                                        value={canonName}
+                                        onChange={(e) => setCanonName(e.target.value)}
+                                        placeholder="例如：林娜 / Lina"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">自定义身份（可选，逗号/换行分隔）</label>
+                                    <input
+                                        className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full"
+                                        value={canonCustomIdentity}
+                                        onChange={(e) => setCanonCustomIdentity(e.target.value)}
+                                        placeholder="例如：失忆 / 黑客 / 继承人"
+                                    />
+                                </div>
+                                <div className="md:col-span-2">
+                                    <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">身材/体态/身体特征（可选）</label>
+                                    <textarea
+                                        className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-16 resize-none"
+                                        value={canonBody}
+                                        onChange={(e) => setCanonBody(e.target.value)}
+                                        placeholder="例如：高挑、肩颈线清晰、走路很稳、短发…"
+                                    />
+                                </div>
+                                <div className="md:col-span-2">
+                                    <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">自定义风格标签（可选，逗号/换行分隔）</label>
+                                    <textarea
+                                        className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-16 resize-none"
+                                        value={canonCustomTags}
+                                        onChange={(e) => setCanonCustomTags(e.target.value)}
+                                        placeholder="例如：冷艳、黑西装、琥珀眼、雨夜霓虹…"
+                                    />
+                                </div>
+                                <div className="md:col-span-2">
+                                    <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">额外备注（可选）</label>
+                                    <textarea
+                                        className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
+                                        value={canonExtra}
+                                        onChange={(e) => setCanonExtra(e.target.value)}
+                                        placeholder="例如：镜头表现、禁忌、语气/动作习惯…"
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="flex items-center justify-between gap-3">
+                                <div className="text-sm text-white/80">身份标签</div>
+                                <button
+                                    className={`px-3 py-1.5 rounded-md text-xs font-bold flex items-center gap-2 ${canonTagEditMode ? 'bg-primary text-black' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                    onClick={() => setCanonTagEditMode(v => !v)}
+                                    title="Toggle edit mode for categories"
+                                >
+                                    <Edit3 className="w-3.5 h-3.5" /> {canonTagEditMode ? '编辑中' : '编辑标签'}
+                                </button>
+                            </div>
+
+                            <div className="space-y-4">
+                                {(canonIdentityCategories || []).map(cat => (
+                                    <div key={cat.key} className="border border-white/10 rounded-lg p-4 bg-white/[0.02]">
+                                        <div className="flex items-center justify-between gap-3 mb-3">
+                                            {canonTagEditMode ? (
+                                                <input
+                                                    className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full"
+                                                    value={cat.title}
+                                                    onChange={(e) => updateIdentityCategoryTitle(cat.key, e.target.value)}
+                                                />
+                                            ) : (
+                                                <div className="text-sm font-semibold text-white">{cat.title}</div>
+                                            )}
+                                            {canonTagEditMode && (
+                                                <button
+                                                    className="px-3 py-2 rounded-md text-xs font-bold bg-white/10 text-white hover:bg-white/20 flex items-center gap-2"
+                                                    onClick={() => addIdentityOption(cat.key)}
+                                                >
+                                                    <Plus size={14} /> 新增
+                                                </button>
+                                            )}
+                                        </div>
+
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                            {(cat.options || []).map(opt => {
+                                                const selected = canonSelectedIdentityIds.includes(opt.id);
+                                                return (
+                                                    <div key={opt.id} className={`border rounded-lg p-3 flex gap-3 ${selected ? 'border-primary/60 bg-primary/10' : 'border-white/10 bg-black/20'}`}>
+                                                        <button
+                                                            className="flex-1 text-left"
+                                                            onClick={() => !canonTagEditMode && toggleCanonIdentityId(opt.id)}
+                                                            title={canonTagEditMode ? '编辑模式下不可选择' : '点击选择'}
+                                                        >
+                                                            {canonTagEditMode ? (
+                                                                <div className="space-y-2">
+                                                                    <input
+                                                                        className="bg-black/30 border border-white/10 rounded-md px-2 py-1 text-sm text-white focus:border-primary/50 focus:outline-none w-full"
+                                                                        value={opt.label}
+                                                                        onChange={(e) => updateIdentityOption(cat.key, opt.id, { label: e.target.value })}
+                                                                    />
+                                                                    <input
+                                                                        className="bg-black/30 border border-white/10 rounded-md px-2 py-1 text-xs text-white/90 focus:border-primary/50 focus:outline-none w-full"
+                                                                        value={opt.detail}
+                                                                        onChange={(e) => updateIdentityOption(cat.key, opt.id, { detail: e.target.value })}
+                                                                    />
+                                                                </div>
+                                                            ) : (
+                                                                <>
+                                                                    <div className="text-sm font-semibold text-white flex items-center gap-2">
+                                                                        {selected ? <Check size={16} className="text-primary" /> : <span className="w-4" />}
+                                                                        {opt.label}
+                                                                    </div>
+                                                                    <div className="text-xs text-white/60 mt-1">{opt.detail}</div>
+                                                                </>
+                                                            )}
+                                                        </button>
+
+                                                        {canonTagEditMode && (
+                                                            <button
+                                                                className="p-2 rounded-md hover:bg-white/10 text-white/70"
+                                                                onClick={() => removeIdentityOption(cat.key, opt.id)}
+                                                                title="删除"
+                                                            >
+                                                                <Trash2 size={16} />
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+
+                            <div className="text-sm text-white/80">外观/风格标签</div>
+
+                            <div className="space-y-4">
+                                {(canonTagCategories || []).map(cat => (
+                                    <div key={cat.key} className="border border-white/10 rounded-lg p-4 bg-white/[0.02]">
+                                        <div className="flex items-center justify-between gap-3 mb-3">
+                                            {canonTagEditMode ? (
+                                                <input
+                                                    className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full"
+                                                    value={cat.title}
+                                                    onChange={(e) => updateCanonCategoryTitle(cat.key, e.target.value)}
+                                                />
+                                            ) : (
+                                                <div className="text-sm font-semibold text-white">{cat.title}</div>
+                                            )}
+                                            {canonTagEditMode && (
+                                                <button
+                                                    className="px-3 py-2 rounded-md text-xs font-bold bg-white/10 text-white hover:bg-white/20 flex items-center gap-2"
+                                                    onClick={() => addCanonOption(cat.key)}
+                                                >
+                                                    <Plus size={14} /> 新增
+                                                </button>
+                                            )}
+                                        </div>
+
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                            {(cat.options || []).map(opt => {
+                                                const selected = canonSelectedTagIds.includes(opt.id);
+                                                return (
+                                                    <div key={opt.id} className={`border rounded-lg p-3 flex gap-3 ${selected ? 'border-primary/60 bg-primary/10' : 'border-white/10 bg-black/20'}`}>
+                                                        <button
+                                                            className="flex-1 text-left"
+                                                            onClick={() => !canonTagEditMode && toggleCanonTagId(opt.id)}
+                                                            title={canonTagEditMode ? '编辑模式下不可选择' : '点击选择'}
+                                                        >
+                                                            {canonTagEditMode ? (
+                                                                <div className="space-y-2">
+                                                                    <input
+                                                                        className="bg-black/30 border border-white/10 rounded-md px-2 py-1 text-sm text-white focus:border-primary/50 focus:outline-none w-full"
+                                                                        value={opt.label}
+                                                                        onChange={(e) => updateCanonOption(cat.key, opt.id, { label: e.target.value })}
+                                                                    />
+                                                                    <input
+                                                                        className="bg-black/30 border border-white/10 rounded-md px-2 py-1 text-xs text-white/90 focus:border-primary/50 focus:outline-none w-full"
+                                                                        value={opt.detail}
+                                                                        onChange={(e) => updateCanonOption(cat.key, opt.id, { detail: e.target.value })}
+                                                                    />
+                                                                </div>
+                                                            ) : (
+                                                                <>
+                                                                    <div className="text-sm font-semibold text-white flex items-center gap-2">
+                                                                        {selected ? <Check size={16} className="text-primary" /> : <span className="w-4" />}
+                                                                        {opt.label}
+                                                                    </div>
+                                                                    <div className="text-xs text-white/60 mt-1">{opt.detail}</div>
+                                                                </>
+                                                            )}
+                                                        </button>
+                                                        {canonTagEditMode && (
+                                                            <button
+                                                                className="p-2 rounded-md hover:bg-white/10 text-white/70"
+                                                                onClick={() => removeCanonOption(cat.key, opt.id)}
+                                                                title="删除"
+                                                            >
+                                                                <Trash2 size={16} />
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+
+                            <div className="flex items-center justify-end gap-2 pt-2">
+                                {canonTagEditMode && (
+                                    <button
+                                        className="px-4 py-2 rounded-lg text-sm font-bold bg-white/10 text-white hover:bg-white/20"
+                                        onClick={async () => {
+                                            const normalizedTags = normalizeCanonTagCategories(canonTagCategories);
+                                            const normalizedIdentity = normalizeCanonTagCategories(canonIdentityCategories);
+                                            const ok1 = normalizedTags ? persistCanonTagCategories(normalizedTags) : false;
+                                            const ok2 = normalizedIdentity ? persistCanonIdentityCategories(normalizedIdentity) : false;
+                                            let okDb = true;
+                                            try {
+                                                if (!id) throw new Error('Missing project id');
+                                                if (!normalizedTags || !normalizedIdentity) throw new Error('Invalid categories');
+                                                await saveProjectCharacterCanonCategories(id, {
+                                                    tag_categories: normalizedTags,
+                                                    identity_categories: normalizedIdentity,
+                                                });
+                                            } catch (e) {
+                                                okDb = false;
+                                                console.error('[Character Canon Categories] Save failed:', e);
+                                            }
+                                            alert(ok1 && ok2 && okDb ? '已保存标签配置（数据库+localStorage）' : '保存失败');
+                                        }}
+                                    >
+                                        <Save className="w-4 h-4 inline-block mr-2" /> 保存标签配置
+                                    </button>
+                                )}
+                                <button
+                                    className="px-4 py-2 rounded-lg text-sm font-bold bg-white/10 text-white hover:bg-white/20"
+                                    onClick={closeCanonModal}
+                                    disabled={isGeneratingCanon}
+                                >
+                                    关闭
+                                </button>
+                                <button
+                                    className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${isGeneratingCanon ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-primary text-black hover:bg-primary/90'}`}
+                                    onClick={handleGenerateProjectCanon}
+                                    disabled={isGeneratingCanon}
+                                >
+                                    {isGeneratingCanon ? <><Loader2 className="w-4 h-4 animate-spin" /> Generating...</> : <><Sparkles className="w-4 h-4" /> Generate & Append</>}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
@@ -582,8 +2280,26 @@ const EpisodeInfo = ({ episode, onUpdate }) => {
             language: "English",
             borrowed_films: ["King Kong (2005)", "Joker (2019)", "The Truman Show"],
             notes: ""
-        }
+        },
+        story_dna_episode_md: "",
+        story_dna_episode_number: 1,
     });
+
+    const [episodeStoryInput, setEpisodeStoryInput] = useState({
+        episode_number: 1,
+        background: "",
+        setup: "",
+        development: "",
+        turning_points: "",
+        climax: "",
+        resolution: "",
+        suspense: "",
+        foreshadowing: "",
+        extra_notes: "",
+    });
+    const [isGeneratingEpisodeStory, setIsGeneratingEpisodeStory] = useState(false);
+    const episodeStoryAutosaveTimerRef = useRef(null);
+    const skipNextEpisodeStoryAutosaveRef = useRef(true);
 
     useEffect(() => {
         if (episode) {
@@ -595,6 +2311,9 @@ const EpisodeInfo = ({ episode, onUpdate }) => {
                      ...info.e_global_info, // default structure
                      ...(loaded.e_global_info || {}), // loaded data
                  }
+                 ,
+                 story_dna_episode_md: loaded.story_dna_episode_md || info.story_dna_episode_md || "",
+                 story_dna_episode_number: loaded.story_dna_episode_number || info.story_dna_episode_number || 1,
              };
 
              // Deep merge tech_params if they exist
@@ -609,8 +2328,101 @@ const EpisodeInfo = ({ episode, onUpdate }) => {
              }
              
              setInfo(merged);
+
+             // Restore Story Generator (Episode) draft inputs (if previously saved)
+             if (loaded.story_generator_episode_input && typeof loaded.story_generator_episode_input === 'object') {
+                 const draft = loaded.story_generator_episode_input;
+                 const draftEpisodeNumber = draft.episode_number ?? loaded.story_dna_episode_number ?? 1;
+                 setEpisodeStoryInput(prev => ({
+                     ...prev,
+                     ...draft,
+                     episode_number: draftEpisodeNumber,
+                 }));
+             } else {
+                 // best-effort default for generator episode_number from stored field
+                 const epNum = loaded.story_dna_episode_number || 1;
+                 setEpisodeStoryInput(prev => ({ ...prev, episode_number: epNum }));
+             }
+
+             // Avoid immediately auto-saving right after hydration
+             skipNextEpisodeStoryAutosaveRef.current = true;
         }
     }, [episode]);
+
+    // Auto-save Episode Story Generator draft inputs (debounced)
+    useEffect(() => {
+        if (!episode?.id) return;
+
+        if (skipNextEpisodeStoryAutosaveRef.current) {
+            skipNextEpisodeStoryAutosaveRef.current = false;
+            return;
+        }
+
+        if (episodeStoryAutosaveTimerRef.current) {
+            clearTimeout(episodeStoryAutosaveTimerRef.current);
+        }
+
+        episodeStoryAutosaveTimerRef.current = setTimeout(async () => {
+            try {
+                const payload = {
+                    mode: 'episode',
+                    episode_number: Number(episodeStoryInput.episode_number || 0) || undefined,
+                    background: episodeStoryInput.background,
+                    setup: episodeStoryInput.setup,
+                    development: episodeStoryInput.development,
+                    turning_points: episodeStoryInput.turning_points,
+                    climax: episodeStoryInput.climax,
+                    resolution: episodeStoryInput.resolution,
+                    suspense: episodeStoryInput.suspense,
+                    foreshadowing: episodeStoryInput.foreshadowing,
+                    extra_notes: episodeStoryInput.extra_notes,
+                };
+                await saveEpisodeStoryGeneratorInput(episode.id, payload);
+            } catch (e) {
+                // Silent failure: avoid interrupting typing UX
+                console.error('[Episode Story Generator] Auto-save failed:', e);
+            }
+        }, 800);
+
+        return () => {
+            if (episodeStoryAutosaveTimerRef.current) {
+                clearTimeout(episodeStoryAutosaveTimerRef.current);
+            }
+        };
+    }, [episode?.id, episodeStoryInput]);
+
+    const handleGenerateEpisodeStory = async () => {
+        if (!episode?.id) return;
+        setIsGeneratingEpisodeStory(true);
+        try {
+            const payload = {
+                mode: 'episode',
+                episode_number: Number(episodeStoryInput.episode_number || 0),
+                background: episodeStoryInput.background,
+                setup: episodeStoryInput.setup,
+                development: episodeStoryInput.development,
+                turning_points: episodeStoryInput.turning_points,
+                climax: episodeStoryInput.climax,
+                resolution: episodeStoryInput.resolution,
+                suspense: episodeStoryInput.suspense,
+                foreshadowing: episodeStoryInput.foreshadowing,
+                extra_notes: episodeStoryInput.extra_notes,
+            };
+            const updatedEpisode = await generateEpisodeStory(episode.id, payload);
+            const updatedInfo = updatedEpisode?.episode_info || {};
+            setInfo(prev => ({
+                ...prev,
+                story_dna_episode_md: updatedInfo.story_dna_episode_md || prev.story_dna_episode_md,
+                story_dna_episode_number: updatedInfo.story_dna_episode_number || prev.story_dna_episode_number,
+            }));
+            alert('Episode story outline generated and saved to Ep. Info.');
+        } catch (e) {
+            console.error(e);
+            alert(`Failed to generate episode story: ${e.message}`);
+        } finally {
+            setIsGeneratingEpisodeStory(false);
+        }
+    };
 
     const handleSave = async () => {
         try {
@@ -715,6 +2527,7 @@ const EpisodeInfo = ({ episode, onUpdate }) => {
                         label="Global Style" 
                         value={data.Global_Style} 
                         onChange={v => updateField('Global_Style', v)} 
+                        multi={true}
                         list={[
                             "Photorealistic, Cinematic Lighting, 8k, Masterpiece",
                             "Hyperrealistic Portrait, RAW Photo, Ultra Detailed",
@@ -828,18 +2641,367 @@ const EpisodeInfo = ({ episode, onUpdate }) => {
                         />
                     </div>
                  </div>
+
+                 {/* Story Generator (Episode) */}
+                 <div className="bg-card border border-white/10 p-6 rounded-xl space-y-4 xl:col-span-2">
+                    <div className="flex items-center justify-between gap-3">
+                        <h3 className="text-lg font-semibold text-primary">Story Generator (Episode / Ep. Info)</h3>
+                        <button
+                            onClick={handleGenerateEpisodeStory}
+                            disabled={isGeneratingEpisodeStory}
+                            className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${isGeneratingEpisodeStory ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                            title="Generate an episode outline (setup/development/turning points/climax/resolution/suspense)"
+                        >
+                            {isGeneratingEpisodeStory ? <><Loader2 className="w-4 h-4 animate-spin" /> Generating...</> : <><Sparkles className="w-4 h-4" /> Generate Episode Outline</>}
+                        </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">Episode Number</label>
+                            <input
+                                type="number"
+                                min="1"
+                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full"
+                                value={episodeStoryInput.episode_number}
+                                onChange={(e) => setEpisodeStoryInput(prev => ({ ...prev, episode_number: e.target.value }))}
+                                placeholder="e.g. 1"
+                            />
+                        </div>
+                        <div>
+                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">Foreshadowing / Payoffs</label>
+                            <input
+                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full"
+                                value={episodeStoryInput.foreshadowing}
+                                onChange={(e) => setEpisodeStoryInput(prev => ({ ...prev, foreshadowing: e.target.value }))}
+                                placeholder="Seeds, reveals, payoff targets"
+                            />
+                        </div>
+
+                        <div className="sm:col-span-2">
+                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">Background / World (Episode focus)</label>
+                            <textarea
+                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
+                                value={episodeStoryInput.background}
+                                onChange={(e) => setEpisodeStoryInput(prev => ({ ...prev, background: e.target.value }))}
+                                placeholder="Context that matters specifically for this episode"
+                            />
+                        </div>
+
+                        <div className="sm:col-span-2">
+                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">Setup</label>
+                            <textarea
+                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
+                                value={episodeStoryInput.setup}
+                                onChange={(e) => setEpisodeStoryInput(prev => ({ ...prev, setup: e.target.value }))}
+                                placeholder="Teaser/opening hook, inciting incident, point-of-no-return"
+                            />
+                        </div>
+                        <div className="sm:col-span-2">
+                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">Development</label>
+                            <textarea
+                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
+                                value={episodeStoryInput.development}
+                                onChange={(e) => setEpisodeStoryInput(prev => ({ ...prev, development: e.target.value }))}
+                                placeholder="Escalation, reveals, midpoint reversal"
+                            />
+                        </div>
+                        <div className="sm:col-span-2">
+                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">Turning Points</label>
+                            <textarea
+                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
+                                value={episodeStoryInput.turning_points}
+                                onChange={(e) => setEpisodeStoryInput(prev => ({ ...prev, turning_points: e.target.value }))}
+                                placeholder="Second turn, low point, final plan"
+                            />
+                        </div>
+                        <div className="sm:col-span-2">
+                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">Climax</label>
+                            <textarea
+                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
+                                value={episodeStoryInput.climax}
+                                onChange={(e) => setEpisodeStoryInput(prev => ({ ...prev, climax: e.target.value }))}
+                                placeholder="Confrontation, key choice, cost"
+                            />
+                        </div>
+                        <div className="sm:col-span-2">
+                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">Resolution</label>
+                            <textarea
+                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
+                                value={episodeStoryInput.resolution}
+                                onChange={(e) => setEpisodeStoryInput(prev => ({ ...prev, resolution: e.target.value }))}
+                                placeholder="Wrap-up, character state change"
+                            />
+                        </div>
+                        <div className="sm:col-span-2">
+                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">Suspense / End Hook</label>
+                            <textarea
+                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
+                                value={episodeStoryInput.suspense}
+                                onChange={(e) => setEpisodeStoryInput(prev => ({ ...prev, suspense: e.target.value }))}
+                                placeholder="Cliffhanger, new question, next-episode threat"
+                            />
+                        </div>
+                        <div className="sm:col-span-2">
+                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">Extra Notes</label>
+                            <textarea
+                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
+                                value={episodeStoryInput.extra_notes}
+                                onChange={(e) => setEpisodeStoryInput(prev => ({ ...prev, extra_notes: e.target.value }))}
+                                placeholder="Constraints, twist preference, pacing"
+                            />
+                        </div>
+                    </div>
+
+                    <div>
+                        <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">Generated Episode Outline (Markdown)</label>
+                        <textarea
+                            className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-48 resize-none"
+                            value={info.story_dna_episode_md || ''}
+                            onChange={(e) => setInfo(prev => ({ ...prev, story_dna_episode_md: e.target.value }))}
+                            placeholder="(After generation, the episode outline will appear here. You can edit it and Save Changes.)"
+                        />
+                    </div>
+                 </div>
             </div>
         </div>
     );
 };
 
 
-const ScriptEditor = ({ activeEpisode, project, onUpdateScript, onLog }) => {
+const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpdateEpisodeInfo, onLog, onImportText }) => {
+    const navigate = useNavigate();
     const [segments, setSegments] = useState([]);
     const [showMerged, setShowMerged] = useState(false);
     const [mergedContent, setMergedContent] = useState('');
     const [rawContent, setRawContent] = useState('');
+    const [llmResultContent, setLlmResultContent] = useState('');
     const [isRawMode, setIsRawMode] = useState(false);
+
+    const extractJsonFromLlmText = (text) => {
+        if (!text || typeof text !== 'string') return '';
+
+        const tryParse = (candidate) => {
+            if (!candidate || typeof candidate !== 'string') return null;
+            const s = candidate.trim();
+            if (!s) return null;
+            try {
+                return JSON.parse(s);
+            } catch {
+                return null;
+            }
+        };
+
+        const trimmed = text.trim();
+
+        // Case 1: whole response is JSON
+        if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+            const obj = tryParse(trimmed);
+            if (obj !== null) return JSON.stringify(obj, null, 2);
+        }
+
+        // Case 2: fenced code block ```json ... ```
+        const fenceRe = /```(?:json)?\s*([\s\S]*?)```/gi;
+        let match;
+        while ((match = fenceRe.exec(text)) !== null) {
+            const candidate = (match[1] || '').trim();
+            if (!candidate) continue;
+            const obj = tryParse(candidate);
+            if (obj !== null) return JSON.stringify(obj, null, 2);
+        }
+
+        // Case 3: heuristic substring between outermost braces/brackets
+        const braceStart = trimmed.indexOf('{');
+        const braceEnd = trimmed.lastIndexOf('}');
+        if (braceStart !== -1 && braceEnd > braceStart) {
+            const candidate = trimmed.slice(braceStart, braceEnd + 1);
+            const obj = tryParse(candidate);
+            if (obj !== null) return JSON.stringify(obj, null, 2);
+        }
+
+        const bracketStart = trimmed.indexOf('[');
+        const bracketEnd = trimmed.lastIndexOf(']');
+        if (bracketStart !== -1 && bracketEnd > bracketStart) {
+            const candidate = trimmed.slice(bracketStart, bracketEnd + 1);
+            const obj = tryParse(candidate);
+            if (obj !== null) return JSON.stringify(obj, null, 2);
+        }
+
+        return '';
+    };
+
+    const llmJsonResultContent = useMemo(() => extractJsonFromLlmText(llmResultContent), [llmResultContent]);
+
+    const extractJsonObjectsFromText = (text) => {
+        if (!text || typeof text !== 'string') return [];
+
+        const objs = [];
+
+        const tryPush = (candidate) => {
+            if (!candidate || typeof candidate !== 'string') return;
+            const s = candidate.trim();
+            if (!s) return;
+            try {
+                objs.push(JSON.parse(s));
+            } catch {
+                // ignore
+            }
+        };
+
+        const trimmed = text.trim();
+
+        // Whole text JSON
+        if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+            tryPush(trimmed);
+        }
+
+        // Fenced blocks (prefer these)
+        const fenceRe = /```(?:json)?\s*([\s\S]*?)```/gi;
+        let match;
+        while ((match = fenceRe.exec(text)) !== null) {
+            tryPush(match[1]);
+        }
+
+        // If we didn't get anything, do a simple brace-scan for objects.
+        if (objs.length === 0) {
+            let braceCount = 0;
+            let startIndex = -1;
+            let inString = false;
+
+            for (let i = 0; i < text.length; i++) {
+                const ch = text[i];
+                const prev = i > 0 ? text[i - 1] : '';
+
+                if (ch === '"' && prev !== '\\') {
+                    inString = !inString;
+                }
+                if (inString) continue;
+
+                if (ch === '{') {
+                    if (braceCount === 0) startIndex = i;
+                    braceCount++;
+                } else if (ch === '}') {
+                    braceCount--;
+                    if (braceCount === 0 && startIndex !== -1) {
+                        const candidate = text.slice(startIndex, i + 1);
+                        tryPush(candidate);
+                        startIndex = -1;
+                    }
+                }
+            }
+        }
+
+        // De-dupe by JSON string
+        const seen = new Set();
+        const unique = [];
+        for (const o of objs) {
+            try {
+                const k = JSON.stringify(o);
+                if (!seen.has(k)) {
+                    seen.add(k);
+                    unique.push(o);
+                }
+            } catch {
+                // ignore
+            }
+        }
+        return unique;
+    };
+
+    const getEGlobalInfoPayloadFromJsonText = (jsonText) => {
+        const objects = extractJsonObjectsFromText(jsonText);
+        for (const obj of objects) {
+            if (obj && typeof obj === 'object' && obj.e_global_info) {
+                return { e_global_info: obj.e_global_info };
+            }
+        }
+        return null;
+    };
+
+    const getEntitiesPayloadFromJsonText = (jsonText) => {
+        const objects = extractJsonObjectsFromText(jsonText);
+        for (const obj of objects) {
+            if (!obj || typeof obj !== 'object') continue;
+            const hasAny = !!(obj.characters || obj.props || obj.environments);
+            if (hasAny) {
+                return {
+                    characters: Array.isArray(obj.characters) ? obj.characters : [],
+                    props: Array.isArray(obj.props) ? obj.props : [],
+                    environments: Array.isArray(obj.environments) ? obj.environments : [],
+                };
+            }
+        }
+        return null;
+    };
+
+    const doImportText = async (text, importType = 'auto') => {
+        if (typeof onImportText !== 'function') {
+            if (onLog) onLog('Import is not available in this context.', 'warning');
+            return;
+        }
+        try {
+            await onImportText(text || '', importType);
+        } catch (e) {
+            if (onLog) onLog(`Import failed: ${e.message}`, 'error');
+        }
+    };
+
+    const parseMarkdownTable = (text) => {
+        if (!text || typeof text !== 'string') return null;
+        const lines = text
+            .split('\n')
+            .map(l => l.trim())
+            .filter(l => l.startsWith('|') && l.includes('|'));
+
+        if (lines.length < 2) return null;
+
+        const cleanCells = (line) => {
+            let cols = line.split('|').map(c => c.trim());
+            if (cols.length > 0 && cols[0] === "") cols.shift();
+            if (cols.length > 0 && cols[cols.length - 1] === "") cols.pop();
+
+            return cols.map(c => (c || '')
+                .replace(/\\\|/g, '|')
+                .replace(/<br\s*\/?>/gi, '\n')
+            );
+        };
+
+        const isSeparatorLine = (line) => /\|\s*:?-{3,}:?/.test(line) || /^[\s\|:\-]*$/.test(line);
+
+        const headerLine = lines[0];
+        const sepLine = lines[1];
+        if (isSeparatorLine(headerLine) || !isSeparatorLine(sepLine)) return null;
+
+        const headers = cleanCells(headerLine);
+        if (headers.length === 0) return null;
+
+        const rows = [];
+        for (let i = 2; i < lines.length; i++) {
+            const line = lines[i];
+            if (isSeparatorLine(line)) continue;
+            const cells = cleanCells(line);
+            if (cells.length === 0) continue;
+            while (cells.length < headers.length) cells.push('');
+            rows.push(cells.slice(0, headers.length));
+        }
+
+        return { headers, rows };
+    };
+
+    const buildMarkdownTable = (headers, rows) => {
+        const esc = (val) => (val || '')
+            .replace(/\|/g, '\\|')
+            .replace(/\n/g, '<br>');
+
+        const headerLine = `| ${headers.map(esc).join(' | ')} |`;
+        const sepLine = `| ${headers.map(() => '---').join(' | ')} |`;
+        const rowLines = (rows || []).map(r => {
+            const safe = [...r];
+            while (safe.length < headers.length) safe.push('');
+            return `| ${safe.slice(0, headers.length).map(esc).join(' | ')} |`;
+        });
+        return [headerLine, sepLine, ...rowLines].join('\n');
+    };
 
     const handleMerge = () => {
         const fullText = segments
@@ -856,6 +3018,13 @@ const ScriptEditor = ({ activeEpisode, project, onUpdateScript, onLog }) => {
         } else {
             setRawContent('');
         }
+
+        const storedNewField = activeEpisode?.ai_scene_analysis_result;
+        const storedLegacy = activeEpisode?.episode_info?.llm_scene_analysis_result;
+        const stored = (typeof storedNewField === 'string' && storedNewField.length > 0)
+            ? storedNewField
+            : (typeof storedLegacy === 'string' ? storedLegacy : (storedLegacy ? JSON.stringify(storedLegacy, null, 2) : ''));
+        setLlmResultContent(typeof stored === 'string' ? stored : '');
 
         if (!activeEpisode?.script_content) {
             setSegments([]);
@@ -956,6 +3125,69 @@ const ScriptEditor = ({ activeEpisode, project, onUpdateScript, onLog }) => {
         }
     }, [activeEpisode]);
 
+    const persistLlmResultContent = async (content) => {
+        if (!activeEpisode?.id) return;
+        if (!onUpdateEpisodeInfo) return;
+
+        try {
+            await onUpdateEpisodeInfo(activeEpisode.id, { ai_scene_analysis_result: content || '' });
+        } catch (e) {
+            console.error("Failed to persist LLM result", e);
+            if (onLog) onLog(`Failed to save LLM result: ${e.message}`, "error");
+        }
+    };
+
+    // Keep the "LLM 返回结果" box in sync with DB-saved ai_scene_analysis_result.
+    // Important: don't clobber local edits while user is typing.
+    const lastLoadedAnalysisRef = useRef(null);
+    const refreshAnalysisFromDB = useCallback(async () => {
+        if (!projectId || !activeEpisode?.id) return;
+        try {
+            const eps = await fetchEpisodes(projectId);
+            const fresh = (eps || []).find(e => e.id === activeEpisode.id);
+            const dbText = fresh?.ai_scene_analysis_result || '';
+
+            // Only update if user hasn't diverged from last loaded content.
+            const current = llmResultContent || '';
+            const lastLoaded = lastLoadedAnalysisRef.current;
+            const userHasEdited = lastLoaded !== null && current !== lastLoaded;
+
+            if (!userHasEdited) {
+                if (dbText && dbText !== current) {
+                    setLlmResultContent(dbText);
+                }
+                lastLoadedAnalysisRef.current = dbText;
+            }
+        } catch (e) {
+            // non-fatal
+            console.warn('[ScriptEditor] Failed to refresh analysis from DB', e);
+        }
+    }, [projectId, activeEpisode?.id, llmResultContent]);
+
+    useEffect(() => {
+        // On episode change/remount, prefer parent-provided field; fallback to DB refresh.
+        const initial = activeEpisode?.ai_scene_analysis_result || '';
+        setLlmResultContent(initial);
+        lastLoadedAnalysisRef.current = initial;
+        if (!initial) {
+            refreshAnalysisFromDB();
+        }
+    }, [activeEpisode?.id]);
+
+    const handleLlmCellChange = (rowIdx, colIdx, value) => {
+        const parsed = parseMarkdownTable(llmResultContent);
+        if (!parsed) {
+            setLlmResultContent(value);
+            return;
+        }
+
+        const nextRows = parsed.rows.map(r => [...r]);
+        if (!nextRows[rowIdx]) return;
+        nextRows[rowIdx][colIdx] = value;
+        const nextText = buildMarkdownTable(parsed.headers, nextRows);
+        setLlmResultContent(nextText);
+    };
+
     const handleSegmentChange = (idx, field, value) => {
         const newSegments = [...segments];
         newSegments[idx] = { ...newSegments[idx], [field]: value };
@@ -1000,6 +3232,706 @@ const ScriptEditor = ({ activeEpisode, project, onUpdateScript, onLog }) => {
     const [systemPrompt, setSystemPrompt] = useState("");
     const [userPrompt, setUserPrompt] = useState("");
     const [isSuperuser, setIsSuperuser] = useState(false);
+
+    // Character Canon (Authoritative) generator
+    const CANON_TAG_STORAGE_KEY = 'aistory_character_canon_tag_categories_v1';
+    const CANON_IDENTITY_STORAGE_KEY = 'aistory_character_canon_identity_categories_v1';
+    const DEFAULT_CANON_TAG_CATEGORIES = [
+        {
+            key: 'beauty',
+            title: '颜值/美貌（主角塑造）',
+            options: [
+                { id: 'beauty_1', label: '绝美', detail: '五官精致、比例高级、镜头感强' },
+                { id: 'beauty_2', label: '冷艳', detail: '表情克制、眼神有压迫感、气场强' },
+                { id: 'beauty_3', label: '甜美', detail: '笑容干净、亲和力强、少年感/少女感' },
+                { id: 'beauty_4', label: '高级感', detail: '皮肤质感干净、妆容克制、整体贵气' },
+                { id: 'beauty_5', label: '狐狸系', detail: '眼尾上挑、神情慵懒、带一点挑衅感' },
+                { id: 'beauty_m1', label: '硬朗帅', detail: '下颌线清晰、骨相立体、眼神坚决' },
+                { id: 'beauty_m2', label: '禁欲系', detail: '克制冷淡、距离感强、越看越上头' },
+                { id: 'beauty_m3', label: '痞帅', detail: '微挑眉、嘴角不经意上扬、危险又迷人' },
+                { id: 'beauty_m4', label: '温柔系', detail: '眼神温和、说话慢半拍、可靠感强' },
+            ],
+        },
+        {
+            key: 'skin_tone',
+            title: '肤色/质感（常用标签）',
+            options: [
+                { id: 'skin_1', label: '冷白皮', detail: '冷调白皙，通透干净' },
+                { id: 'skin_2', label: '暖白皮', detail: '暖调白皙，亲和柔和' },
+                { id: 'skin_3', label: '健康小麦', detail: '小麦色/日晒感，活力与性感' },
+                { id: 'skin_4', label: '古铜', detail: '更深一档的日晒肤色，张力强' },
+                { id: 'skin_5', label: '奶油肌', detail: '细腻柔光质感，显贵气' },
+                { id: 'skin_6', label: '冷感瓷肌', detail: '干净无瑕，光泽克制' },
+            ],
+        },
+        {
+            key: 'eye_color',
+            title: '眼睛颜色（常用标签）',
+            options: [
+                { id: 'eye_1', label: '深棕', detail: '沉稳、温柔、耐看' },
+                { id: 'eye_2', label: '浅棕/琥珀', detail: '更亮、更抓镜头' },
+                { id: 'eye_3', label: '黑色', detail: '压迫感强、眼神锋利' },
+                { id: 'eye_4', label: '灰色', detail: '冷感、高级、距离感' },
+                { id: 'eye_5', label: '蓝色', detail: '清冷或少年感，辨识度高' },
+                { id: 'eye_6', label: '绿色', detail: '稀有感、神秘感强' },
+            ],
+        },
+        {
+            key: 'hair_style',
+            title: '发型（常用标签）',
+            options: [
+                { id: 'hair_1', label: '长直发', detail: '干净利落，发丝有光泽' },
+                { id: 'hair_2', label: '长卷发', detail: '松弛性感，层次丰富' },
+                { id: 'hair_3', label: '高马尾', detail: '利落、青春、行动感' },
+                { id: 'hair_4', label: '低马尾', detail: '克制、优雅、职场感' },
+                { id: 'hair_5', label: '丸子头', detail: '露出颈部线条，清爽' },
+                { id: 'hair_6', label: '短发波波', detail: '轮廓利落，强调脸部线条' },
+                { id: 'hair_7', label: '寸头/短寸', detail: '干净硬朗，突出眉骨与眼神' },
+                { id: 'hair_8', label: '背头', detail: '成熟强势，精英气场' },
+            ],
+        },
+        {
+            key: 'hair_color',
+            title: '发色（常用标签）',
+            options: [
+                { id: 'hcol_1', label: '自然黑', detail: '干净利落，东方感强' },
+                { id: 'hcol_2', label: '深棕', detail: '更柔和、更显质感' },
+                { id: 'hcol_3', label: '栗棕', detail: '温柔氛围感，显白' },
+                { id: 'hcol_4', label: '巧克力棕', detail: '成熟高级，适配职场' },
+                { id: 'hcol_5', label: '亚麻棕', detail: '更轻盈的时髦感（可偏冷/偏暖）' },
+                { id: 'hcol_6', label: '金发', detail: '辨识度高，镜头更亮' },
+                { id: 'hcol_7', label: '银灰', detail: '冷感高级，未来感/神秘感' },
+                { id: 'hcol_8', label: '红棕', detail: '热烈、强存在感' },
+            ],
+        },
+        {
+            key: 'sexy',
+            title: '性感（不露骨，主角塑造）',
+            options: [
+                { id: 'sexy_shoulder_1', label: '露肩/一字肩', detail: '突出肩线与颈部线条，镜头更“高级性感”' },
+                { id: 'sexy_collar_1', label: '露锁骨', detail: '领口略开，锁骨清晰（尺度克制）' },
+                { id: 'sexy_collar_2', label: '开领/解一两颗扣', detail: '衬衫/外套微敞，若隐若现但不露骨' },
+                { id: 'sexy_collar_3', label: '露锁骨与胸口（开领/浅V）', detail: '开领或浅V领，视觉聚焦颈胸区域（尺度克制）' },
+                { id: 'sexy_arm_1', label: '无袖/吊带（露手臂）', detail: '露出上臂线条，更轻熟、更利落' },
+                { id: 'sexy_arm_2', label: '挽袖/卷袖（露前臂）', detail: '随性、克制，有一点禁欲张力' },
+                { id: 'sexy_leg_1', label: '短裙/短裤（露腿）', detail: '腿部比例突出（注意尺度克制）' },
+                { id: 'sexy_leg_2', label: '开衩裙（露腿）', detail: '走动时若隐若现，更“贵气”的性感' },
+            ],
+        },
+        {
+            key: 'gender',
+            title: '性别（设定）',
+            options: [
+                { id: 'gender_f', label: '女', detail: '女性角色（可用于镜头与造型提示）' },
+                { id: 'gender_m', label: '男', detail: '男性角色（可用于镜头与造型提示）' },
+                { id: 'gender_none', label: '无性别/性别不明', detail: '不以性别定义角色，或刻意模糊' },
+            ],
+        },
+        {
+            key: 'body',
+            title: '身材/比例（主角塑造）',
+            options: [
+                { id: 'body_1', label: '好身材', detail: '9头身，修长腿' },
+                { id: 'body_2', label: '肩颈线', detail: '锁骨清晰，肩线利落' },
+                { id: 'body_3', label: '体态', detail: '站姿挺拔，走路带节奏感' },
+                { id: 'body_4', label: '肌肉线条', detail: '紧致不夸张，轮廓清晰' },
+                { id: 'body_h1', label: '身高：娇小', detail: '约150–160cm，比例更显可爱/脆弱感' },
+                { id: 'body_h2', label: '身高：中等', detail: '约160–170cm，日常感强、适配多数场景' },
+                { id: 'body_h3', label: '身高：高挑', detail: '约170–180cm，镜头更有存在感与气场' },
+                { id: 'body_h4', label: '身高：很高', detail: '约180cm+，压迫感/保护感更强' },
+                { id: 'body_shape_1', label: '纤细/骨感', detail: '骨点清晰、线条冷感，适合疏离气质' },
+                { id: 'body_shape_2', label: '匀称/健康', detail: '比例自然、肌肉薄而紧，运动感' },
+                { id: 'body_shape_3', label: '微肉/丰润', detail: '柔软曲线、亲和力强（尺度克制）' },
+                { id: 'body_shape_4', label: '健身型', detail: '肩背与核心发达，动作干净有力量' },
+                { id: 'body_shape_5', label: '厚实/壮硕', detail: '骨架大、存在感强，近景更有压迫' },
+                { id: 'body_prop_1', label: '腿长', detail: '视觉比例拉长，走路带风' },
+                { id: 'body_prop_2', label: '腰线高', detail: '上短下长，镜头更显修长' },
+                { id: 'body_prop_3', label: '腰臀比突出', detail: '曲线更明显（不露骨）' },
+                { id: 'body_m1', label: '宽肩窄腰', detail: '倒三角轮廓明显，西装很好看' },
+                { id: 'body_m2', label: '力量感', detail: '动作不多但很稳，抬手就有压迫感' },
+            ],
+        },
+        {
+            key: 'age',
+            title: '年龄/阶段（设定）',
+            options: [
+                { id: 'age_1', label: '少年/少女（16–19）', detail: '青春感强，情绪外露，成长线明显' },
+                { id: 'age_2', label: '青年（20–25）', detail: '锐气与试错期，冲劲足' },
+                { id: 'age_3', label: '轻熟（26–32）', detail: '自洽、边界感更强，魅力更稳定' },
+                { id: 'age_4', label: '成熟（33–40）', detail: '经验与压迫感/掌控感更强' },
+                { id: 'age_5', label: '中年（41–55）', detail: '沉稳、城府/担当更明显' },
+                { id: 'age_6', label: '长者（56+）', detail: '威望、阅历，气场不靠外放' },
+                { id: 'age_7', label: '年龄不详/看不出', detail: '刻意模糊年龄，神秘感与距离感更强' },
+            ],
+        },
+        {
+            key: 'wardrobe',
+            title: '穿搭/造型（主角塑造）',
+            options: [
+                { id: 'wardrobe_1', label: '干练', detail: '收腰西装或衬衫+长裤，剪裁利落' },
+                { id: 'wardrobe_2', label: '优雅', detail: '简洁连衣裙或套装，配饰克制' },
+                { id: 'wardrobe_3', label: '都市时髦', detail: '大衣/风衣+高跟或短靴，层次感' },
+                { id: 'wardrobe_4', label: '禁欲风', detail: '高领/长袖/长裤，颜色克制但极有气场' },
+                { id: 'wardrobe_5', label: '轻奢', detail: '面料有质感，细节讲究，不浮夸' },
+                { id: 'wardrobe_m1', label: '绅士', detail: '合身西装/大衣，领带或领结点到为止' },
+                { id: 'wardrobe_m2', label: '冷酷街头', detail: '黑色夹克/皮衣+短靴，线条硬' },
+                { id: 'wardrobe_m3', label: '少年感男主', detail: '白衬衫/针织衫/运动外套，干净清爽' },
+            ],
+        },
+        {
+            key: 'clothing_items',
+            title: '衣着/单品（常用标签）',
+            options: [
+                { id: 'cloth_1', label: '白衬衫', detail: '干净克制，越简单越高级' },
+                { id: 'cloth_2', label: '黑高领', detail: '禁欲、冷感、气场强' },
+                { id: 'cloth_3', label: '西装', detail: '合身剪裁，肩线清晰' },
+                { id: 'cloth_4', label: '大衣/风衣', detail: '压气场，走路带风' },
+                { id: 'cloth_5', label: '丝质/缎面', detail: '微光泽，性感但不露骨' },
+                { id: 'cloth_6', label: '皮衣/夹克', detail: '硬朗、叛逆、酷感' },
+                { id: 'cloth_7', label: '短裙/开衩', detail: '腿部线条更突出（注意尺度克制）' },
+                { id: 'cloth_8', label: '高跟鞋', detail: '气场与身材比例拉长' },
+                { id: 'cloth_9', label: '短靴', detail: '利落、都市、行动感' },
+                { id: 'cloth_10', label: '配饰克制', detail: '少而精，提升高级感' },
+            ],
+        },
+        {
+            key: 'combat_wear',
+            title: '战斗服装/战甲（服饰）',
+            options: [
+                { id: 'cwear_1', label: '战甲/盔甲', detail: '金属/皮革甲胄，防护与威慑感' },
+                { id: 'cwear_2', label: '轻甲', detail: '更灵活，线条更贴身、利落' },
+                { id: 'cwear_3', label: '战术背心/防弹衣', detail: '现代作战感，功能性口袋与模块' },
+                { id: 'cwear_4', label: '制服/作战服', detail: '军警/特勤气质，纪律与专业' },
+                { id: 'cwear_5', label: '披风/斗篷', detail: '英雄感/隐匿感，镜头层次更强' },
+                { id: 'cwear_6', label: '护臂/护腕', detail: '近战细节，硬朗质感' },
+                { id: 'cwear_7', label: '护膝/护腿', detail: '实战磨损感更真实' },
+                { id: 'cwear_8', label: '作战靴', detail: '落地更稳，压迫感与行动感兼具' },
+                { id: 'cwear_9', label: '战术腰带/枪套', detail: '装备挂载，专业度更高' },
+            ],
+        },
+        {
+            key: 'ancient_wear',
+            title: '古装服装/服饰',
+            options: [
+                { id: 'awear_1', label: '汉服（襦裙/交领）', detail: '飘逸层次，古风气质' },
+                { id: 'awear_2', label: '长袍/直裾', detail: '文人/谋士感，克制内敛' },
+                { id: 'awear_3', label: '官服/朝服', detail: '礼制等级与权力感更明确' },
+                { id: 'awear_4', label: '锦衣/华服', detail: '贵气、纹样精致、用料讲究' },
+                { id: 'awear_5', label: '夜行衣', detail: '暗色贴身，隐秘与危险感（不强调动作）' },
+                { id: 'awear_6', label: '甲胄（古代战甲）', detail: '甲片/扎甲，历史质感强' },
+                { id: 'awear_7', label: '披风/披肩', detail: '身份感与镜头层次' },
+                { id: 'awear_8', label: '发冠/发簪', detail: '阶层与礼制体现' },
+                { id: 'awear_9', label: '腰带/玉佩', detail: '点明身份与品味' },
+                { id: 'awear_10', label: '绣鞋/靴', detail: '细节完成度更高，时代感更真' },
+            ],
+        },
+        {
+            key: 'hair_makeup',
+            title: '妆发/细节（主角塑造）',
+            options: [
+                { id: 'hm_1', label: '红唇', detail: '饱和但干净的红，气场拉满' },
+                { id: 'hm_2', label: '淡妆', detail: '伪素颜，重点是皮肤干净与眼神' },
+                { id: 'hm_3', label: '眼妆', detail: '眼尾微上扬，强调眼神锋利/勾人' },
+                { id: 'hm_4', label: '长发', detail: '发丝有光泽，发型不凌乱' },
+                { id: 'hm_5', label: '短发', detail: '轮廓利落，露出颈部线条' },
+                { id: 'hm_m1', label: '寸头/短寸', detail: '干净利落，突出眉骨与眼神' },
+                { id: 'hm_m2', label: '胡渣', detail: '微微胡渣，成熟感与危险感' },
+            ],
+        },
+        {
+            key: 'vibe',
+            title: '气质/表现（主角塑造）',
+            options: [
+                { id: 'vibe_1', label: '神秘', detail: '信息不一次说完，表情留白' },
+                { id: 'vibe_2', label: '冷峻', detail: '少笑，语气短，目光锐利' },
+                { id: 'vibe_3', label: '阳光', detail: '笑意自然，语气轻快，亲和力强' },
+                { id: 'vibe_4', label: '专业感', detail: '用词准确，动作克制，目标导向' },
+                { id: 'vibe_5', label: '强势', detail: '话语有控制力，场面压得住' },
+                { id: 'vibe_6', label: '脆弱感', detail: '瞬间的停顿/回避眼神，让人心软' },
+            ],
+        },
+        {
+            key: 'nation',
+            title: '国籍/地区（设定）',
+            options: [
+                { id: 'nation_1', label: '中国', detail: '可细分：北方/南方口音与习惯' },
+                { id: 'nation_2', label: '日本', detail: '克制礼貌、边界感明显' },
+                { id: 'nation_3', label: '韩国', detail: '时尚敏感、表达更直接' },
+                { id: 'nation_4', label: '美国', detail: '表达直接、个人主义、行动优先' },
+                { id: 'nation_5', label: '英国', detail: '措辞克制、礼貌疏离、幽默冷' },
+                { id: 'nation_6', label: '法国', detail: '松弛浪漫、审美挑剔、有锋芒' },
+                { id: 'nation_7', label: '意大利', detail: '热情外放、注重衣着与手势' },
+            ],
+        },
+        {
+            key: 'ethnicity',
+            title: '人种/族裔（设定）',
+            options: [
+                { id: 'eth_1', label: '东亚', detail: '例如：中/日/韩常见审美与轮廓特点' },
+                { id: 'eth_2', label: '白人/欧洲裔', detail: '骨相立体、肤色与发色范围更广' },
+                { id: 'eth_3', label: '黑人/非洲裔', detail: '五官张力强、体态与气场更突出' },
+                { id: 'eth_4', label: '拉丁裔', detail: '热烈、自信、风格表达更强' },
+                { id: 'eth_5', label: '南亚裔', detail: '深邃眼神、配饰审美更鲜明' },
+                { id: 'eth_6', label: '中东/阿拉伯裔', detail: '浓眉深眼、轮廓强、气场浓烈' },
+                { id: 'eth_7', label: '混血', detail: '特征融合，辨识度高' },
+            ],
+        },
+    ];
+
+    const DEFAULT_CANON_IDENTITY_CATEGORIES = [
+        {
+            key: 'lead_role',
+            title: '主角定位/戏份',
+            options: [
+                { id: 'lead_f', label: '女主角', detail: '故事核心视角/情感主线' },
+                { id: 'lead_m', label: '男主角', detail: '故事核心视角/推动行动线' },
+                { id: 'lead_2', label: '第二主角', detail: '重要支线/关键转折' },
+                { id: 'antagonist', label: '反派/对立面', detail: '推进冲突与悬念' },
+            ],
+        },
+        {
+            key: 'occupation',
+            title: '职业/身份',
+            options: [
+                { id: 'occ_ceo', label: 'CEO/总裁', detail: '强掌控、决策快、社交资源丰富' },
+                { id: 'occ_police', label: '刑警/警探', detail: '行动派、观察力强、压力承受高' },
+                { id: 'occ_lawyer', label: '律师', detail: '逻辑强、措辞锋利、擅长博弈' },
+                { id: 'occ_doctor', label: '医生', detail: '专业冷静、情绪克制、同理心' },
+                { id: 'occ_artist', label: '艺术家', detail: '审美敏感、情绪浓、反差感' },
+                { id: 'occ_student', label: '大学生', detail: '成长线明显、少年感/少女感' },
+                { id: 'occ_model', label: '模特/艺人', detail: '镜头感强、曝光与舆论压力' },
+            ],
+        },
+        {
+            key: 'combat_identity',
+            title: '战斗身份/背景',
+            options: [
+                { id: 'cid_1', label: '军人/士兵', detail: '训练有素，服从命令，纪律感强' },
+                { id: 'cid_2', label: '特勤/特种', detail: '高压任务，处事克制专业' },
+                { id: 'cid_3', label: '雇佣兵', detail: '利益驱动，实战经验丰富' },
+                { id: 'cid_4', label: '杀手/刺客', detail: '隐秘、冷静、边界感强' },
+                { id: 'cid_5', label: '保镖/护卫', detail: '保护优先，风险评估与站位意识强' },
+                { id: 'cid_6', label: '武术家', detail: '以技服人，克制与底线清晰' },
+                { id: 'cid_7', label: '赏金猎人', detail: '规则感强，灰色地带的执行者' },
+                { id: 'cid_8', label: '黑帮打手', detail: '狠劲、街头经验与威慑' },
+            ],
+        },
+        {
+            key: 'ancient_identity',
+            title: '古装身份/阵营',
+            options: [
+                { id: 'aid_1', label: '将军/统帅', detail: '威望与军纪，杀伐果断' },
+                { id: 'aid_2', label: '侍卫/禁军', detail: '守护要员/皇权，纪律严' },
+                { id: 'aid_3', label: '捕快/衙役', detail: '基层执法，江湖味更浓' },
+                { id: 'aid_4', label: '县令/官员', detail: '规则执行者，权力与人情博弈' },
+                { id: 'aid_5', label: '世家公子/小姐', detail: '礼制与家族利益牵引，克制体面' },
+                { id: 'aid_6', label: '王爷/皇子', detail: '权力中心，处处试探与算计' },
+                { id: 'aid_7', label: '宫女/太监', detail: '宫廷生态，信息与生存技巧' },
+                { id: 'aid_8', label: '门派弟子/修行者', detail: '师门规矩、江湖恩怨、阵营牵连' },
+                { id: 'aid_9', label: '侠客/游侠', detail: '行走江湖，讲义气也有底线' },
+            ],
+        },
+        {
+            key: 'status',
+            title: '社会身份/阶层',
+            options: [
+                { id: 'st_elite', label: '上层精英', detail: '资源多、社交圈高、习惯克制' },
+                { id: 'st_middle', label: '中产专业人士', detail: '稳健务实、重效率与边界' },
+                { id: 'st_grass', label: '草根逆袭', detail: '韧性强、行动强、野心明确' },
+                { id: 'st_mysterious', label: '身份成谜', detail: '信息分层揭示，悬念强' },
+            ],
+        },
+        {
+            key: 'personality_arc',
+            title: '主角弧光/关键词',
+            options: [
+                { id: 'arc_redemption', label: '救赎', detail: '背负过去，逐步修复与和解' },
+                { id: 'arc_growth', label: '成长', detail: '从稚嫩到成熟的可见变化' },
+                { id: 'arc_revenge', label: '复仇', detail: '目标明确，情绪压抑与爆发' },
+                { id: 'arc_power', label: '权力', detail: '争夺与控制、规则博弈' },
+            ],
+        },
+    ];
+    const [canonName, setCanonName] = useState('');
+    const [canonIdentityCategories, setCanonIdentityCategories] = useState(DEFAULT_CANON_IDENTITY_CATEGORIES);
+    const [canonSelectedIdentityIds, setCanonSelectedIdentityIds] = useState([]);
+    const [canonCustomIdentity, setCanonCustomIdentity] = useState('');
+    const [canonBody, setCanonBody] = useState('');
+    const [canonExtra, setCanonExtra] = useState('');
+    const [canonCustomTags, setCanonCustomTags] = useState('');
+    const [canonTagCategories, setCanonTagCategories] = useState(DEFAULT_CANON_TAG_CATEGORIES);
+    const [canonTagEditMode, setCanonTagEditMode] = useState(false);
+    const [canonSelectedTagIds, setCanonSelectedTagIds] = useState([]);
+    const [canonGenerating, setCanonGenerating] = useState(false);
+    const [showCanonModal, setShowCanonModal] = useState(false);
+
+    // Script Generator (Scenes)
+    const [showSceneGenPanel, setShowSceneGenPanel] = useState(false);
+    const [sceneGenCount, setSceneGenCount] = useState(10);
+    const [sceneGenNotes, setSceneGenNotes] = useState('');
+    const [sceneGenReplaceExisting, setSceneGenReplaceExisting] = useState(true);
+    const [sceneGenGenerating, setSceneGenGenerating] = useState(false);
+
+    const canonOptionValue = (opt) => `${opt.label}：${opt.detail}`;
+
+    const normalizeCanonTagCategories = (raw) => {
+        if (!Array.isArray(raw)) return null;
+        const normalized = raw
+            .filter(Boolean)
+            .map((cat) => {
+                const key = String(cat?.key || '').trim();
+                const title = String(cat?.title || '').trim();
+                const options = Array.isArray(cat?.options) ? cat.options : [];
+                if (!key || !title) return null;
+                const normalizedOptions = options
+                    .filter(Boolean)
+                    .map((opt) => {
+                        const id = String(opt?.id || '').trim();
+                        const label = String(opt?.label || '').trim();
+                        const detail = String(opt?.detail || '').trim();
+                        if (!id || !label || !detail) return null;
+                        return { id, label, detail };
+                    })
+                    .filter(Boolean);
+                return { key, title, options: normalizedOptions };
+            })
+            .filter(Boolean);
+        return normalized.length > 0 ? normalized : null;
+    };
+
+    const persistCanonTagCategories = (categories) => {
+        try {
+            const normalized = normalizeCanonTagCategories(categories);
+            if (!normalized) return false;
+            localStorage.setItem(CANON_TAG_STORAGE_KEY, JSON.stringify(normalized));
+            return true;
+        } catch (e) {
+            return false;
+        }
+    };
+
+    useEffect(() => {
+        try {
+            const saved = localStorage.getItem(CANON_TAG_STORAGE_KEY);
+            const DEPRECATED_CANON_CATEGORY_KEYS = new Set(['combat']);
+            const LEGACY_SEXY_OPTION_IDS = new Set([
+                'sexy_1',
+                'sexy_2',
+                'sexy_3',
+                'sexy_4',
+                'sexy_m1',
+                'sexy_m2',
+            ]);
+
+            const mergeCategoriesByKey = (savedCats, defaultCats) => {
+                const byKey = new Map();
+                for (const c of (savedCats || [])) {
+                    if (!c?.key) continue;
+                    if (DEPRECATED_CANON_CATEGORY_KEYS.has(c.key)) continue;
+                    byKey.set(c.key, c);
+                }
+
+                const mergeOne = (savedCat, defCat) => {
+                    if (!savedCat) return defCat;
+                    const categoryKey = savedCat.key || defCat?.key;
+                    let savedOptions = Array.isArray(savedCat.options) ? savedCat.options : [];
+                    if (categoryKey === 'sexy') {
+                        savedOptions = savedOptions.filter(o => o?.id && !LEGACY_SEXY_OPTION_IDS.has(o.id));
+                    }
+                    const defOptions = Array.isArray(defCat?.options) ? defCat.options : [];
+                    const seenIds = new Set(savedOptions.map(o => o?.id).filter(Boolean));
+                    const mergedOptions = [...savedOptions];
+                    for (const opt of defOptions) {
+                        if (!opt?.id) continue;
+                        if (!seenIds.has(opt.id)) mergedOptions.push(opt);
+                    }
+                    return {
+                        ...savedCat,
+                        key: savedCat.key || defCat?.key,
+                        title: savedCat.title || defCat?.title,
+                        options: mergedOptions,
+                    };
+                };
+
+                const mergedCats = [];
+                for (const def of (defaultCats || [])) {
+                    const saved = byKey.get(def.key);
+                    mergedCats.push(mergeOne(saved, def));
+                    byKey.delete(def.key);
+                }
+                for (const rest of byKey.values()) {
+                    if (rest?.key && DEPRECATED_CANON_CATEGORY_KEYS.has(rest.key)) continue;
+                    mergedCats.push(rest);
+                }
+                return mergedCats;
+            };
+
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                const normalized = normalizeCanonTagCategories(parsed);
+                if (normalized) {
+                    setCanonTagCategories(mergeCategoriesByKey(normalized, DEFAULT_CANON_TAG_CATEGORIES));
+                    return;
+                }
+            }
+            // No saved or invalid saved -> ensure defaults are used
+            setCanonTagCategories(DEFAULT_CANON_TAG_CATEGORIES);
+        } catch (e) {
+            // ignore
+            setCanonTagCategories(DEFAULT_CANON_TAG_CATEGORIES);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    useEffect(() => {
+        try {
+            const saved = localStorage.getItem(CANON_IDENTITY_STORAGE_KEY);
+            if (!saved) {
+                setCanonIdentityCategories(DEFAULT_CANON_IDENTITY_CATEGORIES);
+                return;
+            }
+
+            const parsed = JSON.parse(saved);
+            const normalized = normalizeCanonTagCategories(parsed);
+
+            const DEPRECATED_CANON_CATEGORY_KEYS = new Set(['combat']);
+            const mergeCategoriesByKey = (savedCats, defaultCats) => {
+                const byKey = new Map();
+                for (const c of (savedCats || [])) {
+                    if (!c?.key) continue;
+                    if (DEPRECATED_CANON_CATEGORY_KEYS.has(c.key)) continue;
+                    byKey.set(c.key, c);
+                }
+
+                const mergeOne = (savedCat, defCat) => {
+                    if (!savedCat) return defCat;
+                    const savedOptions = Array.isArray(savedCat.options) ? savedCat.options : [];
+                    const defOptions = Array.isArray(defCat?.options) ? defCat.options : [];
+                    const seenIds = new Set(savedOptions.map(o => o?.id).filter(Boolean));
+                    const mergedOptions = [...savedOptions];
+                    for (const opt of defOptions) {
+                        if (!opt?.id) continue;
+                        if (!seenIds.has(opt.id)) mergedOptions.push(opt);
+                    }
+                    return {
+                        ...savedCat,
+                        key: savedCat.key || defCat?.key,
+                        title: savedCat.title || defCat?.title,
+                        options: mergedOptions,
+                    };
+                };
+
+                const mergedCats = [];
+                for (const def of (defaultCats || [])) {
+                    const saved = byKey.get(def.key);
+                    mergedCats.push(mergeOne(saved, def));
+                    byKey.delete(def.key);
+                }
+                for (const rest of byKey.values()) {
+                    if (rest?.key && DEPRECATED_CANON_CATEGORY_KEYS.has(rest.key)) continue;
+                    mergedCats.push(rest);
+                }
+                return mergedCats;
+            };
+
+            if (normalized) {
+                setCanonIdentityCategories(mergeCategoriesByKey(normalized, DEFAULT_CANON_IDENTITY_CATEGORIES));
+            } else {
+                setCanonIdentityCategories(DEFAULT_CANON_IDENTITY_CATEGORIES);
+            }
+        } catch (e) {
+            // ignore
+            setCanonIdentityCategories(DEFAULT_CANON_IDENTITY_CATEGORIES);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+    const canonSelectedTagStrings = () => {
+        const selected = [];
+        for (const cat of (canonTagCategories || [])) {
+            for (const opt of (cat.options || [])) {
+                if (canonSelectedTagIds.includes(opt.id)) {
+                    selected.push(canonOptionValue(opt));
+                }
+            }
+        }
+        return selected;
+    };
+
+    const canonSelectedIdentityStrings = () => {
+        const selected = [];
+        for (const cat of (canonIdentityCategories || [])) {
+            for (const opt of (cat.options || [])) {
+                if (canonSelectedIdentityIds.includes(opt.id)) {
+                    selected.push(canonOptionValue(opt));
+                }
+            }
+        }
+        return selected;
+    };
+
+    const toggleCanonTagId = (id) => {
+        setCanonSelectedTagIds(prev => (
+            prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id]
+        ));
+    };
+
+    const toggleCanonIdentityId = (id) => {
+        setCanonSelectedIdentityIds(prev => (
+            prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id]
+        ));
+    };
+
+    const newCanonOptionId = (prefix = 'opt') => `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    const updateCanonCategoryTitle = (catKey, title) => {
+        setCanonTagCategories(prev => (prev || []).map(c => (c.key === catKey ? { ...c, title } : c)));
+    };
+    const updateCanonOption = (catKey, optId, patch) => {
+        setCanonTagCategories(prev => (prev || []).map(c => {
+            if (c.key !== catKey) return c;
+            return {
+                ...c,
+                options: (c.options || []).map(o => (o.id === optId ? { ...o, ...patch } : o)),
+            };
+        }));
+    };
+    const addCanonOption = (catKey) => {
+        const id = newCanonOptionId(catKey);
+        setCanonTagCategories(prev => (prev || []).map(c => {
+            if (c.key !== catKey) return c;
+            return { ...c, options: [...(c.options || []), { id, label: '新标签', detail: '细节描述' }] };
+        }));
+    };
+    const removeCanonOption = (catKey, optId) => {
+        setCanonSelectedTagIds(prev => prev.filter(id => id !== optId));
+        setCanonTagCategories(prev => (prev || []).map(c => {
+            if (c.key !== catKey) return c;
+            return { ...c, options: (c.options || []).filter(o => o.id !== optId) };
+        }));
+    };
+
+    const updateIdentityCategoryTitle = (catKey, title) => {
+        setCanonIdentityCategories(prev => (prev || []).map(c => (c.key === catKey ? { ...c, title } : c)));
+    };
+    const updateIdentityOption = (catKey, optId, patch) => {
+        setCanonIdentityCategories(prev => (prev || []).map(c => {
+            if (c.key !== catKey) return c;
+            return {
+                ...c,
+                options: (c.options || []).map(o => (o.id === optId ? { ...o, ...patch } : o)),
+            };
+        }));
+    };
+    const addIdentityOption = (catKey) => {
+        const id = newCanonOptionId(catKey);
+        setCanonIdentityCategories(prev => (prev || []).map(c => {
+            if (c.key !== catKey) return c;
+            return { ...c, options: [...(c.options || []), { id, label: '新身份', detail: '细节描述' }] };
+        }));
+    };
+    const removeIdentityOption = (catKey, optId) => {
+        setCanonSelectedIdentityIds(prev => prev.filter(id => id !== optId));
+        setCanonIdentityCategories(prev => (prev || []).map(c => {
+            if (c.key !== catKey) return c;
+            return { ...c, options: (c.options || []).filter(o => o.id !== optId) };
+        }));
+    };
+
+    const persistCanonIdentityCategories = (categories) => {
+        try {
+            const normalized = normalizeCanonTagCategories(categories);
+            if (!normalized) return false;
+            localStorage.setItem(CANON_IDENTITY_STORAGE_KEY, JSON.stringify(normalized));
+            return true;
+        } catch (e) {
+            return false;
+        }
+    };
+
+    const closeCanonModal = () => {
+        // Best-effort autosave if user was editing tags
+        if (canonTagEditMode) {
+            const ok = persistCanonTagCategories(canonTagCategories);
+            if (ok && onLog) onLog('已保存标签配置（JSON）', 'success');
+            const ok2 = persistCanonIdentityCategories(canonIdentityCategories);
+            if (ok2 && onLog) onLog('已保存身份标签配置（JSON）', 'success');
+        }
+        setCanonTagEditMode(false);
+        setShowCanonModal(false);
+    };
+
+    const handleGenerateScenes = async () => {
+        if (!activeEpisode?.id) return;
+        const n = Number(sceneGenCount);
+        if (Number.isNaN(n) || n <= 0) {
+            alert('Please enter a valid scene count.');
+            return;
+        }
+        setSceneGenGenerating(true);
+        try {
+            if (onLog) onLog(`Generating scenes for episode (target: ${n})`, 'process');
+            const res = await generateEpisodeScenes(activeEpisode.id, {
+                scene_count: n,
+                extra_notes: sceneGenNotes,
+                replace_existing_scenes: !!sceneGenReplaceExisting,
+            });
+            if (onLog) onLog(`Scenes generated: ${res?.scenes_created ?? 0}`, 'success');
+            alert(`Scenes generated: ${res?.scenes_created ?? 0}. Open the Scenes tab to view them.`);
+        } catch (e) {
+            console.error(e);
+            if (onLog) onLog(`Scene generation failed: ${e.message}`, 'error');
+            alert(`Generation failed: ${e.message}`);
+        } finally {
+            setSceneGenGenerating(false);
+        }
+    };
+
+    const handleGenerateCanon = async () => {
+        if (!activeEpisode?.id) return;
+        const name = (canonName || '').trim();
+        if (!name) {
+            alert('请输入角色名称');
+            return;
+        }
+
+        const custom = (canonCustomTags || '')
+            .split(/[,，\n]/)
+            .map(t => t.trim())
+            .filter(Boolean);
+        const selectedStrings = canonSelectedTagStrings();
+        const style_tags = Array.from(new Set([...(selectedStrings || []), ...custom]));
+
+        const identityCustom = (canonCustomIdentity || '')
+            .split(/[,，\n]/)
+            .map(t => t.trim())
+            .filter(Boolean);
+        const identityStrings = canonSelectedIdentityStrings();
+        const identityMerged = Array.from(new Set([...(identityStrings || []), ...identityCustom]));
+        const identity = identityMerged.join(' / ');
+
+        setCanonGenerating(true);
+        try {
+            if (onLog) onLog(`Generating Character Canon for: ${name}`, 'process');
+            const updatedEpisode = await generateEpisodeCharacterProfile(activeEpisode.id, {
+                name,
+                identity,
+                body_features: canonBody,
+                style_tags,
+                extra_notes: canonExtra,
+            });
+
+            if (updatedEpisode?.script_content != null) {
+                setRawContent(updatedEpisode.script_content);
+            }
+            if (onLog) onLog(`Character Canon saved & inserted into script: ${name}`, 'success');
+            setShowCanonModal(false);
+        } catch (e) {
+            console.error(e);
+            if (onLog) onLog(`Character Canon generation failed: ${e.message}`, 'error');
+            alert(`生成失败: ${e.message}`);
+        } finally {
+            setCanonGenerating(false);
+        }
+    };
 
     // Check user role on mount
     useEffect(() => {
@@ -1051,9 +3983,6 @@ const ScriptEditor = ({ activeEpisode, project, onUpdateScript, onLog }) => {
             }
         } else {
              // Normal user flow
-             if (!confirm("This will overwrite the current raw content with the AI analysis result (Markdown Table format). Continue?")) {
-                return;
-            }
             executeAnalysis(rawContent);
         }
     };
@@ -1068,14 +3997,46 @@ const ScriptEditor = ({ activeEpisode, project, onUpdateScript, onLog }) => {
             console.log("[ScriptEditor] Executing Analysis. Project Prop:", project);
             console.log("[ScriptEditor] Using Metadata:", metadata);
             
-            const result = await analyzeScene(content, customSystemPrompt, metadata);
-            const analyzedText = result.result || result.analysis || (typeof result === 'string' ? result : JSON.stringify(result));
+            const result = await analyzeScene(content, customSystemPrompt, metadata, activeEpisode?.id || null);
+            const analyzedText = result.result || result.analysis || (typeof result === 'string' ? result : JSON.stringify(result, null, 2));
 
-            setRawContent(analyzedText);
-            
-            // Auto-save the analyzed content
-            if (onLog) onLog("Analysis complete. Saving result...", "process");
-            await onUpdateScript(activeEpisode.id, analyzedText);
+            if (result && result.meta) {
+                try {
+                    console.log("[AI Scene Analysis] meta:", result.meta);
+                    const m = result.meta;
+                    const usage = m.usage || {};
+                    if (onLog) onLog(
+                        `AI Analysis meta: sys_chars=${m.system_prompt_chars} user_chars=${m.user_prompt_chars} ` +
+                        `est_in=${m.est_input_tokens ?? ''} est_out=${m.est_output_tokens ?? ''} ` +
+                        `max_tokens=${m.config_max_tokens_effective ?? m.config_max_tokens ?? ''} ` +
+                        `finish=${m.finish_reason ?? ''} output_chars=${m.output_chars ?? ''} ` +
+                        `episode_id=${m.request_episode_id ?? ''} saved=${m.saved_to_episode ?? ''} ` +
+                        `usage_prompt=${usage.prompt_tokens ?? usage.input_tokens ?? ''} ` +
+                        `usage_completion=${usage.completion_tokens ?? usage.output_tokens ?? ''} ` +
+                        `usage_total=${usage.total_tokens ?? ''}`,
+                        "info"
+                    );
+                } catch (e) {
+                    // ignore meta logging errors
+                }
+            }
+
+            // Store the raw LLM output separately for viewing/editing (JSON or Markdown table)
+            setLlmResultContent(analyzedText);
+            lastLoadedAnalysisRef.current = analyzedText;
+
+            // Persist LLM raw output into dedicated DB field (DO NOT overwrite script_content)
+            // If backend already saved it (via episode_id), skip the extra PUT to avoid large payload twice.
+            const savedByBackend = !!(result?.meta?.saved_to_episode);
+            if (!savedByBackend) {
+                if (onLog) onLog("Analysis complete. Saving LLM result (separate field)...", "process");
+                await persistLlmResultContent(analyzedText);
+            } else {
+                if (onLog) onLog("Analysis complete. Saved to DB by backend.", "success");
+                // Parent episode state may be stale; re-load from DB so the Script tab stays consistent
+                // across tab switches/remounts.
+                await refreshAnalysisFromDB();
+            }
             
             if (onLog) onLog("AI Analysis applied and saved.", "success");
             alert("AI Scene Analysis Completed!");
@@ -1083,6 +4044,73 @@ const ScriptEditor = ({ activeEpisode, project, onUpdateScript, onLog }) => {
         } catch (e) {
             console.error(e);
             if (onLog) onLog(`Analysis Failed: ${e.message}`, "error");
+            alert(`Analysis failed: ${e.message}`);
+        } finally {
+            setIsAnalyzing(false);
+        }
+    };
+
+    const executeAdvancedAnalysis = async (userInput, customSystemPrompt) => {
+        if (!activeEpisode?.id) {
+            alert("No active episode selected.");
+            return;
+        }
+
+        setIsAnalyzing(true);
+        if (onLog) onLog("Starting Advanced AI Analysis (Superuser)...", "start");
+
+        try {
+            const result = await analyzeScene(userInput, customSystemPrompt, null, activeEpisode?.id || null);
+            const analyzedText = result.result || result.analysis || (typeof result === 'string' ? result : JSON.stringify(result));
+
+            if (result && result.meta) {
+                try {
+                    console.log("[Advanced AI Analysis] meta:", result.meta);
+                    const m = result.meta;
+                    const usage = m.usage || {};
+                    if (onLog) onLog(
+                        `AI Analysis meta: sys_chars=${m.system_prompt_chars} user_chars=${m.user_prompt_chars} ` +
+                        `est_in=${m.est_input_tokens ?? ''} est_out=${m.est_output_tokens ?? ''} ` +
+                        `max_tokens=${m.config_max_tokens_effective ?? m.config_max_tokens ?? ''} ` +
+                        `finish=${m.finish_reason ?? ''} output_chars=${m.output_chars ?? ''} ` +
+                        `episode_id=${m.request_episode_id ?? ''} saved=${m.saved_to_episode ?? ''} ` +
+                        `usage_prompt=${usage.prompt_tokens ?? usage.input_tokens ?? ''} ` +
+                        `usage_completion=${usage.completion_tokens ?? usage.output_tokens ?? ''} ` +
+                        `usage_total=${usage.total_tokens ?? ''}`,
+                        "info"
+                    );
+                } catch (e) {
+                    // ignore meta logging errors
+                }
+            }
+
+            // Fill Script tab's "LLM 返回结果" immediately
+            setLlmResultContent(analyzedText || "");
+            lastLoadedAnalysisRef.current = analyzedText || "";
+
+            // Persist the LLM output into dedicated DB field (unless backend already saved it)
+            const savedByBackend = !!(result?.meta?.saved_to_episode);
+            if (!savedByBackend) {
+                if (onLog) onLog("Advanced analysis complete. Saving LLM result (separate field)...", "process");
+                await persistLlmResultContent(analyzedText || "");
+            } else {
+                if (onLog) onLog("Advanced analysis complete. Saved to DB by backend.", "success");
+                await refreshAnalysisFromDB();
+            }
+
+            // Auto-run import immediately using the existing import logic
+            if (typeof onImportText === 'function') {
+                if (onLog) onLog("Auto-importing analysis result...", "process");
+                await onImportText(analyzedText || "", 'auto');
+                if (onLog) onLog("Auto-import finished.", "success");
+            } else {
+                if (onLog) onLog("Import is not available in this context.", "warning");
+            }
+
+            setShowAnalysisModal(false);
+        } catch (e) {
+            console.error(e);
+            if (onLog) onLog(`Advanced analysis failed: ${e.message}`, "error");
             alert(`Analysis failed: ${e.message}`);
         } finally {
             setIsAnalyzing(false);
@@ -1127,6 +4155,15 @@ const ScriptEditor = ({ activeEpisode, project, onUpdateScript, onLog }) => {
                             )}
                         </button>
                     )}
+                    {isRawMode && (
+                        <button
+                            onClick={() => setShowSceneGenPanel(v => !v)}
+                            className="px-4 py-2 bg-white/10 text-white rounded-lg text-sm font-bold hover:bg-white/20"
+                            title="Generate a scene list for this episode and populate the Scenes tab"
+                        >
+                            Scene Generator
+                        </button>
+                    )}
                     {!isRawMode && (
                         <button 
                             onClick={handleMerge} 
@@ -1142,66 +4179,187 @@ const ScriptEditor = ({ activeEpisode, project, onUpdateScript, onLog }) => {
             </div>
 
             <div className="flex-1 overflow-hidden border border-white/10 rounded-xl bg-black/20 flex flex-col">
-                {isRawMode ? (
-                    <textarea 
-                        className="w-full h-full p-6 bg-transparent text-white/90 font-mono text-sm leading-relaxed focus:outline-none custom-scrollbar resize-none"
-                        placeholder="Paste or type your script here..."
-                        value={rawContent}
-                        onChange={(e) => setRawContent(e.target.value)}
-                    />
-                ) : (
-                    <div className="overflow-auto custom-scrollbar h-full w-full">
-                        <table className="w-full text-left border-collapse text-sm">
-                            <thead className="bg-white/5 sticky top-0 z-10 backdrop-blur-md">
-                                <tr>
-                                    <th className="p-4 border-b border-white/10 font-medium text-muted-foreground w-16">ID</th>
-                                    <th className="p-4 border-b border-white/10 font-medium text-muted-foreground w-48">Title</th>
-                                    <th className="p-4 border-b border-white/10 font-medium text-muted-foreground min-w-[300px]">Content (Revised)</th>
-                                    <th className="p-4 border-b border-white/10 font-medium text-muted-foreground min-w-[300px]">Content (Original)</th>
-                                    <th className="p-4 border-b border-white/10 font-medium text-muted-foreground w-48">Narrative Function</th>
-                                    <th className="p-4 border-b border-white/10 font-medium text-muted-foreground w-64">Analysis & Adaptation Notes</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-white/5">
-                                {segments.map((seg, idx) => (
-                                    <tr key={idx} className="hover:bg-white/5 transition-colors group">
-                                        <td className="p-4 align-top font-mono text-xs text-muted-foreground">{seg.id}</td>
-                                        <td className="p-4 align-top font-bold text-primary">
-                                            {seg.title}
-                                        </td>
-                                        <td className="p-4 align-top">
-                                            <textarea 
-                                                className="w-full bg-transparent border-none text-white/90 leading-relaxed font-serif focus:outline-none focus:ring-0 resize-none overflow-hidden"
-                                                style={{ minHeight: '60px' }}
-                                                ref={(el) => {
-                                                    if (el) {
-                                                        el.style.height = 'auto';
-                                                        el.style.height = el.scrollHeight + 'px';
-                                                    }
-                                                }}
-                                                onInput={(e) => {
-                                                    e.target.style.height = 'auto';
-                                                    e.target.style.height = e.target.scrollHeight + 'px';
-                                                }}
-                                                value={seg.content || ''}
-                                                onChange={(e) => handleSegmentChange(idx, 'content', e.target.value)}
+                <div className="flex-1 overflow-hidden">
+                    {isRawMode ? (
+                        <div className="h-full w-full flex flex-col">
+                            {showSceneGenPanel && (
+                                <div className="px-6 py-4 border-b border-white/10 bg-black/10">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <div>
+                                            <div className="text-xs font-bold text-white/90">Script → Scenes Generator</div>
+                                            <div className="text-[11px] text-muted-foreground mt-0.5">Uses Overview/Ep. Info Story DNA if available, then creates Scenes for this episode.</div>
+                                        </div>
+                                        <button
+                                            onClick={handleGenerateScenes}
+                                            disabled={sceneGenGenerating}
+                                            className={`px-3 py-2 rounded-md text-xs font-bold ${sceneGenGenerating ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 hover:bg-white/20 text-white'}`}
+                                        >
+                                            {sceneGenGenerating ? <><Loader2 className="w-4 h-4 animate-spin inline-block mr-2" /> Generating...</> : 'Generate Scenes'}
+                                        </button>
+                                    </div>
+
+                                    <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="block text-[10px] text-muted-foreground uppercase font-bold mb-1">Scene Count</label>
+                                            <input
+                                                type="number"
+                                                min="1"
+                                                className="w-full bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white/90 focus:outline-none focus:border-primary/50"
+                                                value={sceneGenCount}
+                                                onChange={(e) => setSceneGenCount(e.target.value)}
+                                                placeholder="e.g. 10"
                                             />
-                                        </td>
-                                        <td className="p-4 align-top whitespace-pre-wrap text-muted-foreground leading-relaxed text-xs italic">
-                                            {seg.original}
-                                        </td>
-                                        <td className="p-4 align-top text-xs text-muted-foreground whitespace-pre-wrap">
-                                            {seg.narrative_role}
-                                        </td>
-                                        <td className="p-4 align-top text-xs text-indigo-300/80 bg-white/5 group-hover:bg-white/10 whitespace-pre-wrap">
-                                            {seg.analysis}
-                                        </td>
+                                        </div>
+                                        <div className="flex items-end">
+                                            <label className="flex items-center gap-2 text-xs text-white/80 select-none">
+                                                <input
+                                                    type="checkbox"
+                                                    className="accent-primary"
+                                                    checked={sceneGenReplaceExisting}
+                                                    onChange={(e) => setSceneGenReplaceExisting(e.target.checked)}
+                                                />
+                                                Replace existing scenes for this episode
+                                            </label>
+                                        </div>
+                                        <div className="sm:col-span-2">
+                                            <label className="block text-[10px] text-muted-foreground uppercase font-bold mb-1">Extra Notes (optional)</label>
+                                            <textarea
+                                                className="w-full h-20 bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white/90 focus:outline-none focus:border-primary/50 custom-scrollbar resize-none"
+                                                value={sceneGenNotes}
+                                                onChange={(e) => setSceneGenNotes(e.target.value)}
+                                                placeholder="Tone, constraints, must-have scenes, specific hook, etc."
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                            <textarea 
+                                className="w-full flex-1 p-6 bg-transparent text-white/90 font-mono text-sm leading-relaxed focus:outline-none custom-scrollbar resize-none"
+                                placeholder="Paste or type your script here..."
+                                value={rawContent}
+                                onChange={(e) => setRawContent(e.target.value)}
+                            />
+                        </div>
+                    ) : (
+                        <div className="overflow-auto custom-scrollbar h-full w-full">
+                            <table className="w-full text-left border-collapse text-sm">
+                                <thead className="bg-white/5 sticky top-0 z-10 backdrop-blur-md">
+                                    <tr>
+                                        <th className="p-4 border-b border-white/10 font-medium text-muted-foreground w-16">ID</th>
+                                        <th className="p-4 border-b border-white/10 font-medium text-muted-foreground w-48">Title</th>
+                                        <th className="p-4 border-b border-white/10 font-medium text-muted-foreground min-w-[300px]">Content (Revised)</th>
+                                        <th className="p-4 border-b border-white/10 font-medium text-muted-foreground min-w-[300px]">Content (Original)</th>
+                                        <th className="p-4 border-b border-white/10 font-medium text-muted-foreground w-48">Narrative Function</th>
+                                        <th className="p-4 border-b border-white/10 font-medium text-muted-foreground w-64">Analysis & Adaptation Notes</th>
                                     </tr>
-                                ))}
-                            </tbody>
-                        </table>
+                                </thead>
+                                <tbody className="divide-y divide-white/5">
+                                    {segments.map((seg, idx) => (
+                                        <tr key={idx} className="hover:bg-white/5 transition-colors group">
+                                            <td className="p-4 align-top font-mono text-xs text-muted-foreground">{seg.id}</td>
+                                            <td className="p-4 align-top font-bold text-primary">
+                                                {seg.title}
+                                            </td>
+                                            <td className="p-4 align-top">
+                                                <textarea 
+                                                    className="w-full bg-transparent border-none text-white/90 leading-relaxed font-serif focus:outline-none focus:ring-0 resize-none overflow-hidden"
+                                                    style={{ minHeight: '60px' }}
+                                                    ref={(el) => {
+                                                        if (el) {
+                                                            el.style.height = 'auto';
+                                                            el.style.height = el.scrollHeight + 'px';
+                                                        }
+                                                    }}
+                                                    onInput={(e) => {
+                                                        e.target.style.height = 'auto';
+                                                        e.target.style.height = e.target.scrollHeight + 'px';
+                                                    }}
+                                                    value={seg.content || ''}
+                                                    onChange={(e) => handleSegmentChange(idx, 'content', e.target.value)}
+                                                />
+                                            </td>
+                                            <td className="p-4 align-top whitespace-pre-wrap text-muted-foreground leading-relaxed text-xs italic">
+                                                {seg.original}
+                                            </td>
+                                            <td className="p-4 align-top text-xs text-muted-foreground whitespace-pre-wrap">
+                                                {seg.narrative_role}
+                                            </td>
+                                            <td className="p-4 align-top text-xs text-indigo-300/80 bg-white/5 group-hover:bg-white/10 whitespace-pre-wrap">
+                                                {seg.analysis}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </div>
+
+                <div className="border-t border-white/10 bg-black/10 shrink-0">
+                    <div className="px-6 py-3 flex items-center justify-between">
+                        <div className="text-xs text-muted-foreground uppercase font-bold">LLM 返回结果</div>
+                        <div className="flex items-center gap-3">
+                            <button
+                                onClick={() => doImportText(llmResultContent, 'auto')}
+                                className="px-3 py-1.5 rounded-md text-[10px] font-bold bg-white/5 hover:bg-white/10 border border-white/10 text-white/80"
+                                title="Import from LLM markdown/table result"
+                            >
+                                导入 LLM 返回结果
+                            </button>
+                        </div>
                     </div>
-                )}
+                    <textarea
+                        className="w-full h-48 px-6 pb-6 bg-transparent text-white/90 font-mono text-xs leading-relaxed focus:outline-none custom-scrollbar resize-none"
+                        placeholder="Paste or edit the LLM result here (Markdown/table/JSON mixed is ok)."
+                        value={llmResultContent}
+                        onChange={(e) => setLlmResultContent(e.target.value)}
+                        onBlur={() => persistLlmResultContent(llmResultContent)}
+                    />
+                </div>
+
+                <div className="border-t border-white/10">
+                    <div className="px-6 py-3 flex items-center justify-between">
+                        <div className="text-xs text-muted-foreground uppercase font-bold">JSON 返回结果</div>
+                        <div className="flex items-center gap-3">
+                            <button
+                                onClick={() => {
+                                    const payload = getEGlobalInfoPayloadFromJsonText(llmResultContent);
+                                    if (!payload) {
+                                        if (onLog) onLog('No e_global_info found in JSON.', 'warning');
+                                        return;
+                                    }
+                                    doImportText(JSON.stringify(payload, null, 2), 'json');
+                                }}
+                                className="px-3 py-1.5 rounded-md text-[10px] font-bold bg-white/5 hover:bg-white/10 border border-white/10 text-white/80"
+                                title="Import Part 1: e_global_info"
+                            >
+                                导入 e_global_info
+                            </button>
+                            <button
+                                onClick={() => {
+                                    const payload = getEntitiesPayloadFromJsonText(llmResultContent);
+                                    if (!payload) {
+                                        if (onLog) onLog('No entities JSON (characters/props/environments) found.', 'warning');
+                                        return;
+                                    }
+                                    doImportText(JSON.stringify(payload, null, 2), 'json');
+                                }}
+                                className="px-3 py-1.5 rounded-md text-[10px] font-bold bg-white/5 hover:bg-white/10 border border-white/10 text-white/80"
+                                title="Import Part 3: entities JSON"
+                            >
+                                导入 实体(Entities)
+                            </button>
+                            <div className="text-[10px] text-muted-foreground">从 LLM 返回内容自动提取</div>
+                        </div>
+                    </div>
+                    <textarea
+                        className="w-full h-48 px-6 pb-6 bg-transparent text-white/90 font-mono text-xs leading-relaxed focus:outline-none custom-scrollbar resize-none"
+                        placeholder="未检测到可解析的 JSON（如果 LLM 返回了 ```json ...``` 或纯 JSON，这里会显示）。"
+                        value={llmJsonResultContent}
+                        readOnly
+                    />
+                </div>
+
             </div>
 
             {showAnalysisModal && (
@@ -1257,7 +4415,7 @@ const ScriptEditor = ({ activeEpisode, project, onUpdateScript, onLog }) => {
                                 <Copy className="w-4 h-4" /> Copy Full Prompt
                              </button>
                              <button 
-                                onClick={() => executeAnalysis(userPrompt, systemPrompt, true)}
+                                          onClick={() => executeAdvancedAnalysis(userPrompt, systemPrompt)}
                                 disabled={isAnalyzing}
                                 className="flex items-center gap-2 px-6 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                              >
@@ -2532,7 +5690,17 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
     const [entities, setEntities] = useState([]);
     const [editingScene, setEditingScene] = useState(null);
     const [shotPromptModal, setShotPromptModal] = useState({ open: false, sceneId: null, data: null, loading: false });
-    const [shotReviewModal, setShotReviewModal] = useState({ open: false, sceneId: null, data: null, loading: false });
+    const [aiShotsStaging, setAiShotsStaging] = useState({
+        loading: false,
+        sceneId: null,
+        content: [],
+        rawText: '',
+        usage: null,
+        timestamp: null,
+        error: null,
+        saving: false,
+        applying: false,
+    });
 
     // Debug: Monitor Data State
     useEffect(() => {
@@ -2811,6 +5979,84 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
         }
     };
 
+    const loadLatestAIShotsStaging = async (sceneId) => {
+        if (!sceneId) {
+            setAiShotsStaging(prev => ({
+                ...prev,
+                sceneId: null,
+                content: [],
+                rawText: '',
+                usage: null,
+                timestamp: null,
+                error: null,
+                loading: false,
+            }));
+            return;
+        }
+
+        setAiShotsStaging(prev => ({
+            ...prev,
+            loading: true,
+            error: null,
+            sceneId,
+        }));
+
+        try {
+            const latest = await getSceneLatestAIResult(sceneId);
+            setAiShotsStaging(prev => ({
+                ...prev,
+                loading: false,
+                sceneId,
+                content: Array.isArray(latest?.content) ? latest.content : [],
+                rawText: latest?.raw_text || '',
+                usage: latest?.usage || null,
+                timestamp: latest?.timestamp || null,
+            }));
+        } catch (e) {
+            console.error(e);
+            // If there's no staging yet, treat as empty (avoid blocking UX)
+            const status = e?.response?.status;
+            if (status === 404) {
+                setAiShotsStaging(prev => ({
+                    ...prev,
+                    loading: false,
+                    sceneId,
+                    content: [],
+                    rawText: '',
+                    usage: null,
+                    timestamp: null,
+                    error: null,
+                }));
+                return;
+            }
+            setAiShotsStaging(prev => ({
+                ...prev,
+                loading: false,
+                error: e?.response?.data?.detail || e?.message || 'Failed to load latest AI shots result',
+            }));
+        }
+    };
+
+    useEffect(() => {
+        if (editingScene?.id) {
+            loadLatestAIShotsStaging(editingScene.id);
+        } else {
+            // Reset when closing or opening an unsaved scene
+            setAiShotsStaging(prev => ({
+                ...prev,
+                loading: false,
+                sceneId: null,
+                content: [],
+                rawText: '',
+                usage: null,
+                timestamp: null,
+                error: null,
+                saving: false,
+                applying: false,
+            }));
+        }
+    }, [editingScene?.id]);
+
     const handleConfirmGenerateShots = async () => {
          const { sceneId, data } = shotPromptModal;
          if (!confirm("This will overwrite existing shots for this scene. Continue?")) return;
@@ -2827,13 +6073,29 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
              
              // Close Prompt Modal, Open Review Modal
              setShotPromptModal({ open: false, sceneId: null, data: null, loading: false });
-             
-             setShotReviewModal({
-                 open: true,
-                 sceneId: sceneId,
-                 data: result.content || [],
-                 loading: false
-             });
+
+             // Open the Scene detail modal and embed the staging editor there
+             const sceneObj = scenes.find(s => s.id === sceneId) || { id: sceneId, scene_no: sceneId };
+             setEditingScene(sceneObj);
+             setAiShotsStaging(prev => ({
+                ...prev,
+                sceneId,
+                content: result?.content || [],
+                rawText: result?.raw_text || '',
+                usage: result?.usage || null,
+                timestamp: result?.timestamp || null,
+                loading: false,
+                error: null,
+             }));
+
+             // Auto-import/apply immediately after generation
+             try {
+                 onLog?.(`SceneManager: Auto-importing shots for Scene ${sceneId}...`, 'info');
+                 await applySceneAIResult(sceneId, { content: result?.content || [] });
+                 onLog?.(`SceneManager: Auto-import finished for Scene ${sceneId}.`, 'success');
+             } catch (e) {
+                 onLog?.(`SceneManager: Auto-import failed - ${(e?.response?.data?.detail || e?.message)}`, 'error');
+             }
          } catch (e) {
              console.error(e);
              onLog?.(`SceneManager: Failed to generate shots - ${e.message}`, 'error');
@@ -2895,7 +6157,9 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
                         >
                              <div className="p-4 border-b border-white/10 flex items-center justify-between bg-[#09090b]">
                                 <h3 className="font-bold text-lg">Edit Scene {editingScene.scene_no || editingScene.id}</h3>
-                                <button onClick={() => setEditingScene(null)} className="p-2 hover:bg-white/10 rounded-full"><X className="w-5 h-5"/></button>
+                                <div className="flex items-center gap-2">
+                                    <button onClick={() => setEditingScene(null)} className="p-2 hover:bg-white/10 rounded-full"><X className="w-5 h-5"/></button>
+                                </div>
                             </div>
                             
                             <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
@@ -2926,6 +6190,206 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
                                             onChange={e => handleSceneUpdate({...editingScene, core_scene_info: e.target.value})}
                                             placeholder="Enter visual direction, lighting, mood, composition..."
                                         />
+                                    </div>
+
+                                    <div className="pt-4 border-t border-white/5">
+                                        <div className="flex items-center justify-between gap-3 mb-2">
+                                            <label className="text-xs text-muted-foreground uppercase font-bold tracking-wider block text-primary/80">AI Shots (Staging)</label>
+                                            <div className="flex items-center gap-2">
+                                                <button
+                                                    onClick={async () => {
+                                                        if (!editingScene.id) return;
+                                                        setAiShotsStaging(prev => ({ ...prev, saving: true }));
+                                                        try {
+                                                            await updateSceneLatestAIResult(editingScene.id, aiShotsStaging.content || []);
+                                                            onLog?.('Staged draft saved.', 'success');
+                                                        } catch (e) {
+                                                            onLog?.('Failed to save draft: ' + (e?.response?.data?.detail || e?.message), 'error');
+                                                        } finally {
+                                                            setAiShotsStaging(prev => ({ ...prev, saving: false }));
+                                                        }
+                                                    }}
+                                                    disabled={!editingScene.id || aiShotsStaging.saving}
+                                                    className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-md text-xs font-bold text-white disabled:opacity-50"
+                                                    title="Save the edited staging table back into scenes.ai_shots_result"
+                                                >
+                                                    {aiShotsStaging.saving ? 'Saving…' : 'Save Draft'}
+                                                </button>
+                                                <button
+                                                    onClick={async () => {
+                                                        if (!editingScene.id) return;
+                                                        if (!confirm('Apply these shots? This will replace existing shots.')) return;
+                                                        setAiShotsStaging(prev => ({ ...prev, applying: true }));
+                                                        try {
+                                                            await applySceneAIResult(editingScene.id, { content: aiShotsStaging.content || [] });
+                                                            onLog?.('Shots applied to database.', 'success');
+                                                        } catch (e) {
+                                                            onLog?.('Failed to apply shots: ' + (e?.response?.data?.detail || e?.message), 'error');
+                                                        } finally {
+                                                            setAiShotsStaging(prev => ({ ...prev, applying: false }));
+                                                        }
+                                                    }}
+                                                    disabled={!editingScene.id || aiShotsStaging.applying}
+                                                    className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 rounded-md text-xs font-bold text-white disabled:opacity-50"
+                                                    title="Import/apply the staged shots into the shots table"
+                                                >
+                                                    {aiShotsStaging.applying ? 'Applying…' : 'Apply to Scene'}
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        {!editingScene.id ? (
+                                            <div className="text-xs text-muted-foreground bg-white/5 border border-white/10 rounded p-3">
+                                                Save this Scene first to create a DB record before loading or applying AI shots.
+                                            </div>
+                                        ) : aiShotsStaging.error ? (
+                                            <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/20 rounded p-3">
+                                                {aiShotsStaging.error}
+                                            </div>
+                                        ) : aiShotsStaging.loading ? (
+                                            <div className="flex items-center justify-center h-24"><Loader2 className="animate-spin text-primary" size={24}/></div>
+                                        ) : (aiShotsStaging.content || []).length === 0 ? (
+                                            <div className="text-xs text-muted-foreground bg-white/5 border border-white/10 rounded p-3">
+                                                No staged AI shots yet. Generate AI shots for this scene first.
+                                            </div>
+                                        ) : (
+                                            <div className="bg-black/30 border border-white/10 rounded-md overflow-hidden">
+                                                <div className="max-h-[320px] overflow-auto custom-scrollbar">
+                                                    <table className="w-full text-xs text-left border-collapse">
+                                                        <thead className="sticky top-0 bg-[#252525] z-10 shadow-md">
+                                                            <tr>
+                                                                {['Shot ID', 'Shot Name', 'Content', 'Duration', 'Entities', 'Logic', 'Keyframes'].map(h => (
+                                                                    <th key={h} className="p-2 border-b border-white/10 font-bold text-white/70">{h}</th>
+                                                                ))}
+                                                                <th className="p-2 border-b border-white/10 w-10"></th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody className="divide-y divide-white/5">
+                                                            {(aiShotsStaging.content || []).map((shot, idx) => (
+                                                                <tr key={idx} className="hover:bg-white/5 group">
+                                                                    <td className="p-1">
+                                                                        <input
+                                                                            className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded"
+                                                                            value={shot['Shot ID'] || shot.shot_id || ''}
+                                                                            onChange={e => {
+                                                                                const newData = [...(aiShotsStaging.content || [])];
+                                                                                newData[idx] = { ...shot, 'Shot ID': e.target.value };
+                                                                                setAiShotsStaging(prev => ({ ...prev, content: newData }));
+                                                                            }}
+                                                                        />
+                                                                    </td>
+                                                                    <td className="p-1">
+                                                                        <input
+                                                                            className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded"
+                                                                            value={shot['Shot Name'] || shot.shot_name || ''}
+                                                                            onChange={e => {
+                                                                                const newData = [...(aiShotsStaging.content || [])];
+                                                                                newData[idx] = { ...shot, 'Shot Name': e.target.value };
+                                                                                setAiShotsStaging(prev => ({ ...prev, content: newData }));
+                                                                            }}
+                                                                        />
+                                                                    </td>
+                                                                    <td className="p-1">
+                                                                        <textarea
+                                                                            className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded resize-y min-h-[40px]"
+                                                                            value={shot['Video Content'] || shot.video_content || ''}
+                                                                            onChange={e => {
+                                                                                const newData = [...(aiShotsStaging.content || [])];
+                                                                                newData[idx] = { ...shot, 'Video Content': e.target.value };
+                                                                                setAiShotsStaging(prev => ({ ...prev, content: newData }));
+                                                                            }}
+                                                                        />
+                                                                    </td>
+                                                                    <td className="p-1 w-20">
+                                                                        <input
+                                                                            className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded"
+                                                                            value={shot['Duration (s)'] || shot.duration || ''}
+                                                                            onChange={e => {
+                                                                                const newData = [...(aiShotsStaging.content || [])];
+                                                                                newData[idx] = { ...shot, 'Duration (s)': e.target.value };
+                                                                                setAiShotsStaging(prev => ({ ...prev, content: newData }));
+                                                                            }}
+                                                                        />
+                                                                    </td>
+                                                                    <td className="p-1">
+                                                                        <input
+                                                                            className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded"
+                                                                            value={shot['Associated Entities'] || shot.associated_entities || ''}
+                                                                            onChange={e => {
+                                                                                const newData = [...(aiShotsStaging.content || [])];
+                                                                                newData[idx] = { ...shot, 'Associated Entities': e.target.value };
+                                                                                setAiShotsStaging(prev => ({ ...prev, content: newData }));
+                                                                            }}
+                                                                        />
+                                                                    </td>
+                                                                    <td className="p-1">
+                                                                        <input
+                                                                            className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded"
+                                                                            value={shot['Shot Logic (CN)'] || shot.shot_logic_cn || ''}
+                                                                            onChange={e => {
+                                                                                const newData = [...(aiShotsStaging.content || [])];
+                                                                                newData[idx] = { ...shot, 'Shot Logic (CN)': e.target.value };
+                                                                                setAiShotsStaging(prev => ({ ...prev, content: newData }));
+                                                                            }}
+                                                                        />
+                                                                    </td>
+                                                                    <td className="p-1">
+                                                                        <input
+                                                                            className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded"
+                                                                            value={shot['Keyframes'] || shot.keyframes || ''}
+                                                                            onChange={e => {
+                                                                                const newData = [...(aiShotsStaging.content || [])];
+                                                                                newData[idx] = { ...shot, 'Keyframes': e.target.value };
+                                                                                setAiShotsStaging(prev => ({ ...prev, content: newData }));
+                                                                            }}
+                                                                        />
+                                                                    </td>
+                                                                    <td className="p-1 text-center">
+                                                                        <button
+                                                                            onClick={() => {
+                                                                                const newData = (aiShotsStaging.content || []).filter((_, i) => i !== idx);
+                                                                                setAiShotsStaging(prev => ({ ...prev, content: newData }));
+                                                                            }}
+                                                                            className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-500"
+                                                                            title="Delete row"
+                                                                        >
+                                                                            <Trash2 size={14}/>
+                                                                        </button>
+                                                                    </td>
+                                                                </tr>
+                                                            ))}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                                <div className="p-2 border-t border-white/10 flex items-center justify-between">
+                                                    <button
+                                                        onClick={() => {
+                                                            const newData = [...(aiShotsStaging.content || []), { 'Shot ID': (aiShotsStaging.content?.length || 0) + 1, 'Video Content': '' }];
+                                                            setAiShotsStaging(prev => ({ ...prev, content: newData }));
+                                                        }}
+                                                        className="px-3 py-1 bg-white/5 hover:bg-white/10 rounded flex items-center gap-2 text-xs"
+                                                    >
+                                                        <Plus size={14}/> Add Row
+                                                    </button>
+                                                    {(aiShotsStaging.timestamp || aiShotsStaging.usage) && (
+                                                        <div className="text-[10px] text-muted-foreground">
+                                                            {aiShotsStaging.timestamp ? `Updated: ${aiShotsStaging.timestamp}` : ''}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {editingScene.id && aiShotsStaging.rawText ? (
+                                            <div className="mt-3">
+                                                <label className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider mb-1 block">Raw LLM Text (Read-only)</label>
+                                                <textarea
+                                                    readOnly
+                                                    className="w-full bg-black/40 border border-white/10 rounded p-3 text-white/80 text-xs focus:outline-none resize-y custom-scrollbar font-mono leading-relaxed min-h-[120px]"
+                                                    value={aiShotsStaging.rawText}
+                                                />
+                                            </div>
+                                        ) : null}
                                     </div>
                                 </div>
                             </div>
@@ -3006,125 +6470,6 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
                 </div>
             )}
 
-            {shotReviewModal.open && (
-                <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
-                    <div className="bg-[#1e1e1e] border border-white/10 rounded-lg w-full max-w-[90vw] h-[90vh] flex flex-col shadow-2xl">
-                         <div className="p-4 border-b border-white/10 flex justify-between items-center bg-black/40">
-                            <h3 className="font-bold flex items-center gap-2"><TableIcon size={16} className="text-primary"/> Review AI Generated Shots</h3>
-                            <div className="flex items-center gap-2">
-                                <span className="text-xs text-muted-foreground bg-yellow-500/10 text-yellow-500 px-2 py-1 rounded">Staging Area</span>
-                                <button onClick={() => setShotReviewModal({open: false, sceneId: null, data: null, loading: false})}><X size={18}/></button>
-                            </div>
-                        </div>
-                        
-                        <div className="flex-1 overflow-hidden relative bg-[#121212]">
-                            {/* Simple Table Editor for Staging */}
-                            <div className="absolute inset-0 overflow-auto p-4 custom-scrollbar">
-                                <table className="w-full text-xs text-left border-collapse">
-                                    <thead className="sticky top-0 bg-[#252525] z-10 shadow-md">
-                                        <tr>
-                                            {["Shot ID", "Shot Name", "Content", "Duration", "Entities", "Logic", "Keyframes"].map(h => (
-                                                <th key={h} className="p-2 border-b border-white/10 font-bold text-white/70">{h}</th>
-                                            ))}
-                                            <th className="p-2 border-b border-white/10 w-10"></th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-white/5">
-                                        {(shotReviewModal.data || []).map((shot, idx) => (
-                                            <tr key={idx} className="hover:bg-white/5 group">
-                                                <td className="p-1"><input className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded" value={shot["Shot ID"] || shot.shot_id || ''} onChange={e => {
-                                                    const newData = [...shotReviewModal.data];
-                                                    newData[idx] = { ...shot, "Shot ID": e.target.value };
-                                                    setShotReviewModal(prev => ({...prev, data: newData}));
-                                                }} /></td>
-                                                <td className="p-1"><input className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded" value={shot["Shot Name"] || shot.shot_name || ''} onChange={e => {
-                                                    const newData = [...shotReviewModal.data];
-                                                    newData[idx] = { ...shot, "Shot Name": e.target.value };
-                                                    setShotReviewModal(prev => ({...prev, data: newData}));
-                                                }} /></td>
-                                                <td className="p-1"><textarea className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded resize-y min-h-[40px]" value={shot["Video Content"] || shot.video_content || ''} onChange={e => {
-                                                    const newData = [...shotReviewModal.data];
-                                                    newData[idx] = { ...shot, "Video Content": e.target.value };
-                                                    setShotReviewModal(prev => ({...prev, data: newData}));
-                                                }} /></td>
-                                                <td className="p-1 w-20"><input className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded" value={shot["Duration (s)"] || shot.duration || ''} onChange={e => {
-                                                    const newData = [...shotReviewModal.data];
-                                                    newData[idx] = { ...shot, "Duration (s)": e.target.value };
-                                                    setShotReviewModal(prev => ({...prev, data: newData}));
-                                                }} /></td>
-                                                <td className="p-1"><input className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded" value={shot["Associated Entities"] || shot.associated_entities || ''} onChange={e => {
-                                                    const newData = [...shotReviewModal.data];
-                                                    newData[idx] = { ...shot, "Associated Entities": e.target.value };
-                                                    setShotReviewModal(prev => ({...prev, data: newData}));
-                                                }} /></td>
-                                                <td className="p-1"><input className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded" value={shot["Shot Logic (CN)"] || shot.shot_logic_cn || ''} onChange={e => {
-                                                    const newData = [...shotReviewModal.data];
-                                                    newData[idx] = { ...shot, "Shot Logic (CN)": e.target.value };
-                                                    setShotReviewModal(prev => ({...prev, data: newData}));
-                                                }} /></td>
-                                                <td className="p-1"><input className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded" value={shot["Keyframes"] || shot.keyframes || ''} onChange={e => {
-                                                    const newData = [...shotReviewModal.data];
-                                                    newData[idx] = { ...shot, "Keyframes": e.target.value };
-                                                    setShotReviewModal(prev => ({...prev, data: newData}));
-                                                }} /></td>
-                                                <td className="p-1 text-center">
-                                                    <button onClick={() => {
-                                                        const newData = shotReviewModal.data.filter((_, i) => i !== idx);
-                                                        setShotReviewModal(prev => ({...prev, data: newData}));
-                                                    }} className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-500"><Trash2 size={14}/></button>
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                                <button onClick={() => {
-                                     const newData = [...(shotReviewModal.data || []), { "Shot ID": (shotReviewModal.data?.length||0)+1, "Video Content": "" }];
-                                     setShotReviewModal(prev => ({...prev, data: newData}));
-                                }} className="mt-4 px-3 py-1 bg-white/5 hover:bg-white/10 rounded flex items-center gap-2 text-xs">
-                                    <Plus size={14}/> Add Row
-                                </button>
-                            </div>
-                        </div>
-
-                        <div className="p-4 border-t border-white/10 flex justify-end gap-3 bg-black/20">
-                             <button
-                                onClick={async () => {
-                                    try {
-                                        await updateSceneLatestAIResult(shotReviewModal.sceneId, shotReviewModal.data);
-                                        onLog?.("Staged draft saved.", "success");
-                                    } catch(e) {
-                                        onLog?.("Failed to save draft.", "error");
-                                    }
-                                }}
-                                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded text-sm font-medium"
-                            >
-                                Save Draft
-                            </button>
-                            <button 
-                                onClick={async () => {
-                                    if(!confirm("Apply these shots? This will replace existing shots.")) return;
-                                    setShotReviewModal(prev => ({...prev, loading: true}));
-                                    try {
-                                        await applySceneAIResult(shotReviewModal.sceneId, { content: shotReviewModal.data });
-                                        onLog?.("Shots applied to database.", "success");
-                                        setShotReviewModal({open: false, sceneId: null, data: null, loading: false});
-                                        // Trigger refresh if needed (this component doesn't have refreshShots prop, maybe just relies on parent fetch)
-                                        // The user will likely navigate or refresh
-                                    } catch(e) {
-                                        onLog?.("Failed to apply shots: " + e.message, "error");
-                                        setShotReviewModal(prev => ({...prev, loading: false}));
-                                    }
-                                }}
-                                disabled={shotReviewModal.loading}
-                                className="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-sm font-medium flex items-center gap-2"
-                            >
-                                {shotReviewModal.loading ? <Loader2 className="animate-spin" size={16}/> : <CheckCircle size={16}/>}
-                                Apply to Scene
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
         </div>
     );
 };
@@ -4605,6 +7950,15 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                  data: result.content || [],
                  loading: false
              });
+
+             // Auto-import/apply immediately after generation
+             try {
+                 onLog?.(`Auto-importing shots for Scene ${sceneId}...`, 'info');
+                 await applySceneAIResult(sceneId, { content: result?.content || [] });
+                 onLog?.(`Auto-import finished for Scene ${sceneId}.`, 'success');
+             } catch (e) {
+                 onLog?.(`Auto-import failed - ${(e?.response?.data?.detail || e?.message)}`, 'error');
+             }
              
          } catch (e) {
              console.error(e);
@@ -7272,7 +10626,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                              <button
                                 onClick={async () => {
                                     try {
-                                        await updateSceneLatestAIResult(shotReviewModal.sceneId, { content: shotReviewModal.data });
+                                        await updateSceneLatestAIResult(shotReviewModal.sceneId, shotReviewModal.data);
                                         onLog?.("Staged draft saved.", "success");
                                     } catch(e) {
                                         onLog?.("Failed to save draft.", "error");
@@ -7728,6 +11082,7 @@ const TranslateControl = ({ text, onUpdate, onSave }) => {
 const Editor = ({ projectId, onClose }) => {
     const params = useParams();
     const id = projectId || params.id;
+    const navigate = useNavigate();
 
     const [project, setProject] = useState(null);
     const [episodes, setEpisodes] = useState([]);
@@ -8564,6 +11919,20 @@ const Editor = ({ projectId, onClose }) => {
 
                 {/* Right: Actions */}
                 <div className="flex items-center gap-3">
+                    <button
+                        onClick={() => {
+                            if (onClose) {
+                                onClose();
+                                return;
+                            }
+                            navigate('/projects');
+                        }}
+                        className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1.5"
+                        title="Back to Projects"
+                    >
+                        <ArrowLeft className="w-4 h-4" />
+                        <span className="text-xs font-medium hidden sm:block">Back to Projects</span>
+                    </button>
                     <button 
                         onClick={() => setIsImportOpen(true)}
                         className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1.5" 
@@ -8601,7 +11970,7 @@ const Editor = ({ projectId, onClose }) => {
                     <div className="animate-in fade-in duration-300 min-h-full">
                         {activeTab === 'overview' && <ProjectOverview id={id} key={refreshKey} onProjectUpdate={loadProjectData} />}
                         {activeTab === 'ep_info' && <EpisodeInfo episode={activeEpisode} onUpdate={handleUpdateEpisodeInfo} />}
-                        {activeTab === 'script' && <ScriptEditor activeEpisode={activeEpisode} project={project} onUpdateScript={handleUpdateScript} onLog={addLog} />}
+                        {activeTab === 'script' && <ScriptEditor activeEpisode={activeEpisode} projectId={id} project={project} onUpdateScript={handleUpdateScript} onUpdateEpisodeInfo={handleUpdateEpisodeInfo} onLog={addLog} onImportText={handleImport} />}
                         {activeTab === 'scenes' && <SceneManager activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} />}
                         {activeTab === 'subjects' && <SubjectLibrary projectId={id} currentEpisode={activeEpisode} />}
                         {activeTab === 'assets' && <AssetsLibrary projectId={id} onLog={addLog} />}

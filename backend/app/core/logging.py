@@ -12,6 +12,30 @@ logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 logging.getLogger("uvicorn.error").setLevel(logging.ERROR)
 logging.getLogger("fastapi").setLevel(logging.WARNING)
 
+
+class _SuppressUvicornAccessUploads(logging.Filter):
+    _re = re.compile(r'"(GET|HEAD)\s+/uploads/[^\s]*\s+HTTP/')
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            msg = record.getMessage()
+        except Exception:
+            return True
+        return self._re.search(msg) is None
+
+
+def configure_uvicorn_logging_noise_reduction() -> None:
+    """Reduce meaningless uvicorn access log noise.
+
+    Uvicorn may override logger levels via its own log_config after module import,
+    so call this at app startup to ensure it takes effect.
+    """
+    access_logger = logging.getLogger("uvicorn.access")
+    access_logger.setLevel(logging.WARNING)
+
+    if not any(isinstance(f, _SuppressUvicornAccessUploads) for f in access_logger.filters):
+        access_logger.addFilter(_SuppressUvicornAccessUploads())
+
 logger = logging.getLogger("functional_activity")
 logger.setLevel(logging.INFO)
 handler = logging.StreamHandler()
@@ -100,6 +124,16 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         method = request.method
         path = request.url.path
         func_name = get_function_name(method, path)
+        noise_prefixes = (
+            "/uploads/",
+            "/docs",
+            "/redoc",
+        )
+        noise_exact = {
+            "/openapi.json",
+            "/favicon.ico",
+        }
+        is_noise = path in noise_exact or any(path.startswith(p) for p in noise_prefixes)
         
         # 2. Extract Client Info
         client_host = request.client.host if request.client else "unknown"
@@ -112,18 +146,48 @@ class LoggingMiddleware(BaseHTTPMiddleware):
             if user:
                 username = user
 
-        response = await call_next(request)
-        process_time = time.time() - start_time
-        
-        # 4. Log meaningful events
-        if func_name:
-            if 200 <= response.status_code < 300:
-                 logger.info(f"Functional Access | User: {username} | Action: {func_name} | IP: {client_host} | Time: {process_time:.2f}s")
+        try:
+            response = await call_next(request)
+        except Exception as e:
+            process_ms = int((time.time() - start_time) * 1000)
+            if not is_noise:
+                action = func_name or f"API Call: {method} {path}"
+                logger.error(
+                    f"API Result | User: {username} | Action: {action} | Method: {method} | Path: {path} | "
+                    f"Status: EXCEPTION | IP: {client_host} | Time: {process_ms}ms | Error: {type(e).__name__}: {str(e)[:200]}"
+                )
+            raise
+
+        process_ms = int((time.time() - start_time) * 1000)
+
+        # 4. Log every API endpoint call with key access factors and result status.
+        # Skip noisy static /uploads requests.
+        if not is_noise:
+            action = func_name or f"API Call: {method} {path}"
+            content_length = request.headers.get("content-length")
+            size_part = f" | ReqBytes: {content_length}" if content_length else ""
+
+            if 200 <= response.status_code < 400:
+                logger.info(
+                    f"API Result | User: {username} | Action: {action} | Method: {method} | Path: {path} | "
+                    f"Status: {response.status_code} | IP: {client_host} | Time: {process_ms}ms{size_part}"
+                )
+            elif 400 <= response.status_code < 500:
+                logger.warning(
+                    f"API Result | User: {username} | Action: {action} | Method: {method} | Path: {path} | "
+                    f"Status: {response.status_code} | IP: {client_host} | Time: {process_ms}ms{size_part}"
+                )
             else:
-                 logger.warning(f"Functional Alert | User: {username} | Action: {func_name} | Status: {response.status_code} | IP: {client_host}")
-        
-        # 5. Fallback for unmapped but important errors (500s)
-        elif response.status_code >= 500:
-             logger.error(f"System Error | User: {username} | Path: {method} {path} | Status: {response.status_code}")
+                logger.error(
+                    f"API Result | User: {username} | Action: {action} | Method: {method} | Path: {path} | "
+                    f"Status: {response.status_code} | IP: {client_host} | Time: {process_ms}ms{size_part}"
+                )
+
+        # 5. Fallback for non-API 5xxs (rare but useful)
+        elif response.status_code >= 500 and (not is_noise):
+            logger.error(
+                f"System Error | User: {username} | Path: {method} {path} | Status: {response.status_code} | "
+                f"IP: {client_host} | Time: {process_ms}ms"
+            )
 
         return response

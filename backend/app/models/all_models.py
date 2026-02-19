@@ -93,8 +93,8 @@ class Project(Base):
     updated_at = Column(String, default=datetime.datetime.utcnow().isoformat)
     
     owner = relationship("User", back_populates="projects")
-    episodes = relationship("Episode", back_populates="project")
-    entities = relationship("Entity", back_populates="project")
+    episodes = relationship("Episode", back_populates="project", cascade="all, delete-orphan")
+    entities = relationship("Entity", back_populates="project", cascade="all, delete-orphan")
 
 class Episode(Base):
     __tablename__ = "episodes"
@@ -106,9 +106,16 @@ class Episode(Base):
     episode_info = Column(JSON, default={})
     
     script_content = Column(Text, nullable=True)
+
+    # Canonical character profiles defined by user and/or generated via LLM.
+    # This is the single source of truth for character identity/appearance.
+    character_profiles = Column(JSON, default=[])
+
+    # Store AI Scene Analysis raw result separately (Markdown table / JSON), do NOT overwrite script_content
+    ai_scene_analysis_result = Column(Text, nullable=True)
     
     project = relationship("Project", back_populates="episodes")
-    scenes = relationship("Scene", back_populates="episode")
+    scenes = relationship("Scene", back_populates="episode", cascade="all, delete-orphan")
     script_segments = relationship("ScriptSegment", back_populates="episode", cascade="all, delete-orphan")
 
 class ScriptSegment(Base):
@@ -141,10 +148,11 @@ class Scene(Base):
     
     linked_characters = Column(Text, nullable=True) 
     key_props = Column(Text, nullable=True)
-    ai_shots_result = Column(Text, nullable=True)         
+    # Raw LLM output (Markdown table). Stored as plain text to match import logic.
+    ai_shots_result = Column(Text, nullable=True)
 
     episode = relationship("Episode", back_populates="scenes")
-    shots = relationship("Shot", back_populates="scene")
+    shots = relationship("Shot", back_populates="scene", cascade="all, delete-orphan")
 
 class Shot(Base):
     __tablename__ = "shots"

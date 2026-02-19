@@ -5,8 +5,12 @@ import json
 import asyncio
 from typing import Dict, Any, List
 import logging
+import os
 
 logger = logging.getLogger(__name__)
+
+# Some providers (e.g., Ark/Doubao) can take several minutes for large prompts.
+DEFAULT_LLM_TIMEOUT_SECONDS = 600
 
 SYSTEM_PROMPT = """
 You are an AI assistant for a Storyboard Editor application.
@@ -125,7 +129,7 @@ class LLMService:
         logger.info(f"Calling Doubao Multimodal: {url} model={model}")
 
         def _request():
-            return requests.post(url, headers=headers, json=payload, timeout=120)
+            return requests.post(url, headers=headers, json=payload, timeout=DEFAULT_LLM_TIMEOUT_SECONDS)
 
         try:
             response = await asyncio.to_thread(_request)
@@ -244,8 +248,9 @@ class LLMService:
         try:
             full_response = await self._raw_llm_request_full(base_url, api_key, model, messages, extra_config)
             content = full_response["choices"][0]["message"]["content"]
+            finish_reason = full_response.get("choices", [{}])[0].get("finish_reason")
             usage = full_response.get("usage", {})
-            return {"content": content, "usage": usage}
+            return {"content": content, "usage": usage, "finish_reason": finish_reason}
         except Exception as e:
             logger.error(f"LLM Raw Completion failed: {e}")
             raise e
@@ -413,30 +418,56 @@ class LLMService:
             for k, v in extra_config.items():
                 if k not in ["model", "messages", "stream"]:
                     payload[k] = v
-        
-        logger.info(f"Calling LLM: {url} model={model}")
-        print(f"Calling LLM DIRECT PRINT: {url} model={model}", flush=True)
 
-        # Debug Payload (Masking potentially large image data if we were sending base64, but here it is URL)
-        import copy
-        debug_payload = copy.deepcopy(payload)
-        if "messages" in debug_payload:
-            for m in debug_payload["messages"]:
-                 if isinstance(m.get("content"), list):
-                      for c in m["content"]:
-                           if isinstance(c, dict) and c.get("type") == "image_url":
-                                # Truncate long data urls if any
-                                url_val = c.get("image_url", {}).get("url", "")
-                                if url_val and url_val.startswith("data:"):
-                                     c["image_url"]["url"] = url_val[:50] + "...(truncated)"
-        
-        logger.info(f"LLM Payload Body: {json.dumps(debug_payload, ensure_ascii=False)}")
+        def _message_chars(msg: Dict[str, Any]) -> int:
+            content = msg.get("content")
+            if isinstance(content, str):
+                return len(content)
+            if isinstance(content, list):
+                total = 0
+                for part in content:
+                    if isinstance(part, dict):
+                        if part.get("type") == "text":
+                            total += len(part.get("text") or "")
+                        elif part.get("type") == "image_url":
+                            url_val = (part.get("image_url") or {}).get("url") or ""
+                            total += len(url_val)
+                        else:
+                            total += len(json.dumps(part, ensure_ascii=False))
+                    else:
+                        total += len(str(part))
+                return total
+            return len(str(content))
+
+        roles = {}
+        prompt_chars = 0
+        for m in (messages or []):
+            try:
+                role = m.get("role", "unknown")
+                roles[role] = roles.get(role, 0) + 1
+                prompt_chars += _message_chars(m)
+            except Exception:
+                continue
+
+        effective_max_tokens = payload.get("max_tokens")
+        if effective_max_tokens is None:
+            effective_max_tokens = payload.get("max_completion_tokens")
+
+        logger.info(
+            "Calling LLM: url=%s model=%s messages=%s roles=%s prompt_chars=%s max_tokens=%s",
+            url,
+            model,
+            len(messages or []),
+            roles,
+            prompt_chars,
+            effective_max_tokens,
+        )
 
         def _request(bypass_proxy=False):
             kwargs = {
                 "json": payload,
                 "headers": headers,
-                "timeout": 120
+                "timeout": DEFAULT_LLM_TIMEOUT_SECONDS
             }
             if bypass_proxy:
                 kwargs["proxies"] = {"http": None, "https": None}
@@ -452,9 +483,44 @@ class LLMService:
             raise Exception(f"API Error {response.status_code}: {response.text}")
 
         data = response.json()
-        print(f"LLM Response DIRECT PRINT: {json.dumps(data, ensure_ascii=False)}", flush=True)
-        # Also log
-        logging.getLogger("app").info(f"LLM Response: {json.dumps(data, ensure_ascii=False)}")
+
+        # Summarize response without dumping content.
+        try:
+            choices = data.get("choices") or []
+            first = choices[0] if choices else {}
+            finish_reason = first.get("finish_reason") if isinstance(first, dict) else None
+            content = ""
+            if isinstance(first, dict):
+                msg = first.get("message") or {}
+                if isinstance(msg, dict):
+                    content = msg.get("content") or ""
+            usage = data.get("usage") or {}
+            output_chars = len(content) if isinstance(content, str) else len(str(content))
+            logger.info(
+                "LLM Response: model=%s finish_reason=%s output_chars=%s usage=%s",
+                data.get("model") or model,
+                finish_reason,
+                output_chars,
+                usage,
+            )
+            if str(finish_reason).lower() == "length":
+                logger.warning(
+                    "LLM output appears truncated (finish_reason=length). prompt_chars=%s output_chars=%s max_tokens=%s prompt_tokens=%s completion_tokens=%s total_tokens=%s usage=%s",
+                    prompt_chars,
+                    output_chars,
+                    effective_max_tokens,
+                    usage.get("prompt_tokens") or usage.get("input_tokens"),
+                    usage.get("completion_tokens") or usage.get("output_tokens"),
+                    usage.get("total_tokens"),
+                    usage,
+                )
+        except Exception:
+            logger.info("LLM Response received (summary unavailable)")
+
+        # Optional deep debug (disabled by default). This may include large content.
+        if os.getenv("LLM_DEBUG_LOG_CONTENT") == "1":
+            logging.getLogger("app").debug("LLM Payload (debug): %s", json.dumps(payload, ensure_ascii=False))
+            logging.getLogger("app").debug("LLM Response (debug): %s", json.dumps(data, ensure_ascii=False))
         
         if "choices" in data and len(data["choices"]) > 0:
             return data

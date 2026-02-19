@@ -75,6 +75,17 @@ export const updateProject = async (id, data) => {
     return response.data;
 }
 
+export const generateProjectStoryGlobal = async (projectId, payload) => {
+    const response = await api.post(`/projects/${projectId}/story_generator/global`, payload);
+    return response.data;
+}
+
+// Project Story Generator (Global/Project) draft input persistence (no LLM call)
+export const saveProjectStoryGeneratorGlobalInput = async (projectId, payload) => {
+    const response = await api.put(`/projects/${projectId}/story_generator/global/input`, payload);
+    return response.data;
+}
+
 // Episodes
 export const fetchEpisodes = async (projectId) => {
     const response = await api.get(`/projects/${projectId}/episodes`);
@@ -168,6 +179,72 @@ export const updateSceneLatestAIResult = async (sceneId, content) => {
 export const applySceneAIResult = async (sceneId, data = null) => {
     // data is optional { content: [] } to override stored
     const response = await api.post(`/scenes/${sceneId}/apply_ai_result`, data);
+    return response.data;
+}
+
+// Episode Character Canon
+export const generateEpisodeCharacterProfile = async (episodeId, payload) => {
+    const response = await api.post(`/episodes/${episodeId}/character_profiles/generate`, payload);
+    return response.data;
+}
+
+// Project Character Canon (Overview)
+export const generateProjectCharacterProfile = async (projectId, payload) => {
+    const response = await api.post(`/projects/${projectId}/character_profiles/generate`, payload);
+    return response.data;
+}
+
+// Project Character Canon draft input persistence (no LLM call)
+export const saveProjectCharacterCanonInput = async (projectId, payload) => {
+    const response = await api.put(`/projects/${projectId}/character_canon/input`, payload);
+    return response.data;
+}
+
+export const saveProjectCharacterCanonCategories = async (projectId, payload) => {
+    const response = await api.put(`/projects/${projectId}/character_canon/categories`, payload);
+    return response.data;
+}
+
+export const fetchEpisodeCharacterProfiles = async (episodeId) => {
+    const response = await api.get(`/episodes/${episodeId}/character_profiles`);
+    return response.data;
+}
+
+export const fetchProjectCharacterProfiles = async (projectId) => {
+    const response = await api.get(`/projects/${projectId}/character_profiles`);
+    return response.data;
+}
+
+export const updateEpisodeCharacterProfiles = async (episodeId, character_profiles) => {
+    const response = await api.put(`/episodes/${episodeId}/character_profiles`, { character_profiles });
+    return response.data;
+}
+
+export const updateProjectCharacterProfiles = async (projectId, character_profiles) => {
+    const response = await api.put(`/projects/${projectId}/character_profiles`, { character_profiles });
+    return response.data;
+}
+
+// Episode Story Generator (Global/Episode)
+export const generateEpisodeStory = async (episodeId, payload) => {
+    const response = await api.post(`/episodes/${episodeId}/story_generator`, payload);
+    return response.data;
+}
+
+// Episode Story Generator draft input persistence (no LLM call)
+export const saveEpisodeStoryGeneratorInput = async (episodeId, payload) => {
+    const response = await api.put(`/episodes/${episodeId}/story_generator/input`, payload);
+    return response.data;
+}
+
+export const generateEpisodeScenes = async (episodeId, payload) => {
+    const response = await api.post(`/episodes/${episodeId}/script_generator/scenes`, payload);
+    return response.data;
+}
+
+// Project Script Generator (Episodes -> Script drafts)
+export const generateProjectEpisodeScripts = async (projectId, payload) => {
+    const response = await api.post(`/projects/${projectId}/script_generator/episodes/scripts`, payload);
     return response.data;
 }
 
@@ -328,12 +405,15 @@ export const refinePrompt = async (original_prompt, instruction, type = 'image')
     return response.data;
 };
 
-export const analyzeScene = async (scriptText, systemPrompt = null, projectMetadata = null) => {
-    console.log("[API] analyzeScene called with metadata:", projectMetadata);
+export const analyzeScene = async (scriptText, systemPrompt = null, projectMetadata = null, episodeId = null) => {
+    console.log("[API] analyzeScene called", { hasMetadata: !!projectMetadata, episodeId });
     const payload = { 
         text: scriptText,
         system_prompt: systemPrompt
     };
+    if (episodeId) {
+        payload.episode_id = episodeId;
+    }
     if (projectMetadata) {
         payload.project_metadata = projectMetadata;
     }
@@ -386,6 +466,7 @@ export const injectEntityFeatures = (prompt, entities = []) => {
 export const getPricingRules = async () => (await api.get('/billing/rules')).data;
 export const createPricingRule = async (data) => (await api.post('/billing/rules', data)).data;
 export const syncPricingRules = async () => (await api.post('/billing/rules/sync')).data;
+export const getBillingOptions = async () => (await api.get('/billing/options')).data;
 export const updatePricingRule = async (id, data) => (await api.put(`/billing/rules/${id}`, data)).data;
 export const deletePricingRule = async (id) => (await api.delete(`/billing/rules/${id}`)).data;
 export const getTransactions = async (limit=100, userId=null) => {

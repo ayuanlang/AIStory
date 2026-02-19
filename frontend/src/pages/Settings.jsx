@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useStore } from '@/lib/store';
 import { Save, Info, Upload, Download, Coins, History } from 'lucide-react';
 import { API_URL } from '@/config';
@@ -6,6 +7,7 @@ import { updateSetting, getSettings, getTransactions, fetchMe } from '../service
 import RechargeModal from '../components/RechargeModal'; // Import RechargeModal
 
 const Settings = () => {
+    const location = useLocation();
     const { llmConfig, setLLMConfig, savedConfigs, saveProviderConfig, addLog, generationConfig, setGenerationConfig, savedToolConfigs, saveToolConfig } = useStore();
     
     // Internal state for form
@@ -59,6 +61,38 @@ const Settings = () => {
     const [transactions, setTransactions] = useState([]);
     const [isBillingLoading, setIsBillingLoading] = useState(false);
     const [showRecharge, setShowRecharge] = useState(false); // Recharge Modal State
+
+    // Unified Top Up entry: support /settings?tab=billing and cross-app 402 redirects.
+    useEffect(() => {
+        const params = new URLSearchParams(location.search || '');
+        const tab = params.get('tab');
+        if (tab === 'billing') {
+            setActiveTab('billing');
+        }
+
+        // If we navigated here due to insufficient credits, auto-open the modal.
+        let shouldOpen = false;
+        try {
+            shouldOpen = sessionStorage.getItem('OPEN_RECHARGE_MODAL') === '1';
+            if (shouldOpen) sessionStorage.removeItem('OPEN_RECHARGE_MODAL');
+        } catch {
+            // ignore
+        }
+
+        if (shouldOpen) {
+            setActiveTab('billing');
+            setShowRecharge(true);
+        }
+    }, [location.search]);
+
+    useEffect(() => {
+        const fn = () => {
+            setActiveTab('billing');
+            setShowRecharge(true);
+        };
+        window.addEventListener('SHOW_RECHARGE_MODAL', fn);
+        return () => window.removeEventListener('SHOW_RECHARGE_MODAL', fn);
+    }, []);
 
     // Helper: Refresh Billing Data
     const refreshBilling = () => {

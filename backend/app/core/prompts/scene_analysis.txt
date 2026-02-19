@@ -15,13 +15,13 @@
 #### 1. 场景/环境分离原则 (Space-Environment Separation)
 - **Environment (环境资产)**：物理容器，**绝对空镜**（无人无物）。它是刚性的、可复用的。
   - **规则**：一个 Scene 必须绑定一个主要的 Environment 资产。
-  - **唯一性原则 (Uniqueness Principle)**：每个 Scene 必须生成独立的 Environment 资产。
+  - **唯一性原则 (Uniqueness Principle)**：原则上每个 Scene 必须生成独立的 Environment 资产。
     - **复用限制**：仅当空间结构、视角、光影、氛围**完全一致**（如连续时间流逝或闪回后返回同一时刻）时，才允许复用同一 Environment。否则，即使是同一地点，若有新的 Dramatic Need 或视角微调，也请新建 Environment (可使用 visual_dependencies 保持一致)。
   - **视角独立性 (Perspective Independence)**：不同视角的同一地点（如“门内向外看”与“门外向内看”，或“正打”与“反打”背景差异巨大时），**必须拆分为独立的 Environment 资产**。
     - 这些变体资产在 Part 3 JSON 中应作为独立条目存在。
     - 必须使用 `visual_dependencies` 字段关联主环境，确保设计风格一致。
   - **Actionable Space Assurance (空间可行性保障)**：
-    - Environment 必须提供明确的**物理空间**以承载 Scene 中的所有 Beats 动作 (e.g., 追逐、打斗、人群聚集)。
+    - Environment 必须提供足够**物理空间**以承载 Scene 中的所有 Beats 动作 (e.g., 追逐、打斗、人群聚集)。
     - **Clearance Mandate**: 除非剧本明确要求有障碍物（如掩体射击），否则 Anchor 周围必须是**开阔、平整的区域 (Clear Floor Plan)**。严禁生成会阻挡 Character 与 Key Prop 交互的随机路障（如随机的柱子、不可移动的家具堆）。
 - **Scene (时空事件)**：在 Environment 中发生的具体事件。
   - **规则**：Scene 负责定义“人与物的落位”。不得修改 Environment 的物理结构（墙不能乱动）。
@@ -39,21 +39,14 @@
     - **Purpose**: 让分镜生成时即便脱离了 JSON 也能快速理解画面背景，确保动作与环境的物理交互合理。
 3.  **[Axis] (轴线)**：简述主要人物的运动轨迹（从哪里走到哪里）。
 4.  **[Beats] (节拍流)**：按时间顺序排列的动作单元。
-    - **Spatial Activation (空间激活)**：Beats 动作必须**主动发生在该物理空间中**，并与环境产生交互（如倚靠、穿越、拿起）。严禁“真空表演”。**Script Micro-Correction (剧本微调强制)**：为了保证空间激活，**必须**对剧本做不影响主要情节的细节修正（例如：增加与环境互动的动作，或调整站位以利用空间纵深，将枯燥的对话转化为伴随动作的表演）。
+    - **Spatial Activation (空间激活)**：Beats 动作必须**主动发生在该物理空间中**，并与环境产生交互（如倚靠、穿越、拿起）。严禁“真空表演”。
     - **格式**：`1. [User] action -> [Target] reaction.` (必须包含具体的对白/字幕/屏幕文字/音效内容)。**实体引用**：Beat 描述中涉及的所有**角色**、**道具**、**环境**均须用 `[]` 包裹（例如：`[Alice] walks to [Window] holding [Cup]`）。
-    - **所有格特殊规则 (Possessive Exemption)**：当需要表达“角色的...”时（例如 `[RoleName]`'s hand），请直接书写 `[RoleName]'s`。这种形式会被系统识别并**跳过描述注入**，从而避免语法错误。这是**唯一**允许 Skipping Injection 的情况。请善用此规则来描述局部特写（e.g., `Close up of [RoleName]'s eyes`）。
-    - **Interaction Completeness (交互完整性)**: 若 Beat 中的动作涉及其他角色或道具（如离开，分开，打开），**必须显式描述**交互对手与道具被影响后的状态。严禁隐式省略。
-      - *Example*: `[A] ends kiss with [B]` 必须写为 `[A] parts lips from [B], leaving [B] visible in frame`.
-    - **Environment Object Specificity (环境交互特指)**: 当 Beat 涉及与环境中的物体交互时，**严禁使用通用名词** (Do not use generic terms like "table/chair")。必须使用与 `[Environment Context]` 一致的**具体视觉描述**来特指（e.g., Use "the scratched metal workbench" instead of "the table"; "the red velvet sofa" instead of "the sofa"）。尤其是后续会与角色产生交互的物体，必须提供**Anchor Description (描点描述)**，明确其**颜色、形状、材质或特殊标记**（e.g., "The [Red Leather Armchair] with torn cushion", "The [Brass Antique Lamp] with green shade"）。
-    - **Continuity Mandate (连贯性强制)**：每个 Beat 必须继承上一 Beat 的视觉状态。（开始新Beat时要检查）
-      - **Persistence (存续原则)**：上一 Beat 出现的角色与道具，默认在当前 Beat 继续保持存在（Visible），除非有明确的指令使其退出。
-      - **Exit Logic (退出描述)**：如果某个上一 Beat 存在的实体在本 Beat 消失，**必须显式描述**其“离开的动作” (e.g., [A] exits frame left) 或“被遮挡的状态”。严禁凭空消失。
     - **内容增强 (Enhancement)**：
         - **角色高光**：在不脱离剧本逻辑的前提下，增加特定 Beat 细致刻画主角特质（如通过局部特写展现美貌/诱人身材/力量感，或通过神态展现坚毅/美好性格）。
-        - **视觉转场**：显式设计转场 Beat（如(FG)前景遮挡过渡、焦点变化，Object Wipe等 ）。
+        - **视觉转场**：显式设计转场 Beat（如(FG)前景遮挡过渡、焦点变化）。
     - **语言规范**：必须使用**客观摄影语言**（如“逆光勾勒出身材轮廓”而非“性感”）。**严禁 NSFW (色情/暴力)**。
     - **稳定性**：Beat 的起点和终点必须是相对稳定的物理状态（便于生成 Start Frame 和 End Frame）。
-    - **Coverage**: 增加 Beat 除了主视角外，是否需要特写（如手部动作）或全景（如位置变换）。
+    - **Coverage**: 思考 Beat 除了主视角外，是否需要特写（如手部动作）或全景（如位置变换）。
 4.  **[Full Script Coverage] (剧本全覆盖)**：Core Scene Info 中的 Beats 组合必须包含该场景原始剧本中的所有剧情信息（每一句对白、每一个动作、每一个情绪反应），不得有任何遗漏。
     - **字幕与视觉信息**：剧本中指示的字幕 (Subtitle)、屏幕文字 (On-screen Text)、旁白 (V.O.) 与画外音 (O.S.) 均须作为 Beat 的一部分记录下来。
 
@@ -62,76 +55,28 @@
   - 在 **Part 2 Markdown** 表格的 Core Scene Info 中，必须明确该 Scene 整体启用了哪些物理层级空间。
   - **[Layout]** 字段需明确：前景 (FG) 是否有遮挡/边框？中景 (MG) 是核心活动区？后景 (BG) 是否有纵深细节？
 - **Linked Characters**：必须列出场内主要角色。任何与主角色有**动作交互**或**对白交流**的人物，都必须被识别为独立资产并提取。
-- **Key Props Extraction Rules (道具提炼规则)**：
-  - **Selection Criteria (入选判据)**:
-    1.  **Interactability (交互性)**: 必须被角色物理接触、移动或操作。纯静态摆设归入 Environment。
-    2.  **Continuity (连续性)**: 必须跨越多个 Beats 或 Shots 存在。仅在单镜头闪现的物体不作为资产。
-    3.  **Visual Specificity (视觉独特性)**: 必须具有需要专门设计的外观特征（如“雕刻精美的古董枪” vs “普通白色一次性纸杯”）。普通物品通过 Prompt 描述即可，无需资产化。
-  - **Threshold (阈值)**：仅提取在**至少 2 个 Beats** 中被显著使用，或对剧情有**核心推动作用**（Key Plot Item）的道具。
-  - **One-off Exemption (单次豁免)**：如果某道具仅在一个 Beat 中短暂出现（如“随手拿起一张纸巾擦嘴后扔掉”），**无需**将其提炼为独立 Prop Asset。直接在该 Beat 的描述中用自然语言描写即可。
-  - **Identity Matching (身份匹配)**: Prop 的 Prompt 描述必须显式包含与其持有者身份/性格相符的视觉细节（如“战士的剑应有磨损和血槽”，“贵族的杯子应有金边和徽章”）。
-  - **Background Items**: 纯背景装饰物归入 Environment。
-- **State Variant Dependency (状态变体依赖)**：
-  - **Rule: Priority of Original/Normal State (原始/常规状态优先)**：对于任何具有多种物理状态的道具，**必须优先定义其常态/完整态**作为 **Base Entity**。
-    - **Logic**: "Regular/Intact/Closed" = **Base Entity**; "Broken/Opened/Modified" = **Variant**.
-    - *Example*: 箱子默认为 **[Closed Box (Base)]**。如果剧情需要打开，则建立 **[Opened Box (Variant)]** 并依赖前者。
-    - *Example*: 花瓶默认为 **[Intact Vase (Base)]**。打碎后的状态为 **[Broken Vase (Variant)]** 并依赖前者。
-  - **Dependency Strategy**：特殊状态实体（Variant）必须在 Part 3 JSON 的 `visual_dependencies` 字段中显式引用 Base Entity 的名称，以确保设计一致性。
-  - **Existence (强制存在)**：Base Entity 必须作为独立条目存在于 JSON 中（即使本场戏直接从特殊状态开始，也需先定义原始状态作为基准）。
+- **Key Props**：仅提取**有交互**的关键道具。背景道具应归入 Environment。
 - **Consistency**: 确保 Markdown 表格中的实体名称与 JSON 中的 `name` 严格一致（大小写、括号）。
 
 ---
 
-### 二、主体抽取与生成策略 (Subject Extraction & Generation Criteria)
-
-- **Dependency Consistency (依赖一致性)**: 主体生成若需依托其他主体（通常为同一主体的不同状态，不同视角，要保持一致性，仅是同框出现的不算），必须在 `visual_dependencies` 字段中完整列出所有依赖主体的名称（与JSON定义一致），不得遗漏或模糊表述。
-- **Visual Anchor (视觉钩子)**: 每个主体配置一个专属视觉钩子 `anchor_description`：【thumbnail_readability】（如发型，衣服，相貌特征，配饰，材质，颜色等）。
-  - **Constraint**: 不要用主观词如美丽、伟大等，不要用禁忌词，如性感、血腥等NSFW。
-  - **Identity**: 要体现角色身份，如女孩，猩猩，提包等。
-  - **Length**: ≤ 20 英文词。
-- **主体生成依赖策略（强制）**：
-    - **Type A（特征提取）**：`[Global Style] + 【Anchor】 + 【New Angle/Pose】 + 【Context】`，用于多视角/新姿态。
-    - **Type B（图像编辑）**：`【Anchor Base】, 【Action】 to achieve 【Target】`，用于风格/材质/背景编辑。
-    - **Implementation**: 在 `visual_dependencies` 列出依赖主体，在 `dependency_strategy` 标注类型并填写 `logic`；`generation_prompt_en` 必须包含具体生成/编辑指令。
-- **角色规则 (Character Rules)**：
-  - **Identity**: 外观重大变化视为独立角色实体。
-  - **View**: 必须生成六视图（6-panel）。
-  - **Format**: 中文外观含身高与头身比。`generation_prompt_en` 结尾含英文资产要求。
-  - **Anchor**: `anchor_description` 必须包含实体身份（如 Girl, Gorilla）。
-- **道具规则 (Prop Rules)**：
-  - **Variants**: 状态变化生成独立资产名（如 `"Bottle (Shattered)"`）。
-  - **Presentation**: 单物体纯白背景展示，标注材质与相对比例。
-  - **Simplification**: 只出现一次的道具，不用单独提取，融合到环境或新建角色持道具的单独资产即可。
-- **环境规则 (Environment Rules)**：
-  - **Empty Scene**: 必须是**空场景**（无人物/道具，不能直接出现与角色、道具的关联）。
-  - **Action Space**: 必须检索与本环境相关的 Scene 的动作空间，保证描述能支持剧情发展需求。
-  - **Connectivity**: 明确空间连通性（如门窗位置）对动作空间范围的影响，预留好角色运动空间（不要出现门关着但要对门外角色有动作交互的情况）。如必须，环境描述要明确门是开着的或将运动空间设为门外。
-  - **New Asset Trigger**: 大幅位移或机位调整时需生成新的环境资产。即使是同一地点，只要镜头的变化，就应该是新的环境（Variant），但要依赖原来的环境（Base）。
-
----
-
-### 三、英文生成提示词模板 (English Generation Prompt Templates)
-
-**All prompts must start with [Global Style].**
+### 二、资产生成规范 (Asset Generation Rules)
 
 #### 1. Environment Prompt Template
-（用于生成背景环境图像，**空场景**，以 camera-first 开头，包含视觉锚点、尺度参考、材质、光照、色彩、负空间，**要充分考虑剧情发展所需的空间**）
-
-`{env_prompt_template}`
+（**空场景**，无角色。核心在于构建一个围绕**物理锚点**展开的**可供剧情发展与人物活动**的物理空间。）
+`[Global Style] Camera at [Height/Angle] looking [Direction] into 【environment_name】; **Core Stage**: Centralized around 【primary_anchor description】. Lighting: 【source, direction, quality】. Atmosphere: 【mood keywords】. Details: 【materials, textures】. **No humans or characters present.**`
 
 #### 2. Character Prompt Template
-（用于生成角色六视图资产，包含精确视觉锚点与比例。**表情生成规则**：结合剧情为不同视图分配不同表情，唯独**特写(Close-up)** 必须保持**正常/标准表情**以作为基准。）
-
-`{char_prompt_template}`
+（**标准六视图**，确保几何一致性。）
+`[Global Style] 6-view character sheet for 【Name】. Structure: 6-view layout (Front, Back, Side, 3/4, Close-up, Detail). Appearance: 【Age, Body Type, ethnicity】. Attire: 【Clothing details, footwear】. Anchors: 【Signature features e.g. scar, accessory】. Consistency: T-pose/Neutral pose. Background: White.`
 
 #### 3. Prop Prompt Template
-（用于生成单物体道具图像，包含材质、尺寸、相对尺度与细节）
-
-`{prop_prompt_template}`
+（**独立物体**，白色背景。）
+`[Global Style] Prop Asset: 【Name】. View: 【Angle e.g. Isometric/Front】. Material: 【Texture details】. Wear & Tear: 【Condition】. Background: White.`
 
 ---
 
-### 四、输出模版说明 (Output Templates)
+### 三、输出模版说明 (Output Templates)
 
 必须严格按照以下三部分顺序输出，不得包含多余的 conversational text。
 
@@ -186,7 +131,7 @@
       "clothing": "Clothing Desc",
       "action_characteristics": "Action Traits",
       "generation_prompt_en": "[Global Style] ...",
-      "anchor_description": "Distinct Visual Feature (e.g., 'Red Scarf', 'Scar on Cheek'). Must be obvious for AI recognition.",
+      "anchor_description": "visual tags",
       "visual_dependencies": [],
       "dependency_strategy": {
         "type": "Original/Type A/Type B",
@@ -205,9 +150,9 @@
       "name": "Exact Name",
       "name_en": "English Name",
       "type": "held/static",
-      "description_cn": "Chinese Desc (Mandatory: Define Mobility [How it moves] & Mutable States [Active/Broken/Empty])",
+      "description_cn": "Chinese Desc",
       "generation_prompt_en": "[Global Style] ...",
-      "anchor_description": "Distinct Visual Marker (e.g., 'Golden Dragon Handle'). Must be obvious for AI recognition.",
+      "anchor_description": "visual tags",
       "visual_dependencies": [],
       "dependency_strategy": {
         "type": "Original/Type A/Type B",
@@ -229,7 +174,7 @@
       "visual_params": "Wide/Interior/Day",
       "description_cn": "Chinese Desc",
       "generation_prompt_en": "[Global Style] Camera ...",
-      "anchor_description": "Distinct Visual Landmark (e.g., 'Giant Red Statue'). Must be obvious for AI recognition.",
+      "anchor_description": "visual tags",
       "visual_dependencies": [],
       "dependency_strategy": {
         "type": "Original/Type A/Type B",
@@ -240,7 +185,7 @@
 }
 ```
 
-### 五、校验清单 (Validation Checklist)
+### 四、校验清单 (Validation Checklist)
 1. **Anchor Check**: 每个 Scene 的 Core Scene Info 是否都定义了 **[Anchor] (物理锚点)**？
 2. **Space Check**: Environment Prompt 是否包含 **"No humans or characters present"**？
 3. **Consistency Check**: Scene 表格中的 `[Char A]` 是否在 Part 3 JSON 中有对应条目？

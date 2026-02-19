@@ -23,6 +23,7 @@ class AgentResponse(BaseModel):
 
 class AnalyzeSceneRequest(BaseModel):
     text: str
+    episode_id: Optional[int] = None
     llm_config: Optional[Dict[str, Any]] = None
     prompt_file: Optional[str] = "scene_analysis.txt"
     system_prompt: Optional[str] = None
