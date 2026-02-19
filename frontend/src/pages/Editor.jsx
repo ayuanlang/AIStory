@@ -628,6 +628,7 @@ const normalizeCanonTagCategories = (raw) => {
 // Mock Data / Placeholders for Tabs
 const ProjectOverview = ({ id, onProjectUpdate }) => {
     const [project, setProject] = useState(null);
+    const { addLog } = useLog();
     const [info, setInfo] = useState({
         script_title: "",
         series_episode: "",
