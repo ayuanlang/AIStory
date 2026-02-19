@@ -1349,7 +1349,10 @@ const ProjectOverview = ({ id, onProjectUpdate }) => {
                 addLog?.(`Episode scripts generated. Episodes created: ${created}.`, 'success');
                 alert(`Episode scripts generated. Episodes created: ${created}.`);
             }
-            await loadEpisodes();
+            // Refresh project + episodes from parent (ProjectOverview does not own episode state)
+            if (onProjectUpdate) {
+                await onProjectUpdate();
+            }
         } catch (e) {
             console.error(e);
             addLog?.(`Episode script generation failed: ${e.message}`, 'error');
@@ -11111,7 +11114,7 @@ const Editor = ({ projectId, onClose }) => {
          } catch (e) {
             console.error("Failed to fetch project title", e);
          }
-         loadEpisodes();
+            await loadEpisodes();
     };
 
     const loadEpisodes = async () => {
