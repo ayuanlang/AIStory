@@ -244,7 +244,11 @@ export const generateEpisodeScenes = async (episodeId, payload) => {
 
 // Project Script Generator (Episodes -> Script drafts)
 export const generateProjectEpisodeScripts = async (projectId, payload) => {
-    const response = await api.post(`/projects/${projectId}/script_generator/episodes/scripts`, payload);
+    const response = await api.post(
+        `/projects/${projectId}/script_generator/episodes/scripts`,
+        payload,
+        { timeout: 30 * 60 * 1000 }
+    );
     return response.data;
 }
 

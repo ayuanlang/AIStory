@@ -1327,7 +1327,11 @@ const ProjectOverview = ({ id, onProjectUpdate }) => {
     };
 
     const handleGenerateEpisodeScripts = async () => {
-        if (!id) return;
+        if (!id) {
+            addLog?.('Cannot generate episode scripts: missing project id.', 'error');
+            alert('Cannot generate episode scripts: missing project id.');
+            return;
+        }
         const n = Number(globalStoryInput.episodes_count || 0);
         if (!n || Number.isNaN(n) || n <= 0) {
             alert('Please set a valid Episodes Count first.');
@@ -1336,11 +1340,13 @@ const ProjectOverview = ({ id, onProjectUpdate }) => {
 
         setIsGeneratingEpisodeScripts(true);
         try {
-            addLog?.(`Generating episode scripts (1..${n})...`, 'process');
+            addLog?.(`Generating episode scripts (1..${n})... (This may take several minutes)`, 'process');
+            console.log('[ProjectOverview] generate episode scripts: start', { projectId: id, episodes_count: n });
             const res = await generateProjectEpisodeScripts(id, {
                 episodes_count: n,
                 overwrite_existing: true,
             });
+            console.log('[ProjectOverview] generate episode scripts: response', res);
             const created = Number(res?.episodes_created ?? 0);
             const errors = Array.isArray(res?.errors) ? res.errors : [];
             if (errors.length > 0) {
@@ -1356,8 +1362,9 @@ const ProjectOverview = ({ id, onProjectUpdate }) => {
             }
         } catch (e) {
             console.error(e);
-            addLog?.(`Episode script generation failed: ${e.message}`, 'error');
-            alert(`Failed to generate episode scripts: ${e.message}`);
+            const detail = e?.response?.data?.detail || e?.response?.data?.message || e?.message || String(e);
+            addLog?.(`Episode script generation failed: ${detail}`, 'error');
+            alert(`Failed to generate episode scripts: ${detail}`);
         } finally {
             setIsGeneratingEpisodeScripts(false);
         }
