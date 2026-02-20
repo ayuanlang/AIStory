@@ -383,9 +383,9 @@
       *   **Primary Sustain Action (核心维持动作)**: **Critical**. 
           - `[Example]: "(1) [Subject] eyes scanning continuously across text, (2) [Subject] finger tracing lines vertically." (Instead of just "reading").`
       *   **Continuous Flow**: 确保 `Start` 到 `End` 之间没有时间真空。
-        *   **Density Guideline (密度建议)**: 动作/细节数量应与时长匹配，默认目标为 **每秒 1-2 个可见变化**（含动作或运镜变化）。建置镜头或强氛围镜头允许更低密度；但严禁为了凑数制造会改变剧情的无意义抽搐/乱动。
-          - `[Formula]: Aim(Index of Actions) ≈ Duration * (1~2).`
-          - `[Example]: Duration 5s requires Index 10+: "(1) [Subject] head turns left -> (2) [Subject] blinks twice -> (3) Camera pushes in -> (4) Shadows shift on [Subject] face -> (5) [Subject] lips part slightly -> (6) [Subject] hand raises -> (7) [Subject] fingers twitch -> ..."`
+        *   **Density Guideline (密度建议)**: 动作/细节数量应与时长匹配，默认基准密度为 **每秒 1.5 个微节拍（可见变化）**（含动作或运镜变化）。建置镜头或强氛围镜头允许更低密度；但严禁为了凑数制造会改变剧情的无意义抽搐/乱动。
+          - `[Formula]: Aim(Index of Actions) ≈ Duration * 1.5`（可按镜头类型在 ±20% 范围内微调）。
+          - `[Example]: Duration 5s 建议 Index 7-8 左右: "(1) [Subject] head turns left -> (2) Camera pushes in subtly -> (3) [Subject] lips part slightly -> (4) [Subject] hand raises -> (5) [Subject] gaze locks on target -> (6) Shadows shift across [Subject] face -> (7) [Subject] exhales and settles."`
 
   4.  **实体状态与交互 (Entity Status & Interaction)**：
       *   **强制状态描述**: 画面中所有可见的 `Linked Characters` 和 `Key Props` 都必须有动态描述。

@@ -3232,15 +3232,33 @@ async def ai_generate_shots(
             billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
 
         response_dict = await llm_service.generate_content(user_input, system_prompt, llm_config)
-        response_content = response_dict.get("content", "")
+        response_content_raw = response_dict.get("content", "")
         usage = response_dict.get("usage", {})
 
-        logger.info(f"[ai_generate_shots] llm_response_len={len(response_content)}")
+        logger.info(f"[ai_generate_shots] llm_response_len_raw={len(response_content_raw)}")
 
-        if response_content.startswith("Error:"):
+        if str(response_content_raw).startswith("Error:"):
             if reservation_tx:
-                billing_service.cancel_reservation(db, reservation_tx.id, response_content)
-            raise HTTPException(status_code=500, detail=response_content)
+                billing_service.cancel_reservation(db, reservation_tx.id, str(response_content_raw))
+            raise HTTPException(status_code=500, detail=str(response_content_raw))
+
+        # Force-remove common reasoning leakage (e.g., "I think", "analysis", <think> blocks)
+        # before table parsing and persistence.
+        response_content = sanitize_llm_markdown_output(response_content_raw)
+        reasoning_line_re = re.compile(
+            r"^\s*(i think|i will|let me|let's|analysis|reasoning|thought process|"
+            r"分析|思路|推理|我将|我认为)\b",
+            flags=re.IGNORECASE,
+        )
+        cleaned_lines = []
+        for line in str(response_content or "").splitlines():
+            stripped = line.strip()
+            if stripped and not stripped.startswith("|") and reasoning_line_re.match(stripped):
+                continue
+            cleaned_lines.append(line)
+        response_content = "\n".join(cleaned_lines).strip()
+
+        logger.info(f"[ai_generate_shots] llm_response_len_clean={len(response_content)}")
 
         # Billing finalize
         if reservation_tx:

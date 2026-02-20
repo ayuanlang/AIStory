@@ -9248,7 +9248,14 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         try {
             const tech = JSON.parse(editingShot.technical_notes || '{}');
             const keyframes = tech.keyframes || [];
-            const videoRefSubmitMode = tech.video_ref_submit_mode || 'auto';
+
+            const resolveVideoMode = (t) => {
+                if (t?.video_mode_unified) return t.video_mode_unified;
+                if (t?.video_ref_submit_mode === 'refs_video') return 'refs_video';
+                return t?.video_gen_mode || 'start';
+            };
+            const videoMode = resolveVideoMode(tech);
+            const videoRefSubmitMode = videoMode === 'refs_video' ? 'refs_video' : 'auto';
             
             const refs = [];
             // 1. Video Ref Selection Strategy
@@ -9524,8 +9531,15 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             let currentShot = { ...shot }; 
             let shotTech = {};
             try { shotTech = JSON.parse(currentShot.technical_notes || '{}'); } catch(e){}
+
+            const resolveVideoMode = (t) => {
+                if (t?.video_mode_unified) return t.video_mode_unified;
+                if (t?.video_ref_submit_mode === 'refs_video') return 'refs_video';
+                return t?.video_gen_mode || 'start';
+            };
+            const resolvedCurrentMode = resolveVideoMode(shotTech);
             const currentShotMode = shotTech.video_gen_mode || 'start'; // Default: Start Only
-            const currentVideoRefSubmitMode = shotTech.video_ref_submit_mode || 'auto';
+            const currentVideoRefSubmitMode = resolvedCurrentMode === 'refs_video' ? 'refs_video' : 'auto';
 
             try {
                 // 1. Ensure Start Frame
@@ -9619,7 +9633,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                         let tech2 = {};
                         try { tech2 = JSON.parse(currentShot.technical_notes || '{}'); } catch(e){}
                         const shotMode2 = tech2.video_gen_mode || 'start'; // Default: Start Only
-                        const shotVideoRefSubmitMode = tech2.video_ref_submit_mode || 'auto';
+                        const resolvedMode2 = resolveVideoMode(tech2);
+                        const shotVideoRefSubmitMode = resolvedMode2 === 'refs_video' ? 'refs_video' : 'auto';
 
                         if (shotVideoRefSubmitMode === 'refs_video') {
                             if (tech2.video_ref_image_urls && Array.isArray(tech2.video_ref_image_urls)) {
@@ -10306,11 +10321,13 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                     <Upload size={10} /> Set
                                                 </button>
 
-                                                {/* Shot-specific Video Generation Mode */}
+                                                {/* Shot-specific Final Video Mode */}
                                                 <select
                                                     value={(() => {
                                                         try {
                                                             const t = JSON.parse(editingShot.technical_notes || '{}');
+                                                            if (t.video_mode_unified) return t.video_mode_unified;
+                                                            if (t.video_ref_submit_mode === 'refs_video') return 'refs_video';
                                                             return t.video_gen_mode || 'start';
                                                         } catch(e) { return 'start'; }
                                                     })()}
@@ -10318,40 +10335,25 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                         const mode = e.target.value;
                                                         try {
                                                             const t = JSON.parse(editingShot.technical_notes || '{}');
-                                                            t.video_gen_mode = mode;
+                                                            t.video_mode_unified = mode;
+                                                            if (mode === 'refs_video') {
+                                                                t.video_ref_submit_mode = 'refs_video';
+                                                            } else {
+                                                                t.video_gen_mode = mode;
+                                                                t.video_ref_submit_mode = 'auto';
+                                                            }
                                                             setEditingShot(prev => ({ ...prev, technical_notes: JSON.stringify(t) }));
                                                             // Auto-save happens on blur or next action usually, but we might want to trigger update if needed
                                                             // onUpdateShot(editingShot.id, { technical_notes: JSON.stringify(t) }); // Optional: immediate save
                                                         } catch(e) {}
                                                     }}
                                                     className="bg-black/40 border border-white/20 text-[10px] rounded px-1 py-0.5 text-white/70 outline-none hover:bg-white/5"
-                                                    title="Video Generation Reference Strategy"
+                                                    title="Final Video Generation Mode"
                                                 >
                                                     <option value="start_end">Start+End</option>
                                                     <option value="start">Start Only</option>
                                                     <option value="end">End Only</option>
-                                                </select>
-
-                                                <select
-                                                    value={(() => {
-                                                        try {
-                                                            const t = JSON.parse(editingShot.technical_notes || '{}');
-                                                            return t.video_ref_submit_mode || 'auto';
-                                                        } catch(e) { return 'auto'; }
-                                                    })()}
-                                                    onChange={(e) => {
-                                                        const mode = e.target.value;
-                                                        try {
-                                                            const t = JSON.parse(editingShot.technical_notes || '{}');
-                                                            t.video_ref_submit_mode = mode;
-                                                            setEditingShot(prev => ({ ...prev, technical_notes: JSON.stringify(t) }));
-                                                        } catch(e) {}
-                                                    }}
-                                                    className="bg-black/40 border border-white/20 text-[10px] rounded px-1 py-0.5 text-white/70 outline-none hover:bg-white/5"
-                                                    title="Reference Image Source for Final Video"
-                                                >
-                                                    <option value="auto">Ref Source: Auto</option>
-                                                    <option value="refs_video">Ref Source: Refs(Video)</option>
+                                                    <option value="refs_video">Refs (Video) As Ref</option>
                                                 </select>
 
                                                 <button 
