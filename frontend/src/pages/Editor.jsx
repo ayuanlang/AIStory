@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useLog } from '../context/LogContext';
+import ReactMarkdown from 'react-markdown';
 import { useStore } from '../lib/store';
 import LogPanel from '../components/LogPanel';
 import AgentChat from '../components/AgentChat';
@@ -1292,6 +1293,12 @@ const ProjectOverview = ({ id, onProjectUpdate }) => {
             const payload = {
                 mode: 'global',
                 episodes_count: Number(globalStoryInput.episodes_count || 0),
+                // Project Overview / Basic Information (forward to LLM)
+                script_title: info.script_title,
+                type: info.type,
+                language: info.language,
+                base_positioning: info.base_positioning,
+                Global_Style: info.Global_Style,
                 background: globalStoryInput.background,
                 setup: globalStoryInput.setup,
                 development: globalStoryInput.development,
@@ -1914,6 +1921,16 @@ const ProjectOverview = ({ id, onProjectUpdate }) => {
                             value={info.story_dna_global_md || ''}
                             onChange={(e) => updateField('story_dna_global_md', e.target.value)}
                             placeholder="(After generation, the global framework will appear here. You can edit it and Save Changes.)"
+                        />
+                    </div>
+
+                    <div>
+                        <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">Global Style & Constraints (Extracted)</label>
+                        <textarea
+                            className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white w-full h-40 resize-none"
+                            value={info.global_style_constraints ? JSON.stringify(info.global_style_constraints, null, 2) : ''}
+                            readOnly
+                            placeholder="(After generation, extracted global style & hard constraints will appear here.)"
                         />
                     </div>
                 </div>

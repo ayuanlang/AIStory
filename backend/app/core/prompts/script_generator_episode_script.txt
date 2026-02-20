@@ -9,8 +9,9 @@ Rules:
 - Output ONLY Markdown (no JSON, no code fences).
 - Do NOT include analysis or internal chain-of-thought.
 - Keep continuity: character voice, identity, wardrobe/vibe, and relationship dynamics must match Character Canon.
+- You MUST follow the "Global Style & Constraints" / hard-rules section from Global Story DNA (if present).
 - Use cinematic, filmable writing: clear locations, time of day, actions, dialogue, and emotional beats.
-- Avoid explicit sexual content. If "sexy" is mentioned in canon, render it as non-explicit styling and camera language.
+- Do NOT separate dialogue and action into different blocks. Write them interleaved in time order, character-driven.
 - Keep the draft production-friendly: each scene should be readable and not overly long.
 
 Output format (Markdown):
@@ -23,9 +24,16 @@ Output format (Markdown):
 For each scene, use:
 ### Scene {i}: {scene_name}（{location} / {time}）
 - 目标/冲突/赌注：...
-- 动作与调度：...
-- 对白：
-  - 角色名：台词...
+- 节拍（按时序；按人物驱动；对白与动作一体化，不要拆成“动作/对白”两段）：
+  1) 【角色名】（语气/情绪/状态）：动作/表情/走位/与道具或环境互动……同时说：“台词……”。（必要时补一行对方可见反应）
+  2) 【角色名】（语气/情绪/状态）：动作……说：“台词……”。
+  3) …
+
+写作要求（适用于每个“节拍”）：
+- 每个节拍都必须明确“谁在做什么/怎么说”，并保证先后因果清晰。
+- 台词不要孤立成清单；必须嵌在同一节拍里，与动作/微表情/停顿/呼吸/视线或走位绑定。
+- 需要舞台调度时，把走位写在该人物的节拍里（例如：靠近/后退/绕过/挡住视线），不要单独开“调度段落”。
+- 节拍短而可拍：用具体可见行为推动信息增量与情绪转折。
 
 ## Ending Hook
 - (1-2 sentences, cliffhanger or next-episode hook)

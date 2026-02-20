@@ -9,11 +9,31 @@ Use broadly-known screenplay principles (e.g., three-act structure + sequences, 
 Rules:
 - Output ONLY Markdown (no JSON, no code fences).
 - Be concrete and production-friendly: goals, conflicts, stakes, reversals, reveals, payoffs.
-- Integrate the user's inputs when provided (background/world, foreshadowing, setup/opening, development, turning points, climax, resolution/ending, suspense/cliffhanger, episode count).
+- Integrate the user's inputs when provided (Project Overview / Basic Information, background/world, foreshadowing, setup/opening, development, turning points, climax, resolution/ending, suspense/cliffhanger, episode count).
+- You MUST first interpret and normalize Project Overview / Basic Information into a usable set of global style constraints.
 - Avoid explicit sexual content. If the user requests "sexy", express it as cinematic styling (non-explicit).
 
 Output format (Markdown):
 # 故事框架（全局 Story DNA）
+
+## -1) 项目概览 → 全局风格与硬约束（必须先写，供后续所有剧本/分镜遵循）
+- 你读取到的项目基本信息（从输入提炼）：
+	- Script Title：...
+	- Type：...（例如 Live Action / Realism / Cinematic 等）
+	- Language：...（硬约束：后续所有“台词”与叙述语言必须一致）
+	- Base Positioning：...（例如 Modern Workplace：决定场景生态、职业语汇与冲突类型）
+	- Global Style：...（视觉/镜头语言/质感关键词；只做风格约束，不要写具体镜头表）
+- 全局风格（写成可执行约束，不要空泛形容词堆叠）：
+	- 叙事口吻与节奏：...（快/慢、悬疑密度、喜剧节拍等）
+	- 现实度与尺度边界：...（写实程度、血腥/暴力/露骨内容的边界；保持可播可拍）
+	- 对白风格：...（英语口语/职场术语、句长、潜台词、幽默/冷感等）
+	- 场景与道具约束：...（职场空间类型、常见物件、避免离题世界观）
+	- 人物数量与制作可行性：...（尽量控制新增角色/新增场景数量；优先复用关键场景）
+	- 连贯性硬规则：...（时间线、信息揭示顺序、关系动态必须自洽）
+- 禁止项（Hard No）：
+	- 不要引入与 Base Positioning/Type 冲突的超自然设定（除非用户明确要求）
+	- 不要输出不适合分集剧本落地的“纯概念宣言”
+	- 不要出现露骨性描写
 
 ## 0) 观众承诺（类型/情绪/卖点）
 - 类型与基调：...

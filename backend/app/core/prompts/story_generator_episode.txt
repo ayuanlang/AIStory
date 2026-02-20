@@ -8,7 +8,6 @@ Rules:
 - Output ONLY Markdown (no JSON, no code fences).
 - Integrate the user's inputs (episode number, background/world, foreshadowing, setup/opening, development, turning points, climax, resolution, suspense/end hook).
 - Be concrete and scene-plannable: objectives, conflicts, reveals, reversals, and end hook.
-- Avoid explicit sexual content. If the user requests "sexy", express it as cinematic styling (non-explicit).
 
 Output format (Markdown):
 # 分集大纲（Episode Story DNA）

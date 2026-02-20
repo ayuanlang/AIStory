@@ -287,15 +287,21 @@ const Settings = () => {
             setEndpoint(llmConfig.endpoint || "");
             setModel(llmConfig.model || "");
         } else {
-             // Fallback: try loading current provider from saved if main config is null
-             const saved = savedConfigs[provider];
+             // Fallback: use default provider snapshot when active config is not present
+             const fallbackProvider = "openai";
+             setProvider(fallbackProvider);
+             const saved = savedConfigs[fallbackProvider];
              if (saved) {
                  setApiKey(saved.apiKey || "");
                  setEndpoint(saved.endpoint || "");
                  setModel(saved.model || "");
+             } else {
+                 setApiKey("");
+                 setEndpoint("https://api.openai.com/v1");
+                 setModel("");
              }
         }
-    }, [llmConfig, savedConfigs, provider]);
+    }, [llmConfig, savedConfigs]);
 
     // Initialize generation config & handle saved tool configs updates
     useEffect(() => {

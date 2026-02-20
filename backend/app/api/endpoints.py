@@ -17,7 +17,7 @@ import os
 from app.services.media_service import MediaGenerationService
 from app.services.video_service import create_montage
 from app.api.deps import get_current_user  # Import dependency
-from typing import List, Optional, Dict, Any, Union
+from typing import List, Optional, Dict, Any, Union, Tuple
 from pydantic import BaseModel
 import bcrypt
 import re
@@ -849,6 +849,111 @@ def get_project_cover_image(db: Session, project_id: int) -> Optional[str]:
     
     return None
 
+
+def _extract_md_section(md: str, start_header_regex: str) -> Tuple[str, str]:
+    """Return (section_text, remainder) where section_text starts at the first header matching regex.
+
+    Section is from matching header line up to (but not including) the next '## ' header.
+    If not found, returns ("", md).
+    """
+    if not md:
+        return "", md
+    m = re.search(start_header_regex, md, flags=re.MULTILINE)
+    if not m:
+        return "", md
+    start = m.start()
+    after = md[m.end():]
+    m2 = re.search(r"^##\s+", after, flags=re.MULTILINE)
+    if m2:
+        end = m.end() + m2.start()
+        return md[start:end].strip(), (md[:start] + md[end:]).strip()
+    return md[start:].strip(), md[:start].strip()
+
+
+def parse_global_style_constraints(global_md: str) -> Dict[str, Any]:
+    """Parse the '## -1) ...全局风格与硬约束...' section from Global Story DNA markdown.
+
+    Returns a dict suitable for persisting into project.global_info.
+    Parsing is best-effort; if the section is missing, returns an empty dict.
+    """
+    section, _ = _extract_md_section(global_md or "", r"^##\s*-1\)\s*.+$")
+    if not section:
+        return {}
+
+    result: Dict[str, Any] = {
+        "raw_section_md": section,
+        "project_overview": {},
+        "global_constraints": {},
+        "hard_no": [],
+        "extras": {},
+    }
+
+    current_block: Optional[str] = None
+    kv_re = re.compile(r"^(?P<k>[^:：]+)\s*[:：]\s*(?P<v>.*)$")
+
+    for raw_line in section.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("##"):
+            continue
+        if not line.startswith("-"):
+            continue
+
+        item = line.lstrip("-").strip()
+        if not item:
+            continue
+
+        # Block switches
+        if "项目基本信息" in item:
+            current_block = "project_overview"
+            continue
+        if item.startswith("全局风格"):
+            current_block = "global_constraints"
+            continue
+        if item.startswith("禁止项") or "Hard No" in item:
+            current_block = "hard_no"
+            continue
+
+        if current_block == "hard_no":
+            result["hard_no"].append(item)
+            continue
+
+        m = kv_re.match(item)
+        if not m:
+            # store unstructured bullet under current block
+            bucket = current_block or "extras"
+            result.setdefault(bucket, [])
+            if isinstance(result[bucket], list):
+                result[bucket].append(item)
+            continue
+
+        key = m.group("k").strip()
+        val = m.group("v").strip()
+        if current_block == "project_overview":
+            key_map = {
+                "Script Title": "script_title",
+                "Type": "type",
+                "Language": "language",
+                "Base Positioning": "base_positioning",
+                "Global Style": "global_style",
+            }
+            normalized_key = key_map.get(key, key)
+            result["project_overview"][normalized_key] = val
+        elif current_block == "global_constraints":
+            key_map = {
+                "叙事口吻与节奏": "narration_pacing",
+                "现实度与尺度边界": "realism_and_rating",
+                "对白风格": "dialogue_style",
+                "场景与道具约束": "scene_and_props",
+                "人物数量与制作可行性": "production_scope",
+                "连贯性硬规则": "continuity_rules",
+            }
+            normalized_key = key_map.get(key, key)
+            result["global_constraints"][normalized_key] = val
+        else:
+            result["extras"][key] = val
+
+    return result
+
 @router.post("/projects/", response_model=ProjectOut)
 def create_project(
     project: ProjectCreate, 
@@ -883,6 +988,8 @@ async def generate_project_story_dna_global(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    gi_existing = dict(project.global_info or {})
+
     # Force global mode for this endpoint
     episodes_count = req.episodes_count
     if not episodes_count or int(episodes_count) <= 0:
@@ -896,8 +1003,24 @@ async def generate_project_story_dna_global(
     with open(prompt_path, "r", encoding="utf-8") as f:
         sys_prompt = f.read()
 
+    # Prefer request payload (latest UI state), fall back to saved global_info.
+    script_title = (req.script_title or gi_existing.get("script_title") or "").strip()
+    project_type = (getattr(req, "type", None) or gi_existing.get("type") or "").strip()
+    language = (req.language or gi_existing.get("language") or "").strip()
+    base_positioning = (req.base_positioning or gi_existing.get("base_positioning") or "").strip()
+    global_style = (req.Global_Style or gi_existing.get("Global_Style") or gi_existing.get("global_style") or "").strip()
+
     user_prompt = (
         f"Mode: global\n"
+        f"Project Title: {project.title}\n"
+        f"\n"
+        f"[Project Overview / Basic Information]\n"
+        f"Script Title: {script_title}\n"
+        f"Type: {project_type}\n"
+        f"Language: {language}\n"
+        f"Base Positioning: {base_positioning}\n"
+        f"Global Style: {global_style}\n"
+        f"\n"
         f"Episodes Count: {int(episodes_count)}\n"
         f"Foreshadowing: {req.foreshadowing or ''}\n"
         f"Background: {req.background or ''}\n"
@@ -920,6 +1043,8 @@ async def generate_project_story_dna_global(
     if not generated_md:
         raise HTTPException(status_code=500, detail="LLM returned empty content")
 
+    extracted_constraints = parse_global_style_constraints(generated_md)
+
     # Persist both output and the inputs that produced it.
     # This ensures a successful generation is durable across refresh even
     # if the user doesn't click the separate "Save Changes" button.
@@ -934,6 +1059,9 @@ async def generate_project_story_dna_global(
     gi["story_generator_global_input"] = story_input
     gi["story_dna_global_md"] = generated_md
     gi["story_dna_global_updated_at"] = now_iso
+    if extracted_constraints:
+        gi["global_style_constraints"] = extracted_constraints
+        gi["global_style_constraints_updated_at"] = now_iso
     project.global_info = gi
 
     db.add(project)
@@ -1606,6 +1734,12 @@ class StoryGeneratorRequest(BaseModel):
     mode: str  # 'global' | 'episode'
     episodes_count: Optional[int] = None
     episode_number: Optional[int] = None
+    # Project Overview / Basic Information (optional but should be forwarded to LLM when provided)
+    script_title: Optional[str] = None
+    type: Optional[str] = None
+    language: Optional[str] = None
+    base_positioning: Optional[str] = None
+    Global_Style: Optional[str] = None
     foreshadowing: Optional[str] = None
     background: Optional[str] = None
     setup: Optional[str] = None
@@ -2171,15 +2305,29 @@ async def generate_project_episode_scripts_from_global_framework(
         # Balance check per call (may raise 402)
         billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
 
+        constraints_obj = (project.global_info or {}).get("global_style_constraints")
+        constraints_block = ""
+        if constraints_obj:
+            constraints_block = (
+                "Extracted Global Style & Constraints (JSON-ish):\n"
+                + json.dumps(constraints_obj, ensure_ascii=False, indent=2)
+                + "\n\n"
+            )
+
+        relationships_block = ""
+        if relationships:
+            relationships_block = f"Character Relationships (Plain Text):\n{relationships}\n\n"
+
         user_prompt = (
             f"Project Title: {project.title}\n"
             f"Episode Number: {idx}\n"
             f"Episode Title: {ep.title}\n"
             f"Extra Notes: {req.extra_notes or ''}\n\n"
+            f"{constraints_block}"
             f"Global Story DNA (Markdown):\n{global_md}\n\n"
             f"Character Canon (Markdown):\n{character_canon_md}\n\n"
-            + (f"Character Relationships (Plain Text):\n{relationships}\n\n" if relationships else "")
-            + "Write the episode script draft now."
+            f"{relationships_block}"
+            "Write the episode script draft now."
         )
 
         try:
