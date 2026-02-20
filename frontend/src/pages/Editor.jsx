@@ -70,6 +70,8 @@ import {
     generateEpisodeScenes,
     generateProjectEpisodeScripts,
     saveProjectStoryGeneratorGlobalInput,
+    exportProjectStoryGlobalPackage,
+    importProjectStoryGlobalPackage,
     saveProjectCharacterCanonInput,
     saveProjectCharacterCanonCategories,
     updateProjectCharacterProfiles,
@@ -693,8 +695,10 @@ const ProjectOverview = ({ id, onProjectUpdate }) => {
     const [isGeneratingGlobalStory, setIsGeneratingGlobalStory] = useState(false);
     const [isGeneratingEpisodeScripts, setIsGeneratingEpisodeScripts] = useState(false);
     const [isAnalyzingNovel, setIsAnalyzingNovel] = useState(false);
+    const [isImportingStoryPackage, setIsImportingStoryPackage] = useState(false);
     const [novelImportText, setNovelImportText] = useState('');
     const [showGlobalStoryGuide, setShowGlobalStoryGuide] = useState(false);
+    const storyPackageFileInputRef = useRef(null);
     const globalStoryAutosaveTimerRef = useRef(null);
     const skipNextGlobalStoryAutosaveRef = useRef(true);
 
@@ -1385,6 +1389,90 @@ const ProjectOverview = ({ id, onProjectUpdate }) => {
         }
     };
 
+    const handleExportStoryGeneratorPackage = async () => {
+        try {
+            const pkg = await exportProjectStoryGlobalPackage(id);
+            const blob = new Blob([JSON.stringify(pkg, null, 2)], { type: 'application/json;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            const safeName = String(project?.title || `project_${id}`)
+                .replace(/[\\/:*?"<>|]+/g, '_')
+                .replace(/\s+/g, '_')
+                .slice(0, 60);
+            a.href = url;
+            a.download = `${safeName}_story_generator_global_export.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        } catch (e) {
+            console.error(e);
+            const detail = e?.response?.data?.detail || e?.message || String(e);
+            alert(`Failed to export Story Generator package: ${detail}`);
+        }
+    };
+
+    const handleOpenImportStoryGeneratorPackage = () => {
+        if (!storyPackageFileInputRef.current) return;
+        storyPackageFileInputRef.current.value = '';
+        storyPackageFileInputRef.current.click();
+    };
+
+    const handleImportStoryGeneratorPackageFile = async (event) => {
+        const file = event?.target?.files?.[0];
+        if (!file) return;
+
+        setIsImportingStoryPackage(true);
+        try {
+            const raw = await file.text();
+            let parsed;
+            try {
+                parsed = JSON.parse(raw);
+            } catch {
+                throw new Error('Invalid JSON file.');
+            }
+
+            const payload = {
+                project_overview: parsed?.project_overview || {},
+                story_generator_global_input: parsed?.story_generator_global_input || {},
+                story_dna_global_md: parsed?.story_dna_global_md || '',
+                global_style_constraints: parsed?.global_style_constraints || {},
+            };
+
+            const updated = await importProjectStoryGlobalPackage(id, payload);
+            setProject(updated);
+            if (updated?.global_info) {
+                const merged = {
+                    ...info,
+                    ...updated.global_info,
+                    tech_params: {
+                        visual_standard: {
+                            ...info.tech_params.visual_standard,
+                            ...(updated.global_info.tech_params?.visual_standard || {})
+                        }
+                    }
+                };
+                setInfo(merged);
+
+                if (updated.global_info.story_generator_global_input && typeof updated.global_info.story_generator_global_input === 'object') {
+                    skipNextGlobalStoryAutosaveRef.current = true;
+                    setGlobalStoryInput(prev => ({
+                        ...prev,
+                        ...updated.global_info.story_generator_global_input,
+                    }));
+                }
+            }
+
+            alert('Story Generator package imported and saved to this project.');
+        } catch (e) {
+            console.error(e);
+            const detail = e?.response?.data?.detail || e?.message || String(e);
+            alert(`Failed to import Story Generator package: ${detail}`);
+        } finally {
+            setIsImportingStoryPackage(false);
+        }
+    };
+
     const handleGenerateEpisodeScripts = async () => {
         if (!id) {
             addLog?.('Cannot generate episode scripts: missing project id.', 'error');
@@ -1713,6 +1801,29 @@ const ProjectOverview = ({ id, onProjectUpdate }) => {
                     <div className="flex items-center justify-between gap-3">
                         <h3 className="text-lg font-semibold text-primary">Story Generator (Global / Project)</h3>
                         <div className="flex items-center gap-2">
+                            <input
+                                ref={storyPackageFileInputRef}
+                                type="file"
+                                accept="application/json,.json"
+                                className="hidden"
+                                onChange={handleImportStoryGeneratorPackageFile}
+                            />
+                            <button
+                                onClick={handleOpenImportStoryGeneratorPackage}
+                                disabled={isImportingStoryPackage || isGeneratingGlobalStory || isGeneratingEpisodeScripts || isAnalyzingNovel}
+                                className={`px-3 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${(isImportingStoryPackage || isGeneratingGlobalStory || isGeneratingEpisodeScripts || isAnalyzingNovel) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                title="Import Story Generator package JSON from another project"
+                            >
+                                {isImportingStoryPackage ? <><Loader2 className="w-4 h-4 animate-spin" /> Importing...</> : <><Upload className="w-4 h-4" /> Import Package</>}
+                            </button>
+                            <button
+                                onClick={handleExportStoryGeneratorPackage}
+                                disabled={isGeneratingGlobalStory || isGeneratingEpisodeScripts || isAnalyzingNovel || isImportingStoryPackage}
+                                className={`px-3 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${(isGeneratingGlobalStory || isGeneratingEpisodeScripts || isAnalyzingNovel || isImportingStoryPackage) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                title="Export Story Generator package JSON for import into another project"
+                            >
+                                <Download className="w-4 h-4" /> Export Package
+                            </button>
                             <button
                                 onClick={() => setShowGlobalStoryGuide(v => !v)}
                                 className="px-3 py-2 rounded-lg text-sm font-bold bg-white/10 text-white hover:bg-white/20 flex items-center gap-2"

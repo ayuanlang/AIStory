@@ -91,6 +91,16 @@ export const saveProjectStoryGeneratorGlobalInput = async (projectId, payload) =
     return response.data;
 }
 
+export const exportProjectStoryGlobalPackage = async (projectId) => {
+    const response = await api.get(`/projects/${projectId}/story_generator/global/export`);
+    return response.data;
+}
+
+export const importProjectStoryGlobalPackage = async (projectId, payload) => {
+    const response = await api.put(`/projects/${projectId}/story_generator/global/import`, payload);
+    return response.data;
+}
+
 // Episodes
 export const fetchEpisodes = async (projectId) => {
     const response = await api.get(`/projects/${projectId}/episodes`);

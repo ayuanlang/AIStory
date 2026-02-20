@@ -1121,6 +1121,104 @@ def save_project_story_generator_global_input(
     return project
 
 
+class StoryGeneratorGlobalImportRequest(BaseModel):
+    project_overview: Optional[Dict[str, Any]] = None
+    story_generator_global_input: Optional[Dict[str, Any]] = None
+    story_dna_global_md: Optional[str] = None
+    global_style_constraints: Optional[Dict[str, Any]] = None
+
+
+@router.get("/projects/{project_id}/story_generator/global/export", response_model=Dict[str, Any])
+def export_project_story_generator_global_package(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    gi = dict(project.global_info or {})
+
+    return {
+        "schema_version": 1,
+        "export_type": "story_generator_global_project",
+        "exported_at": datetime.utcnow().isoformat(),
+        "source_project": {
+            "id": project.id,
+            "title": project.title,
+        },
+        "project_overview": {
+            "script_title": gi.get("script_title") or "",
+            "type": gi.get("type") or "",
+            "language": gi.get("language") or "",
+            "base_positioning": gi.get("base_positioning") or "",
+            "Global_Style": gi.get("Global_Style") or gi.get("global_style") or "",
+        },
+        "story_generator_global_input": gi.get("story_generator_global_input") or {},
+        "story_dna_global_md": gi.get("story_dna_global_md") or "",
+        "global_style_constraints": gi.get("global_style_constraints") or {},
+    }
+
+
+@router.put("/projects/{project_id}/story_generator/global/import", response_model=ProjectOut)
+def import_project_story_generator_global_package(
+    project_id: int,
+    req: StoryGeneratorGlobalImportRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    now_iso = datetime.utcnow().isoformat()
+    gi = dict(project.global_info or {})
+
+    overview = req.project_overview or {}
+    if isinstance(overview, dict):
+        for key in ["script_title", "type", "language", "base_positioning", "Global_Style"]:
+            if key in overview:
+                val = overview.get(key)
+                gi[key] = "" if val is None else str(val)
+
+    imported_input = req.story_generator_global_input or {}
+    if isinstance(imported_input, dict):
+        normalized_input = dict(imported_input)
+        normalized_input["mode"] = "global"
+        if "episodes_count" in normalized_input:
+            try:
+                normalized_input["episodes_count"] = int(normalized_input.get("episodes_count") or 0)
+            except Exception:
+                normalized_input["episodes_count"] = 0
+        gi["story_generator_global_input"] = normalized_input
+        gi["story_generator_global_input_updated_at"] = now_iso
+
+    if req.story_dna_global_md is not None:
+        gi["story_dna_global_md"] = req.story_dna_global_md or ""
+        gi["story_dna_global_updated_at"] = now_iso
+
+    if req.global_style_constraints is not None:
+        gi["global_style_constraints"] = req.global_style_constraints or {}
+        gi["global_style_constraints_updated_at"] = now_iso
+
+    project.global_info = gi
+    db.add(project)
+    db.commit()
+    db.refresh(project)
+
+    # Populate response aliases to match other endpoints
+    try:
+        project.cover_image = get_project_cover_image(db, project.id)
+    except Exception:
+        project.cover_image = None
+    try:
+        project.aspectRatio = project.global_info.get('aspectRatio') if project.global_info else None
+    except Exception:
+        project.aspectRatio = None
+    return project
+
+
 class AnalyzeNovelRequest(BaseModel):
     novel_text: str
 
