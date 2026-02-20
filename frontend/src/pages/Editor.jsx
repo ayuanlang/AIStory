@@ -9248,6 +9248,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         try {
             const tech = JSON.parse(editingShot.technical_notes || '{}');
             const keyframes = tech.keyframes || [];
+            const videoRefSubmitMode = tech.video_ref_submit_mode || 'auto';
             
             const refs = [];
             // 1. Video Ref Selection Strategy
@@ -9269,7 +9270,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             }
             
             // Check if user has explicitly managed video refs
-            if (tech.video_ref_image_urls && Array.isArray(tech.video_ref_image_urls)) {
+            if (videoRefSubmitMode === 'refs_video') {
+                if (tech.video_ref_image_urls && Array.isArray(tech.video_ref_image_urls)) {
+                    refs.push(...tech.video_ref_image_urls);
+                }
+            } else if (tech.video_ref_image_urls && Array.isArray(tech.video_ref_image_urls)) {
                 // Manual Mode: Use strictly what's in the list
                 refs.push(...tech.video_ref_image_urls);
             } else {
@@ -9303,12 +9308,16 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             let finalStartRef = null;
             let finalEndRef = null;
             
-            if (uniqueRefs.length > 0) {
-                 finalStartRef = uniqueRefs[0];
-                 // Take the last item as End Frame if there is more than 1 item
-                 if (uniqueRefs.length > 1) {
-                     finalEndRef = uniqueRefs[uniqueRefs.length - 1];
-                 }
+            if (videoRefSubmitMode === 'refs_video') {
+                // Submit Refs (Video) as reference images without requiring Start/End frames.
+                finalStartRef = uniqueRefs.length > 0 ? uniqueRefs[0] : null;
+                finalEndRef = null;
+            } else if (uniqueRefs.length > 0) {
+                finalStartRef = uniqueRefs[0];
+                // Take the last item as End Frame if there is more than 1 item
+                if (uniqueRefs.length > 1) {
+                    finalEndRef = uniqueRefs[uniqueRefs.length - 1];
+                }
             }
             
             console.log("[Editor] Video Generation Refs (Ordered):", uniqueRefs);
@@ -9516,10 +9525,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             let shotTech = {};
             try { shotTech = JSON.parse(currentShot.technical_notes || '{}'); } catch(e){}
             const currentShotMode = shotTech.video_gen_mode || 'start'; // Default: Start Only
+            const currentVideoRefSubmitMode = shotTech.video_ref_submit_mode || 'auto';
 
             try {
                 // 1. Ensure Start Frame
-                if (currentShotMode !== 'end' && !currentShot.image_url) {
+                if (currentVideoRefSubmitMode !== 'refs_video' && currentShotMode !== 'end' && !currentShot.image_url) {
                     try {
                         setBatchProgress({ current: processedCount, total: shots.length, status: `${statusBase}: Start Frame...` });
                         let prompt = currentShot.start_frame || currentShot.video_content || "A cinematic shot";
@@ -9561,7 +9571,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 // Determine Shot Mode (default start)
                 const shotMode = tech.video_gen_mode || 'start';
 
-                if (shotMode !== 'start' && !tech.end_frame_url) {
+                if (currentVideoRefSubmitMode !== 'refs_video' && shotMode !== 'start' && !tech.end_frame_url) {
                     try {
                         setBatchProgress({ current: processedCount, total: shots.length, status: `${statusBase}: End Frame...` });
                         let prompt = currentShot.end_frame || "End frame";
@@ -9609,9 +9619,14 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                         let tech2 = {};
                         try { tech2 = JSON.parse(currentShot.technical_notes || '{}'); } catch(e){}
                         const shotMode2 = tech2.video_gen_mode || 'start'; // Default: Start Only
+                        const shotVideoRefSubmitMode = tech2.video_ref_submit_mode || 'auto';
 
-                        if (tech2.video_ref_image_urls && Array.isArray(tech2.video_ref_image_urls)) {
-                             refs.push(...tech2.video_ref_image_urls);
+                        if (shotVideoRefSubmitMode === 'refs_video') {
+                            if (tech2.video_ref_image_urls && Array.isArray(tech2.video_ref_image_urls)) {
+                                refs.push(...tech2.video_ref_image_urls);
+                            }
+                        } else if (tech2.video_ref_image_urls && Array.isArray(tech2.video_ref_image_urls)) {
+                            refs.push(...tech2.video_ref_image_urls);
                         } else {
                             // Auto Mode respecting shotMode
                             if (shotMode2 !== 'end' && currentShot.image_url) refs.push(currentShot.image_url);
@@ -9625,7 +9640,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                         const uniqueRefs = [...new Set(refs)].filter(Boolean);
                         
                         let lastFrame = null;
-                        if (shotMode2 === 'start_end' || shotMode2 === 'end') {
+                        if (shotVideoRefSubmitMode !== 'refs_video' && (shotMode2 === 'start_end' || shotMode2 === 'end')) {
                             lastFrame = tech2.end_frame_url || null;
                         }
 
@@ -10315,6 +10330,28 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                     <option value="start_end">Start+End</option>
                                                     <option value="start">Start Only</option>
                                                     <option value="end">End Only</option>
+                                                </select>
+
+                                                <select
+                                                    value={(() => {
+                                                        try {
+                                                            const t = JSON.parse(editingShot.technical_notes || '{}');
+                                                            return t.video_ref_submit_mode || 'auto';
+                                                        } catch(e) { return 'auto'; }
+                                                    })()}
+                                                    onChange={(e) => {
+                                                        const mode = e.target.value;
+                                                        try {
+                                                            const t = JSON.parse(editingShot.technical_notes || '{}');
+                                                            t.video_ref_submit_mode = mode;
+                                                            setEditingShot(prev => ({ ...prev, technical_notes: JSON.stringify(t) }));
+                                                        } catch(e) {}
+                                                    }}
+                                                    className="bg-black/40 border border-white/20 text-[10px] rounded px-1 py-0.5 text-white/70 outline-none hover:bg-white/5"
+                                                    title="Reference Image Source for Final Video"
+                                                >
+                                                    <option value="auto">Ref Source: Auto</option>
+                                                    <option value="refs_video">Ref Source: Refs(Video)</option>
                                                 </select>
 
                                                 <button 

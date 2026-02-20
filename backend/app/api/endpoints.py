@@ -954,6 +954,114 @@ def parse_global_style_constraints(global_md: str) -> Dict[str, Any]:
 
     return result
 
+
+def sanitize_llm_markdown_output(text: str) -> str:
+    """Best-effort cleanup for markdown endpoints.
+
+    Removes common reasoning leakage (<think> blocks, leading "I think..." preambles)
+    and fenced wrappers when models ignore format instructions.
+    """
+    if not text:
+        return ""
+
+    content = str(text)
+    content = re.sub(r"<think>[\s\S]*?</think>", "", content, flags=re.IGNORECASE).strip()
+    content = content.replace("```markdown", "").replace("```md", "").replace("```", "").strip()
+
+    lines = content.splitlines()
+    if not lines:
+        return ""
+
+    reasoning_prefix_re = re.compile(
+        r"^\s*(i think|i will|let me|let's|analysis|reasoning|thought process|"
+        r"分析|思路|推理|下面|我将|我认为|先来)\b",
+        flags=re.IGNORECASE,
+    )
+    markdown_start_re = re.compile(r"^\s*(#|\||-\s|\d+\.\s|>\s|\*\s)")
+
+    # Trim leading blank lines first.
+    while lines and not lines[0].strip():
+        lines.pop(0)
+
+    # Remove obvious leading reasoning lines.
+    while lines and reasoning_prefix_re.match(lines[0]) and not markdown_start_re.match(lines[0]):
+        lines.pop(0)
+
+    # If a markdown-looking start exists later and the preface looks like reasoning,
+    # cut to the markdown start.
+    first_md_index = None
+    for idx, line in enumerate(lines):
+        if markdown_start_re.match(line):
+            first_md_index = idx
+            break
+    if first_md_index is not None and first_md_index > 0:
+        preface = "\n".join(lines[:first_md_index]).lower()
+        if any(token in preface for token in ["i think", "analysis", "reasoning", "推理", "思路", "我将", "我认为"]):
+            lines = lines[first_md_index:]
+
+    return "\n".join(lines).strip()
+
+
+def is_valid_markdown_output(text: str, require_h1: bool = True) -> bool:
+    if not text:
+        return False
+
+    content = str(text).strip()
+    if not content:
+        return False
+
+    lower = content.lower()
+    if "<think>" in lower or "```" in content:
+        return False
+
+    lines = [ln for ln in content.splitlines() if ln.strip()]
+    if not lines:
+        return False
+
+    if require_h1 and not lines[0].lstrip().startswith("#"):
+        return False
+
+    # Basic markdown structure presence
+    has_md_structure = any(
+        ln.lstrip().startswith(("#", "- ", "* ", "|", ">", "1. ", "2. ", "3. "))
+        for ln in lines
+    )
+    return has_md_structure
+
+
+async def generate_markdown_with_retry(
+    user_prompt: str,
+    sys_prompt: str,
+    llm_config: Optional[Dict[str, Any]],
+    strict_markdown: bool = True,
+    require_h1: bool = True,
+) -> str:
+    resp = await llm_service.generate_content(user_prompt, sys_prompt, llm_config)
+    content = sanitize_llm_markdown_output(resp.get("content") or "")
+
+    if not strict_markdown:
+        return content
+
+    if content and is_valid_markdown_output(content, require_h1=require_h1):
+        return content
+
+    retry_sys_prompt = (
+        f"{sys_prompt}\n\n"
+        "[FORMAT RETRY - STRICT]\n"
+        "Return ONLY final valid Markdown.\n"
+        "Do NOT output reasoning, preface text, or chain-of-thought.\n"
+        "Do NOT output code fences.\n"
+        "The first non-empty line must be an H1 markdown header starting with '# '."
+    )
+    retry_user_prompt = (
+        f"{user_prompt}\n\n"
+        "[RETRY INSTRUCTION]\n"
+        "Only return corrected final markdown now."
+    )
+    retry_resp = await llm_service.generate_content(retry_user_prompt, retry_sys_prompt, llm_config)
+    retry_content = sanitize_llm_markdown_output(retry_resp.get("content") or "")
+    return retry_content or content
+
 @router.post("/projects/", response_model=ProjectOut)
 def create_project(
     project: ProjectCreate, 
@@ -1039,8 +1147,13 @@ async def generate_project_story_dna_global(
     model = llm_config.get("model") if llm_config else None
     billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
 
-    resp = await llm_service.generate_content(user_prompt, sys_prompt, llm_config)
-    generated_md = (resp.get("content") or "").strip()
+    generated_md = await generate_markdown_with_retry(
+        user_prompt=user_prompt,
+        sys_prompt=sys_prompt,
+        llm_config=llm_config,
+        strict_markdown=(req.strict_markdown is not False),
+        require_h1=True,
+    )
     if not generated_md:
         raise HTTPException(status_code=500, detail="LLM returned empty content")
 
@@ -1527,6 +1640,7 @@ class ProjectEpisodeScriptsGenerateRequest(BaseModel):
     episodes_count: Optional[int] = None
     overwrite_existing: bool = False
     extra_notes: Optional[str] = None
+    strict_markdown: bool = True
 
 @router.get("/projects/{project_id}/episodes", response_model=List[EpisodeOut])
 def read_episodes(
@@ -1934,6 +2048,7 @@ class StoryGeneratorRequest(BaseModel):
     resolution: Optional[str] = None
     suspense: Optional[str] = None
     extra_notes: Optional[str] = None
+    strict_markdown: bool = True
 
 
 class ScriptScenesGenerateRequest(BaseModel):
@@ -2167,8 +2282,13 @@ async def generate_episode_story_dna(
     model = llm_config.get("model") if llm_config else None
     billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
 
-    resp = await llm_service.generate_content(user_prompt, sys_prompt, llm_config)
-    generated_md = (resp.get("content") or "").strip()
+    generated_md = await generate_markdown_with_retry(
+        user_prompt=user_prompt,
+        sys_prompt=sys_prompt,
+        llm_config=llm_config,
+        strict_markdown=(req.strict_markdown is not False),
+        require_h1=True,
+    )
     if not generated_md:
         raise HTTPException(status_code=500, detail="LLM returned empty content")
 
@@ -2521,11 +2641,15 @@ async def generate_project_episode_scripts_from_global_framework(
             sys_prompt_episode = sys_prompt
 
         try:
-            resp = await llm_service.generate_content(user_prompt, sys_prompt_episode, llm_config)
-            raw = (resp.get("content") or "").strip()
-            if not raw:
+            content = await generate_markdown_with_retry(
+                user_prompt=user_prompt,
+                sys_prompt=sys_prompt_episode,
+                llm_config=llm_config,
+                strict_markdown=(req.strict_markdown is not False),
+                require_h1=True,
+            )
+            if not content:
                 raise RuntimeError("LLM returned empty content")
-            content = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
 
             ep.script_content = content
             ei = dict(ep.episode_info or {})

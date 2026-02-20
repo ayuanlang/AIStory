@@ -8,6 +8,8 @@ Use broadly-known screenplay principles (e.g., three-act structure + sequences, 
 
 Rules:
 - Output ONLY Markdown (no JSON, no code fences).
+- Output ONLY final answer content. Do NOT output reasoning or preface text such as "I think", "Let me think", "Analysis", "思路", "推理过程".
+- Markdown must be syntactically correct and renderable (headers/lists/numbering must be valid).
 - Be concrete and production-friendly: goals, conflicts, stakes, reversals, reveals, payoffs.
 - Integrate the user's inputs when provided (Project Overview / Basic Information, background/world, foreshadowing, setup/opening, development, turning points, climax, resolution/ending, suspense/cliffhanger, episode count).
 - You MUST first interpret and normalize Project Overview / Basic Information into a usable set of global style constraints.

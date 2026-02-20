@@ -8,6 +8,9 @@ Write ONE episode's full script draft based on the provided context:
 Rules:
 - Output ONLY Markdown (no JSON, no code fences).
 - Do NOT include analysis or internal chain-of-thought.
+- Do NOT output any reasoning preface such as "I think", "Let me think", "Analysis", "思路", "推理过程".
+- Your response must be syntactically valid Markdown (headers/lists/indentation must render correctly).
+- Start directly with `# Episode {episode_number}: {episode_title}` as the first non-empty line.
 - Keep continuity: character voice, identity, wardrobe/vibe, and relationship dynamics must match Character Canon.
 - You MUST follow the "Global Style & Constraints" / hard-rules section from Global Story DNA (if present).
 - Use cinematic, filmable writing: clear locations, time of day, actions, dialogue, and emotional beats.
@@ -25,10 +28,10 @@ For each scene, use:
 ### Scene {i}: {scene_name}（{location} / {time}）
 - 目标/冲突/赌注：...
 - 节拍（按时序；按人物驱动；对白与动作一体化，不要拆成“动作/对白”两段）：
-  1) 【角色名】（语气/情绪/状态）：动作/表情/走位/与道具或环境互动……同时说：“台词……”。（必要时补一行对方可见反应）
+  1) 【角色名】（语气/情绪/状态）：动作/表情/走位/特效/音效/背景/与道具或环境互动……同时说：“台词……”。（必要时补一行对方可见反应）
   2) 【角色名】（语气/情绪/状态）：动作……说：“台词……”。
   3) …
-
+-配乐与音效
 写作要求（适用于每个“节拍”）：
 - 每个节拍都必须明确“谁在做什么/怎么说”，并保证先后因果清晰。
 - 台词不要孤立成清单；必须嵌在同一节拍里，与动作/微表情/停顿/呼吸/视线或走位绑定。
