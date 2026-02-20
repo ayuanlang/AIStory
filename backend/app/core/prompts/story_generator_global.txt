@@ -11,6 +11,8 @@ Rules:
 - Be concrete and production-friendly: goals, conflicts, stakes, reversals, reveals, payoffs.
 - Integrate the user's inputs when provided (Project Overview / Basic Information, background/world, foreshadowing, setup/opening, development, turning points, climax, resolution/ending, suspense/cliffhanger, episode count).
 - You MUST first interpret and normalize Project Overview / Basic Information into a usable set of global style constraints.
+- Project Overview / Basic Information may be partially empty or fully empty. Do NOT fail; infer safe, production-friendly defaults and continue generating.
+- Character Canon may be empty at this stage. Do NOT require it when generating Global Story DNA.
 - Avoid explicit sexual content. If the user requests "sexy", express it as cinematic styling (non-explicit).
 
 Output format (Markdown):

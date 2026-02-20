@@ -1013,6 +1013,7 @@ async def generate_project_story_dna_global(
     user_prompt = (
         f"Mode: global\n"
         f"Project Title: {project.title}\n"
+        f"Note: Project Overview / Basic Information and Character Canon may be empty; do not fail, infer sensible defaults and continue.\n"
         f"\n"
         f"[Project Overview / Basic Information]\n"
         f"Script Title: {script_title}\n"
@@ -1118,6 +1119,92 @@ def save_project_story_generator_global_input(
     except Exception:
         project.aspectRatio = None
     return project
+
+
+class AnalyzeNovelRequest(BaseModel):
+    novel_text: str
+
+
+@router.post("/projects/{project_id}/story_generator/analyze_novel", response_model=Dict[str, Any])
+async def analyze_project_novel_to_story_generator_fields(
+    project_id: int,
+    req: AnalyzeNovelRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    novel_text = (req.novel_text or "").strip()
+    if not novel_text:
+        raise HTTPException(status_code=400, detail="novel_text is required")
+
+    prompt_dir = os.path.join(str(settings.BASE_DIR), "app", "core", "prompts")
+    prompt_path = os.path.join(prompt_dir, "story_generator_analyze_novel.txt")
+    if not os.path.exists(prompt_path):
+        logger.error(f"Analyze novel prompt not found at: {prompt_path}")
+        raise HTTPException(status_code=404, detail="Prompt file 'story_generator_analyze_novel.txt' not found.")
+
+    with open(prompt_path, "r", encoding="utf-8") as f:
+        sys_prompt_template = f.read()
+
+    user_prompt = f"Project Title: {project.title}\n\nNovel/Script Text:\n{novel_text}"
+
+    llm_config = agent_service.get_active_llm_config(current_user.id)
+    provider = llm_config.get("provider") if llm_config else None
+    model = llm_config.get("model") if llm_config else None
+    billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+
+    # Keep compatibility with prompt template variable while still passing text in user prompt.
+    try:
+        sys_prompt = sys_prompt_template.format(novel_text=novel_text)
+    except Exception:
+        sys_prompt = sys_prompt_template
+
+    resp = await llm_service.generate_content(user_prompt, sys_prompt, llm_config)
+    raw = (resp.get("content") or "").strip()
+    if not raw:
+        raise HTTPException(status_code=500, detail="LLM returned empty content")
+
+    content = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+    content = content.replace("```json", "").replace("```", "").strip()
+    start_idx = content.find("{")
+    end_idx = content.rfind("}")
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+        content = content[start_idx:end_idx + 1]
+
+    try:
+        data = json.loads(content)
+    except Exception as e:
+        logger.error(f"[analyze_novel] JSON parse failed: {e}. Raw len={len(raw)}")
+        raise HTTPException(status_code=500, detail="Failed to parse LLM JSON for novel analysis")
+
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=500, detail="LLM JSON must be an object")
+
+    required_keys = [
+        "background",
+        "setup",
+        "development",
+        "turning_points",
+        "climax",
+        "resolution",
+        "suspense",
+        "foreshadowing",
+    ]
+
+    normalized: Dict[str, Any] = {}
+    for key in required_keys:
+        val = data.get(key, "")
+        if val is None:
+            normalized[key] = ""
+        elif isinstance(val, str):
+            normalized[key] = val.strip()
+        else:
+            normalized[key] = str(val).strip()
+
+    return normalized
 
 
 @router.get("/projects/", response_model=List[ProjectOut])

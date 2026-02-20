@@ -27,6 +27,7 @@ import {
     fetchProject, 
     updateProject,
     generateProjectStoryGlobal,
+    analyzeProjectNovel,
     generateProjectCharacterProfile,
     fetchEpisodes, 
     createEpisode, 
@@ -691,6 +692,8 @@ const ProjectOverview = ({ id, onProjectUpdate }) => {
     });
     const [isGeneratingGlobalStory, setIsGeneratingGlobalStory] = useState(false);
     const [isGeneratingEpisodeScripts, setIsGeneratingEpisodeScripts] = useState(false);
+    const [isAnalyzingNovel, setIsAnalyzingNovel] = useState(false);
+    const [novelImportText, setNovelImportText] = useState('');
     const [showGlobalStoryGuide, setShowGlobalStoryGuide] = useState(false);
     const globalStoryAutosaveTimerRef = useRef(null);
     const skipNextGlobalStoryAutosaveRef = useRef(true);
@@ -1333,6 +1336,55 @@ const ProjectOverview = ({ id, onProjectUpdate }) => {
         }
     };
 
+    const handleAnalyzeNovelToGlobalStory = async () => {
+        const text = String(novelImportText || '').trim();
+        if (!text) {
+            alert('Please paste novel/script text first.');
+            return;
+        }
+
+        setIsAnalyzingNovel(true);
+        try {
+            const analyzed = await analyzeProjectNovel(id, { novel_text: text });
+            const mergedStoryInput = {
+                ...globalStoryInput,
+                background: analyzed?.background || '',
+                setup: analyzed?.setup || '',
+                development: analyzed?.development || '',
+                turning_points: analyzed?.turning_points || '',
+                climax: analyzed?.climax || '',
+                resolution: analyzed?.resolution || '',
+                suspense: analyzed?.suspense || '',
+                foreshadowing: analyzed?.foreshadowing || '',
+            };
+
+            // We persist immediately so users don't rely only on debounced autosave.
+            skipNextGlobalStoryAutosaveRef.current = true;
+            setGlobalStoryInput(mergedStoryInput);
+            await saveProjectStoryGeneratorGlobalInput(id, {
+                mode: 'global',
+                episodes_count: Number(mergedStoryInput.episodes_count || 0) || 0,
+                background: mergedStoryInput.background,
+                setup: mergedStoryInput.setup,
+                development: mergedStoryInput.development,
+                turning_points: mergedStoryInput.turning_points,
+                climax: mergedStoryInput.climax,
+                resolution: mergedStoryInput.resolution,
+                suspense: mergedStoryInput.suspense,
+                foreshadowing: mergedStoryInput.foreshadowing,
+                extra_notes: mergedStoryInput.extra_notes,
+            });
+
+            alert('Imported text analyzed, fields auto-filled, and draft saved.');
+        } catch (e) {
+            console.error(e);
+            const detail = e?.response?.data?.detail || e?.message || String(e);
+            alert(`Failed to analyze imported text: ${detail}`);
+        } finally {
+            setIsAnalyzingNovel(false);
+        }
+    };
+
     const handleGenerateEpisodeScripts = async () => {
         if (!id) {
             addLog?.('Cannot generate episode scripts: missing project id.', 'error');
@@ -1820,6 +1872,26 @@ const ProjectOverview = ({ id, onProjectUpdate }) => {
                     )}
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div className="sm:col-span-2">
+                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">Import Novel / Script Text</label>
+                            <textarea
+                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-32 resize-y"
+                                value={novelImportText}
+                                onChange={(e) => setNovelImportText(e.target.value)}
+                                placeholder="Paste novel/script text here, then click Analyze & Fill to auto-complete Global Story fields."
+                            />
+                            <div className="mt-2 flex items-center justify-end">
+                                <button
+                                    onClick={handleAnalyzeNovelToGlobalStory}
+                                    disabled={isAnalyzingNovel || isGeneratingGlobalStory}
+                                    className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${(isAnalyzingNovel || isGeneratingGlobalStory) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                    title="Analyze imported text with LLM and auto-fill Story Generator fields"
+                                >
+                                    {isAnalyzingNovel ? <><Loader2 className="w-4 h-4 animate-spin" /> Analyzing...</> : <><Upload className="w-4 h-4" /> Analyze & Fill</>}
+                                </button>
+                            </div>
+                        </div>
+
                         <div>
                             <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">Episodes Count</label>
                             <input

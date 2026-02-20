@@ -80,6 +80,11 @@ export const generateProjectStoryGlobal = async (projectId, payload) => {
     return response.data;
 }
 
+export const analyzeProjectNovel = async (projectId, payload) => {
+    const response = await api.post(`/projects/${projectId}/story_generator/analyze_novel`, payload);
+    return response.data;
+}
+
 // Project Story Generator (Global/Project) draft input persistence (no LLM call)
 export const saveProjectStoryGeneratorGlobalInput = async (projectId, payload) => {
     const response = await api.put(`/projects/${projectId}/story_generator/global/input`, payload);
