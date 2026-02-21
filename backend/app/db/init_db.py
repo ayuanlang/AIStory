@@ -463,6 +463,62 @@ def cleanup_api_settings_active_conflicts(db):
         logger.info("API settings cleanup: no duplicate active rows found.")
 
 
+def normalize_grsai_user_api_settings(db):
+    """Normalize legacy grsai rows in user-scoped api_settings."""
+
+    def _normalize_model(model_value: str) -> str:
+        value = (model_value or "").strip()
+        if not value:
+            return value
+        prefixes = ("grsai/", "grsai-", "grsai_", "grsai ")
+        normalized = value
+        while True:
+            lowered = normalized.lower()
+            matched = False
+            for prefix in prefixes:
+                if lowered.startswith(prefix):
+                    normalized = normalized[len(prefix):].strip(" /_-")
+                    matched = True
+                    break
+            if not matched:
+                break
+
+        alias_map = {
+            "nano-banana-fast": "gemini-2.5-flash-image",
+            "veo3.1-fast": "veo_3_1_t2v_fast_ultra",
+            "gemini-3-pro": "gemini-3-pro-preview",
+        }
+        return alias_map.get(normalized.lower(), normalized)
+
+    rows = db.query(APISetting).filter(APISetting.provider == "grsai").all()
+    changed = 0
+    for row in rows:
+        row_name = (row.name or "").lower()
+        row_category = (row.category or "").lower()
+
+        new_model = _normalize_model(row.model or "")
+        if (row.model or "") != new_model:
+            row.model = new_model
+            changed += 1
+
+        if row_category in ("vision", "llm") and "sora" in row_name and (row.model or "") != "gemini-3-pro-preview":
+            row.model = "gemini-3-pro-preview"
+            changed += 1
+            if row.category != "LLM":
+                row.category = "LLM"
+                changed += 1
+        elif row_category == "video" and "video" in row_name and "sora" in row_name and (row.model or "") != "veo_3_1_t2v_fast_ultra":
+            row.model = "veo_3_1_t2v_fast_ultra"
+            changed += 1
+        elif row_category == "image" and "dakka" in row_name and (row.model or "") != "gemini-2.5-flash-image":
+            row.model = "gemini-2.5-flash-image"
+            changed += 1
+
+    if changed > 0:
+        db.commit()
+        logger.info("Normalized %s legacy grsai api_settings rows", changed)
+
+
 def init_system_api_settings(db):
     """Seed dedicated System API settings (independent from user APISetting rows)."""
     def _normalize_grsai_model_name(model_value: str) -> str:
@@ -482,6 +538,15 @@ def init_system_api_settings(db):
             if not matched:
                 break
         return normalized
+
+    def _legacy_model_alias(model_value: str) -> str:
+        value = (model_value or "").strip().lower()
+        alias_map = {
+            "nano-banana-fast": "gemini-2.5-flash-image",
+            "veo3.1-fast": "veo_3_1_t2v_fast_ultra",
+            "gemini-3-pro": "gemini-3-pro-preview",
+        }
+        return alias_map.get(value, (model_value or "").strip())
 
     grsai_base_url = "https://grsaiapi.com"
     grsai_nano_banana_endpoint = "https://grsai.dakka.com.cn/v1/draw/nano-banana"
@@ -529,6 +594,7 @@ def init_system_api_settings(db):
     for row in existing_rows:
         row_name = (row.name or "").lower()
         normalized_model = _normalize_grsai_model_name(row.model or "")
+        normalized_model = _legacy_model_alias(normalized_model)
         if normalized_model != (row.model or ""):
             row.model = normalized_model
             updated_existing += 1
@@ -538,6 +604,13 @@ def init_system_api_settings(db):
 
         canonical_name_key = row_name.replace("grsai ", "", 1).strip() if row_name.startswith("grsai ") else row_name.strip()
         canonical = canonical_by_name.get(canonical_name_key)
+        if not canonical:
+            if row_category == "image" and "dakka" in row_name:
+                canonical = canonical_by_name.get("nano-banana-fast")
+            elif row_category == "video" and "video" in row_name and "sora" in row_name:
+                canonical = canonical_by_name.get("veo3.1-fast")
+            elif row_category in ("llm", "vision") and "sora" in row_name:
+                canonical = canonical_by_name.get("gemini-3-pro")
         if canonical:
             desired_category = canonical["category"]
             desired_model = canonical["model"]
@@ -629,6 +702,7 @@ def init_initial_data():
         init_pricing_rules(db)
         init_api_settings(db)
         cleanup_api_settings_active_conflicts(db)
+        normalize_grsai_user_api_settings(db)
         init_system_api_settings(db)
     except Exception as e:
         logger.error(f"Failed to initialize data: {e}")

@@ -3922,28 +3922,9 @@ def apply_scene_ai_result(
                         elif name in new_entities_buffer:
                             cleaned_names.append(name)
                         else:
-                            # Auto-create entity? 
-                            # User asked for "Auto identify subjects". Usually means extraction.
-                            # We create a placeholder entity if it looks like a proper name (not generic 'room')
-                            # For safety, enabled by default per user request
-                            new_ent = Entity(
-                                project_id=project.id,
-                                name=name,
-                                type="character", # Default, user can change later
-                                description="Auto-extracted from AI Shot Generation"
-                            )
-                            db.add(new_ent)
-                            # We need to commit to get ID or just trust the name for now?
-                            # Committing inside loop is fine for small batches
-                            try:
-                                db.commit()
-                                db.refresh(new_ent)
-                                entity_map[name] = new_ent
-                                cleaned_names.append(name)
-                                logger.info(f"[Import] Auto-created entity: {name}")
-                            except Exception as e:
-                                logger.warning(f"[Import] Failed to auto-create entity {name}: {e}")
-                                db.rollback()
+                            # Do not auto-create subjects/entities from imported shots.
+                            # Keep the name as plain associated_entities text only.
+                            cleaned_names.append(name)
                     
                     # Update data with cleaned names (optional, normalized)
                     s_data["Associated Entities"] = ", ".join(cleaned_names)
