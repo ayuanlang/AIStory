@@ -7074,7 +7074,12 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
             console.log(`[Editor] Generating Image. Providers: ${provider || 'Auto'}`);
             console.log(`[Editor] Refs (Total ${uniqueRefs.length}):`, uniqueRefs);
 
-            const asset = await generateImage(finalPrompt, provider || null, uniqueRefs.length > 0 ? uniqueRefs : null);
+            const asset = await generateImage(finalPrompt, provider || null, uniqueRefs.length > 0 ? uniqueRefs : null, {
+                project_id: projectId,
+                entity_name: selectedEntity?.name || selectedEntity?.name_en,
+                subject_name: selectedEntity?.name || selectedEntity?.name_en,
+                asset_type: 'subject'
+            });
             await updateEntityImage(asset.url);
         } catch (e) {
             console.error(e);
@@ -7211,7 +7216,12 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
                         const uniqueRefs = [...new Set(depUrls)];
                         
                         // 3. Generate
-                        const res = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null);
+                        const res = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
+                            project_id: projectId,
+                            entity_name: entity?.name || entity?.name_en,
+                            subject_name: entity?.name || entity?.name_en,
+                            asset_type: 'subject'
+                        });
                         
                         if (res && res.url) {
                             // 4. Update
@@ -9009,6 +9019,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 project_id: projectId,
                 shot_id: editingShot.id,
                 shot_number: `${editingShot.shot_id}_KF_${kf.time}`,
+                shot_name: editingShot.shot_name,
                 asset_type: 'keyframe'
             });
             
@@ -9215,6 +9226,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     project_id: projectId,
                     shot_id: editingShot.id,
                     shot_number: editingShot.shot_id,
+                    shot_name: editingShot.shot_name,
                     asset_type: 'start_frame',
                 });
                 if (res && res.url) {
@@ -9302,6 +9314,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     project_id: projectId,
                     shot_id: editingShot.id,
                     shot_number: editingShot.shot_id,
+                    shot_name: editingShot.shot_name,
                     asset_type: 'end_frame',
                 });
                 if (res && res.url) {
@@ -9446,6 +9459,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 project_id: projectId,
                 shot_id: editingShot.id,
                 shot_number: editingShot.shot_id,
+                shot_name: editingShot.shot_name,
                 asset_type: 'video',
             }, keyframes);
             if (res && res.url) {
@@ -9535,6 +9549,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                         project_id: projectId,
                         shot_id: shot.id,
                         shot_number: shot.shot_id,
+                        shot_name: shot.shot_name,
                         asset_type: 'start_frame'
                     });
 
@@ -9583,6 +9598,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                         project_id: projectId,
                         shot_id: shot.id,
                         shot_number: shot.shot_id,
+                                shot_name: shot.shot_name,
                         asset_type: 'end_frame'
                     });
 
@@ -9666,6 +9682,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                             project_id: projectId,
                             shot_id: currentShot.id,
                             shot_number: currentShot.shot_id,
+                            shot_name: currentShot.shot_name,
                             asset_type: 'start_frame'
                         });
 
@@ -9708,6 +9725,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                             project_id: projectId,
                             shot_id: currentShot.id,
                             shot_number: currentShot.shot_id,
+                            shot_name: currentShot.shot_name,
                             asset_type: 'end_frame'
                         });
 
@@ -9771,6 +9789,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                             project_id: projectId,
                             shot_id: currentShot.id,
                             shot_number: currentShot.shot_id,
+                            shot_name: currentShot.shot_name,
                             asset_type: 'video'
                         });
 

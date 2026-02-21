@@ -887,6 +887,7 @@ async def refine_prompt(
              
         data = response.json()
         content = data["choices"][0]["message"]["content"].strip()
+        content = llm_service.sanitize_text_output(content)
         # Clean quotes/markdown if any
         if content.startswith('"') and content.endswith('"'):
              content = content[1:-1]
@@ -5756,6 +5757,9 @@ class GenerationRequest(BaseModel):
     project_id: Optional[int] = None
     shot_id: Optional[int] = None
     shot_number: Optional[str] = None
+    shot_name: Optional[str] = None
+    entity_name: Optional[str] = None
+    subject_name: Optional[str] = None
     asset_type: Optional[str] = None
 
 class VideoGenerationRequest(BaseModel):
@@ -5768,8 +5772,44 @@ class VideoGenerationRequest(BaseModel):
     project_id: Optional[int] = None
     shot_id: Optional[int] = None
     shot_number: Optional[str] = None
+    shot_name: Optional[str] = None
+    entity_name: Optional[str] = None
+    subject_name: Optional[str] = None
     asset_type: Optional[str] = None
     keyframes: Optional[List[str]] = None
+
+
+def _sanitize_filename_part(value: Optional[str], max_len: int = 48) -> str:
+    if not value:
+        return ""
+    cleaned = re.sub(r'[\\/:*?"<>|]+', ' ', str(value))
+    cleaned = re.sub(r'\s+', '_', cleaned).strip('._- ')
+    cleaned = re.sub(r'_+', '_', cleaned)
+    return cleaned[:max_len]
+
+
+def _build_generation_filename_base(req: Any, db: Session) -> str:
+    parts: List[str] = []
+
+    asset_type = _sanitize_filename_part(getattr(req, "asset_type", None), 24)
+    if asset_type:
+        parts.append(asset_type)
+
+    shot_label = getattr(req, "shot_name", None) or getattr(req, "shot_number", None)
+    if not shot_label and getattr(req, "shot_id", None):
+        shot_obj = db.query(Shot).filter(Shot.id == req.shot_id).first()
+        if shot_obj:
+            shot_label = shot_obj.shot_name or shot_obj.shot_id
+    shot_part = _sanitize_filename_part(shot_label)
+    if shot_part:
+        parts.append(f"shot_{shot_part}")
+
+    subject_label = getattr(req, "subject_name", None) or getattr(req, "entity_name", None)
+    subject_part = _sanitize_filename_part(subject_label)
+    if subject_part:
+        parts.append(f"subject_{subject_part}")
+
+    return "_".join(parts) if parts else "gen"
 
 def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source_metadata: Dict = None):
     # Handle dict or object
@@ -5907,6 +5947,7 @@ async def generate_image_endpoint(
             aspect_ratio=aspect_ratio,
             user_id=current_user.id,
             user_credits=(current_user.credits or 0),
+            filename_base=_build_generation_filename_base(req, db),
         )
         if "error" in result:
              # Include details if available
@@ -6063,6 +6104,7 @@ async def generate_video_endpoint(
             keyframes=req.keyframes,
             user_id=current_user.id,
             user_credits=(current_user.credits or 0),
+            filename_base=_build_generation_filename_base(req, db),
         )
         if "error" in result:
              detail = result["error"]

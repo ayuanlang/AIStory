@@ -6,6 +6,7 @@ import asyncio
 from typing import Dict, Any, List
 import logging
 import os
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,40 @@ class LLMService:
         if "localhost" in url or "127.0.0.1" in url:
             return "local"
         return "unknown"
+
+    def sanitize_text_output(self, text: str) -> str:
+        if not isinstance(text, str) or not text:
+            return text
+
+        cleaned_lines = []
+        for line in text.splitlines():
+            updated = re.sub(
+                r'^(\s*(?:[-*]\s+)?)i\s+think(?:\s+that)?\s*(?:[:,-]\s*)?',
+                r'\1',
+                line,
+                flags=re.IGNORECASE,
+            )
+            cleaned_lines.append(updated)
+
+        cleaned = "\n".join(cleaned_lines)
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        return cleaned.strip()
+
+    def _sanitize_response_content(self, content: Any) -> Any:
+        if isinstance(content, str):
+            return self.sanitize_text_output(content)
+        if isinstance(content, list):
+            normalized = []
+            for item in content:
+                if isinstance(item, dict):
+                    updated = dict(item)
+                    if isinstance(updated.get("text"), str):
+                        updated["text"] = self.sanitize_text_output(updated.get("text"))
+                    normalized.append(updated)
+                else:
+                    normalized.append(item)
+            return normalized
+        return content
 
     async def analyze_multimodal(self, prompt: str, image_url: str, config: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -161,6 +196,7 @@ class LLMService:
             # Usually Ark /responses returns similar to /chat/completions but 'choices' key exists
             if "choices" in data and len(data["choices"]) > 0:
                 content = data["choices"][0]["message"]["content"]
+                content = self._sanitize_response_content(content)
                 usage = data.get("usage", {})
                 return {"content": content, "usage": usage}
             else:
@@ -267,6 +303,7 @@ class LLMService:
         try:
             full_response = await self._raw_llm_request_full(base_url, api_key, model, messages, extra_config)
             content = full_response["choices"][0]["message"]["content"]
+            content = self._sanitize_response_content(content)
             finish_reason = full_response.get("choices", [{}])[0].get("finish_reason")
             usage = full_response.get("usage", {})
             return {"content": content, "usage": usage, "finish_reason": finish_reason}
@@ -277,6 +314,7 @@ class LLMService:
     async def _call_openai_compatible(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> Dict[str, Any]:
         full_response = await self._raw_llm_request_full(base_url, api_key, model, messages, extra_config)
         content = full_response["choices"][0]["message"]["content"]
+        content = self._sanitize_response_content(content)
         usage = full_response.get("usage", {})
         
         # Parse JSON from content
@@ -508,6 +546,15 @@ class LLMService:
             )
 
         data = response.json()
+
+        # Normalize assistant text output across all text-LLM calls.
+        if isinstance(data.get("choices"), list):
+            for choice in data.get("choices"):
+                if not isinstance(choice, dict):
+                    continue
+                message = choice.get("message")
+                if isinstance(message, dict) and "content" in message:
+                    message["content"] = self._sanitize_response_content(message.get("content"))
 
         # Summarize response without dumping content.
         try:

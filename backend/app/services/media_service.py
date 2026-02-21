@@ -159,7 +159,7 @@ class MediaGenerationService:
         
         return defaults.get(provider, {})
 
-    async def generate_image(self, prompt: str, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, width: int = None, height: int = None, aspect_ratio: str = None, user_id: int = 1, user_credits: int = 0):
+    async def generate_image(self, prompt: str, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, width: int = None, height: int = None, aspect_ratio: str = None, user_id: int = 1, user_credits: int = 0, filename_base: Optional[str] = None):
         provider = None
         if llm_config and "provider" in llm_config and llm_config["provider"]:
             provider = llm_config["provider"]
@@ -234,10 +234,10 @@ class MediaGenerationService:
         
         # Download 
         if result and "url" in result and result["url"]:
-             result["url"] = self._download_and_save(result["url"])
+             result["url"] = self._download_and_save(result["url"], filename_base=filename_base, user_id=user_id)
         return result
 
-    async def generate_video(self, prompt: str, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, last_frame_url: Optional[str] = None, duration: int = 5, aspect_ratio: Optional[str] = None, keyframes: Optional[List[str]] = None, user_id: int = 1, user_credits: int = 0):
+    async def generate_video(self, prompt: str, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, last_frame_url: Optional[str] = None, duration: int = 5, aspect_ratio: Optional[str] = None, keyframes: Optional[List[str]] = None, user_id: int = 1, user_credits: int = 0, filename_base: Optional[str] = None):
         provider = None
         if llm_config and "provider" in llm_config and llm_config["provider"]:
             provider = llm_config["provider"]
@@ -309,7 +309,7 @@ class MediaGenerationService:
 
         # Download 
         if result and "url" in result and result["url"]:
-             result["url"] = self._download_and_save(result["url"])
+               result["url"] = self._download_and_save(result["url"], filename_base=filename_base, user_id=user_id)
         
         return result
     
