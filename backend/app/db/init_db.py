@@ -466,52 +466,23 @@ def cleanup_api_settings_active_conflicts(db):
 def normalize_grsai_user_api_settings(db):
     """Normalize legacy grsai rows in user-scoped api_settings."""
 
-    def _normalize_model(model_value: str) -> str:
-        value = (model_value or "").strip()
-        if not value:
-            return value
-        prefixes = ("grsai/", "grsai-", "grsai_", "grsai ")
-        normalized = value
-        while True:
-            lowered = normalized.lower()
-            matched = False
-            for prefix in prefixes:
-                if lowered.startswith(prefix):
-                    normalized = normalized[len(prefix):].strip(" /_-")
-                    matched = True
-                    break
-            if not matched:
-                break
-
-        alias_map = {
-            "nano-banana-fast": "gemini-2.5-flash-image",
-            "veo3.1-fast": "veo_3_1_t2v_fast_ultra",
-            "gemini-3-pro": "gemini-3-pro-preview",
-        }
-        return alias_map.get(normalized.lower(), normalized)
-
     rows = db.query(APISetting).filter(APISetting.provider == "grsai").all()
     changed = 0
     for row in rows:
         row_name = (row.name or "").lower()
         row_category = (row.category or "").lower()
 
-        new_model = _normalize_model(row.model or "")
-        if (row.model or "") != new_model:
-            row.model = new_model
-            changed += 1
-
-        if row_category in ("vision", "llm") and "sora" in row_name and (row.model or "") != "gemini-3-pro-preview":
-            row.model = "gemini-3-pro-preview"
+        if row_category in ("vision", "llm") and "sora" in row_name and (row.model or "") != "gemini-3-pro":
+            row.model = "gemini-3-pro"
             changed += 1
             if row.category != "LLM":
                 row.category = "LLM"
                 changed += 1
-        elif row_category == "video" and "video" in row_name and "sora" in row_name and (row.model or "") != "veo_3_1_t2v_fast_ultra":
-            row.model = "veo_3_1_t2v_fast_ultra"
+        elif row_category == "video" and "video" in row_name and "sora" in row_name and (row.model or "") != "veo3.1-fast":
+            row.model = "veo3.1-fast"
             changed += 1
-        elif row_category == "image" and "dakka" in row_name and (row.model or "") != "gemini-2.5-flash-image":
-            row.model = "gemini-2.5-flash-image"
+        elif row_category == "image" and "dakka" in row_name and (row.model or "") != "nano-banana-fast":
+            row.model = "nano-banana-fast"
             changed += 1
 
     if changed > 0:
@@ -559,24 +530,24 @@ def init_system_api_settings(db):
     grsai_models = [
         {"category": "Image", "name": "sora-image", "model": "sora-image"},
         {"category": "Image", "name": "gpt-image-1.5", "model": "gpt-image-1.5"},
-        {"category": "Image", "name": "nano-banana", "model": "gemini-2.5-flash-image"},
-        {"category": "Image", "name": "nano-banana-fast", "model": "gemini-2.5-flash-image"},
-        {"category": "Image", "name": "nano-banana-pro", "model": "gemini-3-pro-image-preview"},
-        {"category": "Image", "name": "nano-banana-pro-vt", "model": "gemini-3-pro-image-preview"},
-        {"category": "Image", "name": "nano-banana-pro-cl", "model": "gemini-3-pro-image-preview"},
-        {"category": "Image", "name": "nano-banana-pro-vip", "model": "gemini-3-pro-image-preview"},
-        {"category": "Image", "name": "nano-banana-pro-4k-vip", "model": "gemini-3-pro-image-preview"},
+        {"category": "Image", "name": "nano-banana", "model": "nano-banana"},
+        {"category": "Image", "name": "nano-banana-fast", "model": "nano-banana-fast"},
+        {"category": "Image", "name": "nano-banana-pro", "model": "nano-banana-pro"},
+        {"category": "Image", "name": "nano-banana-pro-vt", "model": "nano-banana-pro-vt"},
+        {"category": "Image", "name": "nano-banana-pro-cl", "model": "nano-banana-pro-cl"},
+        {"category": "Image", "name": "nano-banana-pro-vip", "model": "nano-banana-pro-vip"},
+        {"category": "Image", "name": "nano-banana-pro-4k-vip", "model": "nano-banana-pro-4k-vip"},
         {"category": "Image", "name": "sora-create-character", "model": "sora-create-character"},
         {"category": "Image", "name": "sora-upload-character", "model": "sora-upload-character"},
         {"category": "Video", "name": "sora-2", "model": "sora-2"},
-        {"category": "Video", "name": "veo3.1-fast", "model": "veo_3_1_t2v_fast_ultra"},
-        {"category": "Video", "name": "veo3.1-fast-1080p", "model": "veo_3_1_t2v_fast_ultra"},
-        {"category": "Video", "name": "veo3.1-fast-4k", "model": "veo_3_1_t2v_fast_ultra"},
-        {"category": "Video", "name": "veo3.1-pro", "model": "veo_3_1_t2v"},
-        {"category": "Video", "name": "veo3.1-pro-1080p", "model": "veo_3_1_t2v"},
-        {"category": "Video", "name": "veo3.1-pro-4k", "model": "veo_3_1_t2v"},
+        {"category": "Video", "name": "veo3.1-fast", "model": "veo3.1-fast"},
+        {"category": "Video", "name": "veo3.1-fast-1080p", "model": "veo3.1-fast-1080p"},
+        {"category": "Video", "name": "veo3.1-fast-4k", "model": "veo3.1-fast-4k"},
+        {"category": "Video", "name": "veo3.1-pro", "model": "veo3.1-pro"},
+        {"category": "Video", "name": "veo3.1-pro-1080p", "model": "veo3.1-pro-1080p"},
+        {"category": "Video", "name": "veo3.1-pro-4k", "model": "veo3.1-pro-4k"},
         {"category": "LLM", "name": "gemini-2.5-pro", "model": "gemini-2.5-pro"},
-        {"category": "LLM", "name": "gemini-3-pro", "model": "gemini-3-pro-preview"},
+        {"category": "LLM", "name": "gemini-3-pro", "model": "gemini-3-pro"},
     ]
     canonical_by_name = {
         item["name"].strip().lower(): {
@@ -594,7 +565,6 @@ def init_system_api_settings(db):
     for row in existing_rows:
         row_name = (row.name or "").lower()
         normalized_model = _normalize_grsai_model_name(row.model or "")
-        normalized_model = _legacy_model_alias(normalized_model)
         if normalized_model != (row.model or ""):
             row.model = normalized_model
             updated_existing += 1
