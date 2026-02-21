@@ -1,9 +1,9 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useStore } from '@/lib/store';
 import { Save, Info, Upload, Download, Coins, History } from 'lucide-react';
 import { API_URL } from '@/config';
-import { updateSetting, getSettings, getTransactions, fetchMe } from '../services/api';
+import { updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, selectSystemSetting, getSystemSettingsManage, createSystemSettingManage, updateSystemSettingManage, getEffectiveSettingSnapshot } from '../services/api';
 import RechargeModal from '../components/RechargeModal'; // Import RechargeModal
 
 const Settings = () => {
@@ -61,6 +61,37 @@ const Settings = () => {
     const [transactions, setTransactions] = useState([]);
     const [isBillingLoading, setIsBillingLoading] = useState(false);
     const [showRecharge, setShowRecharge] = useState(false); // Recharge Modal State
+    const [systemSettings, setSystemSettings] = useState([]);
+    const [isSystemSettingsLoading, setIsSystemSettingsLoading] = useState(false);
+    const [selectingSystemId, setSelectingSystemId] = useState(null);
+    const [selectedSystemCategory, setSelectedSystemCategory] = useState('All');
+    const [currentUserMeta, setCurrentUserMeta] = useState(null);
+    const [manageableSystemSettings, setManageableSystemSettings] = useState([]);
+    const [manageSettingId, setManageSettingId] = useState('');
+    const [manageApiKey, setManageApiKey] = useState('');
+    const [manageBaseUrl, setManageBaseUrl] = useState('');
+    const [manageModel, setManageModel] = useState('');
+    const [manageWebHook, setManageWebHook] = useState('');
+    const [isManageSaving, setIsManageSaving] = useState(false);
+    const [isManageCreating, setIsManageCreating] = useState(false);
+    const [createName, setCreateName] = useState('');
+    const [createProvider, setCreateProvider] = useState('');
+    const [createCategory, setCreateCategory] = useState('LLM');
+    const [createApiKey, setCreateApiKey] = useState('');
+    const [createBaseUrl, setCreateBaseUrl] = useState('');
+    const [createModel, setCreateModel] = useState('');
+    const [createWebHook, setCreateWebHook] = useState('');
+    const [createIsActive, setCreateIsActive] = useState(false);
+    const [errorLocatorInput, setErrorLocatorInput] = useState('');
+    const [isRowEditOpen, setIsRowEditOpen] = useState(false);
+    const [effectiveSnapshot, setEffectiveSnapshot] = useState(null);
+    const [isSnapshotLoading, setIsSnapshotLoading] = useState(false);
+    const [activeSettingSources, setActiveSettingSources] = useState({
+        LLM: 'none',
+        Image: 'none',
+        Video: 'none',
+        Vision: 'none',
+    });
 
     // Unified Top Up entry: support /settings?tab=billing and cross-app 402 redirects.
     useEffect(() => {
@@ -68,6 +99,8 @@ const Settings = () => {
         const tab = params.get('tab');
         if (tab === 'billing') {
             setActiveTab('billing');
+        } else if (tab === 'system-api' || tab === 'system_api') {
+            setActiveTab('system_api');
         }
 
         // If we navigated here due to insufficient credits, auto-open the modal.
@@ -111,12 +144,315 @@ const Settings = () => {
         }).finally(() => setIsBillingLoading(false));
     };
 
+    const loadSystemSettingsCatalog = async () => {
+        setIsSystemSettingsLoading(true);
+        try {
+            const [userRes, systemRes] = await Promise.all([fetchMe(), getSystemSettings()]);
+            setCurrentUserMeta(userRes || null);
+            if (userRes && userRes.credits !== undefined) {
+                setUserCredits(userRes.credits);
+            }
+            setSystemSettings(Array.isArray(systemRes) ? systemRes : []);
+
+            const canManage = !!(userRes?.is_superuser || userRes?.is_system);
+            if (canManage) {
+                const manageRows = await getSystemSettingsManage();
+                const normalized = Array.isArray(manageRows) ? manageRows : [];
+                setManageableSystemSettings(normalized);
+                if (!manageSettingId && normalized.length > 0) {
+                    const firstId = String(normalized[0].id);
+                    setManageSettingId(firstId);
+                }
+            } else {
+                setManageableSystemSettings([]);
+                setManageSettingId('');
+            }
+        } catch (err) {
+            console.error("Failed to load system API settings", err);
+            setSystemSettings([]);
+            setManageableSystemSettings([]);
+        } finally {
+            setIsSystemSettingsLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        if (!manageSettingId) {
+            setManageApiKey('');
+            setManageBaseUrl('');
+            setManageModel('');
+            setManageWebHook('');
+            return;
+        }
+        const row = manageableSystemSettings.find((item) => String(item.id) === String(manageSettingId));
+        if (!row) return;
+        setManageApiKey('');
+        setManageBaseUrl(row.base_url || '');
+        setManageModel(row.model || '');
+        setManageWebHook(row.config?.webHook || '');
+    }, [manageSettingId, manageableSystemSettings]);
+
+    const handleSaveManagedSystemSetting = async () => {
+        if (!manageSettingId) {
+            showNotification('Please select a system setting to edit', 'error');
+            return;
+        }
+        setIsManageSaving(true);
+        try {
+            const selected = manageableSystemSettings.find((item) => String(item.id) === String(manageSettingId));
+            const nextConfig = {
+                ...(selected?.config || {}),
+                webHook: manageWebHook || '',
+            };
+
+            await updateSystemSettingManage(Number(manageSettingId), {
+                api_key: manageApiKey || undefined,
+                base_url: manageBaseUrl,
+                model: manageModel,
+                config: nextConfig,
+            });
+
+            showNotification('System API setting updated', 'success');
+            addLog('System API setting updated', 'success');
+            await loadSystemSettingsCatalog();
+        } catch (err) {
+            console.error('Failed to update system setting', err);
+            const msg = err?.response?.data?.detail || 'Failed to update system API setting';
+            showNotification(msg, 'error');
+        } finally {
+            setIsManageSaving(false);
+        }
+    };
+
+    const handleCreateManagedSystemSetting = async () => {
+        const provider = String(createProvider || '').trim();
+        if (!provider) {
+            showNotification('Provider is required to create system setting', 'error');
+            return;
+        }
+
+        setIsManageCreating(true);
+        try {
+            const payload = {
+                name: String(createName || '').trim() || undefined,
+                provider,
+                category: createCategory || 'LLM',
+                api_key: String(createApiKey || '').trim() || undefined,
+                base_url: String(createBaseUrl || '').trim() || undefined,
+                model: String(createModel || '').trim() || undefined,
+                config: { webHook: String(createWebHook || '').trim() || '' },
+                is_active: !!createIsActive,
+            };
+
+            const created = await createSystemSettingManage(payload);
+            showNotification('System API setting created', 'success');
+            addLog('System API setting created', 'success');
+
+            setCreateName('');
+            setCreateProvider('');
+            setCreateCategory('LLM');
+            setCreateApiKey('');
+            setCreateBaseUrl('');
+            setCreateModel('');
+            setCreateWebHook('');
+            setCreateIsActive(false);
+
+            await loadSystemSettingsCatalog();
+            if (created?.id) {
+                setManageSettingId(String(created.id));
+            }
+        } catch (err) {
+            console.error('Failed to create system setting', err);
+            const msg = err?.response?.data?.detail || 'Failed to create system API setting';
+            showNotification(msg, 'error');
+        } finally {
+            setIsManageCreating(false);
+        }
+    };
+
+    const handleLoadEffectiveSnapshot = async () => {
+        setIsSnapshotLoading(true);
+        try {
+            const data = await getEffectiveSettingSnapshot({ category: 'LLM' });
+            setEffectiveSnapshot(data || null);
+            if (!data?.found) {
+                showNotification('No effective LLM setting found', 'error');
+            }
+        } catch (err) {
+            console.error('Failed to fetch effective setting snapshot', err);
+            const msg = err?.response?.data?.detail || 'Failed to fetch effective setting snapshot';
+            showNotification(msg, 'error');
+        } finally {
+            setIsSnapshotLoading(false);
+        }
+    };
+
+    const canManageSystemSettings = !!(currentUserMeta?.is_superuser || currentUserMeta?.is_system);
+
+    const openRowEditModal = (row) => {
+        if (!canManageSystemSettings || !row?.id) return;
+        setManageSettingId(String(row.id));
+        setManageApiKey('');
+        setManageBaseUrl(row.base_url || '');
+        setManageModel(row.model || '');
+        setManageWebHook(row.config?.webHook || '');
+        setIsRowEditOpen(true);
+    };
+
+    const closeRowEditModal = () => {
+        setIsRowEditOpen(false);
+    };
+
+    const handleSaveFromRowEdit = async () => {
+        await handleSaveManagedSystemSetting();
+        closeRowEditModal();
+    };
+
+    useEffect(() => {
+        if (!isRowEditOpen) return;
+        const onKeyDown = (event) => {
+            if (event.key === 'Escape') {
+                closeRowEditModal();
+            }
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [isRowEditOpen]);
+
+    const normalizeEndpoint = (url) => {
+        const raw = String(url || '').trim().toLowerCase();
+        if (!raw) return '';
+        return raw
+            .replace(/\/chat\/completions$/i, '')
+            .replace(/\/responses$/i, '')
+            .replace(/\/$/, '');
+    };
+
+    const handleLocateSettingFromError = () => {
+        const raw = String(errorLocatorInput || '').trim();
+        if (!raw) {
+            showNotification('Paste error text first', 'error');
+            return;
+        }
+
+        const provider = (raw.match(/provider=([^,\]]+)/i)?.[1] || '').trim().toLowerCase();
+        const model = (raw.match(/model=([^,\]]+)/i)?.[1] || '').trim().toLowerCase();
+        const endpoint = normalizeEndpoint(raw.match(/endpoint=([^\]]+)/i)?.[1] || '');
+
+        if (!provider && !model && !endpoint) {
+            showNotification('Cannot parse provider/model/endpoint from error', 'error');
+            return;
+        }
+
+        let best = null;
+        let bestScore = -1;
+
+        for (const row of manageableSystemSettings) {
+            const rowProvider = String(row.provider || '').trim().toLowerCase();
+            const rowModel = String(row.model || '').trim().toLowerCase();
+            const rowEndpoint = normalizeEndpoint(row.base_url || '');
+
+            let score = 0;
+            if (provider && provider === rowProvider) score += 3;
+            if (model && model === rowModel) score += 3;
+            if (endpoint && rowEndpoint && (endpoint === rowEndpoint || endpoint.includes(rowEndpoint) || rowEndpoint.includes(endpoint))) score += 2;
+
+            if (score > bestScore) {
+                best = row;
+                bestScore = score;
+            }
+        }
+
+        if (!best || bestScore <= 0) {
+            showNotification('No matching system setting found from this error', 'error');
+            return;
+        }
+
+        setManageSettingId(String(best.id));
+        showNotification(`Matched: [${best.category}] ${best.provider} / ${best.model || '-'}`, 'success');
+    };
+
+    const refreshActiveSettingSources = async () => {
+        try {
+            const all = await getSettings();
+            const next = {
+                LLM: 'none',
+                Image: 'none',
+                Video: 'none',
+                Vision: 'none',
+            };
+            (all || []).forEach((item) => {
+                if (!item?.is_active || !item?.category) return;
+                const source = item?.config?.selection_source === 'system' || item?.config?.use_system_setting_id ? 'system' : 'user';
+                if (next[item.category] !== undefined) {
+                    next[item.category] = source;
+                }
+            });
+            setActiveSettingSources(next);
+        } catch (err) {
+            console.error('Failed to refresh active setting sources', err);
+        }
+    };
+
+    const sourceBadgeClass = (source) => {
+        if (source === 'system') return 'bg-green-500/20 text-green-300 border-green-500/30';
+        if (source === 'user') return 'bg-blue-500/20 text-blue-300 border-blue-500/30';
+        return 'bg-white/10 text-muted-foreground border-white/20';
+    };
+
+    const sourceBadgeText = (source) => {
+        if (source === 'system') return 'Source: System';
+        if (source === 'user') return 'Source: User';
+        return 'Source: Unset';
+    };
+
+    const categorizedSystemSettings = useMemo(() => {
+        // Keep category taxonomy consistent with General page.
+        const categoryLabelMap = {
+            LLM: 'LLM',
+            Image: 'Image',
+            Video: 'Video',
+            Vision: 'Vision',
+            Tools: 'Tools',
+        };
+        const preferredOrder = ['LLM', 'Image', 'Video', 'Vision', 'Tools'];
+
+        const grouped = (systemSettings || []).reduce((acc, item) => {
+            const rawCategory = item?.category || 'Tools';
+            const category = preferredOrder.includes(rawCategory) ? rawCategory : 'Tools';
+            if (!acc[category]) acc[category] = [];
+            acc[category].push({ ...item, category });
+            return acc;
+        }, {});
+
+        const orderedKeys = [
+            ...preferredOrder.filter((cat) => grouped[cat]),
+            ...Object.keys(grouped)
+                .filter((cat) => !preferredOrder.includes(cat))
+                .sort((a, b) => a.localeCompare(b)),
+        ];
+
+        return orderedKeys.map((category) => ({
+            category,
+            label: categoryLabelMap[category] || category,
+            groups: (grouped[category] || []).sort((a, b) => String(a.provider || '').localeCompare(String(b.provider || ''))),
+        }));
+    }, [systemSettings]);
+
+    const visibleSystemSettings = useMemo(() => {
+        if (selectedSystemCategory === 'All') return categorizedSystemSettings;
+        return categorizedSystemSettings.filter((block) => block.category === selectedSystemCategory);
+    }, [categorizedSystemSettings, selectedSystemCategory]);
+
     useEffect(() => {
         if (activeTab === 'billing') {
             refreshBilling();
-        } else {
-             // For non-billing tabs, we still want to load general settings
-             // ... existing logic ...
+        }
+        if (activeTab === 'api') {
+            refreshActiveSettingSources();
+        }
+        if (activeTab === 'system_api') {
+            loadSystemSettingsCatalog();
         }
     }, [activeTab]);
 
@@ -243,6 +579,7 @@ const Settings = () => {
                         setBaiduToken(baiduSetting.api_key || "");
                     }
                 }
+                refreshActiveSettingSources();
              } catch (e) {
                  console.error("Failed to load backend settings", e);
              }
@@ -550,7 +887,8 @@ const Settings = () => {
             const allSettings = await getSettings();
             const existing = allSettings.find(s => 
                 s.provider.toLowerCase() === backendProvider && 
-                s.category === category
+                s.category === category &&
+                (s.model || "") === (configData.model || "")
             );
 
             // Construct payload
@@ -572,14 +910,16 @@ const Settings = () => {
                 is_active: true
             };
 
-            await updateSetting(payload);
+            const saved = await updateSetting(payload);
             console.log(`Synced ${category}/${backendProvider} to backend. Model: ${configData.model}`);
+            return saved;
         } catch (e) {
             console.error(`Failed to sync ${category} setting to backend`, e);
+            return null;
         }
     };
 
-    const handleSave = () => {
+    const handleSave = async () => {
         // 1. Save specific provider config
         const configToSave = { apiKey, endpoint, model };
         saveProviderConfig(provider, configToSave);
@@ -591,13 +931,14 @@ const Settings = () => {
         });
 
         // 3. Sync to Backend
-        syncToBackend("LLM", provider, configToSave);
+        await syncToBackend("LLM", provider, configToSave);
+        await refreshActiveSettingSources();
         showNotification(`Settings for ${provider} saved and activated`, "success");
         
         addLog(`Settings for ${provider} saved and activated`, "success");
     };
 
-    const handleSaveGeneration = () => {
+    const handleSaveGeneration = async () => {
         setGenerationConfig({
             characterSupplements: charSupplements,
             sceneSupplements: sceneSupplements,
@@ -619,7 +960,7 @@ const Settings = () => {
         saveToolConfig(imageModel, imgConfig);
         
         // Sync Image to Backend
-        syncToBackend("Image", imageModel, imgConfig);
+        await syncToBackend("Image", imageModel, imgConfig);
 
         const videoConfig = { 
             apiKey: vidToolKey, 
@@ -632,7 +973,7 @@ const Settings = () => {
         saveToolConfig(videoModel, videoConfig);
         
         // Sync Video to Backend
-        syncToBackend("Video", videoModel, videoConfig);
+        await syncToBackend("Video", videoModel, videoConfig);
 
         const visConfig = {
             apiKey: visToolKey,
@@ -642,10 +983,42 @@ const Settings = () => {
         saveToolConfig(visionModel, visConfig);
 
         // Sync Vision to Backend
-        syncToBackend("Vision", visionModel, visConfig);
+        await syncToBackend("Vision", visionModel, visConfig);
+
+        await refreshActiveSettingSources();
 
         showNotification("Generation settings & credentials saved", "success");
         addLog("Generation settings & credentials saved", "success");
+    };
+
+    const handleSelectSystemSetting = async (setting) => {
+        if (!setting?.id) return;
+        setSelectingSystemId(setting.id);
+        try {
+            const selected = await selectSystemSetting(setting.id);
+            if (selected?.category === 'LLM') {
+                setProvider(selected.provider || 'openai');
+                setEndpoint(selected.base_url || '');
+                setModel(selected.model || '');
+                setApiKey('');
+                setLLMConfig({
+                    provider: selected.provider || 'openai',
+                    apiKey: '',
+                    endpoint: selected.base_url || '',
+                    model: selected.model || ''
+                });
+            }
+            showNotification(`System setting activated: ${selected?.provider || setting.provider} / ${selected?.model || setting.model || ''}`, 'success');
+            addLog(`Activated system API setting: ${selected?.provider || setting.provider} (${selected?.category || setting.category})`, 'success');
+            await loadSystemSettingsCatalog();
+            await refreshActiveSettingSources();
+        } catch (err) {
+            console.error('Failed to select system setting', err);
+            const msg = err?.response?.data?.detail || 'Failed to activate system setting';
+            showNotification(msg, 'error');
+        } finally {
+            setSelectingSystemId(null);
+        }
     };
 
     const renderFields = () => {
@@ -826,6 +1199,12 @@ const Settings = () => {
                         >
                             Prompt Optimizers
                         </button>
+                            <button 
+                                onClick={() => setActiveTab('system_api')}
+                                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'system_api' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
+                            >
+                               System API
+                            </button>
                         <button 
                              onClick={() => setActiveTab('billing')}
                              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'billing' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
@@ -948,6 +1327,9 @@ const Settings = () => {
                         <h2 className="text-xl font-semibold flex items-center gap-2">
                             Core LLM Configuration
                             <span className="text-xs bg-primary/20 text-primary px-2 py-0.5 rounded-full border border-primary/30 font-mono">Task: llm_chat</span>
+                            <span className={`text-[10px] px-2 py-0.5 rounded border font-mono ${sourceBadgeClass(activeSettingSources.LLM)}`}>
+                                {sourceBadgeText(activeSettingSources.LLM)}
+                            </span>
                         </h2>
                         <div className="bg-black/20 p-6 rounded-xl border border-white/10 space-y-4 shadow-sm">
                             <div className="space-y-2">
@@ -1032,6 +1414,9 @@ const Settings = () => {
                                     <label className="text-sm font-medium text-blue-400 flex items-center gap-2">
                                         Image Generation Tool
                                         <span className="text-[10px] bg-blue-500/20 text-blue-300 px-1.5 py-0.5 rounded border border-blue-500/30 font-mono">Task: image_gen</span>
+                                        <span className={`text-[10px] px-2 py-0.5 rounded border font-mono ${sourceBadgeClass(activeSettingSources.Image)}`}>
+                                            {sourceBadgeText(activeSettingSources.Image)}
+                                        </span>
                                     </label>
                                     <select 
                                         value={imageModel}
@@ -1145,6 +1530,9 @@ const Settings = () => {
                                     <label className="text-sm font-medium text-orange-400 flex items-center gap-2">
                                         Video Generation Tool
                                         <span className="text-[10px] bg-orange-500/20 text-orange-300 px-1.5 py-0.5 rounded border border-orange-500/30 font-mono">Task: video_gen</span>
+                                        <span className={`text-[10px] px-2 py-0.5 rounded border font-mono ${sourceBadgeClass(activeSettingSources.Video)}`}>
+                                            {sourceBadgeText(activeSettingSources.Video)}
+                                        </span>
                                     </label>
                                     <select 
                                         value={videoModel}
@@ -1279,6 +1667,9 @@ const Settings = () => {
                                     <label className="text-sm font-medium text-pink-400 flex items-center gap-2">
                                         Vision / Image Recognition Tool
                                         <span className="text-[10px] bg-pink-500/20 text-pink-300 px-1.5 py-0.5 rounded border border-pink-500/30 font-mono">Task: analysis</span>
+                                        <span className={`text-[10px] px-2 py-0.5 rounded border font-mono ${sourceBadgeClass(activeSettingSources.Vision)}`}>
+                                            {sourceBadgeText(activeSettingSources.Vision)}
+                                        </span>
                                     </label>
                                     <select 
                                         value={visionModel}
@@ -1338,6 +1729,432 @@ const Settings = () => {
                             </button>
                         </div>
                     </div>
+                </div>
+            ) : activeTab === 'system_api' ? (
+                <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                    {canManageSystemSettings && (
+                        <div className="space-y-4">
+                            <h2 className="text-xl font-semibold">System API Config Editor</h2>
+                            <div className="bg-black/20 p-6 rounded-xl border border-white/10 space-y-4 shadow-sm">
+                                <p className="text-xs text-muted-foreground">
+                                    Use this editor to fix provider authentication errors quickly (API Key / Model / Endpoint / WebHook).
+                                </p>
+
+                                <div className="space-y-3 border border-white/10 rounded-lg p-4 bg-white/5">
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                        <h3 className="text-sm font-semibold">Effective LLM Setting Snapshot</h3>
+                                        <button
+                                            onClick={handleLoadEffectiveSnapshot}
+                                            disabled={isSnapshotLoading}
+                                            className="text-xs px-3 py-1.5 rounded border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        >
+                                            {isSnapshotLoading ? 'Checking...' : 'Check Effective Setting'}
+                                        </button>
+                                    </div>
+
+                                    {effectiveSnapshot && (
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                                            <div className="space-y-1">
+                                                <div className="text-muted-foreground">Source</div>
+                                                <div className="font-mono">{effectiveSnapshot.source || '-'}</div>
+                                            </div>
+                                            <div className="space-y-1">
+                                                <div className="text-muted-foreground">Setting ID</div>
+                                                <div className="font-mono">{effectiveSnapshot.setting_id || '-'}</div>
+                                            </div>
+                                            <div className="space-y-1">
+                                                <div className="text-muted-foreground">Provider / Model</div>
+                                                <div className="font-mono break-all">{effectiveSnapshot.provider || '-'} / {effectiveSnapshot.model || '-'}</div>
+                                            </div>
+                                            <div className="space-y-1">
+                                                <div className="text-muted-foreground">API Key</div>
+                                                <div className="font-mono">{effectiveSnapshot.api_key_masked || '(empty)'}</div>
+                                            </div>
+                                            <div className="space-y-1 md:col-span-2">
+                                                <div className="text-muted-foreground">Endpoint</div>
+                                                <div className="font-mono break-all">{effectiveSnapshot.endpoint || '-'}</div>
+                                            </div>
+                                            <div className="space-y-1 md:col-span-2">
+                                                <div className="text-muted-foreground">WebHook</div>
+                                                <div className="font-mono break-all">{effectiveSnapshot.webhook || '-'}</div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="space-y-3 border border-white/10 rounded-lg p-4 bg-white/5">
+                                    <h3 className="text-sm font-semibold">Create New System Setting</h3>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                        <div className="space-y-2">
+                                            <label className="text-xs font-medium uppercase text-muted-foreground">Name</label>
+                                            <input
+                                                type="text"
+                                                value={createName}
+                                                onChange={(e) => setCreateName(e.target.value)}
+                                                placeholder="System Setting"
+                                                className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-white"
+                                            />
+                                        </div>
+                                        <div className="space-y-2">
+                                            <label className="text-xs font-medium uppercase text-muted-foreground">Provider *</label>
+                                            <input
+                                                type="text"
+                                                value={createProvider}
+                                                onChange={(e) => setCreateProvider(e.target.value)}
+                                                placeholder="openai / doubao / runway ..."
+                                                className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-white"
+                                            />
+                                        </div>
+                                        <div className="space-y-2">
+                                            <label className="text-xs font-medium uppercase text-muted-foreground">Category</label>
+                                            <select
+                                                value={createCategory}
+                                                onChange={(e) => setCreateCategory(e.target.value)}
+                                                className="w-full p-2 rounded-md bg-zinc-900 border border-white/10 text-white"
+                                            >
+                                                <option value="LLM">LLM</option>
+                                                <option value="Image">Image</option>
+                                                <option value="Video">Video</option>
+                                                <option value="Vision">Vision</option>
+                                                <option value="Tools">Tools</option>
+                                            </select>
+                                        </div>
+                                        <div className="space-y-2">
+                                            <label className="text-xs font-medium uppercase text-muted-foreground">API Key</label>
+                                            <input
+                                                type="password"
+                                                value={createApiKey}
+                                                onChange={(e) => setCreateApiKey(e.target.value)}
+                                                placeholder="Optional; shared by provider"
+                                                className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-white"
+                                            />
+                                        </div>
+                                        <div className="space-y-2">
+                                            <label className="text-xs font-medium uppercase text-muted-foreground">Endpoint</label>
+                                            <input
+                                                type="text"
+                                                value={createBaseUrl}
+                                                onChange={(e) => setCreateBaseUrl(e.target.value)}
+                                                placeholder="https://..."
+                                                className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-white"
+                                            />
+                                        </div>
+                                        <div className="space-y-2">
+                                            <label className="text-xs font-medium uppercase text-muted-foreground">Model</label>
+                                            <input
+                                                type="text"
+                                                value={createModel}
+                                                onChange={(e) => setCreateModel(e.target.value)}
+                                                placeholder="model-id"
+                                                className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-white"
+                                            />
+                                        </div>
+                                        <div className="space-y-2 md:col-span-2">
+                                            <label className="text-xs font-medium uppercase text-muted-foreground">WebHook URL</label>
+                                            <input
+                                                type="text"
+                                                value={createWebHook}
+                                                onChange={(e) => setCreateWebHook(e.target.value)}
+                                                placeholder="https://callback..."
+                                                className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-white"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                                        <input
+                                            type="checkbox"
+                                            checked={createIsActive}
+                                            onChange={(e) => setCreateIsActive(e.target.checked)}
+                                            className="rounded border-white/20 bg-white/10"
+                                        />
+                                        Set as active for this category after create
+                                    </label>
+
+                                    <button
+                                        onClick={handleCreateManagedSystemSetting}
+                                        disabled={isManageCreating}
+                                        className="w-full md:w-auto text-sm px-4 py-2 rounded border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        {isManageCreating ? 'Creating...' : 'Create System Config'}
+                                    </button>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <label className="text-xs font-medium uppercase text-muted-foreground">Paste Error To Locate Setting</label>
+                                    <textarea
+                                        value={errorLocatorInput}
+                                        onChange={(e) => setErrorLocatorInput(e.target.value)}
+                                        placeholder="Error: API Error 401 [provider=doubao, model=..., endpoint=...]..."
+                                        className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-white min-h-[90px]"
+                                    />
+                                    <button
+                                        onClick={handleLocateSettingFromError}
+                                        className="w-full md:w-auto text-xs px-3 py-1.5 rounded border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20"
+                                    >
+                                        Locate From Error
+                                    </button>
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-xs font-medium uppercase text-muted-foreground">Target Setting</label>
+                                    <select
+                                        value={manageSettingId}
+                                        onChange={(e) => setManageSettingId(e.target.value)}
+                                        className="w-full p-2 rounded-md bg-zinc-900 border border-white/10 text-white"
+                                    >
+                                        <option value="">Select...</option>
+                                        {manageableSystemSettings.map((row) => (
+                                            <option key={row.id} value={row.id}>
+                                                [{row.category}] {row.provider} / {row.model || '-'} (ID:{row.id})
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div className="space-y-2 md:col-span-2">
+                                        <label className="text-xs font-medium uppercase text-muted-foreground">API Key (Leave blank to keep current shared key)</label>
+                                        <input
+                                            type="password"
+                                            value={manageApiKey}
+                                            onChange={(e) => setManageApiKey(e.target.value)}
+                                            placeholder="Paste new key to rotate shared provider key"
+                                            className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-white"
+                                        />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-xs font-medium uppercase text-muted-foreground">Endpoint</label>
+                                        <input
+                                            type="text"
+                                            value={manageBaseUrl}
+                                            onChange={(e) => setManageBaseUrl(e.target.value)}
+                                            placeholder="https://..."
+                                            className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-white"
+                                        />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-xs font-medium uppercase text-muted-foreground">Model</label>
+                                        <input
+                                            type="text"
+                                            value={manageModel}
+                                            onChange={(e) => setManageModel(e.target.value)}
+                                            placeholder="doubao-seed-2-0-pro-260215"
+                                            className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-white"
+                                        />
+                                    </div>
+                                    <div className="space-y-2 md:col-span-2">
+                                        <label className="text-xs font-medium uppercase text-muted-foreground">WebHook URL</label>
+                                        <input
+                                            type="text"
+                                            value={manageWebHook}
+                                            onChange={(e) => setManageWebHook(e.target.value)}
+                                            placeholder="https://your-callback..."
+                                            className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-white"
+                                        />
+                                    </div>
+                                </div>
+
+                                <button
+                                    onClick={handleSaveManagedSystemSetting}
+                                    disabled={!manageSettingId || isManageSaving}
+                                    className="w-full md:w-auto text-sm px-4 py-2 rounded border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    {isManageSaving ? 'Saving...' : 'Save System Config'}
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="space-y-4">
+                        <h2 className="text-xl font-semibold">System API Settings</h2>
+                        <div className="bg-black/20 p-6 rounded-xl border border-white/10 space-y-4 shadow-sm">
+                            <div className="flex items-center justify-between gap-3">
+                                <h3 className="text-base font-medium">Select Shared Provider Configuration</h3>
+                                <span className={`text-xs px-2 py-0.5 rounded border ${userCredits > 0 ? 'text-green-300 border-green-500/40 bg-green-500/10' : 'text-yellow-300 border-yellow-500/40 bg-yellow-500/10'}`}>
+                                    Credits: {userCredits}
+                                </span>
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                                System keys are shared by provider. Choose one model config in each category as your active setting.
+                            </p>
+
+                            {!isSystemSettingsLoading && categorizedSystemSettings.length > 0 && (
+                                <div className="flex flex-wrap gap-2">
+                                    <button
+                                        onClick={() => setSelectedSystemCategory('All')}
+                                        className={`text-xs px-2.5 py-1 rounded border transition-colors ${selectedSystemCategory === 'All' ? 'bg-primary/20 text-primary border-primary/40' : 'bg-white/5 text-muted-foreground border-white/10 hover:text-white hover:bg-white/10'}`}
+                                    >
+                                        All
+                                    </button>
+                                    {categorizedSystemSettings.map((block) => (
+                                        <button
+                                            key={block.category}
+                                            onClick={() => setSelectedSystemCategory(block.category)}
+                                            className={`text-xs px-2.5 py-1 rounded border transition-colors ${selectedSystemCategory === block.category ? 'bg-primary/20 text-primary border-primary/40' : 'bg-white/5 text-muted-foreground border-white/10 hover:text-white hover:bg-white/10'}`}
+                                        >
+                                            {block.label}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+
+                            {isSystemSettingsLoading ? (
+                                <div className="text-sm text-muted-foreground">Loading system settings...</div>
+                            ) : userCredits <= 0 ? (
+                                <div className="text-sm text-yellow-300 bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3">
+                                    Your credits are 0. Top up credits first to use system API settings.
+                                </div>
+                            ) : systemSettings.length === 0 ? (
+                                <div className="text-sm text-muted-foreground">No system API settings available.</div>
+                            ) : visibleSystemSettings.length === 0 ? (
+                                <div className="text-sm text-muted-foreground">No settings in selected category.</div>
+                            ) : (
+                                <div className="space-y-4">
+                                    {visibleSystemSettings.map((categoryBlock) => (
+                                        <div key={categoryBlock.category} className="space-y-3">
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-sm font-semibold">{categoryBlock.label}</span>
+                                                <span className="text-[10px] px-2 py-0.5 rounded border border-white/20 text-muted-foreground">
+                                                    {categoryBlock.groups.length} Provider{categoryBlock.groups.length > 1 ? 's' : ''}
+                                                </span>
+                                            </div>
+
+                                            <div className="space-y-3">
+                                                {categoryBlock.groups.map((group) => (
+                                                    <div key={`${group.category}-${group.provider}`} className="border border-white/10 rounded-lg p-4 bg-white/5 space-y-3">
+                                                        <div className="flex flex-wrap items-center gap-2">
+                                                            <span className="text-sm font-semibold">{group.provider}</span>
+                                                            {group.shared_key_configured ? (
+                                                                <span className="text-[10px] px-2 py-0.5 rounded border border-green-500/30 text-green-300 bg-green-500/10">Shared Key Ready</span>
+                                                            ) : (
+                                                                <span className="text-[10px] px-2 py-0.5 rounded border border-yellow-500/30 text-yellow-300 bg-yellow-500/10">No Shared Key</span>
+                                                            )}
+                                                            {canManageSystemSettings && (
+                                                                <span className="text-[10px] px-2 py-0.5 rounded border border-white/20 text-muted-foreground">Click row to edit</span>
+                                                            )}
+                                                        </div>
+
+                                                        <div className="space-y-2">
+                                                            {(group.models || []).map((row) => (
+                                                                <div
+                                                                    key={row.id}
+                                                                    onClick={() => openRowEditModal(row)}
+                                                                    className={`grid grid-cols-1 md:grid-cols-12 gap-2 items-center p-2 rounded border border-white/10 bg-black/20 ${canManageSystemSettings ? 'cursor-pointer hover:bg-white/10 transition-colors' : ''}`}
+                                                                >
+                                                                    <div className="md:col-span-3 text-xs">
+                                                                        <div className="text-muted-foreground">Model</div>
+                                                                        <div className="font-mono break-all">{row.model || '-'}</div>
+                                                                    </div>
+                                                                    <div className="md:col-span-5 text-xs">
+                                                                        <div className="text-muted-foreground">Endpoint</div>
+                                                                        <div className="font-mono break-all">{row.base_url || '-'}</div>
+                                                                    </div>
+                                                                    <div className="md:col-span-2 text-xs">
+                                                                        <div className="text-muted-foreground">WebHook</div>
+                                                                        <div className="font-mono break-all">{row.webhook_url || '-'}</div>
+                                                                    </div>
+                                                                    <div className="md:col-span-2 flex md:justify-end">
+                                                                        <button
+                                                                            onClick={(e) => {
+                                                                                e.stopPropagation();
+                                                                                handleSelectSystemSetting(row);
+                                                                            }}
+                                                                            disabled={!group.shared_key_configured || selectingSystemId === row.id}
+                                                                            className="w-full md:w-auto text-xs px-3 py-1.5 rounded border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                                        >
+                                                                            {selectingSystemId === row.id ? 'Activating...' : (row.is_active ? 'Active' : 'Use This')}
+                                                                        </button>
+                                                                    </div>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    {canManageSystemSettings && isRowEditOpen && (
+                        <div
+                            onClick={closeRowEditModal}
+                            className="fixed inset-0 z-[220] bg-black/70 flex items-center justify-center p-4"
+                        >
+                            <div
+                                onClick={(e) => e.stopPropagation()}
+                                className="w-full max-w-3xl bg-[#09090b] border border-white/10 rounded-xl p-5 space-y-4"
+                            >
+                                <div className="flex items-center justify-between">
+                                    <h3 className="text-lg font-semibold">Edit System API Setting</h3>
+                                    <button
+                                        onClick={closeRowEditModal}
+                                        className="text-xs px-2 py-1 rounded border border-white/10 hover:bg-white/10"
+                                    >
+                                        Close
+                                    </button>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div className="space-y-2 md:col-span-2">
+                                        <label className="text-xs font-medium uppercase text-muted-foreground">API Key (Leave blank to keep current shared key)</label>
+                                        <input
+                                            type="password"
+                                            value={manageApiKey}
+                                            onChange={(e) => setManageApiKey(e.target.value)}
+                                            placeholder="Paste new key to rotate shared provider key"
+                                            className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-white"
+                                        />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-xs font-medium uppercase text-muted-foreground">Endpoint</label>
+                                        <input
+                                            type="text"
+                                            value={manageBaseUrl}
+                                            onChange={(e) => setManageBaseUrl(e.target.value)}
+                                            className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-white"
+                                        />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-xs font-medium uppercase text-muted-foreground">Model</label>
+                                        <input
+                                            type="text"
+                                            value={manageModel}
+                                            onChange={(e) => setManageModel(e.target.value)}
+                                            className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-white"
+                                        />
+                                    </div>
+                                    <div className="space-y-2 md:col-span-2">
+                                        <label className="text-xs font-medium uppercase text-muted-foreground">WebHook URL</label>
+                                        <input
+                                            type="text"
+                                            value={manageWebHook}
+                                            onChange={(e) => setManageWebHook(e.target.value)}
+                                            className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-white"
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="flex justify-end gap-2">
+                                    <button
+                                        onClick={closeRowEditModal}
+                                        className="text-sm px-3 py-2 rounded border border-white/10 hover:bg-white/10"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        onClick={handleSaveFromRowEdit}
+                                        disabled={!manageSettingId || isManageSaving}
+                                        className="text-sm px-4 py-2 rounded border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        {isManageSaving ? 'Saving...' : 'Save Changes'}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
             ) : (
                 <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">

@@ -59,6 +59,23 @@ If the user's request is not clear or does not require a tool, return an empty p
 """
 
 class LLMService:
+    def _infer_provider(self, base_url: str, model: str = "") -> str:
+        url = (base_url or "").lower()
+        model_lower = (model or "").lower()
+        if "ark.cn-" in url or "doubao" in model_lower:
+            return "doubao"
+        if "openai" in url:
+            return "openai"
+        if "anthropic" in url:
+            return "anthropic"
+        if "grsai" in url:
+            return "grsai"
+        if "volces" in url:
+            return "volcengine"
+        if "localhost" in url or "127.0.0.1" in url:
+            return "local"
+        return "unknown"
+
     async def analyze_multimodal(self, prompt: str, image_url: str, config: Dict[str, Any]) -> Dict[str, Any]:
         """
         Analyzes an image with a prompt using multimodal LLM capabilities.
@@ -217,7 +234,8 @@ class LLMService:
         # Add current query
         messages.append({"role": "user", "content": query})
 
-        extra_config = config.get("config", {})
+        extra_config = dict(config.get("config", {}) or {})
+        extra_config.setdefault("__provider", config.get("provider") or self._infer_provider(base_url, model))
 
         try:
             return await self._call_openai_compatible(base_url, api_key, model, messages, extra_config)
@@ -243,7 +261,8 @@ class LLMService:
         if not api_key:
              raise ValueError("API Key missing in config")
 
-        extra_config = config.get("config", {})
+        extra_config = dict(config.get("config", {}) or {})
+        extra_config.setdefault("__provider", config.get("provider") or self._infer_provider(base_url, model))
 
         try:
             full_response = await self._raw_llm_request_full(base_url, api_key, model, messages, extra_config)
@@ -346,7 +365,8 @@ class LLMService:
         else:
              messages.append({"role": "user", "content": user_content})
 
-        extra_config = config.get("config", {})
+        extra_config = dict(config.get("config", {}) or {})
+        extra_config.setdefault("__provider", config.get("provider") or self._infer_provider(base_url, model))
         
         # Handle specialized "sora-create-character" if detected in system prompt
         if system_prompt == "sora-create-character":
@@ -416,7 +436,7 @@ class LLMService:
             # Merge extra config, but don't overwrite critical fields if not intended
             # For now, just update, but maybe exclude 'model' or 'messages'
             for k, v in extra_config.items():
-                if k not in ["model", "messages", "stream"]:
+                if k not in ["model", "messages", "stream"] and not str(k).startswith("__"):
                     payload[k] = v
 
         def _message_chars(msg: Dict[str, Any]) -> int:
@@ -480,7 +500,12 @@ class LLMService:
             response = await asyncio.to_thread(_request, True)
         
         if response.status_code != 200:
-            raise Exception(f"API Error {response.status_code}: {response.text}")
+            provider = (extra_config or {}).get("__provider") or (extra_config or {}).get("provider") or self._infer_provider(base_url, model)
+            resolved_setting_id = (extra_config or {}).get("__resolved_setting_id")
+            resolved_source = (extra_config or {}).get("__resolved_source")
+            raise Exception(
+                f"API Error {response.status_code} [provider={provider}, model={model}, endpoint={url}, setting_id={resolved_setting_id}, source={resolved_source}]: {response.text}"
+            )
 
         data = response.json()
 

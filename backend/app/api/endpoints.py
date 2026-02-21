@@ -75,39 +75,224 @@ def fix_db_schema_endpoint(current_user: User = Depends(get_current_user)):
 from app.services.system_log_service import log_action
 from app.schemas.system_log import SystemLogOut
 
-def get_system_api_setting(db: Session, provider: str = None, category: str = None) -> Optional[APISetting]:
+def _can_use_system_settings(user: User) -> bool:
+    return bool((user.credits or 0) > 0 or user.is_superuser or user.is_system)
+
+
+def get_system_api_setting(
+    db: Session,
+    provider: str = None,
+    category: str = None,
+    model: str = None,
+    setting_id: int = None,
+) -> Optional[APISetting]:
     """Helper to find a system-level API configuration."""
-    query = db.query(APISetting).join(User).filter(User.is_system == True, APISetting.is_active == True)
+    query = db.query(APISetting).join(User).filter(User.is_system == True)
+    if setting_id:
+        query = query.filter(APISetting.id == setting_id)
     if provider:
         query = query.filter(APISetting.provider == provider)
     if category:
         query = query.filter(APISetting.category == category)
-    return query.first()
+    if model:
+        query = query.filter(APISetting.model == model)
+
+    if setting_id:
+        return query.first()
+
+    active = query.filter(APISetting.is_active == True).order_by(APISetting.id.desc()).first()
+    if active:
+        return active
+    return query.order_by(APISetting.id.desc()).first()
+
+
+def _resolve_effective_api_setting_meta(
+    db: Session,
+    user: User,
+    provider: str = None,
+    category: str = None,
+) -> Tuple[Optional[APISetting], str, Dict[str, Any]]:
+    user_setting_query = db.query(APISetting).filter(
+        APISetting.user_id == user.id,
+        APISetting.is_active == True,
+    )
+    if provider:
+        user_setting_query = user_setting_query.filter(APISetting.provider == provider)
+    if category:
+        user_setting_query = user_setting_query.filter(APISetting.category == category)
+
+    active_count = user_setting_query.count()
+    setting = user_setting_query.order_by(APISetting.id.desc()).first()
+    if setting:
+        if active_count > 1:
+            return setting, "user_active_multi", {"active_count": active_count, "marker_id": setting.id}
+
+        marker = setting.config or {}
+        use_system_marker = str(marker.get("selection_source") or "").strip().lower() == "system"
+
+        use_system_setting_id = None
+        try:
+            use_system_setting_id = int(marker.get("use_system_setting_id") or 0)
+        except Exception:
+            use_system_setting_id = None
+
+        target_provider = setting.provider or provider
+        target_category = setting.category or category
+        target_model = setting.model
+
+        if target_provider:
+            provider_model_query = db.query(APISetting).filter(
+                APISetting.user_id == user.id,
+                APISetting.provider == target_provider,
+            )
+            if target_category:
+                provider_model_query = provider_model_query.filter(APISetting.category == target_category)
+            if target_model:
+                provider_model_query = provider_model_query.filter(APISetting.model == target_model)
+
+            user_provider_model_with_key = provider_model_query.filter(
+                APISetting.api_key.isnot(None),
+                APISetting.api_key != "",
+            ).order_by(APISetting.is_active.desc(), APISetting.id.desc()).first()
+            if user_provider_model_with_key:
+                return user_provider_model_with_key, "user_provider_model", {
+                    "active_count": active_count,
+                    "marker_id": setting.id,
+                }
+
+        if _can_use_system_settings(user) and (use_system_marker or use_system_setting_id):
+            if use_system_setting_id:
+                pointed = get_system_api_setting(
+                    db,
+                    provider=target_provider,
+                    category=target_category,
+                    model=target_model,
+                    setting_id=use_system_setting_id,
+                )
+                if pointed and (pointed.api_key or "").strip():
+                    return pointed, "system_linked", {
+                        "active_count": active_count,
+                        "marker_id": setting.id,
+                        "use_system_setting_id": use_system_setting_id,
+                    }
+
+            system_by_context = get_system_api_setting(
+                db,
+                provider=target_provider,
+                category=target_category,
+                model=target_model,
+            )
+            if system_by_context and (system_by_context.api_key or "").strip():
+                return system_by_context, "system_marker_fallback", {
+                    "active_count": active_count,
+                    "marker_id": setting.id,
+                    "use_system_setting_id": use_system_setting_id,
+                }
+
+        if (setting.api_key or "").strip():
+            return setting, "user_active", {"active_count": active_count, "marker_id": setting.id}
+
+        if _can_use_system_settings(user):
+            if use_system_setting_id:
+                pointed = get_system_api_setting(
+                    db,
+                    provider=target_provider,
+                    category=target_category,
+                    model=target_model,
+                    setting_id=use_system_setting_id,
+                )
+                if pointed and (pointed.api_key or "").strip():
+                    return pointed, "system_linked", {
+                        "active_count": active_count,
+                        "marker_id": setting.id,
+                        "use_system_setting_id": use_system_setting_id,
+                    }
+
+            system_fallback = get_system_api_setting(
+                db,
+                provider=target_provider,
+                category=target_category,
+                model=target_model,
+            )
+            if system_fallback and (system_fallback.api_key or "").strip():
+                return system_fallback, "system_fallback", {
+                    "active_count": active_count,
+                    "marker_id": setting.id,
+                    "use_system_setting_id": use_system_setting_id,
+                }
+
+        return setting, "user_inactive_key", {"active_count": active_count, "marker_id": setting.id}
+
+    if _can_use_system_settings(user):
+        system_setting = get_system_api_setting(db, provider, category)
+        if system_setting:
+            return system_setting, "system_default", {"active_count": 0}
+
+    return None, "none", {"active_count": 0}
 
 def get_effective_api_setting(db: Session, user: User, provider: str = None, category: str = None) -> Optional[APISetting]:
     """
     Get API setting for current user. 
     If not found AND user is authorized, fallback to system setting.
     """
-    # 1. Try User's own setting
-    user_setting_query = db.query(APISetting).filter(
-        APISetting.user_id == user.id, 
-        APISetting.is_active == True
+    resolved_setting, source, meta = _resolve_effective_api_setting_meta(db, user, provider, category)
+    if resolved_setting:
+        logger.info(
+            "Resolved API setting | user_id=%s source=%s setting_id=%s provider=%s category=%s model=%s endpoint=%s meta=%s",
+            user.id,
+            source,
+            resolved_setting.id,
+            resolved_setting.provider,
+            resolved_setting.category,
+            resolved_setting.model,
+            resolved_setting.base_url,
+            meta,
+        )
+    return resolved_setting
+
+
+@router.get("/settings/effective")
+def get_effective_setting_snapshot(
+    category: str = "LLM",
+    provider: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    resolved_setting, source, meta = _resolve_effective_api_setting_meta(
+        db,
+        current_user,
+        provider=provider,
+        category=category,
     )
-    if provider:
-        user_setting_query = user_setting_query.filter(APISetting.provider == provider)
-    if category:
-        user_setting_query = user_setting_query.filter(APISetting.category == category)
-    
-    setting = user_setting_query.first()
-    if setting:
-         return setting
-    
-    # 2. Fallback if authorized
-    if user.is_authorized:
-         return get_system_api_setting(db, provider, category)
-    
-    return None
+
+    if not resolved_setting:
+        return {
+            "found": False,
+            "category": category,
+            "provider": provider,
+            "source": source,
+            "meta": meta,
+        }
+
+    api_key = (resolved_setting.api_key or "").strip()
+    masked = ""
+    if api_key:
+        masked = api_key[:4] + "***" + api_key[-4:] if len(api_key) > 8 else ("*" * len(api_key))
+
+    return {
+        "found": True,
+        "source": source,
+        "setting_id": resolved_setting.id,
+        "owner_user_id": resolved_setting.user_id,
+        "category": resolved_setting.category,
+        "provider": resolved_setting.provider,
+        "model": resolved_setting.model,
+        "endpoint": resolved_setting.base_url,
+        "webhook": (resolved_setting.config or {}).get("webHook"),
+        "has_api_key": bool(api_key),
+        "api_key_masked": masked,
+        "meta": meta,
+    }
 
 @router.get("/prompts/{filename}")
 async def get_prompt_content(filename: str, current_user: User = Depends(get_current_user)):
@@ -1236,6 +1421,10 @@ def save_project_story_generator_global_input(
 
 class StoryGeneratorGlobalImportRequest(BaseModel):
     project_overview: Optional[Dict[str, Any]] = None
+    basic_information: Optional[Dict[str, Any]] = None
+    character_canon_project: Optional[Dict[str, Any]] = None
+    story_generator_global_project: Optional[Dict[str, Any]] = None
+    story_generator_global_structured: Optional[Dict[str, Any]] = None
     story_generator_global_input: Optional[Dict[str, Any]] = None
     story_dna_global_md: Optional[str] = None
     global_style_constraints: Optional[Dict[str, Any]] = None
@@ -1252,6 +1441,124 @@ def export_project_story_generator_global_package(
         raise HTTPException(status_code=404, detail="Project not found")
 
     gi = dict(project.global_info or {})
+    basic_info_nested = gi.get("basic_information") if isinstance(gi.get("basic_information"), dict) else {}
+    e_global_info = gi.get("e_global_info") if isinstance(gi.get("e_global_info"), dict) else {}
+    story_input = gi.get("story_generator_global_input") if isinstance(gi.get("story_generator_global_input"), dict) else {}
+
+    def _pick_text(*values):
+        for v in values:
+            if v is None:
+                continue
+            s = str(v).strip()
+            if s:
+                return s
+        return ""
+
+    def _pick_dict(*values):
+        for v in values:
+            if isinstance(v, dict) and len(v) > 0:
+                return v
+        return {}
+
+    def _pick_list(*values):
+        for v in values:
+            if isinstance(v, list) and len(v) > 0:
+                return v
+        return []
+
+    basic_information = {
+        "script_title": _pick_text(gi.get("script_title"), basic_info_nested.get("script_title"), e_global_info.get("script_title"), story_input.get("script_title")),
+        "series_episode": _pick_text(gi.get("series_episode"), basic_info_nested.get("series_episode"), e_global_info.get("series_episode")),
+        "type": _pick_text(gi.get("type"), basic_info_nested.get("type"), e_global_info.get("type"), story_input.get("type")),
+        "language": _pick_text(gi.get("language"), basic_info_nested.get("language"), e_global_info.get("language"), story_input.get("language")),
+        "base_positioning": _pick_text(gi.get("base_positioning"), basic_info_nested.get("base_positioning"), e_global_info.get("base_positioning"), story_input.get("base_positioning")),
+        "Global_Style": _pick_text(gi.get("Global_Style"), gi.get("global_style"), basic_info_nested.get("Global_Style"), e_global_info.get("Global_Style"), story_input.get("Global_Style")),
+        "tech_params": _pick_dict(gi.get("tech_params"), basic_info_nested.get("tech_params"), e_global_info.get("tech_params")),
+        "tone": _pick_text(gi.get("tone"), basic_info_nested.get("tone"), e_global_info.get("tone")),
+        "lighting": _pick_text(gi.get("lighting"), basic_info_nested.get("lighting"), e_global_info.get("lighting")),
+        "borrowed_films": _pick_list(gi.get("borrowed_films"), basic_info_nested.get("borrowed_films"), e_global_info.get("borrowed_films")),
+        "character_relationships": _pick_text(gi.get("character_relationships"), basic_info_nested.get("character_relationships")),
+        "notes": _pick_text(gi.get("notes"), basic_info_nested.get("notes"), e_global_info.get("notes")),
+    }
+
+    character_canon_project = {
+        "character_canon_input": gi.get("character_canon_input") or {},
+        "character_canon_md": gi.get("character_canon_md") or "",
+        "character_profiles": gi.get("character_profiles") or [],
+        "character_canon_tag_categories": gi.get("character_canon_tag_categories") or [],
+        "character_canon_identity_categories": gi.get("character_canon_identity_categories") or [],
+    }
+
+    def _extract_between(text: str, start_pat: str, end_pat: str) -> str:
+        try:
+            pattern = rf"{start_pat}(.*?){end_pat}"
+            m = re.search(pattern, text, flags=re.S)
+            return (m.group(1).strip() if m else "")
+        except Exception:
+            return ""
+
+    def _extract_story_structured(md: str) -> Dict[str, Any]:
+        raw = str(md or "")
+        if not raw.strip():
+            return {}
+        setup_block = _extract_between(raw, r"###\s*A\)\s*定场（开场与触发事件）", r"###\s*B\)\s*发展")
+        development_block = _extract_between(raw, r"###\s*B\)\s*发展", r"###\s*C\)\s*转折")
+        turning_block = _extract_between(raw, r"###\s*C\)\s*转折", r"###\s*D\)\s*高潮")
+        climax_block = _extract_between(raw, r"###\s*D\)\s*高潮", r"###\s*E\)\s*定局")
+        resolution_block = _extract_between(raw, r"###\s*E\)\s*定局", r"##\s*5\)\s*悬念系统")
+        suspense_block = _extract_between(raw, r"##\s*5\)\s*悬念系统", r"##\s*6\)\s*伏笔与回收")
+        foreshadowing_block = _extract_between(raw, r"##\s*6\)\s*伏笔与回收", r"##\s*7\)\s*分集规划")
+        background_block = _extract_between(raw, r"##\s*1\)\s*核心设定（背景/世界观）", r"##\s*2\)\s*主角与目标")
+
+        hook = ""
+        inciting = ""
+        point_of_no_return = ""
+        for line in (setup_block or "").splitlines():
+            s = line.strip()
+            if (not hook) and ("开场钩子" in s):
+                hook = s
+            elif (not inciting) and ("触发事件" in s):
+                inciting = s
+            elif (not point_of_no_return) and ("不可回头" in s or "立场选择" in s):
+                point_of_no_return = s
+
+        return {
+            "background": background_block,
+            "setup": setup_block,
+            "hook": hook,
+            "inciting_incident": inciting,
+            "point_of_no_return": point_of_no_return,
+            "development": development_block,
+            "turning_points": turning_block,
+            "climax": climax_block,
+            "resolution": resolution_block,
+            "suspense": suspense_block,
+            "foreshadowing": foreshadowing_block,
+        }
+
+    story_structured = _extract_story_structured(gi.get("story_dna_global_md") or "")
+
+    def _coalesce_story_input(stored_input: Dict[str, Any], structured: Dict[str, Any]) -> Dict[str, Any]:
+        merged = dict(stored_input or {})
+        for key in ["background", "setup", "development", "turning_points", "climax", "resolution", "suspense", "foreshadowing"]:
+            current = str(merged.get(key) or "").strip()
+            if not current:
+                merged[key] = structured.get(key) or ""
+        return merged
+
+    story_input_export = _coalesce_story_input(story_input, story_structured)
+
+    # Export complete Story Generator (Global/Project) related payload,
+    # including draft inputs, outputs and metadata timestamps.
+    story_generator_global_project = {
+        key: value
+        for key, value in gi.items()
+        if (
+            str(key).startswith("story_generator_global")
+            or str(key).startswith("story_dna_global")
+            or str(key).startswith("global_style_constraints")
+        )
+    }
 
     return {
         "schema_version": 1,
@@ -1262,13 +1569,17 @@ def export_project_story_generator_global_package(
             "title": project.title,
         },
         "project_overview": {
-            "script_title": gi.get("script_title") or "",
-            "type": gi.get("type") or "",
-            "language": gi.get("language") or "",
-            "base_positioning": gi.get("base_positioning") or "",
-            "Global_Style": gi.get("Global_Style") or gi.get("global_style") or "",
+            "script_title": basic_information.get("script_title") or "",
+            "type": basic_information.get("type") or "",
+            "language": basic_information.get("language") or "",
+            "base_positioning": basic_information.get("base_positioning") or "",
+            "Global_Style": basic_information.get("Global_Style") or "",
         },
-        "story_generator_global_input": gi.get("story_generator_global_input") or {},
+        "basic_information": basic_information,
+        "character_canon_project": character_canon_project,
+        "story_generator_global_project": story_generator_global_project,
+        "story_generator_global_structured": story_structured,
+        "story_generator_global_input": story_input_export,
         "story_dna_global_md": gi.get("story_dna_global_md") or "",
         "global_style_constraints": gi.get("global_style_constraints") or {},
     }
@@ -1288,15 +1599,69 @@ def import_project_story_generator_global_package(
     now_iso = datetime.utcnow().isoformat()
     gi = dict(project.global_info or {})
 
-    overview = req.project_overview or {}
-    if isinstance(overview, dict):
-        for key in ["script_title", "type", "language", "base_positioning", "Global_Style"]:
-            if key in overview:
-                val = overview.get(key)
+    basic_information = req.basic_information or req.project_overview or {}
+    if isinstance(basic_information, dict):
+        text_fields = [
+            "script_title",
+            "series_episode",
+            "type",
+            "language",
+            "base_positioning",
+            "Global_Style",
+            "tone",
+            "lighting",
+            "character_relationships",
+            "notes",
+        ]
+        for key in text_fields:
+            if key in basic_information:
+                val = basic_information.get(key)
                 gi[key] = "" if val is None else str(val)
 
+        if "tech_params" in basic_information and isinstance(basic_information.get("tech_params"), dict):
+            gi["tech_params"] = basic_information.get("tech_params") or {}
+
+        if "borrowed_films" in basic_information:
+            borrowed = basic_information.get("borrowed_films")
+            gi["borrowed_films"] = borrowed if isinstance(borrowed, list) else []
+
+    canon_payload = req.character_canon_project or {}
+    if isinstance(canon_payload, dict):
+        if "character_canon_input" in canon_payload and isinstance(canon_payload.get("character_canon_input"), dict):
+            gi["character_canon_input"] = canon_payload.get("character_canon_input") or {}
+            gi["character_canon_input_updated_at"] = now_iso
+
+        if "character_canon_md" in canon_payload:
+            gi["character_canon_md"] = canon_payload.get("character_canon_md") or ""
+
+        if "character_profiles" in canon_payload:
+            profiles = canon_payload.get("character_profiles")
+            gi["character_profiles"] = profiles if isinstance(profiles, list) else []
+            gi["character_profiles_updated_at"] = now_iso
+
+        if "character_canon_tag_categories" in canon_payload:
+            tags = canon_payload.get("character_canon_tag_categories")
+            gi["character_canon_tag_categories"] = tags if isinstance(tags, list) else []
+
+        if "character_canon_identity_categories" in canon_payload:
+            identities = canon_payload.get("character_canon_identity_categories")
+            gi["character_canon_identity_categories"] = identities if isinstance(identities, list) else []
+
+    # Full Story Generator (Global/Project) package import (preferred path)
+    # Accept all recognized story-global keys and merge into global_info.
+    full_story_pkg = req.story_generator_global_project or {}
+    if isinstance(full_story_pkg, dict):
+        for key, value in full_story_pkg.items():
+            k = str(key)
+            if (
+                k.startswith("story_generator_global")
+                or k.startswith("story_dna_global")
+                or k.startswith("global_style_constraints")
+            ):
+                gi[k] = value
+
     imported_input = req.story_generator_global_input or {}
-    if isinstance(imported_input, dict):
+    if isinstance(imported_input, dict) and len(imported_input) > 0:
         normalized_input = dict(imported_input)
         normalized_input["mode"] = "global"
         if "episodes_count" in normalized_input:
@@ -1304,6 +1669,13 @@ def import_project_story_generator_global_package(
                 normalized_input["episodes_count"] = int(normalized_input.get("episodes_count") or 0)
             except Exception:
                 normalized_input["episodes_count"] = 0
+
+        structured_input = req.story_generator_global_structured or {}
+        if isinstance(structured_input, dict):
+            for key in ["background", "setup", "development", "turning_points", "climax", "resolution", "suspense", "foreshadowing"]:
+                if not str(normalized_input.get(key) or "").strip() and str(structured_input.get(key) or "").strip():
+                    normalized_input[key] = structured_input.get(key)
+
         gi["story_generator_global_input"] = normalized_input
         gi["story_generator_global_input_updated_at"] = now_iso
 
@@ -5528,11 +5900,13 @@ async def generate_image_endpoint(
         # Assuming generate_image returns {"url": "...", ...}
         result = await media_service.generate_image(
             prompt=req.prompt, 
-            llm_config={"provider": req.provider} if req.provider else None,
+            llm_config={"provider": req.provider, "model": req.model} if req.provider or req.model else None,
             reference_image_url=req.ref_image_url,
             width=width,
             height=height,
-            aspect_ratio=aspect_ratio
+            aspect_ratio=aspect_ratio,
+            user_id=current_user.id,
+            user_credits=(current_user.credits or 0),
         )
         if "error" in result:
              # Include details if available
@@ -5681,12 +6055,14 @@ async def generate_video_endpoint(
 
         result = await media_service.generate_video(
             prompt=req.prompt, 
-            llm_config={"provider": req.provider} if req.provider else None,
+            llm_config={"provider": req.provider, "model": req.model} if req.provider or req.model else None,
             reference_image_url=req.ref_image_url,
             last_frame_url=req.last_frame_url,
             duration=req.duration,
             aspect_ratio=aspect_ratio,
-            keyframes=req.keyframes
+            keyframes=req.keyframes,
+            user_id=current_user.id,
+            user_credits=(current_user.credits or 0),
         )
         if "error" in result:
              detail = result["error"]

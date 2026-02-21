@@ -337,6 +337,36 @@ export const getSettingDefaults = async () => {
     return response.data;
 }
 
+export const getSystemSettings = async () => {
+    const response = await api.get('/settings/system');
+    return response.data;
+}
+
+export const selectSystemSetting = async (setting_id) => {
+    const response = await api.post('/settings/system/select', { setting_id });
+    return response.data;
+}
+
+export const getSystemSettingsManage = async () => {
+    const response = await api.get('/settings/system/manage');
+    return response.data;
+}
+
+export const createSystemSettingManage = async (data) => {
+    const response = await api.post('/settings/system/manage', data);
+    return response.data;
+}
+
+export const updateSystemSettingManage = async (settingId, data) => {
+    const response = await api.post(`/settings/system/manage/${settingId}`, data);
+    return response.data;
+}
+
+export const getEffectiveSettingSnapshot = async (params = {}) => {
+    const response = await api.get('/settings/effective', { params });
+    return response.data;
+}
+
 export const updateSetting = async (data) => {
     const response = await api.post('/settings', data);
     return response.data;

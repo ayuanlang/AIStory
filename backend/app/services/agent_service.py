@@ -10,6 +10,7 @@ import hmac
 import asyncio
 import uuid
 import os
+import logging
 from typing import List, Dict, Any, Optional
 
 from app.schemas.agent import AgentRequest, AgentResponse, AgentAction
@@ -28,6 +29,8 @@ legacy_db = MockLegacyDB()
 
 # Suppress InsecureRequestWarning from urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+logger = logging.getLogger(__name__)
 
 class AgentService:
     def get_api_config(self, provider: str, user_id: int = 1) -> Dict[str, Any]:
@@ -95,31 +98,144 @@ class AgentService:
                 if not user:
                     return {}
 
+                def _can_use_system_settings() -> bool:
+                    return bool(
+                        (user.credits or 0) > 0
+                        or user.is_superuser
+                        or user.is_system
+                        or user.is_authorized
+                    )
+
+                def _query_system_llm_setting(
+                    setting_id: int = None,
+                    provider: str = None,
+                    model: str = None,
+                ) -> Optional[APISetting]:
+                    q = session.query(APISetting).join(User).filter(
+                        User.is_system == True,
+                        APISetting.category == "LLM",
+                    )
+                    if setting_id:
+                        return q.filter(APISetting.id == setting_id).first()
+                    if provider:
+                        q = q.filter(APISetting.provider == provider)
+                    if model:
+                        q = q.filter(APISetting.model == model)
+
+                    active = q.filter(APISetting.is_active == True).order_by(APISetting.id.desc()).first()
+                    if active:
+                        return active
+                    return q.order_by(APISetting.id.desc()).first()
+
                 # 1. Try User's own setting
-                setting = session.query(APISetting).filter(
+                active_query = session.query(APISetting).filter(
                     APISetting.user_id == user_id,
                     APISetting.category == "LLM",
                     APISetting.is_active == True
-                ).first()
-                
-                # 2. Fallback if authorized and not set
-                if not setting and user.is_authorized:
-                    setting = session.query(APISetting).join(User).filter(
-                        User.is_system == True, 
-                        APISetting.category == "LLM",
-                        APISetting.is_active == True
-                    ).first()
+                )
+                active_count = active_query.count()
+                setting = active_query.order_by(APISetting.id.desc()).first()
 
-                if setting:
+                selected = setting
+                selected_source = "user_active"
+                linked_system_setting = None
+
+                # Rule A: if user has multiple active LLM settings, use user setting directly.
+                if setting and active_count > 1:
+                    selected = setting
+                    selected_source = f"user_active_multi:{setting.id}"
+
+                marker = (setting.config or {}) if setting else {}
+                use_system_marker = str(marker.get("selection_source") or "").strip().lower() == "system"
+                use_system_setting_id = None
+                try:
+                    use_system_setting_id = int(marker.get("use_system_setting_id") or 0)
+                except Exception:
+                    use_system_setting_id = None
+
+                target_provider = setting.provider if setting else None
+                target_model = setting.model if setting else None
+
+                # Rule B: for non-multi-active case, resolve by user's provider+model first.
+                if setting and active_count <= 1 and target_provider:
+                    provider_model_query = session.query(APISetting).filter(
+                        APISetting.user_id == user_id,
+                        APISetting.category == "LLM",
+                        APISetting.provider == target_provider,
+                    )
+                    if target_model:
+                        provider_model_query = provider_model_query.filter(APISetting.model == target_model)
+
+                    user_provider_model_with_key = provider_model_query.filter(
+                        APISetting.api_key.isnot(None),
+                        APISetting.api_key != "",
+                    ).order_by(APISetting.is_active.desc(), APISetting.id.desc()).first()
+                    if user_provider_model_with_key:
+                        selected = user_provider_model_with_key
+                        selected_source = f"user_provider_model:{setting.id}->{user_provider_model_with_key.id}"
+
+                if setting and active_count <= 1 and _can_use_system_settings() and (use_system_marker or use_system_setting_id):
+                    if use_system_setting_id:
+                        linked_system_setting = _query_system_llm_setting(setting_id=use_system_setting_id)
+                        if linked_system_setting and (linked_system_setting.api_key or "").strip():
+                            selected = linked_system_setting
+                            selected_source = f"system_linked:{setting.id}->{linked_system_setting.id}"
+
+                    if selected is setting:
+                        fallback_system = _query_system_llm_setting(
+                            provider=setting.provider,
+                            model=setting.model,
+                        )
+                        if fallback_system and (fallback_system.api_key or "").strip():
+                            selected = fallback_system
+                            selected_source = f"system_marker_fallback:{setting.id}->{fallback_system.id}"
+
+                if setting and active_count <= 1 and not (setting.api_key or "").strip() and _can_use_system_settings():
+                    if use_system_setting_id:
+                        linked_system_setting = _query_system_llm_setting(setting_id=use_system_setting_id)
+                        if linked_system_setting and (linked_system_setting.api_key or "").strip():
+                            selected = linked_system_setting
+                            selected_source = f"system_linked:{setting.id}->{linked_system_setting.id}"
+
+                    if selected is setting:
+                        fallback_system = _query_system_llm_setting(
+                            provider=setting.provider,
+                            model=setting.model,
+                        )
+                        if fallback_system and (fallback_system.api_key or "").strip():
+                            selected = fallback_system
+                            selected_source = f"system_fallback:{setting.id}->{fallback_system.id}"
+
+                # 2. Fallback to system-level active/default LLM setting
+                if not selected and _can_use_system_settings():
+                    selected = _query_system_llm_setting()
+                    selected_source = "system_default"
+
+                if selected:
                     # Import defaults here to avoid circular imports at top level if any
                     from app.api.settings import DEFAULTS
-                    default = DEFAULTS.get(setting.provider, {})
+                    default = DEFAULTS.get(selected.provider, {})
+                    merged_config = dict(selected.config or default.get("config", {}) or {})
+                    merged_config["__resolved_setting_id"] = selected.id
+                    merged_config["__resolved_source"] = selected_source
+
+                    logger.info(
+                        "Resolved active LLM config | user_id=%s username=%s source=%s setting_id=%s provider=%s model=%s endpoint=%s",
+                        user_id,
+                        user.username,
+                        selected_source,
+                        selected.id,
+                        selected.provider,
+                        selected.model,
+                        selected.base_url or default.get("base_url"),
+                    )
+
                     return {
-                        "provider": setting.provider,
-                        "api_key": setting.api_key,
-                        "base_url": setting.base_url or default.get("base_url"),
-                        "model": setting.model or default.get("model"),
-                        "config": setting.config or default.get("config", {})
+                        "provider": selected.provider,
+                        "api_key": selected.api_key,
+                        "base_url": selected.base_url or default.get("base_url"),
+                        "model": selected.model or default.get("model"),
+                        "config": merged_config
                     }
         except Exception as e:
             print(f"Error fetching active LLM: {e}")

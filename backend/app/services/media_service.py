@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional, Union
 
 from app.db.session import SessionLocal
-from app.models.all_models import APISetting
+from app.models.all_models import APISetting, User
 from app.core.config import settings
 
 # Suppress InsecureRequestWarning from urllib3
@@ -30,7 +30,31 @@ logger = logging.getLogger("media_service")
 
 class MediaGenerationService:
 # ...
-    def get_api_config(self, provider: str, user_id: int = 1, category: str = None) -> Dict[str, Any]:
+    def _system_setting_query(self, session, provider: str, category: str = None):
+        query = session.query(APISetting).join(User, APISetting.user_id == User.id).filter(
+            User.is_system == True,
+            APISetting.provider == provider,
+        )
+        if category:
+            query = query.filter(APISetting.category == category)
+        return query
+
+    def _setting_to_config(self, setting: APISetting, provider: str, defaults: Dict[str, Dict[str, str]]) -> Dict[str, Any]:
+        return {
+            "api_key": setting.api_key,
+            "base_url": setting.base_url or defaults.get(provider, {}).get("base_url"),
+            "model": setting.model or defaults.get(provider, {}).get("model"),
+            "config": setting.config or {},
+        }
+
+    def get_api_config(
+        self,
+        provider: str,
+        user_id: int = 1,
+        category: str = None,
+        requested_model: Optional[str] = None,
+        user_credits: int = 0,
+    ) -> Dict[str, Any]:
         """
         Retrieves API configuration for a specific provider from the database.
         Falls back to environment variables or defaults if not configured.
@@ -50,6 +74,8 @@ class MediaGenerationService:
 
         try:
             with SessionLocal() as session:
+                user_setting = None
+
                 # Prioritize Active setting for this provider
                 query = session.query(APISetting).filter(
                     APISetting.user_id == user_id, 
@@ -58,23 +84,66 @@ class MediaGenerationService:
                 )
                 if category:
                     query = query.filter(APISetting.category == category)
-                
-                setting = query.first()
+
+                active_count = query.count()
+
+                if requested_model:
+                    user_setting = query.filter(APISetting.model == requested_model).order_by(APISetting.id.desc()).first()
+
+                if not user_setting:
+                    user_setting = query.order_by(APISetting.id.desc()).first()
+
+                # Rule A: if more than one active user setting exists in this scope, use user setting directly.
+                if user_setting and active_count > 1:
+                    return self._setting_to_config(user_setting, provider, defaults)
                 
                 # Fallback to any setting for this provider if none is explicitly active (relaxed check)
-                if not setting and not category:
-                     setting = session.query(APISetting).filter(
+                if not user_setting and not category:
+                    user_setting = session.query(APISetting).filter(
                         APISetting.user_id == user_id, 
                         APISetting.provider == provider
-                    ).first()
+                    ).order_by(APISetting.id.desc()).first()
 
-                if setting:
-                    return {
-                        "api_key": setting.api_key,
-                        "base_url": setting.base_url or defaults.get(provider, {}).get("base_url"),
-                        "model": setting.model or defaults.get(provider, {}).get("model"),
-                        "config": setting.config or {}
-                    }
+                if user_setting:
+                    # Explicit pointer to system setting selected by user on settings page
+                    use_system_setting_id = (user_setting.config or {}).get("use_system_setting_id")
+                    if use_system_setting_id and user_credits > 0:
+                        pointed = self._system_setting_query(session, provider, category).filter(
+                            APISetting.id == use_system_setting_id
+                        ).first()
+                        if pointed and (pointed.api_key or "").strip():
+                            merged = self._setting_to_config(pointed, provider, defaults)
+                            merged_cfg = dict(merged.get("config") or {})
+                            merged_cfg.update(user_setting.config or {})
+                            merged["config"] = merged_cfg
+                            return merged
+
+                    if (user_setting.api_key or "").strip():
+                        return self._setting_to_config(user_setting, provider, defaults)
+
+                # User has no key: if credits > 0, allow system key fallback by provider/model.
+                if user_credits > 0:
+                    preferred_model = requested_model or (user_setting.model if user_setting else None)
+                    system_query = self._system_setting_query(session, provider, category)
+
+                    system_setting = None
+                    if preferred_model:
+                        system_setting = system_query.filter(APISetting.model == preferred_model).first()
+                    if not system_setting:
+                        system_setting = system_query.filter(APISetting.is_active == True).first()
+                    if not system_setting:
+                        system_setting = system_query.first()
+
+                    if system_setting and (system_setting.api_key or "").strip():
+                        merged = self._setting_to_config(system_setting, provider, defaults)
+                        if user_setting and user_setting.config:
+                            merged_cfg = dict(merged.get("config") or {})
+                            merged_cfg.update(user_setting.config or {})
+                            merged["config"] = merged_cfg
+                        return merged
+
+                if user_setting:
+                    return self._setting_to_config(user_setting, provider, defaults)
         except Exception as e:
             print(f"Error fetching settings for {provider}: {e}")
 
@@ -90,8 +159,7 @@ class MediaGenerationService:
         
         return defaults.get(provider, {})
 
-    async def generate_image(self, prompt: str, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, width: int = None, height: int = None, aspect_ratio: str = None):
-        user_id = 1
+    async def generate_image(self, prompt: str, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, width: int = None, height: int = None, aspect_ratio: str = None, user_id: int = 1, user_credits: int = 0):
         provider = None
         if llm_config and "provider" in llm_config and llm_config["provider"]:
             provider = llm_config["provider"]
@@ -113,6 +181,14 @@ class MediaGenerationService:
                     ).first()
                     if active_setting:
                         provider = active_setting.provider
+                    elif user_credits > 0:
+                        system_active = session.query(APISetting).join(User, APISetting.user_id == User.id).filter(
+                            User.is_system == True,
+                            APISetting.category == "Image",
+                            APISetting.is_active == True,
+                        ).first()
+                        if system_active:
+                            provider = system_active.provider
             except Exception as e:
                 print(f"Error finding active provider: {e}")
         
@@ -120,7 +196,13 @@ class MediaGenerationService:
         if not provider:
             provider = "grsai"
 
-        api_config = self.get_api_config(provider, user_id, category="Image")
+        api_config = self.get_api_config(
+            provider,
+            user_id,
+            category="Image",
+            requested_model=(llm_config or {}).get("model"),
+            user_credits=user_credits,
+        )
         
         # Override model if specified in request
         if llm_config and llm_config.get("model"):
@@ -155,8 +237,7 @@ class MediaGenerationService:
              result["url"] = self._download_and_save(result["url"])
         return result
 
-    async def generate_video(self, prompt: str, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, last_frame_url: Optional[str] = None, duration: int = 5, aspect_ratio: Optional[str] = None, keyframes: Optional[List[str]] = None):
-        user_id = 1
+    async def generate_video(self, prompt: str, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, last_frame_url: Optional[str] = None, duration: int = 5, aspect_ratio: Optional[str] = None, keyframes: Optional[List[str]] = None, user_id: int = 1, user_credits: int = 0):
         provider = None
         if llm_config and "provider" in llm_config and llm_config["provider"]:
             provider = llm_config["provider"]
@@ -180,6 +261,14 @@ class MediaGenerationService:
                     ).first()
                     if active_setting:
                         provider = active_setting.provider
+                    elif user_credits > 0:
+                        system_active = session.query(APISetting).join(User, APISetting.user_id == User.id).filter(
+                            User.is_system == True,
+                            APISetting.category == "Video",
+                            APISetting.is_active == True,
+                        ).first()
+                        if system_active:
+                            provider = system_active.provider
             except Exception as e:
                 print(f"Error finding active provider: {e}")
 
@@ -187,7 +276,13 @@ class MediaGenerationService:
         if not provider:
             provider = "grsai"  # Default has shifted to grsai for consistency if not configured
             
-        api_config = self.get_api_config(provider, user_id, category="Video")
+        api_config = self.get_api_config(
+            provider,
+            user_id,
+            category="Video",
+            requested_model=(llm_config or {}).get("model"),
+            user_credits=user_credits,
+        )
 
         # Override model if specified
         if llm_config and llm_config.get("model"):
@@ -667,6 +762,8 @@ class MediaGenerationService:
                 if aspect_ratio == "9:16": 
                     api_ar = "9:16"
                 payload["aspectRatio"] = api_ar
+                # API requires integer for duration
+                payload["duration"] = int(duration) if duration else 5
                 
                 # payload["urls"] = [] # API Spec: urls cannot be used with firstFrameUrl/lastFrameUrl. We prioritize firstFrameUrl.
                 # prompt truncation moved to end
@@ -730,7 +827,7 @@ class MediaGenerationService:
                  # Remove markdown and brackets to avoid API parsing errors
                  clean_prompt = re.sub(r'[\*\[\]\{\}]', '', prompt)
                  # Enforce length limit
-                 payload["prompt"] = clean_prompt[:900]
+                 payload["prompt"] = clean_prompt[:1200]
 
             # Ensure we don't send None
             if is_veo:
@@ -766,6 +863,8 @@ class MediaGenerationService:
                          debug_p[key] = [ (s[:50] + "...<Base64>...") if isinstance(s, str) and len(s) > 200 else s for s in debug_p[key] ]
 
             print(f"[Grsai] Video Payload: {json.dumps(debug_p, ensure_ascii=False)}")
+            if is_veo:
+                print(f"[Grsai][Veo] Submit Duration={payload.get('duration')} Model={final_model} Aspect={payload.get('aspectRatio')}")
             
             # Double check payload validity before sending
             return await self._submit_and_poll_grsai(endpoint, payload, api_key, result_url, is_video=True, extra_metadata=base_metadata)

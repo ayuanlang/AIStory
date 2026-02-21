@@ -198,6 +198,47 @@ const MODEL_OPTIONS = {
     }
 };
 
+const getSettingSourceByCategory = (settings, category) => {
+    const active = (settings || []).find((item) => item?.category === category && item?.is_active);
+    if (!active) return 'unset';
+    if (active?.config?.selection_source === 'system' || active?.config?.use_system_setting_id) return 'system';
+    return 'user';
+};
+
+const sourceBadgeClass = (source) => {
+    if (source === 'system') return 'bg-green-500/20 text-green-300 border-green-500/30';
+    if (source === 'user') return 'bg-blue-500/20 text-blue-300 border-blue-500/30';
+    return 'bg-white/10 text-muted-foreground border-white/20';
+};
+
+const sourceBadgeText = (source) => {
+    if (source === 'system') return 'System';
+    if (source === 'user') return 'User';
+    return 'Unset';
+};
+
+const formatProviderModelEndpointError = (err) => {
+    const detail = err?.response?.data?.detail || err?.message || String(err || 'Unknown error');
+    const providerMatch = String(detail).match(/provider=([^,\]]+)/i);
+    const modelMatch = String(detail).match(/model=([^,\]]+)/i);
+    const endpointMatch = String(detail).match(/endpoint=([^\]]+)/i);
+
+    if (!providerMatch && !modelMatch && !endpointMatch) {
+        return String(detail);
+    }
+
+    const provider = (providerMatch?.[1] || '').trim();
+    const model = (modelMatch?.[1] || '').trim();
+    const endpoint = (endpointMatch?.[1] || '').trim();
+    const lines = [
+        `Provider: ${provider || '-'}`,
+        `Model: ${model || '-'}`,
+        `Endpoint: ${endpoint || '-'}`,
+    ];
+
+    return `${lines.join('\n')}\n\nRaw: ${detail}`;
+};
+
 
 
 const InputGroup = ({ label, value, onChange, list, placeholder, idPrefix, multi = false }) => {
@@ -1334,7 +1375,8 @@ const ProjectOverview = ({ id, onProjectUpdate }) => {
             alert('Global story framework generated and saved to Overview.');
         } catch (e) {
             console.error(e);
-            alert(`Failed to generate global story: ${e.message}`);
+            const readable = formatProviderModelEndpointError(e);
+            alert(`Failed to generate global story:\n${readable}`);
         } finally {
             setIsGeneratingGlobalStory(false);
         }
@@ -1434,6 +1476,10 @@ const ProjectOverview = ({ id, onProjectUpdate }) => {
 
             const payload = {
                 project_overview: parsed?.project_overview || {},
+                basic_information: parsed?.basic_information || {},
+                character_canon_project: parsed?.character_canon_project || {},
+                story_generator_global_project: parsed?.story_generator_global_project || {},
+                story_generator_global_structured: parsed?.story_generator_global_structured || {},
                 story_generator_global_input: parsed?.story_generator_global_input || {},
                 story_dna_global_md: parsed?.story_dna_global_md || '',
                 global_style_constraints: parsed?.global_style_constraints || {},
@@ -1460,6 +1506,28 @@ const ProjectOverview = ({ id, onProjectUpdate }) => {
                         ...prev,
                         ...updated.global_info.story_generator_global_input,
                     }));
+                }
+
+                // Restore Character Canon draft inputs/categories immediately after package import
+                const importedCanonDraft = updated.global_info.character_canon_input;
+                if (importedCanonDraft && typeof importedCanonDraft === 'object') {
+                    if (typeof importedCanonDraft.name === 'string') setCanonName(importedCanonDraft.name);
+                    if (Array.isArray(importedCanonDraft.selected_identity_ids)) setCanonSelectedIdentityIds(importedCanonDraft.selected_identity_ids);
+                    if (Array.isArray(importedCanonDraft.selected_tag_ids)) setCanonSelectedTagIds(importedCanonDraft.selected_tag_ids);
+                    if (typeof importedCanonDraft.custom_identity === 'string') setCanonCustomIdentity(importedCanonDraft.custom_identity);
+                    if (typeof importedCanonDraft.body_features === 'string') setCanonBody(importedCanonDraft.body_features);
+                    if (typeof importedCanonDraft.custom_style_tags === 'string') setCanonCustomTags(importedCanonDraft.custom_style_tags);
+                    if (typeof importedCanonDraft.extra_notes === 'string') setCanonExtra(importedCanonDraft.extra_notes);
+                }
+
+                if (Array.isArray(updated.global_info.character_canon_tag_categories)) {
+                    const normalizedTags = normalizeCanonTagCategories(updated.global_info.character_canon_tag_categories);
+                    if (normalizedTags) setCanonTagCategories(normalizedTags);
+                }
+
+                if (Array.isArray(updated.global_info.character_canon_identity_categories)) {
+                    const normalizedIdentities = normalizeCanonTagCategories(updated.global_info.character_canon_identity_categories);
+                    if (normalizedIdentities) setCanonIdentityCategories(normalizedIdentities);
                 }
             }
 
@@ -6701,6 +6769,7 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
     const [refSelectionMode, setRefSelectionMode] = useState(null); // 'assets'
     const [assets, setAssets] = useState([]);
     const [availableProviders, setAvailableProviders] = useState([]);
+    const [activeSourceImage, setActiveSourceImage] = useState('unset');
     const [viewingEntity, setViewingEntity] = useState(null);
     const [isBatchGeneratingEntities, setIsBatchGeneratingEntities] = useState(false);
     const [batchEntityProgress, setBatchEntityProgress] = useState(null);
@@ -6722,6 +6791,7 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
                 // APISetting schema: provider, api_key, category, is_active...
                 const imageProviders = settings.filter(s => s.category === 'Image' && s.is_active);
                 setAvailableProviders(imageProviders);
+                setActiveSourceImage(getSettingSourceByCategory(settings, 'Image'));
             } catch (e) {
                 console.error("Failed to load providers", e);
             }
@@ -7874,7 +7944,12 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
                                         <div className="flex items-center gap-4 mb-4">
                                             {/* Provider Select */}
                                             <div className="flex-1">
-                                                <label className="text-[10px] uppercase font-bold text-muted-foreground mb-1 block">Provider</label>
+                                                <label className="text-[10px] uppercase font-bold text-muted-foreground mb-1 flex items-center gap-2">
+                                                    Provider
+                                                    <span className={`text-[9px] px-1.5 py-0.5 rounded border font-mono normal-case ${sourceBadgeClass(activeSourceImage)}`}>
+                                                        Source: {sourceBadgeText(activeSourceImage)}
+                                                    </span>
+                                                </label>
                                                 <select 
                                                     value={provider} 
                                                     onChange={e => setProvider(e.target.value)}
@@ -8072,6 +8147,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const [generatingState, setGeneratingState] = useState({ start: false, end: false, video: false });
     const [isBatchGenerating, setIsBatchGenerating] = useState(false);
     const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0, status: '' }); // Progress tracking
+    const [activeSources, setActiveSources] = useState({ Image: 'unset', Video: 'unset' });
 
     // Helper: Construct Global Context String from Episode Info
     const getGlobalContextStr = () => {
@@ -8089,6 +8165,30 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const openMediaPicker = (callback, context = {}) => {
         setPickerConfig({ isOpen: true, callback, context });
     };
+
+    const refreshActiveSources = useCallback(async () => {
+        try {
+            const settings = await getSettings();
+            setActiveSources({
+                Image: getSettingSourceByCategory(settings, 'Image'),
+                Video: getSettingSourceByCategory(settings, 'Video'),
+            });
+        } catch (e) {
+            console.error('Failed to load active setting sources in ShotsView', e);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (editingShot) {
+            refreshActiveSources();
+        }
+    }, [editingShot?.id, refreshActiveSources]);
+
+    useEffect(() => {
+        if (!isSettingsOpen) {
+            refreshActiveSources();
+        }
+    }, [isSettingsOpen, refreshActiveSources]);
 
     const onUpdateShot = async (shotId, changes) => {
         try {
@@ -10007,6 +10107,9 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                         <div className="flex justify-between items-center">
                                             <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
                                                 Start Frame
+                                                <span className={`text-[9px] px-1.5 py-0.5 rounded border font-mono normal-case ${sourceBadgeClass(activeSources.Image)}`}>
+                                                    Source: {sourceBadgeText(activeSources.Image)}
+                                                </span>
                                                 <TranslateControl 
                                                     text={editingShot.start_frame || ''} 
                                                     onUpdate={(v) => setEditingShot({...editingShot, start_frame: v})} 
@@ -10155,6 +10258,9 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                         <div className="flex justify-between items-center">
                                             <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
                                                 End Frame
+                                                <span className={`text-[9px] px-1.5 py-0.5 rounded border font-mono normal-case ${sourceBadgeClass(activeSources.Image)}`}>
+                                                    Source: {sourceBadgeText(activeSources.Image)}
+                                                </span>
                                                 <TranslateControl 
                                                     text={editingShot.end_frame || ''} 
                                                     onUpdate={(v) => setEditingShot({...editingShot, end_frame: v})} 
@@ -10303,6 +10409,9 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                         <div className="flex justify-between items-center">
                                             <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
                                                 Final Video
+                                                <span className={`text-[9px] px-1.5 py-0.5 rounded border font-mono normal-case ${sourceBadgeClass(activeSources.Video)}`}>
+                                                    Source: {sourceBadgeText(activeSources.Video)}
+                                                </span>
                                                 <TranslateControl 
                                                     text={editingShot.prompt || editingShot.video_content || ''}
                                                     onUpdate={(v) => setEditingShot({...editingShot, prompt: v})}

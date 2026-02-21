@@ -396,11 +396,42 @@ def init_api_settings(db):
     db.commit()
     logger.info("Default API settings created.")
 
+
+def cleanup_api_settings_active_conflicts(db):
+    """
+    Ensure only one active API setting per (user_id, category).
+    Keeps the newest active row (highest id), deactivates older duplicates.
+    Safe to run repeatedly.
+    """
+    active_rows = db.query(APISetting).filter(APISetting.is_active == True).order_by(
+        APISetting.user_id.asc(),
+        APISetting.category.asc(),
+        APISetting.id.desc(),
+    ).all()
+
+    seen = set()
+    changed = 0
+
+    for row in active_rows:
+        key = (row.user_id, row.category or "LLM")
+        if key in seen:
+            row.is_active = False
+            changed += 1
+        else:
+            seen.add(key)
+
+    if changed > 0:
+        db.commit()
+        logger.info(f"API settings cleanup: deactivated {changed} duplicate active rows.")
+    else:
+        logger.info("API settings cleanup: no duplicate active rows found.")
+
 def init_initial_data():
     db = SessionLocal()
     try:
         init_pricing_rules(db)
         init_api_settings(db)
+        cleanup_api_settings_active_conflicts(db)
     except Exception as e:
         logger.error(f"Failed to initialize data: {e}")
     finally:
