@@ -485,6 +485,14 @@ def normalize_grsai_user_api_settings(db):
             row.model = "nano-banana-fast"
             changed += 1
 
+        current_base_url = (row.base_url or "").strip()
+        normalized_base_url = current_base_url.replace("grsaiapi.com", "grsai.dakka.com.cn").rstrip("/")
+        if normalized_base_url and not normalized_base_url.endswith("/chat/completions") and not normalized_base_url.endswith("/v1"):
+            normalized_base_url = f"{normalized_base_url}/v1"
+        if normalized_base_url and normalized_base_url != current_base_url:
+            row.base_url = normalized_base_url
+            changed += 1
+
     if changed > 0:
         db.commit()
         logger.info("Normalized %s legacy grsai api_settings rows", changed)
@@ -519,7 +527,7 @@ def init_system_api_settings(db):
         }
         return alias_map.get(value, (model_value or "").strip())
 
-    grsai_base_url = "https://grsaiapi.com"
+    grsai_base_url = "https://grsai.dakka.com.cn/v1"
     grsai_nano_banana_endpoint = "https://grsai.dakka.com.cn/v1/draw/nano-banana"
     grsai_gpt_image_endpoint = "https://grsai.dakka.com.cn/v1/draw/completions"
     grsai_sora2_endpoint = "https://grsai.dakka.com.cn/v1/video/sora-video"
@@ -616,6 +624,14 @@ def init_system_api_settings(db):
         if expected_endpoint and cfg.get("endpoint") != expected_endpoint:
             cfg["endpoint"] = expected_endpoint
             row.config = cfg
+            updated_existing += 1
+
+        current_base_url = (row.base_url or "").strip()
+        normalized_base_url = current_base_url.replace("grsaiapi.com", "grsai.dakka.com.cn").rstrip("/")
+        if normalized_base_url and not normalized_base_url.endswith("/chat/completions") and not normalized_base_url.endswith("/v1"):
+            normalized_base_url = f"{normalized_base_url}/v1"
+        if normalized_base_url and normalized_base_url != current_base_url:
+            row.base_url = normalized_base_url
             updated_existing += 1
 
     if updated_existing > 0:

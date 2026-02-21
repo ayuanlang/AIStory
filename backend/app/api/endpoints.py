@@ -1738,6 +1738,16 @@ async def analyze_project_novel_to_story_generator_fields(
     llm_config = agent_service.get_active_llm_config(current_user.id)
     provider = llm_config.get("provider") if llm_config else None
     model = llm_config.get("model") if llm_config else None
+    resolved_id = ((llm_config or {}).get("config") or {}).get("__resolved_setting_id")
+    resolved_source = ((llm_config or {}).get("config") or {}).get("__resolved_source")
+    logger.info(
+        "[analyze_novel] Using LLM config | provider=%s model=%s base_url=%s setting_id=%s source=%s",
+        provider,
+        model,
+        (llm_config or {}).get("base_url"),
+        resolved_id,
+        resolved_source,
+    )
     billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
 
     # Keep compatibility with prompt template variable while still passing text in user prompt.

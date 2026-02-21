@@ -60,6 +60,23 @@ If the user's request is not clear or does not require a tool, return an empty p
 """
 
 class LLMService:
+    def _normalize_grsai_llm_base_url(self, base_url: str) -> str:
+        url = (base_url or "").strip()
+        if not url:
+            return url
+
+        normalized = url.replace("grsaiapi.com", "grsai.dakka.com.cn")
+        normalized = normalized.rstrip("/")
+
+        # Preserve explicit endpoint if already configured.
+        if normalized.endswith("/chat/completions"):
+            return normalized
+
+        if normalized.endswith("/v1"):
+            return normalized
+
+        return f"{normalized}/v1"
+
     def _infer_provider(self, base_url: str, model: str = "") -> str:
         url = (base_url or "").lower()
         model_lower = (model or "").lower()
@@ -446,11 +463,15 @@ class LLMService:
     async def _raw_llm_request_full(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> Dict[str, Any]:
         # Ensure base_url ends with correct chat endpoint if not specific
         if not base_url:
-             base_url = "https://api.openai.com/v1" # Default to OpenAI if not set
-             
+            base_url = "https://api.openai.com/v1"  # Default to OpenAI if not set
+
+        provider = (extra_config or {}).get("__provider") or self._infer_provider(base_url, model)
+        if provider == "grsai":
+            base_url = self._normalize_grsai_llm_base_url(base_url)
+
         url = base_url.rstrip("/")
         if not url.endswith("/chat/completions"):
-             url = f"{url}/chat/completions"
+            url = f"{url}/chat/completions"
         
         headers = {
             "Authorization": f"Bearer {api_key}",
