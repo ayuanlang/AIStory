@@ -45,7 +45,7 @@ class SystemSettings(BaseModel):
 class SystemAPIModelOption(BaseModel):
     id: int
     name: Optional[str] = None
-    user_id: int
+    user_id: Optional[int] = None
     provider: str
     category: Optional[str] = None
     model: Optional[str] = None
@@ -87,3 +87,24 @@ class SystemAPISettingManageCreate(BaseModel):
     model: Optional[str] = None
     config: Optional[Dict[str, Any]] = {}
     is_active: bool = False
+
+
+class SystemAPISettingOut(BaseModel):
+    id: int
+    name: Optional[str] = None
+    category: str
+    provider: str
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+    model: Optional[str] = None
+    config: Optional[Dict[str, Any]] = {}
+    is_active: bool = False
+
+    class Config:
+        from_attributes = True
+
+
+class SystemAPIProviderModelCatalog(BaseModel):
+    category: str
+    provider: str
+    models: List[str] = []

@@ -16,7 +16,7 @@ from typing import List, Dict, Any, Optional
 from app.schemas.agent import AgentRequest, AgentResponse, AgentAction
 from app.services.llm_service import llm_service
 from app.db.session import SessionLocal
-from app.models.all_models import APISetting, Entity, User
+from app.models.all_models import APISetting, SystemAPISetting, Entity, User
 from app.core.config import settings
 from app.services.billing_service import billing_service
 from sqlalchemy.orm import Session
@@ -110,22 +110,21 @@ class AgentService:
                     setting_id: int = None,
                     provider: str = None,
                     model: str = None,
-                ) -> Optional[APISetting]:
-                    q = session.query(APISetting).join(User).filter(
-                        User.is_system == True,
-                        APISetting.category == "LLM",
+                ) -> Optional[SystemAPISetting]:
+                    q = session.query(SystemAPISetting).filter(
+                        SystemAPISetting.category == "LLM",
                     )
                     if setting_id:
-                        return q.filter(APISetting.id == setting_id).first()
+                        return q.filter(SystemAPISetting.id == setting_id).first()
                     if provider:
-                        q = q.filter(APISetting.provider == provider)
+                        q = q.filter(SystemAPISetting.provider == provider)
                     if model:
-                        q = q.filter(APISetting.model == model)
+                        q = q.filter(SystemAPISetting.model == model)
 
-                    active = q.filter(APISetting.is_active == True).order_by(APISetting.id.desc()).first()
+                    active = q.filter(SystemAPISetting.is_active == True).order_by(SystemAPISetting.id.desc()).first()
                     if active:
                         return active
-                    return q.order_by(APISetting.id.desc()).first()
+                    return q.order_by(SystemAPISetting.id.desc()).first()
 
                 # 1. Try User's own setting
                 active_query = session.query(APISetting).filter(

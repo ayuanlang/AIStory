@@ -3,7 +3,7 @@ import logging
 import bcrypt
 from sqlalchemy import text, inspect
 from app.db.session import engine, SessionLocal
-from app.models.all_models import PricingRule, APISetting, User
+from app.models.all_models import PricingRule, APISetting, User, SystemAPISetting
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,42 @@ def check_and_migrate_tables():
     # logger.info(f"Starting migration check. Dialect: {engine.dialect.name}")
     
     try:
+        inspector = inspect(engine)
+
+        # Ensure dedicated system_api_settings table exists
+        try:
+            if not inspector.has_table("system_api_settings"):
+                SystemAPISetting.__table__.create(bind=engine, checkfirst=True)
+                logger.info("Created system_api_settings table")
+        except Exception as e:
+            logger.error(f"Failed to ensure system_api_settings table: {e}")
+
+        # Migrate legacy system-owned rows from api_settings into system_api_settings.
+        try:
+            with SessionLocal() as session:
+                system_count = session.query(SystemAPISetting).count()
+                if system_count == 0:
+                    legacy_rows = session.query(APISetting).join(User, APISetting.user_id == User.id).filter(
+                        User.is_system == True,
+                        APISetting.category != "System_Payment",
+                    ).all()
+                    for row in legacy_rows:
+                        session.add(SystemAPISetting(
+                            name=row.name,
+                            category=row.category or "LLM",
+                            provider=row.provider or "unknown",
+                            api_key=row.api_key or "",
+                            base_url=row.base_url,
+                            model=row.model,
+                            config=row.config or {},
+                            is_active=bool(row.is_active),
+                        ))
+                    if legacy_rows:
+                        session.commit()
+                        logger.info("Migrated %s legacy system API rows into system_api_settings", len(legacy_rows))
+        except Exception as e:
+            logger.error(f"Failed migrating legacy system API settings: {e}")
+
         is_postgres = engine.dialect.name == 'postgresql'
         
         if is_postgres:
@@ -426,12 +462,174 @@ def cleanup_api_settings_active_conflicts(db):
     else:
         logger.info("API settings cleanup: no duplicate active rows found.")
 
+
+def init_system_api_settings(db):
+    """Seed dedicated System API settings (independent from user APISetting rows)."""
+    def _normalize_grsai_model_name(model_value: str) -> str:
+        value = (model_value or "").strip()
+        if not value:
+            return value
+        prefixes = ("grsai/", "grsai-", "grsai_", "grsai ")
+        normalized = value
+        while True:
+            lowered = normalized.lower()
+            matched = False
+            for prefix in prefixes:
+                if lowered.startswith(prefix):
+                    normalized = normalized[len(prefix):].strip(" /_-")
+                    matched = True
+                    break
+            if not matched:
+                break
+        return normalized
+
+    grsai_base_url = "https://grsaiapi.com"
+    grsai_nano_banana_endpoint = "https://grsai.dakka.com.cn/v1/draw/nano-banana"
+    grsai_gpt_image_endpoint = "https://grsai.dakka.com.cn/v1/draw/completions"
+    grsai_sora2_endpoint = "https://grsai.dakka.com.cn/v1/video/sora-video"
+    grsai_veo_endpoint = "https://grsai.dakka.com.cn/v1/video/veo"
+    grsai_provider = "grsai"
+
+    # Source list requested by user (from Grsai model catalog page).
+    grsai_models = [
+        {"category": "Image", "name": "sora-image", "model": "sora-image"},
+        {"category": "Image", "name": "gpt-image-1.5", "model": "gpt-image-1.5"},
+        {"category": "Image", "name": "nano-banana", "model": "gemini-2.5-flash-image"},
+        {"category": "Image", "name": "nano-banana-fast", "model": "gemini-2.5-flash-image"},
+        {"category": "Image", "name": "nano-banana-pro", "model": "gemini-3-pro-image-preview"},
+        {"category": "Image", "name": "nano-banana-pro-vt", "model": "gemini-3-pro-image-preview"},
+        {"category": "Image", "name": "nano-banana-pro-cl", "model": "gemini-3-pro-image-preview"},
+        {"category": "Image", "name": "nano-banana-pro-vip", "model": "gemini-3-pro-image-preview"},
+        {"category": "Image", "name": "nano-banana-pro-4k-vip", "model": "gemini-3-pro-image-preview"},
+        {"category": "Image", "name": "sora-create-character", "model": "sora-create-character"},
+        {"category": "Image", "name": "sora-upload-character", "model": "sora-upload-character"},
+        {"category": "Video", "name": "sora-2", "model": "sora-2"},
+        {"category": "Video", "name": "veo3.1-fast", "model": "veo_3_1_t2v_fast_ultra"},
+        {"category": "Video", "name": "veo3.1-fast-1080p", "model": "veo_3_1_t2v_fast_ultra"},
+        {"category": "Video", "name": "veo3.1-fast-4k", "model": "veo_3_1_t2v_fast_ultra"},
+        {"category": "Video", "name": "veo3.1-pro", "model": "veo_3_1_t2v"},
+        {"category": "Video", "name": "veo3.1-pro-1080p", "model": "veo_3_1_t2v"},
+        {"category": "Video", "name": "veo3.1-pro-4k", "model": "veo_3_1_t2v"},
+        {"category": "LLM", "name": "gemini-2.5-pro", "model": "gemini-2.5-pro"},
+        {"category": "LLM", "name": "gemini-3-pro", "model": "gemini-3-pro-preview"},
+    ]
+    canonical_by_name = {
+        item["name"].strip().lower(): {
+            "category": item["category"],
+            "model": item["model"],
+        }
+        for item in grsai_models
+    }
+
+    existing_rows = db.query(SystemAPISetting).filter(
+        SystemAPISetting.provider == grsai_provider
+    ).all()
+
+    updated_existing = 0
+    for row in existing_rows:
+        row_name = (row.name or "").lower()
+        normalized_model = _normalize_grsai_model_name(row.model or "")
+        if normalized_model != (row.model or ""):
+            row.model = normalized_model
+            updated_existing += 1
+        row_model = (row.model or "").lower()
+        row_category = (row.category or "").lower()
+        cfg = dict(row.config or {})
+
+        canonical_name_key = row_name.replace("grsai ", "", 1).strip() if row_name.startswith("grsai ") else row_name.strip()
+        canonical = canonical_by_name.get(canonical_name_key)
+        if canonical:
+            desired_category = canonical["category"]
+            desired_model = canonical["model"]
+            if (row.category or "") != desired_category:
+                row.category = desired_category
+                row_category = desired_category.lower()
+                updated_existing += 1
+            if (row.model or "") != desired_model:
+                row.model = desired_model
+                row_model = desired_model.lower()
+                updated_existing += 1
+
+        expected_endpoint = None
+        if row_category == "image" and "nano-banana" in row_name:
+            expected_endpoint = grsai_nano_banana_endpoint
+        elif row_category == "image" and (
+            "gpt-image" in row_name
+            or "gpt-image" in row_model
+            or "gpt image" in row_name
+        ):
+            expected_endpoint = grsai_gpt_image_endpoint
+        elif row_category == "video" and (
+            "sora-2" in row_name
+            or "sora-2" in row_model
+            or "sora 2" in row_name
+            or "sora_video" in row_model
+            or "sora-video" in row_model
+        ):
+            expected_endpoint = grsai_sora2_endpoint
+        elif row_category == "video" and ("veo" in row_name or "veo" in row_model):
+            expected_endpoint = grsai_veo_endpoint
+
+        if expected_endpoint and cfg.get("endpoint") != expected_endpoint:
+            cfg["endpoint"] = expected_endpoint
+            row.config = cfg
+            updated_existing += 1
+
+    if updated_existing > 0:
+        db.commit()
+        logger.info("Updated %s existing grsai system settings", updated_existing)
+
+    existing_keys = {
+        ((row.category or "").strip().lower(), (row.name or "").replace("Grsai ", "", 1).strip().lower())
+        for row in existing_rows
+    }
+
+    shared_api_key = ""
+    for row in existing_rows:
+        if (row.api_key or "").strip():
+            shared_api_key = row.api_key.strip()
+            break
+
+    added = 0
+    for item in grsai_models:
+        key = (item["category"].strip().lower(), item["name"].strip().lower())
+        if key in existing_keys:
+            continue
+
+        db.add(SystemAPISetting(
+            name=f"Grsai {item['name']}",
+            category=item["category"],
+            provider=grsai_provider,
+            api_key=shared_api_key,
+            base_url=grsai_base_url,
+            model=item["model"],
+            config={
+                "endpoint": grsai_nano_banana_endpoint
+            } if item["category"] == "Image" and "nano-banana" in item["name"] else ({
+                "endpoint": grsai_gpt_image_endpoint
+            } if item["category"] == "Image" and "gpt-image" in item["name"] else ({
+                "endpoint": grsai_sora2_endpoint
+            } if item["category"] == "Video" and "sora-2" in item["name"] else ({
+                "endpoint": grsai_veo_endpoint
+            } if item["category"] == "Video" and "veo" in item["name"] else {}))),
+            is_active=False,
+        ))
+        existing_keys.add(key)
+        added += 1
+
+    if added > 0:
+        db.commit()
+        logger.info("Seeded %s grsai models into system_api_settings", added)
+    else:
+        logger.info("System grsai models already initialized")
+
 def init_initial_data():
     db = SessionLocal()
     try:
         init_pricing_rules(db)
         init_api_settings(db)
         cleanup_api_settings_active_conflicts(db)
+        init_system_api_settings(db)
     except Exception as e:
         logger.error(f"Failed to initialize data: {e}")
     finally:

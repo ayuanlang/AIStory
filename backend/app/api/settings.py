@@ -1,12 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.db.session import get_db
-from app.models.all_models import APISetting, User
+from app.models.all_models import APISetting, User, PricingRule, SystemAPISetting
 from app.schemas.settings import (
     APISettingOut,
     APISettingUpdate,
     SystemAPIModelOption,
+    SystemAPIProviderModelCatalog,
     SystemAPIProviderSettings,
+    SystemAPISettingOut,
     SystemAPISelectionRequest,
     SystemAPISettingManageCreate,
     SystemAPISettingManageUpdate,
@@ -30,7 +32,7 @@ def _can_use_system_settings(user: User) -> bool:
 
 
 def _can_manage_system_settings(user: User) -> bool:
-    return bool(user.is_superuser or user.is_system)
+    return bool(user.is_superuser)
 
 
 def _sync_provider_shared_key(db: Session, user_id: int, provider: str, current_setting_id: int, incoming_api_key: str = None) -> str:
@@ -54,6 +56,40 @@ def _sync_provider_shared_key(db: Session, user_id: int, provider: str, current_
         if item.id != current_setting_id and (item.api_key or "").strip():
             return item.api_key
     return ""
+
+
+def _sync_system_provider_shared_key(db: Session, provider: str, current_setting_id: int, incoming_api_key: str = None) -> str:
+    if not provider:
+        return incoming_api_key or ""
+
+    key = (incoming_api_key or "").strip()
+    provider_settings = db.query(SystemAPISetting).filter(
+        SystemAPISetting.provider == provider,
+    ).all()
+
+    if key:
+        for item in provider_settings:
+            if item.id != current_setting_id:
+                item.api_key = key
+        return key
+
+    for item in provider_settings:
+        if item.id != current_setting_id and (item.api_key or "").strip():
+            return item.api_key
+    return ""
+
+
+def _task_type_to_category(task_type: str) -> str:
+    task = (task_type or "").strip().lower()
+    if task == "image_gen":
+        return "Image"
+    if task == "video_gen":
+        return "Video"
+    if task == "analysis":
+        return "Vision"
+    if task == "llm_chat":
+        return "LLM"
+    return "Tools"
 
 DEFAULTS = {
     "openai": {
@@ -222,9 +258,8 @@ def get_system_settings(
     if not _can_use_system_settings(current_user):
         return []
 
-    system_settings = db.query(APISetting).join(User, APISetting.user_id == User.id).filter(
-        User.is_system == True,
-        APISetting.category != "System_Payment"
+    system_settings = db.query(SystemAPISetting).filter(
+        SystemAPISetting.category != "System_Payment"
     ).all()
 
     # Build user's active map (one active per category should be maintained).
@@ -270,7 +305,6 @@ def get_system_settings(
             SystemAPIModelOption(
                 id=item.id,
                 name=item.name,
-                user_id=item.user_id,
                 provider=provider,
                 category=category,
                 model=item.model,
@@ -290,6 +324,53 @@ def get_system_settings(
     return sorted(result, key=lambda r: (r.category, r.provider))
 
 
+@router.get("/settings/system/catalog", response_model=List[SystemAPIProviderModelCatalog])
+def get_system_settings_catalog(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if not _can_use_system_settings(current_user) and not _can_manage_system_settings(current_user):
+        return []
+
+    grouped: Dict[Tuple[str, str], set] = {}
+
+    pricing_rows = db.query(PricingRule.provider, PricingRule.model, PricingRule.task_type).all()
+    for provider, model, task_type in pricing_rows:
+        provider_name = (provider or "").strip()
+        if not provider_name:
+            continue
+        category = _task_type_to_category(task_type)
+        key = (category, provider_name)
+        if key not in grouped:
+            grouped[key] = set()
+        if (model or "").strip():
+            grouped[key].add(model.strip())
+
+    setting_rows = db.query(SystemAPISetting.provider, SystemAPISetting.model, SystemAPISetting.category).filter(
+        SystemAPISetting.provider.isnot(None)
+    ).all()
+    for provider, model, category in setting_rows:
+        provider_name = (provider or "").strip()
+        if not provider_name:
+            continue
+        cat = (category or "Tools").strip() or "Tools"
+        key = (cat, provider_name)
+        if key not in grouped:
+            grouped[key] = set()
+        if (model or "").strip():
+            grouped[key].add(model.strip())
+
+    result = [
+        SystemAPIProviderModelCatalog(
+            category=category,
+            provider=provider,
+            models=sorted(models),
+        )
+        for (category, provider), models in sorted(grouped.items(), key=lambda item: (item[0][0], item[0][1]))
+    ]
+    return result
+
+
 @router.post("/settings/system/select", response_model=APISettingOut)
 def select_system_setting(
     selection: SystemAPISelectionRequest,
@@ -299,9 +380,8 @@ def select_system_setting(
     if not _can_use_system_settings(current_user):
         raise HTTPException(status_code=403, detail="Insufficient credits to use system API settings")
 
-    system_setting = db.query(APISetting).join(User, APISetting.user_id == User.id).filter(
-        APISetting.id == selection.setting_id,
-        User.is_system == True,
+    system_setting = db.query(SystemAPISetting).filter(
+        SystemAPISetting.id == selection.setting_id,
     ).first()
     if not system_setting:
         raise HTTPException(status_code=404, detail="System API setting not found")
@@ -352,7 +432,7 @@ def select_system_setting(
     return selected
 
 
-@router.get("/settings/system/manage", response_model=List[APISettingOut])
+@router.get("/settings/system/manage", response_model=List[SystemAPISettingOut])
 def list_system_settings_for_manage(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -360,14 +440,13 @@ def list_system_settings_for_manage(
     if not _can_manage_system_settings(current_user):
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
-    rows = db.query(APISetting).join(User, APISetting.user_id == User.id).filter(
-        User.is_system == True,
-        APISetting.category != "System_Payment",
-    ).order_by(APISetting.category.asc(), APISetting.provider.asc(), APISetting.model.asc(), APISetting.id.asc()).all()
+    rows = db.query(SystemAPISetting).filter(
+        SystemAPISetting.category != "System_Payment",
+    ).order_by(SystemAPISetting.category.asc(), SystemAPISetting.provider.asc(), SystemAPISetting.model.asc(), SystemAPISetting.id.asc()).all()
     return rows
 
 
-@router.post("/settings/system/manage", response_model=APISettingOut)
+@router.post("/settings/system/manage", response_model=SystemAPISettingOut)
 def create_system_setting_for_manage(
     payload: SystemAPISettingManageCreate,
     db: Session = Depends(get_db),
@@ -376,21 +455,13 @@ def create_system_setting_for_manage(
     if not _can_manage_system_settings(current_user):
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
-    system_owner_id = current_user.id
-    if not current_user.is_system:
-        system_owner = db.query(User).filter(User.is_system == True).order_by(User.id.asc()).first()
-        if not system_owner:
-            raise HTTPException(status_code=400, detail="No system user found to own system API settings")
-        system_owner_id = system_owner.id
-
     provider = (payload.provider or "").strip()
     if not provider:
         raise HTTPException(status_code=400, detail="provider is required")
 
     category = (payload.category or "LLM").strip() or "LLM"
     create_config = payload.config if isinstance(payload.config, dict) else {}
-    new_setting = APISetting(
-        user_id=system_owner_id,
+    new_setting = SystemAPISetting(
         name=(payload.name or "System Setting").strip() or "System Setting",
         category=category,
         provider=provider,
@@ -404,9 +475,8 @@ def create_system_setting_for_manage(
     db.flush()
 
     # Keep provider-level key shared across all system rows for the same provider.
-    effective_key = _sync_provider_shared_key(
+    effective_key = _sync_system_provider_shared_key(
         db,
-        new_setting.user_id,
         new_setting.provider,
         new_setting.id,
         payload.api_key,
@@ -414,11 +484,10 @@ def create_system_setting_for_manage(
     new_setting.api_key = effective_key
 
     if new_setting.is_active:
-        db.query(APISetting).filter(
-            APISetting.user_id == new_setting.user_id,
-            APISetting.category == new_setting.category,
-            APISetting.id != new_setting.id,
-            APISetting.is_active == True,
+        db.query(SystemAPISetting).filter(
+            SystemAPISetting.category == new_setting.category,
+            SystemAPISetting.id != new_setting.id,
+            SystemAPISetting.is_active == True,
         ).update({"is_active": False})
 
     db.commit()
@@ -426,7 +495,7 @@ def create_system_setting_for_manage(
     return new_setting
 
 
-@router.post("/settings/system/manage/{setting_id}", response_model=APISettingOut)
+@router.post("/settings/system/manage/{setting_id}", response_model=SystemAPISettingOut)
 def update_system_setting_for_manage(
     setting_id: int,
     payload: SystemAPISettingManageUpdate,
@@ -436,9 +505,8 @@ def update_system_setting_for_manage(
     if not _can_manage_system_settings(current_user):
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
-    target = db.query(APISetting).join(User, APISetting.user_id == User.id).filter(
-        APISetting.id == setting_id,
-        User.is_system == True,
+    target = db.query(SystemAPISetting).filter(
+        SystemAPISetting.id == setting_id,
     ).first()
     if not target:
         raise HTTPException(status_code=404, detail="System API setting not found")
@@ -448,17 +516,15 @@ def update_system_setting_for_manage(
         setattr(target, key, value)
 
     if payload.is_active:
-        db.query(APISetting).filter(
-            APISetting.user_id == target.user_id,
-            APISetting.category == target.category,
-            APISetting.id != target.id,
-            APISetting.is_active == True,
+        db.query(SystemAPISetting).filter(
+            SystemAPISetting.category == target.category,
+            SystemAPISetting.id != target.id,
+            SystemAPISetting.is_active == True,
         ).update({"is_active": False})
 
     # Keep provider-level key shared among system rows as well.
-    effective_key = _sync_provider_shared_key(
+    effective_key = _sync_system_provider_shared_key(
         db,
-        target.user_id,
         target.provider,
         target.id,
         payload.api_key,

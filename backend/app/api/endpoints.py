@@ -4,7 +4,7 @@ import logging
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from app.db.session import get_db
-from app.models.all_models import Project, User, Episode, Scene, Shot, Entity, Asset, APISetting, ScriptSegment, PricingRule, TransactionHistory
+from app.models.all_models import Project, User, Episode, Scene, Shot, Entity, Asset, APISetting, SystemAPISetting, ScriptSegment, PricingRule, TransactionHistory
 from app.schemas.agent import AgentRequest, AgentResponse, AnalyzeSceneRequest
 from app.services.agent_service import agent_service
 from app.services.billing_service import billing_service
@@ -85,25 +85,25 @@ def get_system_api_setting(
     category: str = None,
     model: str = None,
     setting_id: int = None,
-) -> Optional[APISetting]:
+) -> Optional[SystemAPISetting]:
     """Helper to find a system-level API configuration."""
-    query = db.query(APISetting).join(User).filter(User.is_system == True)
+    query = db.query(SystemAPISetting)
     if setting_id:
-        query = query.filter(APISetting.id == setting_id)
+        query = query.filter(SystemAPISetting.id == setting_id)
     if provider:
-        query = query.filter(APISetting.provider == provider)
+        query = query.filter(SystemAPISetting.provider == provider)
     if category:
-        query = query.filter(APISetting.category == category)
+        query = query.filter(SystemAPISetting.category == category)
     if model:
-        query = query.filter(APISetting.model == model)
+        query = query.filter(SystemAPISetting.model == model)
 
     if setting_id:
         return query.first()
 
-    active = query.filter(APISetting.is_active == True).order_by(APISetting.id.desc()).first()
+    active = query.filter(SystemAPISetting.is_active == True).order_by(SystemAPISetting.id.desc()).first()
     if active:
         return active
-    return query.order_by(APISetting.id.desc()).first()
+    return query.order_by(SystemAPISetting.id.desc()).first()
 
 
 def _resolve_effective_api_setting_meta(
@@ -283,7 +283,7 @@ def get_effective_setting_snapshot(
         "found": True,
         "source": source,
         "setting_id": resolved_setting.id,
-        "owner_user_id": resolved_setting.user_id,
+        "owner_user_id": getattr(resolved_setting, "user_id", None),
         "category": resolved_setting.category,
         "provider": resolved_setting.provider,
         "model": resolved_setting.model,
@@ -1144,7 +1144,7 @@ def parse_global_style_constraints(global_md: str) -> Dict[str, Any]:
 def sanitize_llm_markdown_output(text: str) -> str:
     """Best-effort cleanup for markdown endpoints.
 
-    Removes common reasoning leakage (<think> blocks, leading "I think..." preambles)
+    Removes common reasoning leakage (<think> blocks)
     and fenced wrappers when models ignore format instructions.
     """
     if not text:
@@ -1159,7 +1159,7 @@ def sanitize_llm_markdown_output(text: str) -> str:
         return ""
 
     reasoning_prefix_re = re.compile(
-        r"^\s*(i think|i will|let me|let's|analysis|reasoning|thought process|"
+        r"^\s*(i will|let me|let's|analysis|reasoning|thought process|"
         r"分析|思路|推理|下面|我将|我认为|先来)\b",
         flags=re.IGNORECASE,
     )
@@ -1182,7 +1182,7 @@ def sanitize_llm_markdown_output(text: str) -> str:
             break
     if first_md_index is not None and first_md_index > 0:
         preface = "\n".join(lines[:first_md_index]).lower()
-        if any(token in preface for token in ["i think", "analysis", "reasoning", "推理", "思路", "我将", "我认为"]):
+        if any(token in preface for token in ["analysis", "reasoning", "推理", "思路", "我将", "我认为"]):
             lines = lines[first_md_index:]
 
     return "\n".join(lines).strip()
@@ -3615,11 +3615,11 @@ async def ai_generate_shots(
                 billing_service.cancel_reservation(db, reservation_tx.id, str(response_content_raw))
             raise HTTPException(status_code=500, detail=str(response_content_raw))
 
-        # Force-remove common reasoning leakage (e.g., "I think", "analysis", <think> blocks)
+        # Force-remove common reasoning leakage (e.g., "analysis", <think> blocks)
         # before table parsing and persistence.
         response_content = sanitize_llm_markdown_output(response_content_raw)
         reasoning_line_re = re.compile(
-            r"^\s*(i think|i will|let me|let's|analysis|reasoning|thought process|"
+            r"^\s*(i will|let me|let's|analysis|reasoning|thought process|"
             r"分析|思路|推理|我将|我认为)\b",
             flags=re.IGNORECASE,
         )
@@ -5518,17 +5518,13 @@ def sync_pricing_rules(
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Not authorized")
 
-    # 1. Fetch System Settings (from System Users)
-    system_users = db.query(User).filter(User.is_system == True).all()
-    system_user_ids = [u.id for u in system_users]
-    
-    if not system_user_ids:
-        return []
-
-    settings = db.query(APISetting).filter(
-        APISetting.user_id.in_(system_user_ids),
-        APISetting.is_active == True
+    # 1. Fetch active dedicated system settings
+    settings = db.query(SystemAPISetting).filter(
+        SystemAPISetting.is_active == True
     ).all()
+
+    if not settings:
+        return []
     
     added_rules = []
     
@@ -5601,14 +5597,9 @@ def get_billing_options(
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Not authorized")
 
-    system_users = db.query(User).filter(User.is_system == True).all()
-    system_user_ids = [u.id for u in system_users]
-    if not system_user_ids:
+    all_settings = db.query(SystemAPISetting).all()
+    if not all_settings:
         return {"providersByTaskType": {}, "modelsByProvider": {}}
-
-    all_settings = db.query(APISetting).filter(
-        APISetting.user_id.in_(system_user_ids)
-    ).all()
 
     # Build category -> providers/models
     providers_by_category = {}

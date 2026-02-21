@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional, Union
 
 from app.db.session import SessionLocal
-from app.models.all_models import APISetting, User
+from app.models.all_models import APISetting, SystemAPISetting
 from app.core.config import settings
 
 # Suppress InsecureRequestWarning from urllib3
@@ -31,15 +31,14 @@ logger = logging.getLogger("media_service")
 class MediaGenerationService:
 # ...
     def _system_setting_query(self, session, provider: str, category: str = None):
-        query = session.query(APISetting).join(User, APISetting.user_id == User.id).filter(
-            User.is_system == True,
-            APISetting.provider == provider,
+        query = session.query(SystemAPISetting).filter(
+            SystemAPISetting.provider == provider,
         )
         if category:
-            query = query.filter(APISetting.category == category)
+            query = query.filter(SystemAPISetting.category == category)
         return query
 
-    def _setting_to_config(self, setting: APISetting, provider: str, defaults: Dict[str, Dict[str, str]]) -> Dict[str, Any]:
+    def _setting_to_config(self, setting: Any, provider: str, defaults: Dict[str, Dict[str, str]]) -> Dict[str, Any]:
         return {
             "api_key": setting.api_key,
             "base_url": setting.base_url or defaults.get(provider, {}).get("base_url"),
@@ -109,7 +108,7 @@ class MediaGenerationService:
                     use_system_setting_id = (user_setting.config or {}).get("use_system_setting_id")
                     if use_system_setting_id and user_credits > 0:
                         pointed = self._system_setting_query(session, provider, category).filter(
-                            APISetting.id == use_system_setting_id
+                            SystemAPISetting.id == use_system_setting_id
                         ).first()
                         if pointed and (pointed.api_key or "").strip():
                             merged = self._setting_to_config(pointed, provider, defaults)
@@ -128,9 +127,9 @@ class MediaGenerationService:
 
                     system_setting = None
                     if preferred_model:
-                        system_setting = system_query.filter(APISetting.model == preferred_model).first()
+                        system_setting = system_query.filter(SystemAPISetting.model == preferred_model).first()
                     if not system_setting:
-                        system_setting = system_query.filter(APISetting.is_active == True).first()
+                        system_setting = system_query.filter(SystemAPISetting.is_active == True).first()
                     if not system_setting:
                         system_setting = system_query.first()
 
@@ -182,10 +181,9 @@ class MediaGenerationService:
                     if active_setting:
                         provider = active_setting.provider
                     elif user_credits > 0:
-                        system_active = session.query(APISetting).join(User, APISetting.user_id == User.id).filter(
-                            User.is_system == True,
-                            APISetting.category == "Image",
-                            APISetting.is_active == True,
+                        system_active = session.query(SystemAPISetting).filter(
+                            SystemAPISetting.category == "Image",
+                            SystemAPISetting.is_active == True,
                         ).first()
                         if system_active:
                             provider = system_active.provider
@@ -262,10 +260,9 @@ class MediaGenerationService:
                     if active_setting:
                         provider = active_setting.provider
                     elif user_credits > 0:
-                        system_active = session.query(APISetting).join(User, APISetting.user_id == User.id).filter(
-                            User.is_system == True,
-                            APISetting.category == "Video",
-                            APISetting.is_active == True,
+                        system_active = session.query(SystemAPISetting).filter(
+                            SystemAPISetting.category == "Video",
+                            SystemAPISetting.is_active == True,
                         ).first()
                         if system_active:
                             provider = system_active.provider
@@ -631,7 +628,8 @@ class MediaGenerationService:
         model = config.get("model") or "unknown_model"
         print(f"[Grsai] Starting Generation. Type={gen_type}, Model={model}, PromptLen={len(prompt) if prompt else 0}")
         tool_conf = config.get("config", {}) or {}
-        base_url = tool_conf.get("endpoint") or "https://grsaiapi.com"
+        raw_endpoint = (tool_conf.get("endpoint") or "").strip()
+        base_url = config.get("base_url") or "https://grsaiapi.com"
         
         # Robust stripping of Grsai specific paths to get the true base URL
         # Remove /v1/draw/..., /v1/video/..., or just /v1 at the end
@@ -641,9 +639,10 @@ class MediaGenerationService:
         
         # Image
         if gen_type == "image":
-            endpoint = f"{base_url}/v1/draw/completions"
+            endpoint = raw_endpoint.rstrip("/") if raw_endpoint and "/draw/" in raw_endpoint else f"{base_url}/v1/draw/completions"
             is_banana = model and model.startswith("nano-banana")
-            if is_banana: endpoint = f"{base_url}/v1/draw/nano-banana"
+            if not raw_endpoint and is_banana:
+                endpoint = f"{base_url}/v1/draw/nano-banana"
             
             final_model = model or "sora-image"
             payload = {"model": final_model, "prompt": prompt, "webHook": "-1", "shutProgress": False}
@@ -695,8 +694,11 @@ class MediaGenerationService:
             if "urls" in log_payload:
                  log_payload["urls"] = [f"<Base64 Data (len={len(u)})>" for u in log_payload["urls"]]
 
+            result_base = endpoint.split("/v1/")[0] if "/v1/" in endpoint else base_url
+            result_url = f"{result_base}/v1/draw/result"
+
             print(f"[Grsai] Submitting Payload: {json.dumps(log_payload, ensure_ascii=False)}")
-            return await self._submit_and_poll_grsai(endpoint, payload, api_key, f"{base_url}/v1/draw/result", extra_metadata=base_metadata)
+            return await self._submit_and_poll_grsai(endpoint, payload, api_key, result_url, extra_metadata=base_metadata)
 
         # Video
         elif gen_type == "video":
@@ -705,10 +707,11 @@ class MediaGenerationService:
             
             # Check if user provided a specific full endpoint (Prefer Map -> Then generic config)
             endpoint_map = tool_conf.get("endpointMap", {})
-            raw_endpoint = endpoint_map.get(model) or tool_conf.get("endpoint")
+            mapped_endpoint = endpoint_map.get(model)
+            resolved_endpoint = (mapped_endpoint or raw_endpoint or "").strip()
             
-            if raw_endpoint and ("/video/" in raw_endpoint or raw_endpoint.strip().endswith("/veo")):
-                 endpoint = raw_endpoint.strip().rstrip("/")
+            if resolved_endpoint and ("/video/" in resolved_endpoint or resolved_endpoint.endswith("/veo")):
+                endpoint = resolved_endpoint.rstrip("/")
             else:
                  # Auto-construct from base URL
                  endpoint_suffix = "sora-video" # default

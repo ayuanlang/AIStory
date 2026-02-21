@@ -253,6 +253,21 @@ class APISetting(Base):
     
     user = relationship("User", back_populates="api_settings")
 
+
+class SystemAPISetting(Base):
+    __tablename__ = "system_api_settings"
+    id = Column(Integer, primary_key=True, index=True)
+
+    name = Column(String, default="System Setting")
+    category = Column(String, index=True)
+    provider = Column(String, index=True)
+    api_key = Column(String)
+    base_url = Column(String, nullable=True)
+    model = Column(String, nullable=True)
+    config = Column(JSON, default={})
+
+    is_active = Column(Boolean, default=False)
+
 class RechargePlan(Base):
     __tablename__ = "recharge_plans"
     id = Column(Integer, primary_key=True, index=True)

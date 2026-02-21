@@ -3,7 +3,7 @@ import { useLocation } from 'react-router-dom';
 import { useStore } from '@/lib/store';
 import { Save, Info, Upload, Download, Coins, History } from 'lucide-react';
 import { API_URL } from '@/config';
-import { updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, selectSystemSetting, getSystemSettingsManage, createSystemSettingManage, updateSystemSettingManage, getEffectiveSettingSnapshot } from '../services/api';
+import { updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, getSystemSettingsCatalog, selectSystemSetting, getSystemSettingsManage, createSystemSettingManage, updateSystemSettingManage, getEffectiveSettingSnapshot } from '../services/api';
 import RechargeModal from '../components/RechargeModal'; // Import RechargeModal
 
 const Settings = () => {
@@ -62,6 +62,7 @@ const Settings = () => {
     const [isBillingLoading, setIsBillingLoading] = useState(false);
     const [showRecharge, setShowRecharge] = useState(false); // Recharge Modal State
     const [systemSettings, setSystemSettings] = useState([]);
+    const [systemCatalog, setSystemCatalog] = useState([]);
     const [isSystemSettingsLoading, setIsSystemSettingsLoading] = useState(false);
     const [selectingSystemId, setSelectingSystemId] = useState(null);
     const [selectedSystemCategory, setSelectedSystemCategory] = useState('All');
@@ -147,12 +148,13 @@ const Settings = () => {
     const loadSystemSettingsCatalog = async () => {
         setIsSystemSettingsLoading(true);
         try {
-            const [userRes, systemRes] = await Promise.all([fetchMe(), getSystemSettings()]);
+            const [userRes, systemRes, catalogRes] = await Promise.all([fetchMe(), getSystemSettings(), getSystemSettingsCatalog()]);
             setCurrentUserMeta(userRes || null);
             if (userRes && userRes.credits !== undefined) {
                 setUserCredits(userRes.credits);
             }
             setSystemSettings(Array.isArray(systemRes) ? systemRes : []);
+            setSystemCatalog(Array.isArray(catalogRes) ? catalogRes : []);
 
             const canManage = !!(userRes?.is_superuser || userRes?.is_system);
             if (canManage) {
@@ -170,6 +172,7 @@ const Settings = () => {
         } catch (err) {
             console.error("Failed to load system API settings", err);
             setSystemSettings([]);
+            setSystemCatalog([]);
             setManageableSystemSettings([]);
         } finally {
             setIsSystemSettingsLoading(false);
@@ -287,7 +290,7 @@ const Settings = () => {
         }
     };
 
-    const canManageSystemSettings = !!(currentUserMeta?.is_superuser || currentUserMeta?.is_system);
+    const canManageSystemSettings = !!(currentUserMeta?.is_superuser);
 
     const openRowEditModal = (row) => {
         if (!canManageSystemSettings || !row?.id) return;
@@ -438,6 +441,47 @@ const Settings = () => {
             groups: (grouped[category] || []).sort((a, b) => String(a.provider || '').localeCompare(String(b.provider || ''))),
         }));
     }, [systemSettings]);
+
+    const selectedManageRow = useMemo(() => {
+        if (!manageSettingId) return null;
+        return manageableSystemSettings.find((item) => String(item.id) === String(manageSettingId)) || null;
+    }, [manageableSystemSettings, manageSettingId]);
+
+    const createProviderSuggestions = useMemo(() => {
+        const cat = String(createCategory || 'LLM');
+        const providers = (systemCatalog || [])
+            .filter((item) => String(item?.category || '') === cat)
+            .map((item) => String(item?.provider || '').trim())
+            .filter(Boolean);
+        return [...new Set(providers)].sort((a, b) => a.localeCompare(b));
+    }, [systemCatalog, createCategory]);
+
+    const createModelSuggestions = useMemo(() => {
+        const cat = String(createCategory || 'LLM');
+        const selectedProvider = String(createProvider || '').trim().toLowerCase();
+        if (!selectedProvider) return [];
+
+        const hit = (systemCatalog || []).find((item) => {
+            const itemProvider = String(item?.provider || '').trim().toLowerCase();
+            return String(item?.category || '') === cat && itemProvider === selectedProvider;
+        });
+
+        return [...new Set((hit?.models || []).filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b)));
+    }, [systemCatalog, createCategory, createProvider]);
+
+    const manageModelSuggestions = useMemo(() => {
+        if (!selectedManageRow) return [];
+        const cat = String(selectedManageRow.category || 'Tools');
+        const selectedProvider = String(selectedManageRow.provider || '').trim().toLowerCase();
+        if (!selectedProvider) return [];
+
+        const hit = (systemCatalog || []).find((item) => {
+            const itemProvider = String(item?.provider || '').trim().toLowerCase();
+            return String(item?.category || '') === cat && itemProvider === selectedProvider;
+        });
+
+        return [...new Set((hit?.models || []).filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b)));
+    }, [systemCatalog, selectedManageRow]);
 
     const visibleSystemSettings = useMemo(() => {
         if (selectedSystemCategory === 'All') return categorizedSystemSettings;
@@ -1798,6 +1842,7 @@ const Settings = () => {
                                         <div className="space-y-2">
                                             <label className="text-xs font-medium uppercase text-muted-foreground">Provider *</label>
                                             <input
+                                                list="system-provider-catalog"
                                                 type="text"
                                                 value={createProvider}
                                                 onChange={(e) => setCreateProvider(e.target.value)}
@@ -1842,6 +1887,7 @@ const Settings = () => {
                                         <div className="space-y-2">
                                             <label className="text-xs font-medium uppercase text-muted-foreground">Model</label>
                                             <input
+                                                list="system-model-catalog-create"
                                                 type="text"
                                                 value={createModel}
                                                 onChange={(e) => setCreateModel(e.target.value)}
@@ -1935,6 +1981,7 @@ const Settings = () => {
                                     <div className="space-y-2">
                                         <label className="text-xs font-medium uppercase text-muted-foreground">Model</label>
                                         <input
+                                            list="system-model-catalog-manage"
                                             type="text"
                                             value={manageModel}
                                             onChange={(e) => setManageModel(e.target.value)}
@@ -1961,6 +2008,22 @@ const Settings = () => {
                                 >
                                     {isManageSaving ? 'Saving...' : 'Save System Config'}
                                 </button>
+
+                                <datalist id="system-provider-catalog">
+                                    {createProviderSuggestions.map((providerItem) => (
+                                        <option key={providerItem} value={providerItem} />
+                                    ))}
+                                </datalist>
+                                <datalist id="system-model-catalog-create">
+                                    {createModelSuggestions.map((modelItem) => (
+                                        <option key={modelItem} value={modelItem} />
+                                    ))}
+                                </datalist>
+                                <datalist id="system-model-catalog-manage">
+                                    {manageModelSuggestions.map((modelItem) => (
+                                        <option key={modelItem} value={modelItem} />
+                                    ))}
+                                </datalist>
                             </div>
                         </div>
                     )}
@@ -2120,6 +2183,7 @@ const Settings = () => {
                                     <div className="space-y-2">
                                         <label className="text-xs font-medium uppercase text-muted-foreground">Model</label>
                                         <input
+                                            list="system-model-catalog-manage"
                                             type="text"
                                             value={manageModel}
                                             onChange={(e) => setManageModel(e.target.value)}

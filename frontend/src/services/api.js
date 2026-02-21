@@ -342,6 +342,11 @@ export const getSystemSettings = async () => {
     return response.data;
 }
 
+export const getSystemSettingsCatalog = async () => {
+    const response = await api.get('/settings/system/catalog');
+    return response.data;
+}
+
 export const selectSystemSetting = async (setting_id) => {
     const response = await api.post('/settings/system/select', { setting_id });
     return response.data;

@@ -81,17 +81,11 @@ class LLMService:
         if not isinstance(text, str) or not text:
             return text
 
-        cleaned_lines = []
-        for line in text.splitlines():
-            updated = re.sub(
-                r'^(\s*(?:[-*]\s+)?)i\s+think(?:\s+that)?\s*(?:[:,-]\s*)?',
-                r'\1',
-                line,
-                flags=re.IGNORECASE,
-            )
-            cleaned_lines.append(updated)
+        cleaned = text
+        cleaned = re.sub(r"<think\b[^>]*>[\s\S]*?</think>", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"<think\b[^>]*>[\s\S]*$", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"</think>", "", cleaned, flags=re.IGNORECASE)
 
-        cleaned = "\n".join(cleaned_lines)
         cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
         return cleaned.strip()
 
