@@ -510,6 +510,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode }) => {
     const [isGeneratingGlobalStory, setIsGeneratingGlobalStory] = useState(false);
     const [isGeneratingEpisodeScripts, setIsGeneratingEpisodeScripts] = useState(false);
     const [episodeScriptsProgress, setEpisodeScriptsProgress] = useState(null);
+    const [showEpisodeScriptsProgressModal, setShowEpisodeScriptsProgressModal] = useState(false);
     const [isAnalyzingNovel, setIsAnalyzingNovel] = useState(false);
     const [isImportingStoryPackage, setIsImportingStoryPackage] = useState(false);
     const [novelImportText, setNovelImportText] = useState('');
@@ -518,6 +519,54 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode }) => {
     const episodeScriptsStatusTimerRef = useRef(null);
     const globalStoryAutosaveTimerRef = useRef(null);
     const skipNextGlobalStoryAutosaveRef = useRef(true);
+
+    const pollEpisodeScriptsStatus = useCallback(async () => {
+        if (!id) return null;
+        try {
+            const status = await getProjectEpisodeScriptsStatus(id);
+            if (status && typeof status === 'object') {
+                setEpisodeScriptsProgress(status);
+                return status;
+            }
+        } catch (e) {
+            // Ignore transient polling errors
+        }
+        return null;
+    }, [id]);
+
+    useEffect(() => {
+        return () => {
+            if (episodeScriptsStatusTimerRef.current) {
+                clearInterval(episodeScriptsStatusTimerRef.current);
+                episodeScriptsStatusTimerRef.current = null;
+            }
+        };
+    }, []);
+
+    useEffect(() => {
+        if (!id) return;
+        let cancelled = false;
+
+        const hydrateEpisodeScriptsStatus = async () => {
+            const status = await pollEpisodeScriptsStatus();
+            if (cancelled || !status || typeof status !== 'object') return;
+            if (status.running) {
+                setShowEpisodeScriptsProgressModal(true);
+                if (!episodeScriptsStatusTimerRef.current) {
+                    episodeScriptsStatusTimerRef.current = setInterval(pollEpisodeScriptsStatus, 1500);
+                }
+            } else if (episodeScriptsStatusTimerRef.current && !isGeneratingEpisodeScripts) {
+                clearInterval(episodeScriptsStatusTimerRef.current);
+                episodeScriptsStatusTimerRef.current = null;
+            }
+        };
+
+        hydrateEpisodeScriptsStatus();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [id, pollEpisodeScriptsStatus, isGeneratingEpisodeScripts]);
 
     // Project-level Character Canon (keep original tag-selection UX)
     const [canonName, setCanonName] = useState('');
@@ -1331,25 +1380,15 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode }) => {
 
         setIsGeneratingEpisodeScripts(true);
         setEpisodeScriptsProgress(null);
+        setShowEpisodeScriptsProgressModal(true);
 
         if (episodeScriptsStatusTimerRef.current) {
             clearInterval(episodeScriptsStatusTimerRef.current);
             episodeScriptsStatusTimerRef.current = null;
         }
 
-        const pollStatus = async () => {
-            try {
-                const status = await getProjectEpisodeScriptsStatus(id);
-                if (status && typeof status === 'object') {
-                    setEpisodeScriptsProgress(status);
-                }
-            } catch (e) {
-                // Ignore transient polling errors
-            }
-        };
-
-        episodeScriptsStatusTimerRef.current = setInterval(pollStatus, 1500);
-        pollStatus();
+        episodeScriptsStatusTimerRef.current = setInterval(pollEpisodeScriptsStatus, 1500);
+        pollEpisodeScriptsStatus();
 
         try {
             const modeLabel = retryFailedOnly ? 'retry-failed-only' : 'full';
@@ -1366,12 +1405,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode }) => {
             });
             console.log('[ProjectOverview] generate episode scripts: response', res);
 
-            try {
-                const status = await getProjectEpisodeScriptsStatus(id);
-                if (status && typeof status === 'object') {
-                    setEpisodeScriptsProgress(status);
-                }
-            } catch (e) {}
+            await pollEpisodeScriptsStatus();
             addLog?.(
                 `[DEBUG][After API] response summary: ${JSON.stringify({
                     project_id: res?.project_id,
@@ -1499,6 +1533,46 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode }) => {
         const arr = str.split(/[,，]/).map(s => s.trim()).filter(Boolean);
         setInfo(prev => ({ ...prev, borrowed_films: arr }));
     };
+
+    const episodeScriptResults = Array.isArray(episodeScriptsProgress?.results) ? episodeScriptsProgress.results : [];
+    const episodesInRun = Number(episodeScriptsProgress?.episodes_in_run || 0);
+    const processedCount = Number(episodeScriptsProgress?.processed || 0);
+    const progressPercent = episodesInRun > 0 ? Math.min(100, Math.round((processedCount / episodesInRun) * 100)) : 0;
+
+    const episodeResultRows = useMemo(() => {
+        if (!episodeScriptsProgress || episodesInRun <= 0) return [];
+        const byEpisodeNumber = new Map();
+        for (const item of episodeScriptResults) {
+            const num = Number(item?.episode_number || 0);
+            if (!num) continue;
+            byEpisodeNumber.set(num, item);
+        }
+
+        const rows = [];
+        for (let i = 1; i <= episodesInRun; i++) {
+            const row = byEpisodeNumber.get(i);
+            if (row) {
+                rows.push({
+                    episode_number: i,
+                    episode_id: row?.episode_id,
+                    episode_title: row?.episode_title || `Episode ${i}`,
+                    status: row?.status || (row?.generated ? 'generated' : row?.skipped ? 'skipped' : row?.error ? 'failed' : 'unknown'),
+                    output_chars: row?.output_chars,
+                    error: row?.error,
+                    reason: row?.reason,
+                });
+            } else {
+                rows.push({
+                    episode_number: i,
+                    episode_title: `Episode ${i}`,
+                    status: 'pending',
+                });
+            }
+        }
+        return rows;
+    }, [episodeScriptsProgress, episodeScriptResults, episodesInRun]);
+
+    const failedEpisodeRows = episodeResultRows.filter(item => item?.status === 'failed' && item?.episode_id);
 
     if (!project) return <div className="p-8 text-muted-foreground">Loading...</div>;
 
@@ -1761,50 +1835,49 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode }) => {
                             >
                                 {isGeneratingEpisodeScripts ? <><Loader2 className="w-4 h-4 animate-spin" /> Running...</> : <><RefreshCw className="w-4 h-4" /> Retry Failed Episodes</>}
                             </button>
+                            <button
+                                onClick={async () => {
+                                    await pollEpisodeScriptsStatus();
+                                    setShowEpisodeScriptsProgressModal(true);
+                                }}
+                                className="px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 bg-white/10 text-white hover:bg-white/20"
+                                title="Open dedicated progress center for episode script generation"
+                            >
+                                <LayoutList className="w-4 h-4" /> Progress Center
+                            </button>
                         </div>
                     </div>
 
                     {episodeScriptsProgress && (
                         <div className="border border-white/10 rounded-lg p-3 bg-black/20 space-y-2">
-                            <div className="text-xs text-muted-foreground mb-1 uppercase tracking-wide">Episode Scripts Progress</div>
+                            <div className="text-xs text-muted-foreground uppercase tracking-wide">Episode Scripts Progress Snapshot</div>
+                            <div className="h-2 rounded bg-white/10 overflow-hidden">
+                                <div
+                                    className="h-2 bg-primary"
+                                    style={{ width: `${progressPercent}%` }}
+                                />
+                            </div>
                             <div className="text-sm text-white flex flex-wrap gap-x-4 gap-y-1">
-                                <span>Mode: <b>{episodeScriptsProgress.mode || 'full'}</b></span>
                                 <span>Status: <b>{episodeScriptsProgress.running ? 'Running' : 'Idle'}</b></span>
-                                <span>Processed: <b>{episodeScriptsProgress.processed || 0}</b> / <b>{episodeScriptsProgress.episodes_in_run || 0}</b></span>
+                                <span>Processed: <b>{processedCount}</b> / <b>{episodesInRun}</b></span>
                                 <span>Generated: <b>{episodeScriptsProgress.generated || 0}</b></span>
                                 <span>Failed: <b>{episodeScriptsProgress.failed || 0}</b></span>
                                 <span>Skipped: <b>{episodeScriptsProgress.skipped || 0}</b></span>
                             </div>
-                            {(() => {
-                                const failedItems = (Array.isArray(episodeScriptsProgress?.results) ? episodeScriptsProgress.results : [])
-                                    .filter(item => item && item.status === 'failed' && item.episode_id)
-                                    .map(item => ({
-                                        episode_id: item.episode_id,
-                                        episode_number: item.episode_number,
-                                        episode_title: item.episode_title,
-                                        error: item.error,
-                                    }));
-
-                                if (failedItems.length === 0) return null;
-
-                                return (
-                                    <div className="pt-2 border-t border-white/10">
-                                        <div className="text-xs text-red-300 mb-2">Failed Episodes (click to jump)</div>
-                                        <div className="flex flex-wrap gap-2">
-                                            {failedItems.map((item, idx) => (
-                                                <button
-                                                    key={`${item.episode_id}_${idx}`}
-                                                    onClick={() => onJumpToEpisode && onJumpToEpisode(item.episode_id)}
-                                                    className="px-2 py-1 rounded text-xs bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 text-red-100"
-                                                    title={item.error || 'Jump to episode'}
-                                                >
-                                                    {item.episode_title || `Episode ${item.episode_number || item.episode_id}`}
-                                                </button>
-                                            ))}
-                                        </div>
-                                    </div>
-                                );
-                            })()}
+                            <div className="flex items-center gap-2 pt-1">
+                                <button
+                                    onClick={() => setShowEpisodeScriptsProgressModal(true)}
+                                    className="px-3 py-1.5 rounded-md text-xs font-bold bg-white/10 text-white hover:bg-white/20"
+                                >
+                                    View Details
+                                </button>
+                                <button
+                                    onClick={pollEpisodeScriptsStatus}
+                                    className="px-3 py-1.5 rounded-md text-xs font-bold bg-white/10 text-white hover:bg-white/20 flex items-center gap-1.5"
+                                >
+                                    <RefreshCw className="w-3.5 h-3.5" /> Refresh
+                                </button>
+                            </div>
                         </div>
                     )}
 
@@ -2147,6 +2220,151 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode }) => {
                     </div>
                 </div>
             </div>
+
+            {showEpisodeScriptsProgressModal && (
+                <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={() => setShowEpisodeScriptsProgressModal(false)}>
+                    <div className="bg-[#0f0f10] border border-white/10 rounded-xl w-full max-w-6xl max-h-[90vh] overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                        <div className="px-5 py-4 border-b border-white/10 flex items-center justify-between gap-3">
+                            <div>
+                                <h3 className="text-lg font-semibold text-primary">Episode Scripts Progress Center</h3>
+                                <div className="text-xs text-muted-foreground">
+                                    Track each episode in real time and review generation results.
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={pollEpisodeScriptsStatus}
+                                    className="px-3 py-1.5 rounded-md text-xs font-bold bg-white/10 text-white hover:bg-white/20 flex items-center gap-1.5"
+                                >
+                                    <RefreshCw className="w-3.5 h-3.5" /> Refresh
+                                </button>
+                                <button
+                                    className="p-2 rounded-md hover:bg-white/10 text-white/80"
+                                    onClick={() => setShowEpisodeScriptsProgressModal(false)}
+                                    title="Close"
+                                >
+                                    <X size={18} />
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="p-5 space-y-4 overflow-y-auto max-h-[calc(90vh-80px)]">
+                            {episodeScriptsProgress ? (
+                                <>
+                                    <div className="grid grid-cols-2 md:grid-cols-6 gap-3 text-sm">
+                                        <div className="border border-white/10 rounded-lg p-3 bg-black/20">
+                                            <div className="text-xs text-muted-foreground">Mode</div>
+                                            <div className="font-bold text-white">{episodeScriptsProgress.mode || 'full'}</div>
+                                        </div>
+                                        <div className="border border-white/10 rounded-lg p-3 bg-black/20">
+                                            <div className="text-xs text-muted-foreground">Status</div>
+                                            <div className="font-bold text-white">{episodeScriptsProgress.running ? 'Running' : 'Idle'}</div>
+                                        </div>
+                                        <div className="border border-white/10 rounded-lg p-3 bg-black/20">
+                                            <div className="text-xs text-muted-foreground">Processed</div>
+                                            <div className="font-bold text-white">{processedCount} / {episodesInRun}</div>
+                                        </div>
+                                        <div className="border border-white/10 rounded-lg p-3 bg-black/20">
+                                            <div className="text-xs text-muted-foreground">Generated</div>
+                                            <div className="font-bold text-white">{episodeScriptsProgress.generated || 0}</div>
+                                        </div>
+                                        <div className="border border-white/10 rounded-lg p-3 bg-black/20">
+                                            <div className="text-xs text-muted-foreground">Failed</div>
+                                            <div className="font-bold text-white">{episodeScriptsProgress.failed || 0}</div>
+                                        </div>
+                                        <div className="border border-white/10 rounded-lg p-3 bg-black/20">
+                                            <div className="text-xs text-muted-foreground">Skipped</div>
+                                            <div className="font-bold text-white">{episodeScriptsProgress.skipped || 0}</div>
+                                        </div>
+                                    </div>
+
+                                    <div className="space-y-2">
+                                        <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                            <span>Overall Progress</span>
+                                            <span>{progressPercent}%</span>
+                                        </div>
+                                        <div className="h-2 rounded bg-white/10 overflow-hidden">
+                                            <div className="h-2 bg-primary" style={{ width: `${progressPercent}%` }} />
+                                        </div>
+                                    </div>
+
+                                    {failedEpisodeRows.length > 0 && (
+                                        <div className="border border-red-500/30 rounded-lg p-3 bg-red-500/10">
+                                            <div className="text-xs text-red-200 mb-2">Failed Episodes (click to jump)</div>
+                                            <div className="flex flex-wrap gap-2">
+                                                {failedEpisodeRows.map((item, idx) => (
+                                                    <button
+                                                        key={`${item.episode_id}_${idx}`}
+                                                        onClick={() => {
+                                                            if (onJumpToEpisode && item.episode_id) onJumpToEpisode(item.episode_id);
+                                                        }}
+                                                        className="px-2 py-1 rounded text-xs bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 text-red-100"
+                                                        title={item.error || 'Jump to episode'}
+                                                    >
+                                                        {item.episode_title || `Episode ${item.episode_number || item.episode_id}`}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    <div className="border border-white/10 rounded-lg overflow-hidden">
+                                        <div className="grid grid-cols-12 bg-white/5 text-xs text-muted-foreground px-3 py-2">
+                                            <div className="col-span-1">#</div>
+                                            <div className="col-span-4">Episode</div>
+                                            <div className="col-span-2">Status</div>
+                                            <div className="col-span-3">Result</div>
+                                            <div className="col-span-2 text-right">Action</div>
+                                        </div>
+                                        <div className="max-h-[38vh] overflow-y-auto">
+                                            {episodeResultRows.length > 0 ? episodeResultRows.map((row, idx) => {
+                                                const status = String(row?.status || 'pending');
+                                                const statusClass =
+                                                    status === 'generated'
+                                                        ? 'bg-green-500/20 text-green-200 border-green-500/30'
+                                                        : status === 'failed'
+                                                            ? 'bg-red-500/20 text-red-200 border-red-500/30'
+                                                            : status === 'skipped'
+                                                                ? 'bg-yellow-500/20 text-yellow-200 border-yellow-500/30'
+                                                                : 'bg-white/10 text-white/80 border-white/20';
+                                                const resultText = row?.error || row?.reason || (row?.output_chars ? `${row.output_chars} chars` : (status === 'pending' ? 'Waiting' : '-'));
+                                                return (
+                                                    <div key={`${row?.episode_number || idx}_${idx}`} className="grid grid-cols-12 px-3 py-2 text-sm border-t border-white/5 items-center">
+                                                        <div className="col-span-1 text-white/90">{row?.episode_number || '-'}</div>
+                                                        <div className="col-span-4 text-white/90 truncate" title={row?.episode_title || ''}>{row?.episode_title || '-'}</div>
+                                                        <div className="col-span-2">
+                                                            <span className={`px-2 py-0.5 rounded text-xs border ${statusClass}`}>{status}</span>
+                                                        </div>
+                                                        <div className="col-span-3 text-xs text-white/70 truncate" title={resultText}>{resultText}</div>
+                                                        <div className="col-span-2 text-right">
+                                                            {row?.episode_id ? (
+                                                                <button
+                                                                    onClick={() => onJumpToEpisode && onJumpToEpisode(row.episode_id)}
+                                                                    className="px-2 py-1 rounded text-xs bg-white/10 text-white hover:bg-white/20"
+                                                                >
+                                                                    Open
+                                                                </button>
+                                                            ) : (
+                                                                <span className="text-xs text-white/40">-</span>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                );
+                                            }) : (
+                                                <div className="px-3 py-6 text-center text-sm text-muted-foreground">No episode run records yet.</div>
+                                            )}
+                                        </div>
+                                    </div>
+                                </>
+                            ) : (
+                                <div className="text-sm text-muted-foreground py-10 text-center">
+                                    No generation status yet. Start “Generate Episode Scripts” to begin tracking.
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {showCanonModal && (
                 <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
