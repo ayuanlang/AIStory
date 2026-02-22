@@ -49,6 +49,11 @@
     - `..._Front...`：沿主轴线正向观察。
     - `..._Reverse...`：沿主轴线反向观察。
     两者必须通过 `visual_dependencies` 关联同一母体风格。
+  - **全量背景覆盖强制 (Full Background Coverage Mandate)**：
+    - `Front/Reverse` 仅是最低交付线，不是上限。
+    - 根据“二维背景一致性优先”原则，凡剧情/调度中可能出现且会导致背景集合、观察方向、轴线关系、主光方向、可见结构、景别，镜头发生变化的视图，都必须预先生成对应 Environment 变体。
+    - 目标是**覆盖剧情需要的全部可能背景环境**，避免下游分镜时临时补环境导致风格漂移。
+    - 若某潜在变体未生成，必须给出可审计的豁免理由（如“该方向在剧情中不会出现且无反打需求”）。
   - **Actionable Space Assurance (空间可行性保障)**：
     - Environment 必须提供足够**物理空间**以承载 Scene 中的所有 Beats 动作 (e.g., 追逐、打斗、人群聚集)。
     - **Clearance Mandate**: 除非剧本明确要求有障碍物（如掩体射击），否则 Anchor 周围必须是**开阔、平整的区域 (Clear Floor Plan)**。严禁生成会阻挡 Character 与 Key Prop 交互的随机路障（如随机的柱子、不可移动的家具堆）。
@@ -70,7 +75,15 @@
   - **Axis Trigger Rule**：当 Axis 相对上一段发生“跨线、反向、观察方向切换”时，视为新 Scene 起点，不得继续沿用上一 Scene 的 Environment。
 4.  **[Beats] (节拍流)**：按时间顺序排列的动作单元。
     - **Spatial Activation (空间激活)**：Beats 动作必须**主动发生在该物理空间中**，并与环境产生交互（如倚靠、穿越、拿起）。严禁“真空表演”。
+    - **空间关系强制 (Spatial Relation Mandate)**：每个 Beat 必须明确写出角色与物理空间的关系（例如：在床上/床边/地面/门口/桌旁/窗前/墙边），并说明其相对 `Stage` 或 `Environment` 的落位。
+    - **主体关系强制 (Subject-to-Subject Mandate)**：每个 Beat 必须明确角色之间的相对关系，至少覆盖：
+      1) **位置关系**（谁在谁左/右/前/后/上/下，距离等级）；
+      2) **朝向关系**（正对/背对/侧对/3/4 对）；
+      3) **视线关系**（看向谁/哪里，如“看向胸前/看向地面/对视”）；
+      4) **接触关系**（是否接触、接触部位、接触强度/目的）。
+    - **状态过渡强制 (Transition-to-New-State Mandate)**：凡位置/朝向/视线/接触任一项发生变化，必须写出从旧状态过渡到新状态的过程（动作路径、顺序与触发原因），禁止只给结果态。
     - **格式**：`1. [User] action -> [Target] reaction.` (必须包含具体的对白/字幕/屏幕文字/音效内容)。**实体引用**：Beat 描述中涉及的所有**角色**、**道具**、**环境**均须用 `[]` 包裹（例如：`[Alice] walks to [Window] holding [Cup]`）。
+      - **推荐扩展句式**：`[空间关系] + [主体关系(位置/朝向/视线/接触)] + [动作变化过程] -> [新状态]`。
     - **内容增强 (Enhancement)**：
         - **角色高光**：在不脱离剧本逻辑的前提下，增加特定 Beat 细致刻画主角特质（如通过局部特写展现美貌/诱人身材/力量感，或通过神态展现坚毅/美好性格）。
         - **视觉转场**：显式设计转场 Beat（如(FG)前景遮挡过渡、焦点变化）。
@@ -174,7 +187,7 @@
 
 | Episode ID | Scene ID | Scene No. | Scene Name | Equivalent Duration | Core Scene Info | Original Script Text | Environment Name | Environment Relation | Entry State | Exit State | Linked Characters | Key Props |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| EP01 | EP01_SC01 | 1 | [Name] | [Times] | **[Stage] (核心舞台)**: 中文描述 (e.g., 南墙的窗户前区域).<br>**[Environment Context] (环境)**: 中文描述 (与 JSON Prompt 严格一致).<br>**[Layout] (布局)**: 中文描述 (e.g., A站在窗边, B坐在沙发上).<br>**[Axis] (轴线)**: 中文描述（含观察方向与是否跨线）.<br>**[Split Reason] (拆分原因)**: 若与上一 Scene 为同一地理场地，必须写明为何拆分（如“台下拍台上，背景主物体变更”）.<br>**[Beats] (节拍)**:<br>1. [Char A] 从左侧入画 -> 走到 [Stage] 旁.<br>2. [Char A] 拿起 [Prop] -> 举起细看.<br>3. [Char B] 在背景处反应. (字幕: "发生了什么?") | [Original] | `[Env Name]` | `NEW / REUSE / VARIANT_OF` | [Entry Snapshot] | [Exit Snapshot] | `[Char A]`, `[Char B]` | `[Prop]` |
+| EP01 | EP01_SC01 | 1 | [Name] | [Times] | **[Stage] (核心舞台)**: 中文描述 (e.g., 南墙的窗户前区域).<br>**[Environment Context] (环境)**: 中文描述 (与 JSON Prompt 严格一致).<br>**[Layout] (布局)**: 中文描述 (e.g., A站在窗边, B坐在沙发上).<br>**[Axis] (轴线)**: 中文描述（含观察方向与是否跨线）.<br>**[Split Reason] (拆分原因)**: 若与上一 Scene 为同一地理场地，必须写明为何拆分（如“台下拍台上，背景主物体变更”）.<br>**[Beats] (节拍)**:<br>1. [空间] [Char A] 在[Bed]右侧边缘坐姿，双脚触地；[关系] [Char A] 侧对[Char B]并看向其胸前，未接触 -> [过程] [Char A] 身体前倾半步、抬手至胸前高度 -> [新状态] 与[Char B]近距对峙.<br>2. [空间] [Char A] 从床边下地到[Stage]前沿；[关系] 朝向由侧对转为正对，视线由胸前转为对视，右手轻触[Char B]前臂 -> [过程] 先移步、再转肩、后建立接触 -> [新状态] 双方正面对峙.<br>3. [空间] [Char B] 后撤至[Wall]旁；[关系] 由接触改为脱离，视线下移至地面 -> [过程] 抽臂、后退、偏头 -> [新状态] 无接触防御姿态. (字幕: "发生了什么?") | [Original] | `[Env Name]` | `NEW / REUSE / VARIANT_OF` | [Entry Snapshot] | [Exit Snapshot] | `[Char A]`, `[Char B]` | `[Prop]` |
 
 #### Part 3: Entities JSON (Strict Schema)
 
@@ -255,9 +268,10 @@
 6. **AI Split Check**: 凡轴线反转/观察方向切换/背景主物体集合变化的段落，是否已拆分成新 Scene + 新 Environment？
 7. **Venue Variant Check**: 同一地理场地的多变体 Environment 是否通过 `visual_dependencies` 保持风格连续？
 8. **Dual-View Check**: 每个核心场地是否默认具备 Front/Reverse 两个视角变体？若没有，是否给出“轴线完全不变、无反打需求”的明确豁免理由？
-9. **Naming Check**: 所有 Environment Name 是否符合 `[Venue]_[DirectionTag]_[ShotScale]_[LightingTag可选]` 模板，并可一眼区分 Front/Reverse？
-10. **Prompt Clarity Check**: 所有 `generation_prompt_en` 是否都明确包含 `[Camera Position]` 与 `[Shooting Direction]`？
-11. **Prop Significance Check**: 每个被抽取的 Prop 是否有“剧情意义 + 持续影响 + 重复出现/引用”的证据？
-12. **Aesthetic Default Check**: 在未明确风格约束时，Environment 是否体现“优美/大气/现代/优雅”；若未采用，是否给出剧情理由？
-13. **ID Continuity Check**: `Episode ID`、`Scene ID` 是否满足 `EPxx_SCyy` 层级关系且序号严格递增？
-14. **State Handoff Check**: 每个 Scene 的 `Entry State` / `Exit State` 是否可无缝衔接下一 Scene？
+9. **Background Coverage Check**: 基于“二维背景一致性优先”触发条件，剧情所需的所有背景环境变体是否已覆盖（不仅是 Front/Reverse），未覆盖项是否给出豁免理由？
+10. **Naming Check**: 所有 Environment Name 是否符合 `[Venue]_[DirectionTag]_[ShotScale]_[LightingTag可选]` 模板，并可一眼区分 Front/Reverse？
+11. **Prompt Clarity Check**: 所有 `generation_prompt_en` 是否都明确包含 `[Camera Position]` 与 `[Shooting Direction]`？
+12. **Prop Significance Check**: 每个被抽取的 Prop 是否有“剧情意义 + 持续影响 + 重复出现/引用”的证据？
+13. **Aesthetic Default Check**: 在未明确风格约束时，Environment 是否体现“优美/大气/现代/优雅”；若未采用，是否给出剧情理由？
+14. **ID Continuity Check**: `Episode ID`、`Scene ID` 是否满足 `EPxx_SCyy` 层级关系且序号严格递增？
+15. **State Handoff Check**: 每个 Scene 的 `Entry State` / `Exit State` 是否可无缝衔接下一 Scene？

@@ -12,6 +12,7 @@ Rules:
 - Your response must be syntactically valid Markdown (headers/lists/indentation must render correctly).
 - Start directly with `# Episode {episode_number}: {episode_title}` as the first non-empty line.
 - Keep continuity: character voice, identity, wardrobe/vibe, and relationship dynamics must match Character Canon.
+- Character Pre-Generation Constraint: because character visuals are pre-generated and must stay consistent, avoid dressing/undressing/changing-outfit beats (穿衣、脱衣、换装、试衣、更衣). If source material implies such moments, rewrite into equivalent non-wardrobe actions.
 - You MUST follow the "Global Style & Constraints" / hard-rules section from Global Story DNA (if present).
 - Default Aesthetic Policy (when no specific style constraint is provided): maintain a modern, premium, cinematic visual tone; write characters as attractive/charismatic with tasteful sensual tension (non-explicit), and keep props/sets refined, detailed, and aesthetically pleasing.
 - Use cinematic, filmable writing: clear locations, time of day, actions, dialogue, and emotional beats.
@@ -22,6 +23,9 @@ Rules:
   - Every scene must carry canonical `Scene ID = EPxx_SCyy` (zero-padded).
   - Scene IDs must be strictly increasing and unique within the episode.
   - Each scene must explicitly declare `Environment Relation`: `NEW` / `REUSE:<EnvName>` / `VARIANT_OF:<EnvName>`.
+  - `Front/Reverse` are the minimum baseline variants, not the upper limit.
+  - Under the 2D-background-consistency-first principle, scenes must cover all environment variants required by story blocking (axis flip, observation-direction switch, background-set change, dominant-light-direction change, visible-structure regrouping).
+  - If any potentially needed variant is not produced, provide an explicit exemption reason in the corresponding scene rationale.
   - Each scene must include compact handoff states: `Entry State` and `Exit State` (characters/props/dynamic parts such as door/window/light on-off), so downstream scene/shot decomposition is deterministic.
 
 - Scene/Beat supplement (copied requirements; keep wording as-is):
@@ -34,8 +38,13 @@ Rules:
     5) 景别/镜高变化引起可见背景结构发生重组（例如俯拍暴露地面构图，平视以墙面为主）。
   - **Axis Trigger Rule**：当 Axis 相对上一段发生“跨线、反向、观察方向切换”时，视为新 Scene 起点，不得继续沿用上一 Scene 的 Environment。
   - **[Beats] (节拍流)**：按时间顺序排列的动作单元。
+    - **服装一致性约束 (Wardrobe Consistency)**：由于角色资产已预生成，Beats 中禁止出现穿衣/脱衣/换装/试衣/更衣及其同义动作；需要表达推进时，改用表情、手部动作、道具互动或机位变化替代。
     - **Spatial Activation (空间激活)**：Beats 动作必须**主动发生在该物理空间中**，并与环境产生交互（如倚靠、穿越、拿起）。严禁“真空表演”。
+    - **空间关系强制 (Spatial Relation Mandate)**：每个 Beat 必须明确角色与物理空间关系（如在床上/床边/地面/门口/桌旁/窗前/墙边），并说明相对 `Stage` 或 `Environment` 的落位。
+    - **主体关系强制 (Subject-to-Subject Mandate)**：每个 Beat 必须明确角色之间的相对关系，至少覆盖：位置关系、朝向关系、视线关系、接触关系。
+    - **状态过渡强制 (Transition-to-New-State Mandate)**：凡位置/朝向/视线/接触任一项发生变化，必须描述从旧状态到新状态的过渡过程（动作路径、顺序与触发原因），禁止只给结果态。
     - **格式**：`1. [User] action -> [Target] reaction.` (必须包含具体的对白/字幕/屏幕文字/音效内容)。**实体引用**：Beat 描述中涉及的所有**角色**、**道具**、**环境**均须用 `[]` 包裹（例如：`[Alice] walks to [Window] holding [Cup]`）。
+      - **推荐扩展句式**：`[空间关系] + [主体关系(位置/朝向/视线/接触)] + [动作变化过程] -> [新状态]`。
     - **内容增强 (Enhancement)**：
         - **角色高光**：在不脱离剧本逻辑的前提下，增加特定 Beat 细致刻画主角特质（如通过局部特写展现美貌/诱人身材/力量感，或通过神态展现坚毅/美好性格）。
         - **视觉转场**：显式设计转场 Beat（如(FG)前景遮挡过渡、焦点变化）。
@@ -66,6 +75,7 @@ For each scene, use:
 - 每个节拍都必须明确“谁在做什么/怎么说”，并保证先后因果清晰。
 - 台词不要孤立成清单；必须嵌在同一节拍里，与动作/微表情/停顿/呼吸/视线或走位绑定。
 - 需要舞台调度时，把走位写在该人物的节拍里（例如：靠近/后退/绕过/挡住视线），不要单独开“调度段落”。
+- 每个节拍必须写清“角色-物理空间关系”与“角色-角色关系”（位置、朝向、视线、接触）；若这些关系有变化，必须写出过渡过程而非只写结果。
 - 节拍短而可拍：用具体可见行为推动信息增量与情绪转折。
 - 视觉审美默认：若输入未指定相反风格，动作与场面调度默认追求高审美、现代、精致；人物吸引力通过镜头语言与气质体现。
 
