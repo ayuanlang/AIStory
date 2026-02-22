@@ -2,7 +2,7 @@
 # Version: 2026-02-21
 
 ## 最终目标：
-1. **场景物理化 (Physicalization)**：将剧本文字转化为具有明确坐标、边界和动线的物理空间方案。
+1. **场景物理化 (Physicalization)**：将剧本文字转化为更适合AI创作的，具有明确坐标、边界和动线的物理空间方案。
 2. **逻辑拆分 (Logical Breakdown)**：提取最小戏剧单元 (Beats)，确保因果链清晰，为分镜生成提供坚实基础。
 3. **资产标准化 (Asset Standardization)**：确立 Environment (容器), Character (表演者), Prop (交互物) 的独立性与关联性。
 4. **视角多样性 (Perspective Variety)**：分析场景时预埋多角度（正/反/侧/俯）的可能性，避免视觉单调。
@@ -11,6 +11,7 @@
 7. **双视角预设 (Dual-View by Default)**：原则上每个 Environment 在设计阶段必须预设两个基础视角变体：`正向 (Front)` 与 `反向 (Reverse)`。仅当剧本与调度已明确“轴线全程不变且不存在反打/反转镜头需求”时，才允许只保留单视角。
 8. **道具宁缺毋滥 (Prop Minimalism by Narrative Significance)**：道具抽取必须从严。只有对剧情有持续影响、具备明确叙事功能、并在后续再次出现或被引用的物件，才允许作为独立 `Prop` 抽取。
 9. **环境默认审美策略 (Default Environment Aesthetic Policy)**：当剧本未明确指定环境风格时，Environment 默认应呈现“优美、美观、大气、现代、优雅”的视觉取向（clean / premium / contemporary / graceful）；若剧情明确要求破败、脏乱、压抑、年代粗粝等风格，则以剧情要求优先。
+10. **角色与道具默认审美策略 (Default Character & Prop Aesthetic Policy)**：当剧本未明确限制时，Character 默认应具备“高颜值/有吸引力/现代时尚/镜头友好”的气质表达（可有性感张力但必须非露骨、可播出）；Prop 默认应“精致、材质高级、工艺清晰”。同时必须保留清晰可复现的锚定特征（Signature Anchors），避免生成同质化。
 
 ---
 
@@ -108,9 +109,15 @@
 （**标准六视图**，确保几何一致性。）
 `[Global Style] 6-view character sheet for 【Name】. [Camera Position]: 【studio camera placement for sheet capture】. [Shooting Direction]: 【for each panel explicitly mark Front/Back/Side/3-4 + facing】. Structure: 6-view layout (Front, Back, Side, 3/4, Close-up, Detail). Appearance: 【Age, Body Type, ethnicity】. Attire: 【Clothing details, footwear】. Anchors: 【Signature features e.g. scar, accessory】. Consistency: T-pose/Neutral pose. Background: White.`
 
+- **Character Aesthetic Fallback (默认角色审美回退词)**：当输入未给出明确角色风格时，默认注入等价语义：`attractive, photogenic, modern styling, elegant silhouette, tasteful sensuality (non-explicit), premium cinematic portrait quality`。
+- **Anchor Hard Rule (锚点硬规则)**：每个角色必须至少给出 2-3 个稳定锚点（如发型轮廓、标志配饰、辨识度五官特征、体态习惯），确保跨镜头一致性。
+
 #### 3. Prop Prompt Template
 （**独立物体**，白色背景。）
 `[Global Style] Prop Asset: 【Name】. [Camera Position]: 【exact studio/object-relative placement】. [Shooting Direction]: 【Front/Reverse/Side/Top or Isometric facing】. View: 【Angle e.g. Isometric/Front】. Material: 【Texture details】. Wear & Tear: 【Condition】. Background: White.`
+
+- **Prop Aesthetic Fallback (默认道具审美回退词)**：当输入未给出明确道具风格时，默认注入等价语义：`refined craftsmanship, premium materials, modern design language, clean silhouette, high-detail texture readability`。
+- **Prop Anchor Rule (道具锚点规则)**：每个关键道具必须明确可识别锚点（形状、材质、颜色/纹理特征、结构细节），避免“泛化物体”导致镜头前后不一致。
 
 > 抽取前自检：若该物体不能清楚回答“它如何持续影响剧情、在哪些后续段落继续发挥作用”，则不应进入 `props`。
 

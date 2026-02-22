@@ -6,6 +6,19 @@ import { API_URL } from '@/config';
 import { updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, getSystemSettingsCatalog, selectSystemSetting, getSystemSettingsManage, createSystemSettingManage, updateSystemSettingManage, getEffectiveSettingSnapshot } from '../services/api';
 import RechargeModal from '../components/RechargeModal'; // Import RechargeModal
 
+const DEFAULT_CHARACTER_SUPPLEMENTS = [
+    "Default Aesthetic Policy (when no explicit style is provided): prioritize premium cinematic beauty and modern elegance.",
+    "Character portrayal should be attractive and charismatic, with tasteful sensual tension only (non-explicit, broadcast-safe).",
+    "Keep identity anchors stable and explicit: preserve recognizable facial/hairstyle silhouette, signature accessory, and posture/mannerism cues for cross-shot consistency.",
+].join('\n');
+
+const DEFAULT_SCENE_SUPPLEMENTS = [
+    "Default Aesthetic Policy (when no explicit style is provided): deliver modern, refined, high-pleasure visuals with clean composition and cinematic lighting hierarchy.",
+    "Props should appear exquisite and well-crafted with clear material readability.",
+    "Anchor Clarity Mandate: keep environment/character/prop anchors explicit and stable; never trade anchor consistency for style.",
+    "If user style constraints are provided, obey them first.",
+].join('\n');
+
 const Settings = () => {
     const location = useLocation();
     const { llmConfig, setLLMConfig, savedConfigs, saveProviderConfig, addLog, generationConfig, setGenerationConfig, savedToolConfigs, saveToolConfig } = useStore();
@@ -20,8 +33,8 @@ const Settings = () => {
     const fileInputRef = useRef(null);
 
     // State for generation supplements
-    const [charSupplements, setCharSupplements] = useState("");
-    const [sceneSupplements, setSceneSupplements] = useState("");
+    const [charSupplements, setCharSupplements] = useState(DEFAULT_CHARACTER_SUPPLEMENTS);
+    const [sceneSupplements, setSceneSupplements] = useState(DEFAULT_SCENE_SUPPLEMENTS);
 
     // State for generation models
     const [imageModel, setImageModel] = useState("Midjourney");
@@ -686,9 +699,14 @@ const Settings = () => {
 
     // Initialize generation config & handle saved tool configs updates
     useEffect(() => {
+        const withFallback = (value, fallbackValue) => {
+            if (typeof value === 'string' && value.trim()) return value;
+            return fallbackValue;
+        };
+
         if (generationConfig) {
-            setCharSupplements(generationConfig.characterSupplements || "");
-            setSceneSupplements(generationConfig.sceneSupplements || "");
+            setCharSupplements(withFallback(generationConfig.characterSupplements, DEFAULT_CHARACTER_SUPPLEMENTS));
+            setSceneSupplements(withFallback(generationConfig.sceneSupplements, DEFAULT_SCENE_SUPPLEMENTS));
             setPromptLanguage(generationConfig.prompt_language || "mixed");
             
             const iModel = generationConfig.imageModel || "Midjourney";
@@ -704,6 +722,8 @@ const Settings = () => {
             loadToolConfig(vModel, 'video');
             loadToolConfig(visModel, 'vision');
         } else {
+               setCharSupplements(DEFAULT_CHARACTER_SUPPLEMENTS);
+               setSceneSupplements(DEFAULT_SCENE_SUPPLEMENTS);
              // Even if no generationConfig, we might have defaults set in state (e.g. Midjourney/Runway)
              // and we should load their configs if savedToolConfigs updates
              loadToolConfig(imageModel, 'image');

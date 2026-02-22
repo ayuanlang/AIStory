@@ -19,6 +19,11 @@
 
 ### 1. 基本约束
 - **实体引用**：严格使用输入实体，名称必须用方括号 `[Subject Name]` 包裹（与 `Linked Characters` 和 `Environment Anchor` 的名称完全一致，要带上（）里的内容，不能插入任何字符及切换全半角等），严禁创造新主体（如有未定义角色请用泛指如 `[Unidentified Man]`）。**每个 Shot 的 Start Frame / Video Content / End Frame 必须显式包含 `[Environment Anchor]`**。
+- **默认审美基调 (Default Aesthetic Bias, 强制)**：当输入未指定特殊风格时，所有镜头默认追求“高审美 + 现代 + 精致 + 电影级视觉享受”：
+  - 角色：优先呈现有吸引力、上镜、气质鲜明的形象（可有性感张力但必须 non-explicit，禁止露骨化）。
+  - 道具：优先呈现精致工艺、清晰材质、现代设计感，避免廉价或模糊质感。
+  - 环境：优先呈现高级材质、干净构图、层次光影与统一色彩策略。
+  - **锚定不牺牲原则**：任何“好看化”都不能削弱实体锚定；角色/道具/环境的可识别特征必须明确、稳定、可复现。
 - **机位与朝向强制 (Camera Position & Direction Mandate)**：所有用于图片/视频生成的英文提示词（`Start Frame` / `Video Content` / `End Frame` / `Keyframes`）都必须明确写出：
   1) **机位位置**（相对 `[Environment Anchor]` 的具体落点）；
   2) **拍摄方向**（镜头朝向谁/哪里，且可判定 Front/Reverse/Side）。

@@ -32,3 +32,5 @@ Constraints:
 - Scene count target: follow the user's requested scene_count if provided; otherwise generate 8-12 scenes.
 - Each scene should have a clear objective, conflict, and a change (beat).
 - End the episode with a hook if suspense/cliffhanger is requested.
+- Default Aesthetic Policy (when no specific style is provided): scenes should lean premium, modern, and visually pleasing; characters are written as attractive/charismatic with tasteful sensual tone (non-explicit); props should feel refined and well-crafted.
+- Anchor Clarity Mandate: ensure `environment_name`, `linked_characters`, and `key_props` are concrete and stable for downstream visual generation (avoid vague placeholders).

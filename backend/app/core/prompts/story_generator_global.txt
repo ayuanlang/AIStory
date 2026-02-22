@@ -16,6 +16,7 @@ Rules:
 - Project Overview / Basic Information may be partially empty or fully empty. Do NOT fail; infer safe, production-friendly defaults and continue generating.
 - Character Canon may be empty at this stage. Do NOT require it when generating Global Story DNA.
 - Avoid explicit sexual content. If the user requests "sexy", express it as cinematic styling (non-explicit).
+- Default Aesthetic Policy (when user gives no specific style): globally bias toward visually premium, modern, elegant, and refined presentation; characters should be attractive and charismatic with tasteful sensual tension (non-explicit), and props/environments should feel high-quality and well-designed.
 - AI scene-planning constraint: default every core venue to have two camera-direction variants (Front/Reverse) for downstream AI generation, unless axis is explicitly guaranteed never to reverse.
 - If axis/camera direction/background set changes, plan it as a new scene variant even inside the same physical venue.
 - Environment naming mandate: when proposing scene environments, use `[Venue]_[DirectionTag]_[ShotScale]_[LightingTagOptional]` (e.g., `GrandTheater_Front_Wide_Night`, `GrandTheater_Reverse_Mid_Night`).
@@ -32,6 +33,7 @@ Output format (Markdown):
 	- Global Style：...（视觉/镜头语言/质感关键词；只做风格约束，不要写具体镜头表）
 - 全局风格（写成可执行约束，不要空泛形容词堆叠）：
 	- 叙事口吻与节奏：...（快/慢、悬疑密度、喜剧节拍等）
+	- 默认审美基调（无明确输入时）：...（高审美、现代、精致、电影质感；人物具吸引力与张力但不露骨）
 	- 现实度与尺度边界：...（写实程度、血腥/暴力/露骨内容的边界；保持可播可拍）
 	- 对白风格：...（英语口语/职场术语、句长、潜台词、幽默/冷感等）
 	- 场景与道具约束：...（职场空间类型、常见物件、避免离题世界观）

@@ -13,6 +13,7 @@ Rules:
 - Start directly with `# Episode {episode_number}: {episode_title}` as the first non-empty line.
 - Keep continuity: character voice, identity, wardrobe/vibe, and relationship dynamics must match Character Canon.
 - You MUST follow the "Global Style & Constraints" / hard-rules section from Global Story DNA (if present).
+- Default Aesthetic Policy (when no specific style constraint is provided): maintain a modern, premium, cinematic visual tone; write characters as attractive/charismatic with tasteful sensual tension (non-explicit), and keep props/sets refined, detailed, and aesthetically pleasing.
 - Use cinematic, filmable writing: clear locations, time of day, actions, dialogue, and emotional beats.
 - Do NOT separate dialogue and action into different blocks. Write them interleaved in time order, character-driven.
 - Keep the draft production-friendly: each scene should be readable and not overly long.
@@ -37,6 +38,7 @@ For each scene, use:
 - 台词不要孤立成清单；必须嵌在同一节拍里，与动作/微表情/停顿/呼吸/视线或走位绑定。
 - 需要舞台调度时，把走位写在该人物的节拍里（例如：靠近/后退/绕过/挡住视线），不要单独开“调度段落”。
 - 节拍短而可拍：用具体可见行为推动信息增量与情绪转折。
+- 视觉审美默认：若输入未指定相反风格，动作与场面调度默认追求高审美、现代、精致；人物吸引力通过镜头语言与气质体现，严禁露骨描写。
 
 ## Ending Hook
 - (1-2 sentences, cliffhanger or next-episode hook)

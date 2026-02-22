@@ -11,6 +11,7 @@ Rules:
 - AI scene planning rule: for each core venue, pre-plan Front/Reverse viewpoint variants by default; only skip Reverse when axis is explicitly fixed and no reverse coverage is needed.
 - If camera direction/axis/background composition changes, treat it as a separate scene variant even in the same location.
 - Environment naming template: use `[Venue]_[DirectionTag]_[ShotScale]_[LightingTagOptional]`, and ensure DirectionTag clearly marks Front/Reverse.
+- Default Aesthetic Policy (when user gives no specific style): keep the episode visually premium/modern/elegant, characters attractive and charismatic with tasteful sensual tone (non-explicit), and props/environments refined and design-forward.
 
 Output format (Markdown):
 # 分集大纲（Episode Story DNA）
