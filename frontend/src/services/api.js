@@ -182,8 +182,36 @@ export const fetchSceneShotsPrompt = async (sceneId) => {
 
 export const generateSceneShots = async (sceneId, promptData = null) => {
     // This now returns the Staging result (timestamp, content=[]), not the applied shots
-    const response = await api.post(`/scenes/${sceneId}/ai_generate_shots`, promptData);
-    return response.data;
+    const payloadMeta = {
+        hasUserPrompt: Boolean(promptData?.user_prompt),
+        hasSystemPrompt: Boolean(promptData?.system_prompt),
+        userPromptLen: String(promptData?.user_prompt || '').length,
+        systemPromptLen: String(promptData?.system_prompt || '').length,
+    };
+    console.log('[API] generateSceneShots request', { sceneId, payloadMeta });
+    try {
+        const response = await api.post(`/scenes/${sceneId}/ai_generate_shots`, promptData);
+        const data = response?.data;
+        console.log('[API] generateSceneShots response', {
+            sceneId,
+            status: response?.status,
+            dataType: typeof data,
+            keys: data && typeof data === 'object' ? Object.keys(data) : [],
+            contentCount: Array.isArray(data?.content) ? data.content.length : null,
+            hasRawText: Boolean(data?.raw_text),
+            hasTimestamp: Boolean(data?.timestamp),
+        });
+        return data;
+    } catch (error) {
+        console.error('[API] generateSceneShots failed', {
+            sceneId,
+            status: error?.response?.status,
+            detail: error?.response?.data?.detail,
+            responseData: error?.response?.data,
+            message: error?.message,
+        });
+        throw error;
+    }
 }
 
 export const getSceneLatestAIResult = async (sceneId) => {

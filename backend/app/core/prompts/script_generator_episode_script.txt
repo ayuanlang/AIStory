@@ -13,6 +13,10 @@ Rules:
 - Start directly with `# Episode {episode_number}: {episode_title}` as the first non-empty line.
 - Keep continuity: character voice, identity, wardrobe/vibe, and relationship dynamics must match Character Canon.
 - Character Pre-Generation Constraint: because character visuals are pre-generated and must stay consistent, avoid dressing/undressing/changing-outfit beats (穿衣、脱衣、换装、试衣、更衣). If source material implies such moments, rewrite into equivalent non-wardrobe actions.
+- Extra Accessory Restraint (Narrative Significance First): when generating the script, do not add unnecessary temporary accessories/extra items (e.g., headphones, hats, glasses, backpacks, shopping bags, handheld trinkets) unless they have important and sustained narrative function.
+  - Allowed only if the item is plot-critical (conflict trigger, information carrier, identity clue, or decision driver) and has continuous downstream impact.
+  - If introduced, it must be tracked across subsequent beats/scenes (ownership/state/presence), and cannot appear once then disappear silently.
+  - If not plot-critical and persistent, do not introduce it.
 - You MUST follow the "Global Style & Constraints" / hard-rules section from Global Story DNA (if present).
 - Default Aesthetic Policy (when no specific style constraint is provided): maintain a modern, premium, cinematic visual tone; write characters as attractive/charismatic with tasteful sensual tension (non-explicit), and keep props/sets refined, detailed, and aesthetically pleasing.
 - Use cinematic, filmable writing: clear locations, time of day, actions, dialogue, and emotional beats.
@@ -43,8 +47,18 @@ Rules:
     - **空间关系强制 (Spatial Relation Mandate)**：每个 Beat 必须明确角色与物理空间关系（如在床上/床边/地面/门口/桌旁/窗前/墙边），并说明相对 `Stage` 或 `Environment` 的落位。
     - **主体关系强制 (Subject-to-Subject Mandate)**：每个 Beat 必须明确角色之间的相对关系，至少覆盖：位置关系、朝向关系、视线关系、接触关系。
     - **状态过渡强制 (Transition-to-New-State Mandate)**：凡位置/朝向/视线/接触任一项发生变化，必须描述从旧状态到新状态的过渡过程（动作路径、顺序与触发原因），禁止只给结果态。
-    - **格式**：`1. [User] action -> [Target] reaction.` (必须包含具体的对白/字幕/屏幕文字/音效内容)。**实体引用**：Beat 描述中涉及的所有**角色**、**道具**、**环境**均须用 `[]` 包裹（例如：`[Alice] walks to [Window] holding [Cup]`）。
-      - **推荐扩展句式**：`[空间关系] + [主体关系(位置/朝向/视线/接触)] + [动作变化过程] -> [新状态]`。
+    - **统一格式（强制）**：每个 Beat 必须按以下模板书写，不得简写：
+      `1. [空间关系] + [主体关系(位置/朝向/视线/接触)] + [动作变化过程] -> [新状态]`。
+      - 必须包含具体的对白/字幕/屏幕文字/音效内容（若该 Beat 存在）。
+      - **实体引用**：Beat 描述中涉及的所有**角色**、**道具**、**环境**均须用 `[]` 包裹（例如：`[Alice] walks to [Window] holding [Cup]`）。
+    - **剧本到 Beats 生成要求 (Script-to-Beats Generation Mandate, 强制)**：
+      1) **顺序一致**：Beats 的顺序必须严格跟随原始剧本事件顺序，禁止打乱因果先后。
+      2) **逐项覆盖**：剧本中的每一项信息（动作、台词、情绪反应、字幕、屏幕文字、音效）必须落到至少一个 Beat，禁止“概述式跳过”。
+      3) **台词落位**：每句台词必须写明说话主体与语气，并绑定到具体 Beat；禁止只写“发生对话/争执升级”。
+      4) **动作闭环**：每个动作必须明确“执行者 -> 受体/对象 -> 可见结果状态”，禁止只有动作起点没有结果态。
+      5) **补桥接动作**：若剧本文本存在物理/空间跳跃，必须补写可执行过渡过程（如移步、转身、接近、离开），不可直接从 A 状态跳到 C 状态。
+      6) **禁抽象替代**：禁止使用“气氛紧张了/关系恶化了/冲突升级了”这类抽象总结替代可拍动作；必须改写为可见行为与可见反应。
+      7) **最小可拍单元**：一个 Beat 至少包含一个明确可拍变化点（位置变、朝向变、视线变、接触变、道具状态变、语言事件变）。
     - **内容增强 (Enhancement)**：
         - **角色高光**：在不脱离剧本逻辑的前提下，增加特定 Beat 细致刻画主角特质（如通过局部特写展现美貌/诱人身材/力量感，或通过神态展现坚毅/美好性格）。
         - **视觉转场**：显式设计转场 Beat（如(FG)前景遮挡过渡、焦点变化）。
@@ -77,6 +91,7 @@ For each scene, use:
 - 需要舞台调度时，把走位写在该人物的节拍里（例如：靠近/后退/绕过/挡住视线），不要单独开“调度段落”。
 - 每个节拍必须写清“角色-物理空间关系”与“角色-角色关系”（位置、朝向、视线、接触）；若这些关系有变化，必须写出过渡过程而非只写结果。
 - 节拍短而可拍：用具体可见行为推动信息增量与情绪转折。
+- 非必要不新增临时配饰/额外物件（如书包、耳机、帽子、手持小物）；仅当其对剧情有重要且持续作用时才可引入，并在后续节拍持续维护其状态。
 - 视觉审美默认：若输入未指定相反风格，动作与场面调度默认追求高审美、现代、精致；人物吸引力通过镜头语言与气质体现。
 
 ## Ending Hook

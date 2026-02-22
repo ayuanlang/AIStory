@@ -99,6 +99,11 @@
 - **动作拆解 (Decomposition)**：所有动作/运动拆为物理可行、逻辑连续的序列，避免跳跃与断层；机位变/状态变即新镜。
 - **一致性 Check**：主动检查并修正位置跳跃、物理不可能、时间顺序错乱、交互不匹配的问题。
 - **实体闭环 (Entity Continuity)**：遵循下文 **三-2 执行顺序**中的 **Entity Integrity Check** 与 **Associated Entities 闭环**（禁止“幽灵角色/幽灵道具”，并确保清单与描述一致）。
+- **临时配饰连续性 (Temporary Accessory Continuity, 强制)**：当某镜头/节拍中给角色新增了临时可穿戴配饰（如耳机、帽子、眼镜、口罩、手套、披肩、围巾），该配饰会被视为“当前状态已生效”。
+  - **Persistence Rule**：从该时刻起，后续镜头（同一 Scene 内）必须继续显式描述该角色“仍佩戴该配饰”（例如：`[Character] wearing headphones`），直到出现明确“移除/摘下/脱下”动作。
+  - **No Silent Drop**：严禁在未描述移除动作的情况下，让配饰在下一镜头凭空消失。
+  - **State Ledger Integration**：在执行 `Start Frame + Video Content = End Frame` 校验时，必须把“配饰是否佩戴”纳入状态账本，与角色位置/持物同级检查。
+  - **Cross-Beat Echo**：若当前 Shot 内含多个微节拍（Micro-Beats），新增配饰后，后续节拍文本也要保持同一配饰状态，不可只在首个节拍提一次。
 - **Inter-Shot Character Continuity (上下镜角色连贯)**：
   - **Presence Check**: 紧邻的两个镜头（Shot N 与 Shot N+1），若空间未变且均为全景/中景，**在场角色必须保持延续**。
   - **No Magic Appearance/Disappearance**: 

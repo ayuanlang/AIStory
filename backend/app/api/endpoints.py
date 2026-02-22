@@ -4089,16 +4089,37 @@ async def ai_generate_shots(
     current_user: User = Depends(get_current_user)
 ):
     try:
-        logger.info(f"[ai_generate_shots] start scene_id={scene_id} user={current_user.id}")
+        req_has_custom_user_prompt = bool(req and (req.user_prompt or "").strip())
+        req_has_custom_system_prompt = bool(req and (req.system_prompt or "").strip())
+        logger.info(
+            "[ai_generate_shots] start "
+            f"scene_id={scene_id} user_id={current_user.id} "
+            f"custom_user_prompt={req_has_custom_user_prompt} custom_system_prompt={req_has_custom_system_prompt}"
+        )
         # 1. Fetch Scene and Context
         scene = db.query(Scene).filter(Scene.id == scene_id).first()
         if not scene:
+            logger.warning(f"[ai_generate_shots] scene_not_found scene_id={scene_id} user_id={current_user.id}")
             raise HTTPException(status_code=404, detail="Scene not found")
             
         episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
+        if not episode:
+            logger.warning(
+                f"[ai_generate_shots] episode_not_found scene_id={scene_id} episode_id={scene.episode_id} user_id={current_user.id}"
+            )
+            raise HTTPException(status_code=404, detail="Episode not found")
+
         project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
         if not project:
+            logger.warning(
+                f"[ai_generate_shots] unauthorized_or_project_not_found "
+                f"scene_id={scene_id} episode_id={episode.id} project_id={episode.project_id} user_id={current_user.id}"
+            )
             raise HTTPException(status_code=403, detail="Not authorized")
+
+        logger.info(
+            f"[ai_generate_shots] context scene_id={scene_id} episode_id={episode.id} project_id={project.id}"
+        )
 
         if req and req.user_prompt:
              user_input = req.user_prompt
@@ -4112,10 +4133,16 @@ async def ai_generate_shots(
 
         # 4. Call LLM
         llm_config = agent_service.get_active_llm_config(current_user.id)
+        if not llm_config:
+            logger.error(f"[ai_generate_shots] missing_llm_config scene_id={scene_id} user_id={current_user.id}")
+            raise HTTPException(status_code=400, detail="No active LLM config")
         
         # Billing (Reserve for token pricing)
         provider = llm_config.get("provider") 
         model = llm_config.get("model")
+        logger.info(
+            f"[ai_generate_shots] llm_selection provider={provider} model={model} scene_id={scene_id}"
+        )
         reservation_tx = None
         if billing_service.is_token_pricing(db, "llm_chat", provider, model):
             messages_est = [
@@ -4134,6 +4161,10 @@ async def ai_generate_shots(
                 "total_tokens": est.get("total_tokens", 0),
             }
             reservation_tx = billing_service.reserve_credits(db, current_user.id, "llm_chat", provider, model, reserve_details)
+            logger.info(
+                f"[ai_generate_shots] token_reservation_created reservation_id={reservation_tx.id} "
+                f"scene_id={scene_id} est_total_tokens={reserve_details.get('total_tokens', 0)}"
+            )
         else:
             # Ensure we have at least a default task type if provider is missing (though check_balance handles None)
             billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
@@ -4142,12 +4173,30 @@ async def ai_generate_shots(
         response_content_raw = response_dict.get("content", "")
         usage = response_dict.get("usage", {})
 
-        logger.info(f"[ai_generate_shots] llm_response_len_raw={len(response_content_raw)}")
+        logger.info(
+            f"[ai_generate_shots] llm_response_received scene_id={scene_id} "
+            f"llm_response_len_raw={len(response_content_raw)} usage_keys={list((usage or {}).keys())}"
+        )
 
         if str(response_content_raw).startswith("Error:"):
             if reservation_tx:
                 billing_service.cancel_reservation(db, reservation_tx.id, str(response_content_raw))
             raise HTTPException(status_code=500, detail=str(response_content_raw))
+
+        raw_str = str(response_content_raw or "").strip()
+        if not raw_str:
+            logger.warning(f"[ai_generate_shots] empty_llm_response scene_id={scene_id} user_id={current_user.id}")
+            if reservation_tx:
+                billing_service.cancel_reservation(db, reservation_tx.id, "empty llm response")
+            raise HTTPException(status_code=502, detail="LLM returned empty response")
+
+        if re.search(r"\bPROHIBITED_CONTENT\b", raw_str, flags=re.IGNORECASE):
+            logger.warning(
+                f"[ai_generate_shots] prohibited_content_marker_detected scene_id={scene_id} user_id={current_user.id}"
+            )
+            if reservation_tx:
+                billing_service.cancel_reservation(db, reservation_tx.id, "provider moderation block")
+            raise HTTPException(status_code=502, detail="Provider moderation blocked shot generation (PROHIBITED_CONTENT)")
 
         # Force-remove common reasoning leakage (e.g., "analysis", <think> blocks)
         # before table parsing and persistence.
@@ -4165,7 +4214,17 @@ async def ai_generate_shots(
             cleaned_lines.append(line)
         response_content = "\n".join(cleaned_lines).strip()
 
-        logger.info(f"[ai_generate_shots] llm_response_len_clean={len(response_content)}")
+        if not response_content:
+            logger.warning(
+                f"[ai_generate_shots] empty_after_sanitize scene_id={scene_id} user_id={current_user.id} raw_len={len(raw_str)}"
+            )
+            if reservation_tx:
+                billing_service.cancel_reservation(db, reservation_tx.id, "empty response after sanitize")
+            raise HTTPException(status_code=502, detail="LLM response became empty after sanitize")
+
+        logger.info(
+            f"[ai_generate_shots] llm_response_cleaned scene_id={scene_id} llm_response_len_clean={len(response_content)}"
+        )
 
         # Billing finalize
         if reservation_tx:
@@ -4177,6 +4236,10 @@ async def ai_generate_shots(
             if "completion_tokens" in actual_details and "output_tokens" not in actual_details:
                 actual_details["output_tokens"] = actual_details.get("completion_tokens", 0)
             billing_service.settle_reservation(db, reservation_tx.id, actual_details)
+            logger.info(
+                f"[ai_generate_shots] token_reservation_settled reservation_id={reservation_tx.id} "
+                f"scene_id={scene_id} actual_keys={list(actual_details.keys())}"
+            )
         else:
             details = {"item": "generate_shots"}
             if usage:
@@ -4186,6 +4249,9 @@ async def ai_generate_shots(
             if "completion_tokens" in details and "output_tokens" not in details:
                 details["output_tokens"] = details.get("completion_tokens", 0)
             billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, details)
+            logger.info(
+                f"[ai_generate_shots] credits_deducted scene_id={scene_id} detail_keys={list(details.keys())}"
+            )
 
         # 5. Parse Table
         lines = response_content.split('\n')
@@ -4220,7 +4286,9 @@ async def ai_generate_shots(
              # Fallback: Try Parse using Markdown table logic more loosely or return raw
              pass
              
-        logger.info(f"[ai_generate_shots] parsed_shots={len(shots_data)}")
+        logger.info(
+            f"[ai_generate_shots] parsed_result scene_id={scene_id} table_lines={len(table_lines)} parsed_shots={len(shots_data)}"
+        )
 
         # 6. Save to DB (Scheme A)
         # scenes.ai_shots_result stores ONLY the raw LLM Markdown table (plain text)
@@ -4237,14 +4305,24 @@ async def ai_generate_shots(
         db.commit()
         
         logger.info(f"[ai_generate_shots] Saved raw markdown to scene.ai_shots_result; parsed_shots={len(shots_data)} scene_id={scene_id}")
+        logger.info(
+            f"[ai_generate_shots] response_ready scene_id={scene_id} "
+            f"response_keys={list(result_wrapper.keys())} content_count={len(result_wrapper.get('content') or [])}"
+        )
         
         # Return the raw data so frontend can display it in the "Edit" modal
         return result_wrapper
 
+    except HTTPException as e:
+        logger.warning(
+            f"[ai_generate_shots] http_exception scene_id={scene_id} user_id={current_user.id} "
+            f"status_code={e.status_code} detail={e.detail}"
+        )
+        raise
     except Exception as e:
         import traceback
         traceback.print_exc()
-        logger.error(f"[ai_generate_shots] error={e}")
+        logger.exception(f"[ai_generate_shots] unhandled_error scene_id={scene_id} user_id={current_user.id} error={e}")
         # Log failure
         try:
             p_log = locals().get('provider')

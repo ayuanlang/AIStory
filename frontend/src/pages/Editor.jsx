@@ -1391,16 +1391,17 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode }) => {
         pollEpisodeScriptsStatus();
 
         try {
-            const modeLabel = retryFailedOnly ? 'retry-failed-only' : 'full';
+            const overwriteExisting = false;
+            const modeLabel = retryFailedOnly ? 'retry-failed-only' : 'generate-missing-only';
             addLog?.(`Generating episode scripts (${modeLabel}, target 1..${n})... (This may take several minutes)`, 'process');
             addLog?.(
-                `[DEBUG][Before API] Generate Episode Scripts payload: ${JSON.stringify({ episodes_count: n, overwrite_existing: !retryFailedOnly, retry_failed_only: retryFailedOnly })}`,
+                `[DEBUG][Before API] Generate Episode Scripts payload: ${JSON.stringify({ episodes_count: n, overwrite_existing: overwriteExisting, retry_failed_only: retryFailedOnly })}`,
                 'info'
             );
             console.log('[ProjectOverview] generate episode scripts: start', { projectId: id, episodes_count: n, retry_failed_only: retryFailedOnly });
             const res = await generateProjectEpisodeScripts(id, {
                 episodes_count: n,
-                overwrite_existing: !retryFailedOnly,
+                overwrite_existing: overwriteExisting,
                 retry_failed_only: retryFailedOnly,
             });
             console.log('[ProjectOverview] generate episode scripts: response', res);
@@ -1834,16 +1835,6 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode }) => {
                                 title="Retry only failed episodes from the last run"
                             >
                                 {isGeneratingEpisodeScripts ? <><Loader2 className="w-4 h-4 animate-spin" /> Running...</> : <><RefreshCw className="w-4 h-4" /> Retry Failed Episodes</>}
-                            </button>
-                            <button
-                                onClick={async () => {
-                                    await pollEpisodeScriptsStatus();
-                                    setShowEpisodeScriptsProgressModal(true);
-                                }}
-                                className="px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 bg-white/10 text-white hover:bg-white/20"
-                                title="Open dedicated progress center for episode script generation"
-                            >
-                                <LayoutList className="w-4 h-4" /> Progress Center
                             </button>
                         </div>
                     </div>
@@ -6908,6 +6899,21 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
                  user_prompt: data.user_prompt,
                  system_prompt: data.system_prompt 
              });
+            const generatedRows = Array.isArray(result?.content) ? result.content : [];
+            const generatedRaw = String(result?.raw_text || '').trim();
+            if (generatedRows.length === 0) {
+                if (generatedRaw) {
+                    const rawPreview = generatedRaw.replace(/\s+/g, ' ').slice(0, 300);
+                    onLog?.(`SceneManager: Generate Shots returned 0 parsed rows. Raw preview: ${rawPreview}`, 'warning');
+                    console.warn('[SceneManager] Generate Shots parse-empty with raw_text preview', {
+                        sceneId,
+                        rawLen: generatedRaw.length,
+                        rawPreview,
+                    });
+                    throw new Error(`Generate Shots returned 0 parsed rows; raw preview: ${rawPreview}`);
+                }
+                throw new Error('Generate Shots returned empty result (no rows and no raw text)');
+            }
              onLog?.(`SceneManager: Shot list generated for Scene ${sceneId}. Please Review/Apply.`, 'success');
              
              // Close Prompt Modal, Open Review Modal
@@ -6919,7 +6925,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
              setAiShotsStaging(prev => ({
                 ...prev,
                 sceneId,
-                content: result?.content || [],
+                     content: generatedRows,
                 rawText: result?.raw_text || '',
                 usage: result?.usage || null,
                 timestamp: result?.timestamp || null,
@@ -6930,7 +6936,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
              // Auto-import/apply immediately after generation
              try {
                  onLog?.(`SceneManager: Auto-importing shots for Scene ${sceneId}...`, 'info');
-                 await applySceneAIResult(sceneId, { content: result?.content || [] });
+                 await applySceneAIResult(sceneId, { content: generatedRows });
                  onLog?.(`SceneManager: Auto-import finished for Scene ${sceneId}.`, 'success');
              } catch (e) {
                  onLog?.(`SceneManager: Auto-import failed - ${(e?.response?.data?.detail || e?.message)}`, 'error');
@@ -8987,6 +8993,21 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                  user_prompt: data.user_prompt,
                  system_prompt: data.system_prompt 
              });
+             const generatedRows = Array.isArray(result?.content) ? result.content : [];
+             const generatedRaw = String(result?.raw_text || '').trim();
+             if (generatedRows.length === 0) {
+                 if (generatedRaw) {
+                     const rawPreview = generatedRaw.replace(/\s+/g, ' ').slice(0, 300);
+                     onLog?.(`Generate Shots returned 0 parsed rows. Raw preview: ${rawPreview}`, 'warning');
+                     console.warn('[ShotsView] Generate Shots parse-empty with raw_text preview', {
+                         sceneId,
+                         rawLen: generatedRaw.length,
+                         rawPreview,
+                     });
+                     throw new Error(`Generate Shots returned 0 parsed rows; raw preview: ${rawPreview}`);
+                 }
+                 throw new Error('Generate Shots returned empty result (no rows and no raw text)');
+             }
              onLog?.(`Shot list generated for Scene ${sceneId}. Please Review/Apply.`, 'success');
              
              setShotPromptModal({ open: false, sceneId: null, data: null, loading: false });
@@ -8995,14 +9016,14 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
              setShotReviewModal({
                  open: true,
                  sceneId: sceneId,
-                 data: result.content || [],
+                 data: generatedRows,
                  loading: false
              });
 
              // Auto-import/apply immediately after generation
              try {
                  onLog?.(`Auto-importing shots for Scene ${sceneId}...`, 'info');
-                 await applySceneAIResult(sceneId, { content: result?.content || [] });
+                 await applySceneAIResult(sceneId, { content: generatedRows });
                  onLog?.(`Auto-import finished for Scene ${sceneId}.`, 'success');
              } catch (e) {
                  onLog?.(`Auto-import failed - ${(e?.response?.data?.detail || e?.message)}`, 'error');

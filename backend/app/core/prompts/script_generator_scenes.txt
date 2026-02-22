@@ -39,6 +39,10 @@ Constraints:
 - End the episode with a hook if suspense/cliffhanger is requested.
 - Default Aesthetic Policy (when no specific style is provided): scenes should lean premium, modern, and visually pleasing; characters are written as attractive/charismatic with tasteful sensual tone (non-explicit); props should feel refined and well-crafted.
 - Character Pre-Generation Constraint: because character visuals are pre-generated and must remain consistent, avoid plot beats involving dressing/undressing/changing outfits (e.g., 穿衣、脱衣、换装、试衣、更衣). If such intent appears in source material, rewrite into equivalent non-wardrobe actions.
+- Extra Accessory Restraint (Narrative Significance First): do not add unnecessary temporary accessories/extra items in generated scenes/scripts (e.g., headphones, hats, glasses, backpacks, shopping bags, handheld trinkets) unless they have important and sustained narrative function.
+  - Allowed only when the item is plot-critical (conflict trigger, information carrier, identity clue, or decision driver) and continues to affect subsequent beats/scenes.
+  - If introduced, it must be tracked in state handoff and continuity (who has it, where it is, whether it remains worn/held).
+  - If not plot-critical and persistent, do not introduce it.
 - Anchor Clarity Mandate: ensure `environment_name`, `linked_characters`, and `key_props` are concrete and stable for downstream visual generation (avoid vague placeholders).
 - Hierarchical coding mandate:
   - `episode_id` must be canonical `EPxx` (zero-padded).
@@ -64,13 +68,25 @@ Constraints:
     5) 景别/镜高变化引起可见背景结构发生重组（例如俯拍暴露地面构图，平视以墙面为主）。
   - **Axis Trigger Rule**：当 Axis 相对上一段发生“跨线、反向、观察方向切换”时，视为新 Scene 起点，不得继续沿用上一 Scene 的 Environment。
   - **[Beats] (节拍流)**：按时间顺序排列的动作单元。
+    - **临时配饰克制 (Temporary Accessory Restraint)**：非必要不得新增临时配饰/额外物件（如书包、耳机、帽子、手持小物）；仅当其对剧情有重要且持续作用时才可引入。
+    - **持续性要求 (Persistence Requirement)**：一旦引入上述物件，后续 Beats/Scenes 必须维护其存在与状态（佩戴/持有/放置/转移），禁止“出现一次后无说明消失”。
     - **服装一致性约束 (Wardrobe Consistency)**：由于角色资产已预生成，Beats 中禁止出现穿衣/脱衣/换装/试衣/更衣及其同义动作；需要表达情绪推进时，改用表情、手部动作、道具互动或机位变化替代。
     - **Spatial Activation (空间激活)**：Beats 动作必须**主动发生在该物理空间中**，并与环境产生交互（如倚靠、穿越、拿起）。严禁“真空表演”。
     - **空间关系强制 (Spatial Relation Mandate)**：每个 Beat 必须明确角色与物理空间关系（如在床上/床边/地面/门口/桌旁/窗前/墙边），并说明相对 `Stage` 或 `Environment` 的落位。
     - **主体关系强制 (Subject-to-Subject Mandate)**：每个 Beat 必须明确角色之间的相对关系，至少覆盖：位置关系、朝向关系、视线关系、接触关系。
     - **状态过渡强制 (Transition-to-New-State Mandate)**：凡位置/朝向/视线/接触任一项发生变化，必须描述从旧状态到新状态的过渡过程（动作路径、顺序与触发原因），禁止只给结果态。
-    - **格式**：`1. [User] action -> [Target] reaction.` (必须包含具体的对白/字幕/屏幕文字/音效内容)。**实体引用**：Beat 描述中涉及的所有**角色**、**道具**、**环境**均须用 `[]` 包裹（例如：`[Alice] walks to [Window] holding [Cup]`）。
-      - **推荐扩展句式**：`[空间关系] + [主体关系(位置/朝向/视线/接触)] + [动作变化过程] -> [新状态]`。
+    - **统一格式（强制）**：每个 Beat 必须按以下模板书写，不得简写：
+      `1. [空间关系] + [主体关系(位置/朝向/视线/接触)] + [动作变化过程] -> [新状态]`。
+      - 必须包含具体的对白/字幕/屏幕文字/音效内容（若该 Beat 存在）。
+      - **实体引用**：Beat 描述中涉及的所有**角色**、**道具**、**环境**均须用 `[]` 包裹（例如：`[Alice] walks to [Window] holding [Cup]`）。
+    - **剧本到 Beats 生成要求 (Script-to-Beats Generation Mandate, 强制)**：
+      1) **顺序一致**：Beats 的顺序必须严格跟随原始剧本事件顺序，禁止打乱因果先后。
+      2) **逐项覆盖**：剧本中的每一项信息（动作、台词、情绪反应、字幕、屏幕文字、音效）必须落到至少一个 Beat，禁止“概述式跳过”。
+      3) **台词落位**：每句台词必须写明说话主体与语气，并绑定到具体 Beat；禁止只写“发生对话/争执升级”。
+      4) **动作闭环**：每个动作必须明确“执行者 -> 受体/对象 -> 可见结果状态”，禁止只有动作起点没有结果态。
+      5) **补桥接动作**：若剧本文本存在物理/空间跳跃，必须补写可执行过渡过程（如移步、转身、接近、离开），不可直接从 A 状态跳到 C 状态。
+      6) **禁抽象替代**：禁止使用“气氛紧张了/关系恶化了/冲突升级了”这类抽象总结替代可拍动作；必须改写为可见行为与可见反应。
+      7) **最小可拍单元**：一个 Beat 至少包含一个明确可拍变化点（位置变、朝向变、视线变、接触变、道具状态变、语言事件变）。
     - **内容增强 (Enhancement)**：
         - **角色高光**：在不脱离剧本逻辑的前提下，增加特定 Beat 细致刻画主角特质（如通过局部特写展现美貌/诱人身材/力量感，或通过神态展现坚毅/美好性格）。
         - **视觉转场**：显式设计转场 Beat（如(FG)前景遮挡过渡、焦点变化）。
