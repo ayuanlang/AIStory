@@ -104,6 +104,22 @@ class SystemAPISettingOut(BaseModel):
         from_attributes = True
 
 
+class SystemAPISettingImportItem(BaseModel):
+    name: Optional[str] = "System Setting"
+    category: str = "LLM"
+    provider: str
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+    model: Optional[str] = None
+    config: Optional[Dict[str, Any]] = {}
+    is_active: bool = False
+
+
+class SystemAPISettingImportRequest(BaseModel):
+    items: List[SystemAPISettingImportItem] = Field(default_factory=list)
+    replace_all: bool = False
+
+
 class SystemAPIProviderModelCatalog(BaseModel):
     category: str
     provider: str

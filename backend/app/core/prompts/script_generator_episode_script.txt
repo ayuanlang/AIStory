@@ -17,6 +17,31 @@ Rules:
 - Use cinematic, filmable writing: clear locations, time of day, actions, dialogue, and emotional beats.
 - Do NOT separate dialogue and action into different blocks. Write them interleaved in time order, character-driven.
 - Keep the draft production-friendly: each scene should be readable and not overly long.
+- Hierarchical continuity contract (mandatory):
+  - Resolve and print `Episode ID` as `EPxx`.
+  - Every scene must carry canonical `Scene ID = EPxx_SCyy` (zero-padded).
+  - Scene IDs must be strictly increasing and unique within the episode.
+  - Each scene must explicitly declare `Environment Relation`: `NEW` / `REUSE:<EnvName>` / `VARIANT_OF:<EnvName>`.
+  - Each scene must include compact handoff states: `Entry State` and `Exit State` (characters/props/dynamic parts such as door/window/light on-off), so downstream scene/shot decomposition is deterministic.
+
+- Scene/Beat supplement (copied requirements; keep wording as-is):
+  - **AI创作优先 (AI-First Scene Partitioning)**：本任务不是传统影视场记，而是为 AI 生成稳定画面。由于 AI 背景通常按“单张二维参考”稳定生成，凡是机位/轴线变化导致背景构图显著变化，必须拆分为新的 Scene + 新的 Environment。
+  - **二维背景一致性优先 (2D Background Consistency First)**：即使现实拍摄可在同一场地切镜头，AI 生成时若出现以下任一情况，必须拆分成新的 Scene 与 Environment：
+    1) 轴线反转（180°跨线）导致前后景关系翻转；
+    2) 观察方向变化（台下拍台上 vs 台下拍台下 / 门内看门外 vs 门外看门内）；
+    3) 背景主物体集合变化（主背景从“舞台幕布+观众席”变为“座椅排布+过道”）；
+    4) 主要光源方向变化（逆光主导 -> 侧光主导）导致背景读感变化；
+    5) 景别/镜高变化引起可见背景结构发生重组（例如俯拍暴露地面构图，平视以墙面为主）。
+  - **Axis Trigger Rule**：当 Axis 相对上一段发生“跨线、反向、观察方向切换”时，视为新 Scene 起点，不得继续沿用上一 Scene 的 Environment。
+  - **[Beats] (节拍流)**：按时间顺序排列的动作单元。
+    - **Spatial Activation (空间激活)**：Beats 动作必须**主动发生在该物理空间中**，并与环境产生交互（如倚靠、穿越、拿起）。严禁“真空表演”。
+    - **格式**：`1. [User] action -> [Target] reaction.` (必须包含具体的对白/字幕/屏幕文字/音效内容)。**实体引用**：Beat 描述中涉及的所有**角色**、**道具**、**环境**均须用 `[]` 包裹（例如：`[Alice] walks to [Window] holding [Cup]`）。
+    - **内容增强 (Enhancement)**：
+        - **角色高光**：在不脱离剧本逻辑的前提下，增加特定 Beat 细致刻画主角特质（如通过局部特写展现美貌/诱人身材/力量感，或通过神态展现坚毅/美好性格）。
+        - **视觉转场**：显式设计转场 Beat（如(FG)前景遮挡过渡、焦点变化）。
+    - **语言规范**：必须使用**客观摄影语言**（如“逆光勾勒出身材轮廓”而非“性感”）。**严禁 NSFW (色情/暴力)**。
+    - **稳定性**：Beat 的起点和终点必须是相对稳定的物理状态（便于生成 Start Frame 和 End Frame）。
+    - **Coverage**: 思考 Beat 除了主视角外，是否需要特写（如手部动作）或全景（如位置变换）。
 
 Output format (Markdown):
 # Episode {episode_number}: {episode_title}
@@ -26,7 +51,11 @@ Output format (Markdown):
 
 ## Scenes
 For each scene, use:
-### Scene {i}: {scene_name}（{location} / {time}）
+### Scene {i} [{scene_id=EPxx_SCyy}]: {scene_name}（{location} / {time}）
+- Environment Anchor：`[Venue]_[DirectionTag]_[ShotScale]_[LightingTagOptional]`
+- Environment Relation：`NEW` / `REUSE:<EnvName>` / `VARIANT_OF:<EnvName>`
+- Entry State：...
+- Exit State：...
 - 目标/冲突/赌注：...
 - 节拍（按时序；按人物驱动；对白与动作一体化，不要拆成“动作/对白”两段）：
   1) 【角色名】（语气/情绪/状态）：动作/表情/走位/特效/音效/背景/与道具或环境互动……同时说：“台词……”。（必要时补一行对方可见反应）
@@ -38,7 +67,7 @@ For each scene, use:
 - 台词不要孤立成清单；必须嵌在同一节拍里，与动作/微表情/停顿/呼吸/视线或走位绑定。
 - 需要舞台调度时，把走位写在该人物的节拍里（例如：靠近/后退/绕过/挡住视线），不要单独开“调度段落”。
 - 节拍短而可拍：用具体可见行为推动信息增量与情绪转折。
-- 视觉审美默认：若输入未指定相反风格，动作与场面调度默认追求高审美、现代、精致；人物吸引力通过镜头语言与气质体现，严禁露骨描写。
+- 视觉审美默认：若输入未指定相反风格，动作与场面调度默认追求高审美、现代、精致；人物吸引力通过镜头语言与气质体现。
 
 ## Ending Hook
 - (1-2 sentences, cliffhanger or next-episode hook)

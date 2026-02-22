@@ -14,16 +14,21 @@ Safety:
 
 JSON schema to output:
 {
+  "episode_id": "EPxx",
   "scenes": [
     {
+      "scene_id": "EPxx_SCyy",
       "scene_no": "1",
       "scene_name": "Short scene title",
       "original_script_text": "The actual screenplay-style text for the scene (dialogue + action).",
       "equivalent_duration": "Optional, e.g. 1:30",
       "core_scene_info": "What the scene accomplishes (goal/conflict/turning).",
       "environment_name": "Location / environment anchor",
+      "environment_relation": "NEW | REUSE:<EnvName> | VARIANT_OF:<EnvName>",
       "linked_characters": "Comma-separated character names",
-      "key_props": "Comma-separated props"
+      "key_props": "Comma-separated props",
+      "entry_state": "Start state of key characters/props/dynamic parts",
+      "exit_state": "End state handed off to next scene"
     }
   ]
 }
@@ -34,3 +39,32 @@ Constraints:
 - End the episode with a hook if suspense/cliffhanger is requested.
 - Default Aesthetic Policy (when no specific style is provided): scenes should lean premium, modern, and visually pleasing; characters are written as attractive/charismatic with tasteful sensual tone (non-explicit); props should feel refined and well-crafted.
 - Anchor Clarity Mandate: ensure `environment_name`, `linked_characters`, and `key_props` are concrete and stable for downstream visual generation (avoid vague placeholders).
+- Hierarchical coding mandate:
+  - `episode_id` must be canonical `EPxx` (zero-padded).
+  - Each `scene_id` must be `EPxx_SCyy`, where `yy` is strictly increasing and unique under the same `episode_id`.
+  - `scene_no` must be the numeric index of `scene_id` (e.g., `EP01_SC03` -> `scene_no: "3"`).
+  - Never mix multiple episode prefixes in one output.
+- Environment-asset relation mandate:
+  - `environment_name` must follow `[Venue]_[DirectionTag]_[ShotScale]_[LightingTagOptional]`.
+  - `environment_relation` is mandatory for every scene and must be one of `NEW`, `REUSE:<ExistingEnvName>`, `VARIANT_OF:<ExistingEnvName>`.
+  - If axis/camera direction/background set changes, use `VARIANT_OF` and a new `environment_name`.
+  - Label mapping consistency: `environment_relation` ↔ `Environment Relation`, `entry_state` ↔ `Entry State`, `exit_state` ↔ `Exit State`.
+
+- Scene/Beat supplement (copied requirements; keep wording as-is):
+  - **AI创作优先 (AI-First Scene Partitioning)**：本任务不是传统影视场记，而是为 AI 生成稳定画面。由于 AI 背景通常按“单张二维参考”稳定生成，凡是机位/轴线变化导致背景构图显著变化，必须拆分为新的 Scene + 新的 Environment。
+  - **二维背景一致性优先 (2D Background Consistency First)**：即使现实拍摄可在同一场地切镜头，AI 生成时若出现以下任一情况，必须拆分成新的 Scene 与 Environment：
+    1) 轴线反转（180°跨线）导致前后景关系翻转；
+    2) 观察方向变化（台下拍台上 vs 台下拍台下 / 门内看门外 vs 门外看门内）；
+    3) 背景主物体集合变化（主背景从“舞台幕布+观众席”变为“座椅排布+过道”）；
+    4) 主要光源方向变化（逆光主导 -> 侧光主导）导致背景读感变化；
+    5) 景别/镜高变化引起可见背景结构发生重组（例如俯拍暴露地面构图，平视以墙面为主）。
+  - **Axis Trigger Rule**：当 Axis 相对上一段发生“跨线、反向、观察方向切换”时，视为新 Scene 起点，不得继续沿用上一 Scene 的 Environment。
+  - **[Beats] (节拍流)**：按时间顺序排列的动作单元。
+    - **Spatial Activation (空间激活)**：Beats 动作必须**主动发生在该物理空间中**，并与环境产生交互（如倚靠、穿越、拿起）。严禁“真空表演”。
+    - **格式**：`1. [User] action -> [Target] reaction.` (必须包含具体的对白/字幕/屏幕文字/音效内容)。**实体引用**：Beat 描述中涉及的所有**角色**、**道具**、**环境**均须用 `[]` 包裹（例如：`[Alice] walks to [Window] holding [Cup]`）。
+    - **内容增强 (Enhancement)**：
+        - **角色高光**：在不脱离剧本逻辑的前提下，增加特定 Beat 细致刻画主角特质（如通过局部特写展现美貌/诱人身材/力量感，或通过神态展现坚毅/美好性格）。
+        - **视觉转场**：显式设计转场 Beat（如(FG)前景遮挡过渡、焦点变化）。
+    - **语言规范**：必须使用**客观摄影语言**（如“逆光勾勒出身材轮廓”而非“性感”）。**严禁 NSFW (色情/暴力)**。
+    - **稳定性**：Beat 的起点和终点必须是相对稳定的物理状态（便于生成 Start Frame 和 End Frame）。
+    - **Coverage**: 思考 Beat 除了主视角外，是否需要特写（如手部动作）或全景（如位置变换）。

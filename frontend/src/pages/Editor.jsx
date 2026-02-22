@@ -37,6 +37,7 @@ import {
     fetchScenes, 
     createScene,
     updateScene, 
+    deleteScene,
     fetchShots,
     fetchEpisodeShots,
     createShot,
@@ -55,7 +56,6 @@ import {
     createAsset,
     uploadAsset,
     getSettings,
-    translateText,
     refinePrompt,
     analyzeScene,
     fetchPrompt,
@@ -69,6 +69,7 @@ import {
     saveEpisodeStoryGeneratorInput,
     generateEpisodeScenes,
     generateProjectEpisodeScripts,
+    getProjectEpisodeScriptsStatus,
     saveProjectStoryGeneratorGlobalInput,
     exportProjectStoryGlobalPackage,
     importProjectStoryGlobalPackage,
@@ -79,248 +80,21 @@ import {
 
 import RefineControl from '../components/RefineControl.jsx';
 import VideoStudio from '../components/VideoStudio';
+import InputGroup from './editor/components/InputGroup';
+import MarkdownCell from './editor/components/MarkdownCell';
+import TranslateControl from './editor/components/TranslateControl';
+import {
+    PROVIDER_LABELS,
+    MODEL_OPTIONS,
+    getSettingSourceByCategory,
+    sourceBadgeClass,
+    sourceBadgeText,
+    formatProviderModelEndpointError,
+} from './editor/editorConfig';
 
 // RefineControl moved to components/RefineControl.jsx
 import { processPrompt } from '../lib/promptUtils';
 import SettingsPage from './Settings';
-
-const PROVIDER_LABELS = {
-    image: {
-        "Midjourney": "Midjourney",
-        "Doubao": "Doubao (豆包 - Volcengine)",
-        "Grsai-Image": "Grsai (Aggregation)",
-        "DALL-E 3": "DALL-E 3",
-        "Stable Diffusion": "Stable Diffusion (SDXL/Pony)",
-        "Flux": "Flux.1",
-        "Tencent Hunyuan": "Tencent Hunyuan (腾讯混元)"
-    },
-    video: {
-        "Runway": "Runway Gen-2/Gen-3",
-        "Luma": "Luma Dream Machine",
-        "Kling": "Kling AI (可灵)",
-        "Sora": "Sora (OpenAI)",
-        "Grsai-Video": "Grsai (Standard)",
-        "Grsai-Video (Upload)": "Grsai (File Upload)",
-        "Stable Video": "Stable Video Component",
-        "Doubao Video": "Doubao (豆包 - Volcengine)",
-        "Wanxiang": "Wanxiang (通义万相 - Aliyun)",
-        "Vidu (Video)": "Vidu (Shengshu)"
-    }
-};
-
-const MODEL_OPTIONS = {
-    image: {
-        "Midjourney": [
-            { label: "Standard (v6.0)", value: "default" },
-            { label: "Niji (Anime)", value: "niji" }
-        ],
-        "Stable Diffusion": [
-            { label: "SDXL 1.0 (Stability)", value: "stable-diffusion-xl-1024-v1-0" },
-            { label: "SD 1.6", value: "stable-diffusion-v1-6" },
-            { label: "SD3 Large", value: "sd3-large" },
-            { label: "SD3 Large Turbo", value: "sd3-large-turbo" }
-        ],
-        "DALL-E 3": [
-            { label: "DALL-E 3 (High Quality)", value: "dall-e-3" }
-        ],
-        "Doubao": [
-            { label: "Doubao Image (Seedream)", value: "doubao-seedream-4-5-251128" }
-        ],
-        "Tencent Hunyuan": [
-            { label: "Hunyuan Vision", value: "hunyuan-vision" },
-            { label: "Standard (201)", value: "201" }
-        ],
-        "Grsai-Image": [
-            { label: "Sora Image", value: "sora-image" },
-            { label: "GPT Image 1.5", value: "gpt-image-1.5" },
-            { label: "Nano Banana Pro", value: "nano-banana-pro" },
-            { label: "Nano Banana Pro VT", value: "nano-banana-pro-vt" },
-            { label: "Nano Banana Fast", value: "nano-banana-fast" },
-            { label: "Nano Banana Pro CL", value: "nano-banana-pro-cl" },
-            { label: "Nano Banana Pro VIP", value: "nano-banana-pro-vip" },
-            { label: "Nano Banana", value: "nano-banana" },
-            { label: "Nano Banana Pro 4K VIP", value: "nano-banana-pro-4k-vip" }
-        ],
-        "Flux": [
-            { label: "Flux.1 Pro", value: "flux-pro" },
-            { label: "Flux.1 Dev", value: "flux-dev" },
-            { label: "Flux.1 Schnell", value: "flux-schnell" }
-        ]
-    },
-    video: {
-        "Runway": [
-            { label: "Gen-3 Alpha", value: "gen-3-alpha" },
-            { label: "Gen-2 (Standard)", value: "gen-2" }
-        ],
-        "Luma": [
-            { label: "Ray 2", value: "ray-2" },
-            { label: "Ray 1.6", value: "ray-1-6" }
-        ],
-        "Kling": [
-            { label: "Kling v1.0", value: "kling-v1" },
-            { label: "Kling v1.5", value: "kling-v1-5" }
-        ],
-        "Sora": [
-             { label: "Sora", value: "sora" }
-        ],
-        "Grsai-Video": [
-            { label: "Sora Video", value: "sora-video" },
-            { label: "Sora V2", value: "sora-2" },
-            { label: "Luma Ray 2", value: "luma-ray-2" },
-            { label: "Luma Ray 1-6", value: "luma-ray-1-6" },
-            { label: "Runway Gen3", value: "runway-gen3" },
-            { label: "Runway Gen3 Alpha", value: "runway-gen3-alpha" },
-            { label: "Runway Gen2", value: "runway-gen2" },
-            { label: "Kling v1", value: "kling-v1" },
-            { label: "Kling v1.5", value: "kling-v1-5" },
-            { label: "Minimax Video", value: "minimax-video" },
-            { label: "CogVideoX", value: "cogvideox" },
-            { label: "Hunyuan Video (Tencent)", value: "hunyuan-video" }
-        ],
-        "Grsai-Video (Upload)": [
-             { label: "Default (Upload Mode)", value: "default-upload" }
-        ],
-        "Stable Video": [
-             { label: "SVD 1.1", value: "svd-xt-1-1" }
-        ],
-        "Doubao Video": [
-            { label: "Doubao Video", value: "doubao-vid-s-251128" },
-            { label: "Doubao Video Pro", value: "doubao-seedance-1-5-pro-251215" }
-        ],
-        "Wanxiang": [
-            { label: "WanX 2.1 (Image2Video)", value: "wanx2.1-i2v-plus" },
-            { label: "WanX 2.1 (KeyFrame2Video)", value: "wanx2.1-kf2v-plus" },
-            { label: "WanX 2.0 (Text2Video)", value: "wanx2.0-t2v-turbo" }
-        ],
-        "Vidu (Video)": [
-             { label: "Vidu 2.0", value: "vidu2.0" }
-        ]
-    }
-};
-
-const getSettingSourceByCategory = (settings, category) => {
-    const active = (settings || []).find((item) => item?.category === category && item?.is_active);
-    if (!active) return 'unset';
-    if (active?.config?.selection_source === 'system' || active?.config?.use_system_setting_id) return 'system';
-    return 'user';
-};
-
-const sourceBadgeClass = (source) => {
-    if (source === 'system') return 'bg-green-500/20 text-green-300 border-green-500/30';
-    if (source === 'user') return 'bg-blue-500/20 text-blue-300 border-blue-500/30';
-    return 'bg-white/10 text-muted-foreground border-white/20';
-};
-
-const sourceBadgeText = (source) => {
-    if (source === 'system') return 'System';
-    if (source === 'user') return 'User';
-    return 'Unset';
-};
-
-const formatProviderModelEndpointError = (err) => {
-    const detail = err?.response?.data?.detail || err?.message || String(err || 'Unknown error');
-    const providerMatch = String(detail).match(/provider=([^,\]]+)/i);
-    const modelMatch = String(detail).match(/model=([^,\]]+)/i);
-    const endpointMatch = String(detail).match(/endpoint=([^\]]+)/i);
-
-    if (!providerMatch && !modelMatch && !endpointMatch) {
-        return String(detail);
-    }
-
-    const provider = (providerMatch?.[1] || '').trim();
-    const model = (modelMatch?.[1] || '').trim();
-    const endpoint = (endpointMatch?.[1] || '').trim();
-    const lines = [
-        `Provider: ${provider || '-'}`,
-        `Model: ${model || '-'}`,
-        `Endpoint: ${endpoint || '-'}`,
-    ];
-
-    return `${lines.join('\n')}\n\nRaw: ${detail}`;
-};
-
-
-
-const InputGroup = ({ label, value, onChange, list, placeholder, idPrefix, multi = false }) => {
-    const [isOpen, setIsOpen] = useState(false);
-    const wrapperRef = useRef(null);
-
-    // Close on click outside
-    useEffect(() => {
-        const handleClickOutside = (event) => {
-            if (wrapperRef.current && !wrapperRef.current.contains(event.target)) {
-                setIsOpen(false);
-            }
-        };
-        document.addEventListener("mousedown", handleClickOutside);
-        return () => document.removeEventListener("mousedown", handleClickOutside);
-    }, []);
-
-    // Helper for multi-select check
-    const isSelected = (opt) => {
-        if (!multi) return value === opt;
-        const current = (value || '').split(',').map(s => s.trim());
-        return current.includes(opt);
-    };
-
-    return (
-        <div className="flex flex-col gap-1" ref={wrapperRef}>
-            <label className="text-xs text-muted-foreground uppercase font-bold">{label}</label>
-            <div className="relative">
-                <input 
-                    className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full"
-                    value={value || ''}
-                    onChange={(e) => {
-                        onChange(e.target.value);
-                        if (list) setIsOpen(true);
-                    }}
-                    onFocus={() => list && setIsOpen(true)}
-                    placeholder={placeholder}
-                />
-                {list && (
-                    <button 
-                        className="absolute right-2 top-1/2 -translate-y-1/2 text-white/50 hover:text-white"
-                        onClick={() => setIsOpen(!isOpen)}
-                        tabIndex={-1}
-                    >
-                        <ChevronDown size={14} />
-                    </button>
-                )}
-                
-                {list && isOpen && (
-                    <div className="absolute top-full left-0 right-0 mt-1 bg-[#1e1e1e] border border-white/10 rounded-md shadow-xl max-h-48 overflow-y-auto z-50 custom-scrollbar">
-                        {list.map(opt => {
-                            const selected = isSelected(opt);
-                            return (
-                                <div 
-                                    key={opt}
-                                    className={`px-3 py-2 text-sm cursor-pointer flex justify-between items-center ${selected ? 'bg-primary/20 text-primary' : 'text-white hover:bg-white/5'}`}
-                                    onClick={() => {
-                                        if (multi) {
-                                            let current = (value || '').split(',').map(s => s.trim()).filter(Boolean);
-                                            if (current.includes(opt)) {
-                                                current = current.filter(c => c !== opt);
-                                            } else {
-                                                current.push(opt);
-                                            }
-                                            onChange(current.join(', '));
-                                        } else {
-                                            onChange(opt);
-                                            setIsOpen(false);
-                                        }
-                                    }}
-                                >
-                                    <span>{opt}</span>
-                                    {selected && <CheckCircle size={14} />}
-                                </div>
-                            );
-                        })}
-                    </div>
-                )}
-            </div>
-        </div>
-    );
-};
 
 // Character Canon (Authoritative) generator (shared)
 const CANON_TAG_STORAGE_KEY = 'aistory_character_canon_tag_categories_v1';
@@ -671,7 +445,7 @@ const normalizeCanonTagCategories = (raw) => {
 };
 
 // Mock Data / Placeholders for Tabs
-const ProjectOverview = ({ id, onProjectUpdate }) => {
+const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode }) => {
     const [project, setProject] = useState(null);
     const { addLog } = useLog();
     const [info, setInfo] = useState({
@@ -735,11 +509,13 @@ const ProjectOverview = ({ id, onProjectUpdate }) => {
     });
     const [isGeneratingGlobalStory, setIsGeneratingGlobalStory] = useState(false);
     const [isGeneratingEpisodeScripts, setIsGeneratingEpisodeScripts] = useState(false);
+    const [episodeScriptsProgress, setEpisodeScriptsProgress] = useState(null);
     const [isAnalyzingNovel, setIsAnalyzingNovel] = useState(false);
     const [isImportingStoryPackage, setIsImportingStoryPackage] = useState(false);
     const [novelImportText, setNovelImportText] = useState('');
     const [showGlobalStoryGuide, setShowGlobalStoryGuide] = useState(false);
     const storyPackageFileInputRef = useRef(null);
+    const episodeScriptsStatusTimerRef = useRef(null);
     const globalStoryAutosaveTimerRef = useRef(null);
     const skipNextGlobalStoryAutosaveRef = useRef(true);
 
@@ -1541,7 +1317,7 @@ const ProjectOverview = ({ id, onProjectUpdate }) => {
         }
     };
 
-    const handleGenerateEpisodeScripts = async () => {
+    const handleGenerateEpisodeScripts = async ({ retryFailedOnly = false } = {}) => {
         if (!id) {
             addLog?.('Cannot generate episode scripts: missing project id.', 'error');
             alert('Cannot generate episode scripts: missing project id.');
@@ -1554,22 +1330,79 @@ const ProjectOverview = ({ id, onProjectUpdate }) => {
         }
 
         setIsGeneratingEpisodeScripts(true);
+        setEpisodeScriptsProgress(null);
+
+        if (episodeScriptsStatusTimerRef.current) {
+            clearInterval(episodeScriptsStatusTimerRef.current);
+            episodeScriptsStatusTimerRef.current = null;
+        }
+
+        const pollStatus = async () => {
+            try {
+                const status = await getProjectEpisodeScriptsStatus(id);
+                if (status && typeof status === 'object') {
+                    setEpisodeScriptsProgress(status);
+                }
+            } catch (e) {
+                // Ignore transient polling errors
+            }
+        };
+
+        episodeScriptsStatusTimerRef.current = setInterval(pollStatus, 1500);
+        pollStatus();
+
         try {
-            addLog?.(`Generating episode scripts (1..${n})... (This may take several minutes)`, 'process');
-            console.log('[ProjectOverview] generate episode scripts: start', { projectId: id, episodes_count: n });
+            const modeLabel = retryFailedOnly ? 'retry-failed-only' : 'full';
+            addLog?.(`Generating episode scripts (${modeLabel}, target 1..${n})... (This may take several minutes)`, 'process');
+            addLog?.(
+                `[DEBUG][Before API] Generate Episode Scripts payload: ${JSON.stringify({ episodes_count: n, overwrite_existing: !retryFailedOnly, retry_failed_only: retryFailedOnly })}`,
+                'info'
+            );
+            console.log('[ProjectOverview] generate episode scripts: start', { projectId: id, episodes_count: n, retry_failed_only: retryFailedOnly });
             const res = await generateProjectEpisodeScripts(id, {
                 episodes_count: n,
-                overwrite_existing: true,
+                overwrite_existing: !retryFailedOnly,
+                retry_failed_only: retryFailedOnly,
             });
             console.log('[ProjectOverview] generate episode scripts: response', res);
+
+            try {
+                const status = await getProjectEpisodeScriptsStatus(id);
+                if (status && typeof status === 'object') {
+                    setEpisodeScriptsProgress(status);
+                }
+            } catch (e) {}
+            addLog?.(
+                `[DEBUG][After API] response summary: ${JSON.stringify({
+                    project_id: res?.project_id,
+                    episodes_target: res?.episodes_target,
+                    episodes_created: res?.episodes_created,
+                    results_count: Array.isArray(res?.results) ? res.results.length : 0,
+                    errors_count: Array.isArray(res?.errors) ? res.errors.length : 0,
+                })}`,
+                'info'
+            );
+
+            const dbg = res?.debug_context || {};
+            addLog?.(
+                `[DEBUG][Input Confirm] Global Style & Constraints imported: ${dbg.has_global_style_constraints ? 'YES' : 'NO'}; ` +
+                `Character relationships imported: ${dbg.has_character_relationships ? 'YES' : 'NO'}; ` +
+                `Character source: ${dbg.character_canon_source || 'unknown'}; ` +
+                `Global DNA len: ${dbg.global_story_dna_length ?? 0}; Character canon len: ${dbg.character_canon_length ?? 0}`,
+                'info'
+            );
             const created = Number(res?.episodes_created ?? 0);
             const errors = Array.isArray(res?.errors) ? res.errors : [];
+            const results = Array.isArray(res?.results) ? res.results : [];
+            const generated = results.filter(r => r?.generated === true).length;
+            const skipped = results.filter(r => r?.skipped === true).length;
+            const summary = `Generated: ${generated}, Skipped: ${skipped}, Created Episodes: ${created}, Errors: ${errors.length}`;
             if (errors.length > 0) {
-                addLog?.(`Episode script generation finished with ${errors.length} errors.`, 'warning');
-                alert(`Episode scripts generated with ${errors.length} errors. Check logs.`);
+                addLog?.(`Episode script generation finished. ${summary}`, 'warning');
+                alert(`Episode script generation finished. ${summary}`);
             } else {
-                addLog?.(`Episode scripts generated. Episodes created: ${created}.`, 'success');
-                alert(`Episode scripts generated. Episodes created: ${created}.`);
+                addLog?.(`Episode script generation finished. ${summary}`, 'success');
+                alert(`Episode script generation finished. ${summary}`);
             }
             // Refresh project + episodes from parent (ProjectOverview does not own episode state)
             if (onProjectUpdate) {
@@ -1581,6 +1414,10 @@ const ProjectOverview = ({ id, onProjectUpdate }) => {
             addLog?.(`Episode script generation failed: ${detail}`, 'error');
             alert(`Failed to generate episode scripts: ${detail}`);
         } finally {
+            if (episodeScriptsStatusTimerRef.current) {
+                clearInterval(episodeScriptsStatusTimerRef.current);
+                episodeScriptsStatusTimerRef.current = null;
+            }
             setIsGeneratingEpisodeScripts(false);
         }
     };
@@ -1916,8 +1753,60 @@ const ProjectOverview = ({ id, onProjectUpdate }) => {
                             >
                                 {isGeneratingEpisodeScripts ? <><Loader2 className="w-4 h-4 animate-spin" /> Generating...</> : <><Wand2 className="w-4 h-4" /> Generate Episode Scripts</>}
                             </button>
+                            <button
+                                onClick={() => handleGenerateEpisodeScripts({ retryFailedOnly: true })}
+                                disabled={isGeneratingEpisodeScripts || isGeneratingGlobalStory}
+                                className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${(isGeneratingEpisodeScripts || isGeneratingGlobalStory) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                title="Retry only failed episodes from the last run"
+                            >
+                                {isGeneratingEpisodeScripts ? <><Loader2 className="w-4 h-4 animate-spin" /> Running...</> : <><RefreshCw className="w-4 h-4" /> Retry Failed Episodes</>}
+                            </button>
                         </div>
                     </div>
+
+                    {episodeScriptsProgress && (
+                        <div className="border border-white/10 rounded-lg p-3 bg-black/20 space-y-2">
+                            <div className="text-xs text-muted-foreground mb-1 uppercase tracking-wide">Episode Scripts Progress</div>
+                            <div className="text-sm text-white flex flex-wrap gap-x-4 gap-y-1">
+                                <span>Mode: <b>{episodeScriptsProgress.mode || 'full'}</b></span>
+                                <span>Status: <b>{episodeScriptsProgress.running ? 'Running' : 'Idle'}</b></span>
+                                <span>Processed: <b>{episodeScriptsProgress.processed || 0}</b> / <b>{episodeScriptsProgress.episodes_in_run || 0}</b></span>
+                                <span>Generated: <b>{episodeScriptsProgress.generated || 0}</b></span>
+                                <span>Failed: <b>{episodeScriptsProgress.failed || 0}</b></span>
+                                <span>Skipped: <b>{episodeScriptsProgress.skipped || 0}</b></span>
+                            </div>
+                            {(() => {
+                                const failedItems = (Array.isArray(episodeScriptsProgress?.results) ? episodeScriptsProgress.results : [])
+                                    .filter(item => item && item.status === 'failed' && item.episode_id)
+                                    .map(item => ({
+                                        episode_id: item.episode_id,
+                                        episode_number: item.episode_number,
+                                        episode_title: item.episode_title,
+                                        error: item.error,
+                                    }));
+
+                                if (failedItems.length === 0) return null;
+
+                                return (
+                                    <div className="pt-2 border-t border-white/10">
+                                        <div className="text-xs text-red-300 mb-2">Failed Episodes (click to jump)</div>
+                                        <div className="flex flex-wrap gap-2">
+                                            {failedItems.map((item, idx) => (
+                                                <button
+                                                    key={`${item.episode_id}_${idx}`}
+                                                    onClick={() => onJumpToEpisode && onJumpToEpisode(item.episode_id)}
+                                                    className="px-2 py-1 rounded text-xs bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 text-red-100"
+                                                    title={item.error || 'Jump to episode'}
+                                                >
+                                                    {item.episode_title || `Episode ${item.episode_number || item.episode_id}`}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                );
+                            })()}
+                        </div>
+                    )}
 
                     {showGlobalStoryGuide && (
                         <div className="border border-white/10 rounded-xl p-4 bg-white/[0.02] space-y-3">
@@ -2537,7 +2426,7 @@ const ProjectOverview = ({ id, onProjectUpdate }) => {
 
 
 
-const EpisodeInfo = ({ episode, onUpdate }) => {
+const EpisodeInfo = ({ episode, onUpdate, project, projectId }) => {
     const [info, setInfo] = useState({
         e_global_info: {
             script_title: "",
@@ -2713,6 +2602,96 @@ const EpisodeInfo = ({ episode, onUpdate }) => {
         }
     };
 
+    const handleSyncFromProjectOverview = async () => {
+        const isNonEmptyValue = (value) => {
+            if (value === null || value === undefined) return false;
+            if (typeof value === 'string') return value.trim() !== '';
+            if (Array.isArray(value)) return value.length > 0;
+            if (typeof value === 'object') return Object.keys(value).length > 0;
+            return true;
+        };
+
+        const keepNonEmptyFields = (obj = {}) => {
+            return Object.fromEntries(
+                Object.entries(obj).filter(([_, value]) => isNonEmptyValue(value))
+            );
+        };
+
+        let source = project?.global_info;
+        if (projectId) {
+            try {
+                const latestProject = await fetchProject(projectId);
+                if (latestProject?.global_info && typeof latestProject.global_info === 'object') {
+                    source = latestProject.global_info;
+                }
+            } catch (e) {
+                console.warn('Failed to fetch latest project before sync, using local project cache.', e);
+            }
+        }
+
+        if (!source || typeof source !== 'object') {
+            alert("No Project Overview data found to sync.");
+            return;
+        }
+
+        const sourceTechParams = source.tech_params && typeof source.tech_params === 'object'
+            ? source.tech_params
+            : {};
+        const sourceVisualStandard = sourceTechParams.visual_standard && typeof sourceTechParams.visual_standard === 'object'
+            ? sourceTechParams.visual_standard
+            : {};
+
+        const sourceGlobalInfo = keepNonEmptyFields(source);
+        const sourceTechParamsNonEmpty = keepNonEmptyFields(sourceTechParams);
+        const sourceVisualStandardNonEmpty = keepNonEmptyFields(sourceVisualStandard);
+
+        const mappedVisualStandard = keepNonEmptyFields({
+            horizontal_resolution: sourceVisualStandardNonEmpty.horizontal_resolution ?? source.horizontal_resolution,
+            vertical_resolution: sourceVisualStandardNonEmpty.vertical_resolution ?? source.vertical_resolution,
+            frame_rate: sourceVisualStandardNonEmpty.frame_rate ?? source.frame_rate,
+            aspect_ratio: sourceVisualStandardNonEmpty.aspect_ratio ?? source.aspect_ratio,
+            quality: sourceVisualStandardNonEmpty.quality ?? source.quality,
+        });
+
+        const mappedTone = isNonEmptyValue(source.tone)
+            ? source.tone
+            : (isNonEmptyValue(source.mood) ? source.mood : undefined);
+        const mappedLighting = isNonEmptyValue(source.lighting)
+            ? source.lighting
+            : (isNonEmptyValue(source.light) ? source.light : undefined);
+
+        const nextGlobalInfo = {
+            ...info.e_global_info,
+            ...sourceGlobalInfo,
+            ...(mappedTone !== undefined ? { tone: mappedTone } : {}),
+            ...(mappedLighting !== undefined ? { lighting: mappedLighting } : {}),
+            tech_params: {
+                ...info.e_global_info.tech_params,
+                ...sourceTechParamsNonEmpty,
+                visual_standard: {
+                    ...info.e_global_info.tech_params?.visual_standard,
+                    ...sourceVisualStandardNonEmpty,
+                    ...mappedVisualStandard,
+                },
+            },
+        };
+
+        const nextInfo = {
+            ...info,
+            e_global_info: nextGlobalInfo,
+        };
+
+        setInfo(nextInfo);
+
+        try {
+            await onUpdate(episode.id, { episode_info: nextInfo });
+            alert("Synced from Project Overview.");
+        } catch (e) {
+            console.error("Failed to sync from project overview", e);
+            alert("Sync failed. Please try again.");
+        }
+    };
+
     const updateField = (key, value) => {
         setInfo(prev => ({
             ...prev,
@@ -2753,9 +2732,18 @@ const EpisodeInfo = ({ episode, onUpdate }) => {
         <div className="p-8 w-full h-full overflow-y-auto">
              <div className="flex justify-between items-center mb-8">
                 <h2 className="text-2xl font-bold">Episode Global Info</h2>
-                <button onClick={handleSave} className="px-4 py-2 bg-primary text-black rounded-lg text-sm font-bold hover:bg-primary/90 flex items-center gap-2">
-                    <SettingsIcon className="w-4 h-4" /> Save Changes
-                </button>
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={handleSyncFromProjectOverview}
+                        className="px-4 py-2 bg-white/10 text-white rounded-lg text-sm font-bold hover:bg-white/20 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled={!projectId && !project?.global_info}
+                    >
+                        <RefreshCw className="w-4 h-4" /> Sync from Project Overview
+                    </button>
+                    <button onClick={handleSave} className="px-4 py-2 bg-primary text-black rounded-lg text-sm font-bold hover:bg-primary/90 flex items-center gap-2">
+                        <SettingsIcon className="w-4 h-4" /> Save Changes
+                    </button>
+                </div>
             </div>
 
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-8 max-w-6xl">
@@ -3056,6 +3044,20 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
     const [rawContent, setRawContent] = useState('');
     const [llmResultContent, setLlmResultContent] = useState('');
     const [isRawMode, setIsRawMode] = useState(false);
+    const [analysisAttentionNotes, setAnalysisAttentionNotes] = useState('');
+    const [isSavingAnalysisAttentionNotes, setIsSavingAnalysisAttentionNotes] = useState(false);
+    const [availableSubjectAssets, setAvailableSubjectAssets] = useState([]);
+    const [selectedReuseSubjectIds, setSelectedReuseSubjectIds] = useState([]);
+    const [reuseSubjectTypeFilter, setReuseSubjectTypeFilter] = useState('all');
+    const [reuseSubjectKeyword, setReuseSubjectKeyword] = useState('');
+    const [isLoadingSubjectAssets, setIsLoadingSubjectAssets] = useState(false);
+    const [isSavingReuseSubjects, setIsSavingReuseSubjects] = useState(false);
+
+    const isEpisodeOnePage = useMemo(() => {
+        const title = String(activeEpisode?.title || '').trim().toLowerCase();
+        if (!title) return false;
+        return /episode\s*1\b/.test(title) || /第\s*1\s*集/.test(title);
+    }, [activeEpisode?.title]);
 
     const extractJsonFromLlmText = (text) => {
         if (!text || typeof text !== 'string') return '';
@@ -3298,6 +3300,14 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             setRawContent('');
         }
 
+        setAnalysisAttentionNotes(String(activeEpisode?.episode_info?.analysis_attention_notes || ''));
+        const persistedIds = activeEpisode?.episode_info?.reuse_subject_asset_ids;
+        if (Array.isArray(persistedIds)) {
+            setSelectedReuseSubjectIds(persistedIds.map(x => String(x)));
+        } else {
+            setSelectedReuseSubjectIds([]);
+        }
+
         const storedNewField = activeEpisode?.ai_scene_analysis_result;
         const storedLegacy = activeEpisode?.episode_info?.llm_scene_analysis_result;
         const stored = (typeof storedNewField === 'string' && storedNewField.length > 0)
@@ -3403,6 +3413,111 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             setIsRawMode(true);
         }
     }, [activeEpisode]);
+
+    useEffect(() => {
+        let mounted = true;
+        const loadAssets = async () => {
+            if (!isEpisodeOnePage || !projectId) {
+                if (mounted) setAvailableSubjectAssets([]);
+                return;
+            }
+            setIsLoadingSubjectAssets(true);
+            try {
+                const entities = await fetchEntities(projectId);
+                if (!mounted) return;
+                setAvailableSubjectAssets(Array.isArray(entities) ? entities : []);
+            } catch (e) {
+                console.error(e);
+                if (mounted) setAvailableSubjectAssets([]);
+            } finally {
+                if (mounted) setIsLoadingSubjectAssets(false);
+            }
+        };
+        loadAssets();
+        return () => { mounted = false; };
+    }, [isEpisodeOnePage, projectId]);
+
+    const selectedReuseSubjectAssets = useMemo(() => {
+        if (!Array.isArray(availableSubjectAssets) || availableSubjectAssets.length === 0) return [];
+        const selected = new Set((selectedReuseSubjectIds || []).map(v => String(v)));
+        return availableSubjectAssets
+            .filter(asset => selected.has(String(asset.id)))
+            .map(asset => ({
+                id: asset.id,
+                name: asset.name || '',
+                type: asset.type || '',
+                description: asset.description || asset.narrative_description || '',
+                anchor_description: asset.anchor_description || '',
+            }));
+    }, [availableSubjectAssets, selectedReuseSubjectIds]);
+
+    const reuseSubjectTypeOptions = useMemo(() => {
+        const types = new Set();
+        for (const asset of availableSubjectAssets || []) {
+            const t = String(asset?.type || '').trim();
+            if (t) types.add(t);
+        }
+        return Array.from(types).sort((a, b) => a.localeCompare(b));
+    }, [availableSubjectAssets]);
+
+    const filteredSubjectAssets = useMemo(() => {
+        const normalizedKeyword = String(reuseSubjectKeyword || '').trim().toLowerCase();
+        return (availableSubjectAssets || []).filter(asset => {
+            const typeValue = String(asset?.type || '').trim();
+            const passType = reuseSubjectTypeFilter === 'all' || typeValue === reuseSubjectTypeFilter;
+            if (!passType) return false;
+
+            if (!normalizedKeyword) return true;
+
+            const haystack = [
+                asset?.name,
+                asset?.description,
+                asset?.narrative_description,
+                asset?.anchor_description,
+                asset?.type,
+            ]
+                .map(v => String(v || '').toLowerCase())
+                .join(' ');
+
+            return haystack.includes(normalizedKeyword);
+        });
+    }, [availableSubjectAssets, reuseSubjectKeyword, reuseSubjectTypeFilter]);
+
+    const hasActiveReuseSubjectFilters = useMemo(() => {
+        return reuseSubjectTypeFilter !== 'all' || String(reuseSubjectKeyword || '').trim().length > 0;
+    }, [reuseSubjectTypeFilter, reuseSubjectKeyword]);
+
+    const toggleReuseSubject = (assetId) => {
+        const key = String(assetId);
+        setSelectedReuseSubjectIds(prev => {
+            const has = prev.includes(key);
+            if (has) return prev.filter(v => v !== key);
+            return [...prev, key];
+        });
+    };
+
+    const clearReuseSubjectFilters = () => {
+        setReuseSubjectTypeFilter('all');
+        setReuseSubjectKeyword('');
+    };
+
+    const handleSaveReuseSubjects = async () => {
+        if (!activeEpisode?.id || !onUpdateEpisodeInfo) return;
+        setIsSavingReuseSubjects(true);
+        try {
+            const mergedEpisodeInfo = {
+                ...(activeEpisode?.episode_info || {}),
+                reuse_subject_asset_ids: selectedReuseSubjectIds,
+            };
+            await onUpdateEpisodeInfo(activeEpisode.id, { episode_info: mergedEpisodeInfo });
+            if (onLog) onLog('Episode 1 reusable subject assets saved.', 'success');
+        } catch (e) {
+            console.error(e);
+            if (onLog) onLog(`Failed to save reusable subjects: ${e.message}`, 'error');
+        } finally {
+            setIsSavingReuseSubjects(false);
+        }
+    };
 
     const persistLlmResultContent = async (content) => {
         if (!activeEpisode?.id) return;
@@ -4276,7 +4391,14 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             console.log("[ScriptEditor] Executing Analysis. Project Prop:", project);
             console.log("[ScriptEditor] Using Metadata:", metadata);
             
-            const result = await analyzeScene(content, customSystemPrompt, metadata, activeEpisode?.id || null);
+            const result = await analyzeScene(
+                content,
+                customSystemPrompt,
+                metadata,
+                activeEpisode?.id || null,
+                analysisAttentionNotes,
+                selectedReuseSubjectAssets
+            );
             const analyzedText = result.result || result.analysis || (typeof result === 'string' ? result : JSON.stringify(result, null, 2));
 
             if (result && result.meta) {
@@ -4329,6 +4451,24 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         }
     };
 
+    const handleSaveAnalysisAttentionNotes = async () => {
+        if (!activeEpisode?.id || !onUpdateEpisodeInfo) return;
+        setIsSavingAnalysisAttentionNotes(true);
+        try {
+            const mergedEpisodeInfo = {
+                ...(activeEpisode?.episode_info || {}),
+                analysis_attention_notes: analysisAttentionNotes || '',
+            };
+            await onUpdateEpisodeInfo(activeEpisode.id, { episode_info: mergedEpisodeInfo });
+            if (onLog) onLog('Episode 1 analysis attention notes saved.', 'success');
+        } catch (e) {
+            console.error(e);
+            if (onLog) onLog(`Failed to save analysis attention notes: ${e.message}`, 'error');
+        } finally {
+            setIsSavingAnalysisAttentionNotes(false);
+        }
+    };
+
     const executeAdvancedAnalysis = async (userInput, customSystemPrompt) => {
         if (!activeEpisode?.id) {
             alert("No active episode selected.");
@@ -4339,7 +4479,14 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         if (onLog) onLog("Starting Advanced AI Analysis (Superuser)...", "start");
 
         try {
-            const result = await analyzeScene(userInput, customSystemPrompt, null, activeEpisode?.id || null);
+            const result = await analyzeScene(
+                userInput,
+                customSystemPrompt,
+                null,
+                activeEpisode?.id || null,
+                analysisAttentionNotes,
+                selectedReuseSubjectAssets
+            );
             const analyzedText = result.result || result.analysis || (typeof result === 'string' ? result : JSON.stringify(result));
 
             if (result && result.meta) {
@@ -4434,15 +4581,6 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                             )}
                         </button>
                     )}
-                    {isRawMode && (
-                        <button
-                            onClick={() => setShowSceneGenPanel(v => !v)}
-                            className="px-4 py-2 bg-white/10 text-white rounded-lg text-sm font-bold hover:bg-white/20"
-                            title="Generate a scene list for this episode and populate the Scenes tab"
-                        >
-                            Scene Generator
-                        </button>
-                    )}
                     {!isRawMode && (
                         <button 
                             onClick={handleMerge} 
@@ -4460,64 +4598,116 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             <div className="flex-1 overflow-hidden border border-white/10 rounded-xl bg-black/20 flex flex-col">
                 <div className="flex-1 overflow-hidden">
                     {isRawMode ? (
-                        <div className="h-full w-full flex flex-col">
-                            {showSceneGenPanel && (
-                                <div className="px-6 py-4 border-b border-white/10 bg-black/10">
-                                    <div className="flex items-center justify-between gap-3">
-                                        <div>
-                                            <div className="text-xs font-bold text-white/90">Script → Scenes Generator</div>
-                                            <div className="text-[11px] text-muted-foreground mt-0.5">Uses Overview/Ep. Info Story DNA if available, then creates Scenes for this episode.</div>
-                                        </div>
-                                        <button
-                                            onClick={handleGenerateScenes}
-                                            disabled={sceneGenGenerating}
-                                            className={`px-3 py-2 rounded-md text-xs font-bold ${sceneGenGenerating ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 hover:bg-white/20 text-white'}`}
-                                        >
-                                            {sceneGenGenerating ? <><Loader2 className="w-4 h-4 animate-spin inline-block mr-2" /> Generating...</> : 'Generate Scenes'}
-                                        </button>
-                                    </div>
-
-                                    <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                        <div>
-                                            <label className="block text-[10px] text-muted-foreground uppercase font-bold mb-1">Scene Count</label>
-                                            <input
-                                                type="number"
-                                                min="1"
-                                                className="w-full bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white/90 focus:outline-none focus:border-primary/50"
-                                                value={sceneGenCount}
-                                                onChange={(e) => setSceneGenCount(e.target.value)}
-                                                placeholder="e.g. 10"
-                                            />
-                                        </div>
-                                        <div className="flex items-end">
-                                            <label className="flex items-center gap-2 text-xs text-white/80 select-none">
-                                                <input
-                                                    type="checkbox"
-                                                    className="accent-primary"
-                                                    checked={sceneGenReplaceExisting}
-                                                    onChange={(e) => setSceneGenReplaceExisting(e.target.checked)}
-                                                />
-                                                Replace existing scenes for this episode
-                                            </label>
-                                        </div>
-                                        <div className="sm:col-span-2">
-                                            <label className="block text-[10px] text-muted-foreground uppercase font-bold mb-1">Extra Notes (optional)</label>
-                                            <textarea
-                                                className="w-full h-20 bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white/90 focus:outline-none focus:border-primary/50 custom-scrollbar resize-none"
-                                                value={sceneGenNotes}
-                                                onChange={(e) => setSceneGenNotes(e.target.value)}
-                                                placeholder="Tone, constraints, must-have scenes, specific hook, etc."
-                                            />
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
+                        <div className="h-full w-full flex flex-col overflow-hidden">
+                            <div className="px-6 py-3 border-b border-white/10 bg-black/10 flex items-center justify-between">
+                                <div className="text-sm text-primary uppercase font-extrabold tracking-wide">输入脚本（Input）</div>
+                                <div className="text-[10px] text-muted-foreground">{(rawContent || '').length} chars</div>
+                            </div>
                             <textarea 
-                                className="w-full flex-1 p-6 bg-transparent text-white/90 font-mono text-sm leading-relaxed focus:outline-none custom-scrollbar resize-none"
+                                className="w-full flex-1 min-h-[420px] p-6 bg-transparent text-white/90 font-mono text-sm leading-relaxed focus:outline-none custom-scrollbar resize-none"
                                 placeholder="Paste or type your script here..."
                                 value={rawContent}
                                 onChange={(e) => setRawContent(e.target.value)}
                             />
+
+                            {isEpisodeOnePage && (
+                                <div className="border-t border-white/10 px-6 py-4 bg-black/10">
+                                    <div className="text-xs font-semibold uppercase text-muted-foreground">Episode 1 · 必复用 Subject 资产（可为空）</div>
+                                    <div className="text-[11px] text-muted-foreground mt-1 mb-2">
+                                        勾选后会将选中 Subject 的名称和描述一并发送给 AI Scene Analysis，作为必须复用资产（不重新生成）。
+                                    </div>
+                                    <div className="mb-2 grid grid-cols-1 md:grid-cols-2 gap-2">
+                                        <select
+                                            value={reuseSubjectTypeFilter}
+                                            onChange={(e) => setReuseSubjectTypeFilter(e.target.value)}
+                                            className="w-full bg-black/30 border border-white/10 rounded-md px-3 py-2 text-xs text-white/90 focus:outline-none focus:border-primary/50"
+                                        >
+                                            <option value="all">All Types</option>
+                                            {reuseSubjectTypeOptions.map((type) => (
+                                                <option key={type} value={type}>{type}</option>
+                                            ))}
+                                        </select>
+                                        <input
+                                            type="text"
+                                            value={reuseSubjectKeyword}
+                                            onChange={(e) => setReuseSubjectKeyword(e.target.value)}
+                                            placeholder="Search name / description / anchor"
+                                            className="w-full bg-black/30 border border-white/10 rounded-md px-3 py-2 text-xs text-white/90 focus:outline-none focus:border-primary/50"
+                                        />
+                                    </div>
+                                    <div className="mb-2 flex justify-end">
+                                        <button
+                                            type="button"
+                                            onClick={clearReuseSubjectFilters}
+                                            disabled={!hasActiveReuseSubjectFilters}
+                                            className={`px-2.5 py-1.5 rounded-md text-[11px] font-semibold ${hasActiveReuseSubjectFilters ? 'bg-white/10 hover:bg-white/20 text-white' : 'bg-white/5 text-muted-foreground cursor-not-allowed'}`}
+                                        >
+                                            Clear Filters
+                                        </button>
+                                    </div>
+                                    {isLoadingSubjectAssets ? (
+                                        <div className="text-xs text-muted-foreground">Loading subject assets...</div>
+                                    ) : availableSubjectAssets.length === 0 ? (
+                                        <div className="text-xs text-muted-foreground">No subject assets found in this project.</div>
+                                    ) : filteredSubjectAssets.length === 0 ? (
+                                        <div className="text-xs text-muted-foreground">No subject assets match current filters.</div>
+                                    ) : (
+                                        <div className="max-h-40 overflow-auto custom-scrollbar border border-white/10 rounded-md bg-black/20 p-2 space-y-1">
+                                            {filteredSubjectAssets.map(asset => {
+                                                const checked = selectedReuseSubjectIds.includes(String(asset.id));
+                                                return (
+                                                    <label key={asset.id} className="flex items-start gap-2 text-xs text-white/90 p-1.5 rounded hover:bg-white/5 cursor-pointer">
+                                                        <input
+                                                            type="checkbox"
+                                                            className="mt-0.5 accent-primary"
+                                                            checked={checked}
+                                                            onChange={() => toggleReuseSubject(asset.id)}
+                                                        />
+                                                        <span>
+                                                            <span className="font-semibold">[{asset.type || 'subject'}] {asset.name || `ID ${asset.id}`}</span>
+                                                            <span className="text-muted-foreground block line-clamp-2">{asset.description || asset.narrative_description || asset.anchor_description || 'No description'}</span>
+                                                        </span>
+                                                    </label>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                    <div className="mt-2 flex items-center justify-between">
+                                                <div className="text-[11px] text-muted-foreground">显示 {filteredSubjectAssets.length}/{availableSubjectAssets.length} 个，已选择 {selectedReuseSubjectAssets.length} 个 subject 作为必须复用资产</div>
+                                        <button
+                                            onClick={handleSaveReuseSubjects}
+                                            disabled={isSavingReuseSubjects}
+                                            className={`px-3 py-2 rounded-md text-xs font-bold ${isSavingReuseSubjects ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 hover:bg-white/20 text-white'}`}
+                                        >
+                                            {isSavingReuseSubjects ? 'Saving...' : 'Save Reuse Subjects'}
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+
+                            {isEpisodeOnePage && (
+                                <div className="border-t border-white/10 px-6 py-4 bg-black/10">
+                                    <div className="text-xs font-semibold uppercase text-muted-foreground">Episode 1 · AI Scene Analysis 补充说明（可为空）</div>
+                                    <div className="text-[11px] text-muted-foreground mt-1 mb-2">
+                                        该项可为空。补充要求通常用于特别强调资产生成或关键执行要求；点击 AI Scene Analysis 时会作为高优先级约束注入。
+                                    </div>
+                                    <textarea
+                                        value={analysisAttentionNotes}
+                                        onChange={(e) => setAnalysisAttentionNotes(e.target.value)}
+                                        placeholder="可留空；例如：必须严格按轴线拆分、保留关键道具锚点、避免漏掉反应镜头、环境命名必须 Front/Reverse。"
+                                        className="w-full h-24 bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white/90 focus:outline-none focus:border-primary/50 custom-scrollbar resize-none"
+                                    />
+                                    <div className="mt-2 flex justify-end">
+                                        <button
+                                            onClick={handleSaveAnalysisAttentionNotes}
+                                            disabled={isSavingAnalysisAttentionNotes}
+                                            className={`px-3 py-2 rounded-md text-xs font-bold ${isSavingAnalysisAttentionNotes ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 hover:bg-white/20 text-white'}`}
+                                        >
+                                            {isSavingAnalysisAttentionNotes ? 'Saving...' : 'Save Attention Notes'}
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     ) : (
                         <div className="overflow-auto custom-scrollbar h-full w-full">
@@ -4575,68 +4765,72 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 </div>
 
                 <div className="border-t border-white/10 bg-black/10 shrink-0">
-                    <div className="px-6 py-3 flex items-center justify-between">
-                        <div className="text-xs text-muted-foreground uppercase font-bold">LLM 返回结果</div>
-                        <div className="flex items-center gap-3">
-                            <button
-                                onClick={() => doImportText(llmResultContent, 'auto')}
-                                className="px-3 py-1.5 rounded-md text-[10px] font-bold bg-white/5 hover:bg-white/10 border border-white/10 text-white/80"
-                                title="Import from LLM markdown/table result"
-                            >
-                                导入 LLM 返回结果
-                            </button>
-                        </div>
+                    <div className="px-6 py-3 border-b border-white/10">
+                        <div className="text-sm text-primary uppercase font-extrabold tracking-wide">分析输出工作区（Output Workspace）</div>
                     </div>
-                    <textarea
-                        className="w-full h-48 px-6 pb-6 bg-transparent text-white/90 font-mono text-xs leading-relaxed focus:outline-none custom-scrollbar resize-none"
-                        placeholder="Paste or edit the LLM result here (Markdown/table/JSON mixed is ok)."
-                        value={llmResultContent}
-                        onChange={(e) => setLlmResultContent(e.target.value)}
-                        onBlur={() => persistLlmResultContent(llmResultContent)}
-                    />
-                </div>
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-0">
+                        <div className="border-b lg:border-b-0 lg:border-r border-white/10">
+                            <div className="px-6 py-3 flex items-center justify-between">
+                                <div className="text-sm text-white uppercase font-bold tracking-wide">LLM 返回结果</div>
+                                <button
+                                    onClick={() => doImportText(llmResultContent, 'auto')}
+                                    className="px-3 py-1.5 rounded-md text-[10px] font-bold bg-white/5 hover:bg-white/10 border border-white/10 text-white/80"
+                                    title="Import from LLM markdown/table result"
+                                >
+                                    导入 LLM 返回结果
+                                </button>
+                            </div>
+                            <textarea
+                                className="w-full h-44 px-6 pb-6 bg-transparent text-white/90 font-mono text-xs leading-relaxed focus:outline-none custom-scrollbar resize-none"
+                                placeholder="Paste or edit the LLM result here (Markdown/table/JSON mixed is ok)."
+                                value={llmResultContent}
+                                onChange={(e) => setLlmResultContent(e.target.value)}
+                                onBlur={() => persistLlmResultContent(llmResultContent)}
+                            />
+                        </div>
 
-                <div className="border-t border-white/10">
-                    <div className="px-6 py-3 flex items-center justify-between">
-                        <div className="text-xs text-muted-foreground uppercase font-bold">JSON 返回结果</div>
-                        <div className="flex items-center gap-3">
-                            <button
-                                onClick={() => {
-                                    const payload = getEGlobalInfoPayloadFromJsonText(llmResultContent);
-                                    if (!payload) {
-                                        if (onLog) onLog('No e_global_info found in JSON.', 'warning');
-                                        return;
-                                    }
-                                    doImportText(JSON.stringify(payload, null, 2), 'json');
-                                }}
-                                className="px-3 py-1.5 rounded-md text-[10px] font-bold bg-white/5 hover:bg-white/10 border border-white/10 text-white/80"
-                                title="Import Part 1: e_global_info"
-                            >
-                                导入 e_global_info
-                            </button>
-                            <button
-                                onClick={() => {
-                                    const payload = getEntitiesPayloadFromJsonText(llmResultContent);
-                                    if (!payload) {
-                                        if (onLog) onLog('No entities JSON (characters/props/environments) found.', 'warning');
-                                        return;
-                                    }
-                                    doImportText(JSON.stringify(payload, null, 2), 'json');
-                                }}
-                                className="px-3 py-1.5 rounded-md text-[10px] font-bold bg-white/5 hover:bg-white/10 border border-white/10 text-white/80"
-                                title="Import Part 3: entities JSON"
-                            >
-                                导入 实体(Entities)
-                            </button>
-                            <div className="text-[10px] text-muted-foreground">从 LLM 返回内容自动提取</div>
+                        <div>
+                            <div className="px-6 py-3 flex items-center justify-between">
+                                <div className="text-sm text-white uppercase font-bold tracking-wide">JSON 返回结果</div>
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        onClick={() => {
+                                            const payload = getEGlobalInfoPayloadFromJsonText(llmResultContent);
+                                            if (!payload) {
+                                                if (onLog) onLog('No e_global_info found in JSON.', 'warning');
+                                                return;
+                                            }
+                                            doImportText(JSON.stringify(payload, null, 2), 'json');
+                                        }}
+                                        className="px-2.5 py-1.5 rounded-md text-[10px] font-bold bg-white/5 hover:bg-white/10 border border-white/10 text-white/80"
+                                        title="Import Part 1: e_global_info"
+                                    >
+                                        导入 e_global_info
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            const payload = getEntitiesPayloadFromJsonText(llmResultContent);
+                                            if (!payload) {
+                                                if (onLog) onLog('No entities JSON (characters/props/environments) found.', 'warning');
+                                                return;
+                                            }
+                                            doImportText(JSON.stringify(payload, null, 2), 'json');
+                                        }}
+                                        className="px-2.5 py-1.5 rounded-md text-[10px] font-bold bg-white/5 hover:bg-white/10 border border-white/10 text-white/80"
+                                        title="Import Part 3: entities JSON"
+                                    >
+                                        导入 实体
+                                    </button>
+                                </div>
+                            </div>
+                            <textarea
+                                className="w-full h-44 px-6 pb-6 bg-transparent text-white/90 font-mono text-xs leading-relaxed focus:outline-none custom-scrollbar resize-none"
+                                placeholder="未检测到可解析的 JSON（如果 LLM 返回了 ```json ...``` 或纯 JSON，这里会显示）。"
+                                value={llmJsonResultContent}
+                                readOnly
+                            />
                         </div>
                     </div>
-                    <textarea
-                        className="w-full h-48 px-6 pb-6 bg-transparent text-white/90 font-mono text-xs leading-relaxed focus:outline-none custom-scrollbar resize-none"
-                        placeholder="未检测到可解析的 JSON（如果 LLM 返回了 ```json ...``` 或纯 JSON，这里会显示）。"
-                        value={llmJsonResultContent}
-                        readOnly
-                    />
                 </div>
 
             </div>
@@ -4745,44 +4939,6 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                     </div>
                 </div>
             )}
-        </div>
-    );
-};
-
-
-const MarkdownCell = ({ value, onChange, placeholder, className }) => {
-    const [isEditing, setIsEditing] = useState(false);
-    const [localValue, setLocalValue] = useState(value || '');
-
-    useEffect(() => {
-        setLocalValue(value || '');
-    }, [value]);
-
-    const handleBlur = () => {
-        setIsEditing(false);
-        onChange(localValue);
-    };
-
-    if (isEditing) {
-        return (
-            <textarea
-                className={`w-full bg-black/40 border border-primary/50 rounded p-2 text-white text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-y min-h-[5rem] custom-scrollbar ${className}`}
-                value={localValue}
-                onChange={(e) => setLocalValue(e.target.value)}
-                onBlur={handleBlur}
-                autoFocus
-                placeholder={placeholder}
-            />
-        );
-    }
-
-    return (
-        <div 
-            className={`w-full min-h-[3rem] p-2 hover:bg-white/10 cursor-text text-sm prose prose-invert prose-p:my-1 prose-headings:my-2 max-w-none text-gray-300 border border-transparent hover:border-white/10 rounded transition-colors ${className}`}
-            onClick={() => setIsEditing(true)}
-            title="Click to edit"
-        >
-            {value ? <ReactMarkdown>{value}</ReactMarkdown> : <span className="opacity-30 italic">{placeholder || 'Empty'}</span>}
         </div>
     );
 };
@@ -5771,7 +5927,7 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
     )
 };
 
-const SceneCard = ({ scene, entities, onClick, onGenerateShots }) => {
+const SceneCard = ({ scene, entities, onClick, onGenerateShots, onDelete }) => {
     const [images, setImages] = useState([]);
     const [currentIndex, setCurrentIndex] = useState(0);
     const [isGenerating, setIsGenerating] = useState(false);
@@ -5847,6 +6003,12 @@ const SceneCard = ({ scene, entities, onClick, onGenerateShots }) => {
         setIsGenerating(false);
     };
 
+    const handleDelete = async (e) => {
+        e.stopPropagation();
+        if (!onDelete || !scene?.id) return;
+        await onDelete(scene);
+    };
+
     const imgUrl = images.length > 0 ? images[currentIndex] : null;
 
     return (
@@ -5885,15 +6047,25 @@ const SceneCard = ({ scene, entities, onClick, onGenerateShots }) => {
                     {scene.scene_no || scene.id}
                 </div>
                 <div className="absolute top-2 right-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity">
-                     <button 
-                        onClick={handleGenerate}
-                        disabled={isGenerating}
-                        className="bg-primary/90 hover:bg-primary text-black px-2 py-1 rounded text-[10px] font-bold flex items-center gap-1 shadow-lg"
-                        title="AI Generate Shot List"
-                     >
-                        {isGenerating ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
-                        AI Shots
-                     </button>
+                    <div className="flex items-center gap-1">
+                        <button
+                            onClick={handleDelete}
+                            className="bg-red-500/90 hover:bg-red-500 text-white px-2 py-1 rounded text-[10px] font-bold flex items-center gap-1 shadow-lg"
+                            title="Delete Scene"
+                        >
+                            <Trash2 className="w-3 h-3"/>
+                            Delete
+                        </button>
+                        <button 
+                            onClick={handleGenerate}
+                            disabled={isGenerating}
+                            className="bg-primary/90 hover:bg-primary text-black px-2 py-1 rounded text-[10px] font-bold flex items-center gap-1 shadow-lg"
+                            title="AI Generate Shot List"
+                        >
+                            {isGenerating ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
+                            AI Shots
+                        </button>
+                    </div>
                 </div>
                 <div className="absolute bottom-2 right-2 bg-primary text-black px-2 py-0.5 rounded text-[10px] font-bold z-10">
                     {scene.equivalent_duration || '0m'}
@@ -5967,6 +6139,8 @@ const SceneCard = ({ scene, entities, onClick, onGenerateShots }) => {
 const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
     const [scenes, setScenes] = useState([]);
     const [entities, setEntities] = useState([]);
+    const [sceneHierarchyFilter, setSceneHierarchyFilter] = useState('');
+    const [sceneKeywordFilter, setSceneKeywordFilter] = useState('');
     const [editingScene, setEditingScene] = useState(null);
     const [shotPromptModal, setShotPromptModal] = useState({ open: false, sceneId: null, data: null, loading: false });
     const [aiShotsStaging, setAiShotsStaging] = useState({
@@ -5980,6 +6154,129 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
         saving: false,
         applying: false,
     });
+    const [aiShotRowEditor, setAiShotRowEditor] = useState({
+        open: false,
+        index: -1,
+        data: null,
+    });
+
+    const sceneFilterStorageKey = useMemo(() => {
+        if (!activeEpisode?.id) return '';
+        return `aistory.sceneFilters.${activeEpisode.id}`;
+    }, [activeEpisode?.id]);
+
+    useEffect(() => {
+        if (!sceneFilterStorageKey) return;
+        try {
+            const raw = localStorage.getItem(sceneFilterStorageKey);
+            if (!raw) return;
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object') {
+                setSceneHierarchyFilter(String(parsed.sceneHierarchyFilter || ''));
+                setSceneKeywordFilter(String(parsed.sceneKeywordFilter || ''));
+            }
+        } catch (e) {
+            console.warn('Failed to restore scene filters', e);
+        }
+    }, [sceneFilterStorageKey]);
+
+    useEffect(() => {
+        if (!sceneFilterStorageKey) return;
+        try {
+            localStorage.setItem(sceneFilterStorageKey, JSON.stringify({
+                sceneHierarchyFilter,
+                sceneKeywordFilter,
+            }));
+        } catch (e) {
+            console.warn('Failed to persist scene filters', e);
+        }
+    }, [sceneFilterStorageKey, sceneHierarchyFilter, sceneKeywordFilter]);
+
+    const filteredScenes = useMemo(() => {
+        const hierarchy = String(sceneHierarchyFilter || '').trim().toLowerCase();
+        const keyword = String(sceneKeywordFilter || '').trim().toLowerCase();
+
+        return (scenes || []).filter((scene) => {
+            const sceneCode = String(scene?.scene_id || scene?.scene_no || '').trim().toLowerCase();
+            const hierarchyPass = !hierarchy || sceneCode.includes(hierarchy);
+            if (!hierarchyPass) return false;
+
+            if (!keyword) return true;
+            const text = [
+                scene?.scene_name,
+                scene?.environment_name,
+                scene?.linked_characters,
+                scene?.key_props,
+                scene?.core_scene_info,
+            ].map(v => String(v || '').toLowerCase()).join(' ');
+            return text.includes(keyword);
+        });
+    }, [scenes, sceneHierarchyFilter, sceneKeywordFilter]);
+
+    const getStagingShotField = (shot, field) => {
+        if (!shot) return '';
+        const map = {
+            shot_id: ['Shot ID', 'shot_id'],
+            shot_name: ['Shot Name', 'shot_name'],
+            scene_id: ['Scene ID', 'scene_id'],
+            start_frame: ['Start Frame', 'start_frame'],
+            video_content: ['Video Content', 'video_content'],
+            duration: ['Duration (s)', 'duration'],
+            end_frame: ['End Frame', 'end_frame'],
+            associated_entities: ['Associated Entities', 'associated_entities'],
+            shot_logic_cn: ['Shot Logic (CN)', 'shot_logic_cn'],
+            keyframes: ['Keyframes', 'keyframes'],
+        };
+        const keys = map[field] || [];
+        for (const key of keys) {
+            const value = shot[key];
+            if (value !== undefined && value !== null) return String(value);
+        }
+        return '';
+    };
+
+    const openAiShotRowEditor = (shot, idx) => {
+        setAiShotRowEditor({
+            open: true,
+            index: idx,
+            data: {
+                shot_id: getStagingShotField(shot, 'shot_id'),
+                shot_name: getStagingShotField(shot, 'shot_name'),
+                scene_id: getStagingShotField(shot, 'scene_id'),
+                start_frame: getStagingShotField(shot, 'start_frame'),
+                video_content: getStagingShotField(shot, 'video_content'),
+                duration: getStagingShotField(shot, 'duration'),
+                end_frame: getStagingShotField(shot, 'end_frame'),
+                associated_entities: getStagingShotField(shot, 'associated_entities'),
+                shot_logic_cn: getStagingShotField(shot, 'shot_logic_cn'),
+                keyframes: getStagingShotField(shot, 'keyframes'),
+            },
+        });
+    };
+
+    const saveAiShotRowEditor = () => {
+        if (!aiShotRowEditor.open || aiShotRowEditor.index < 0) return;
+        const currentRows = [...(aiShotsStaging.content || [])];
+        const current = currentRows[aiShotRowEditor.index] || {};
+        const edited = aiShotRowEditor.data || {};
+
+        currentRows[aiShotRowEditor.index] = {
+            ...current,
+            'Shot ID': edited.shot_id || '',
+            'Shot Name': edited.shot_name || '',
+            'Scene ID': edited.scene_id || '',
+            'Start Frame': edited.start_frame || '',
+            'Video Content': edited.video_content || '',
+            'Duration (s)': edited.duration || '',
+            'End Frame': edited.end_frame || '',
+            'Associated Entities': edited.associated_entities || '',
+            'Shot Logic (CN)': edited.shot_logic_cn || '',
+            'Keyframes': edited.keyframes || '',
+        };
+
+        setAiShotsStaging(prev => ({ ...prev, content: currentRows }));
+        setAiShotRowEditor({ open: false, index: -1, data: null });
+    };
 
     // Debug: Monitor Data State
     useEffect(() => {
@@ -6018,12 +6315,17 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
              const headerMap = {};
              headers.forEach((h, idx) => {
                  const n = normalizeHeader(h);
+                 if (n.includes("episodeid") || n.includes("集id")) headerMap['episode_id'] = idx;
+                 else if ((n.includes("sceneid") && !n.includes("sceneno")) || n.includes("场景id")) headerMap['scene_id'] = idx;
                  if(n.includes("sceneno") || n.includes("场次")) headerMap['scene_no'] = idx;
                  else if(n.includes("scenename") || n.includes("title")) headerMap['scene_name'] = idx;
                  else if(n.includes("equivalentduration")) headerMap['equivalent_duration'] = idx;
                  else if(n.includes("coresceneinfo") || n.includes("coregoal")) headerMap['core_scene_info'] = idx;
                  else if(n.includes("originalscripttext") || n.includes("description")) headerMap['original_script_text'] = idx;
                  else if(n.includes("environmentname") || n.includes("environment")) headerMap['environment_name'] = idx;
+                 else if(n.includes("environmentrelation")) headerMap['environment_relation'] = idx;
+                 else if(n.includes("entrystate")) headerMap['entry_state'] = idx;
+                 else if(n.includes("exitstate")) headerMap['exit_state'] = idx;
                  else if(n.includes("linkedcharacters")) headerMap['linked_characters'] = idx;
                  else if(n.includes("keyprops")) headerMap['key_props'] = idx;
              });
@@ -6057,15 +6359,38 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
                         return cols[idx] ? cleanCol(cols[idx]) : '';
                     };
 
+                    const isNewFormat = cols.length >= 13 || headerMap['episode_id'] !== undefined || headerMap['scene_id'] !== undefined;
+                    const fallback = isNewFormat
+                        ? {
+                            scene_no: 2,
+                            scene_name: 3,
+                            equivalent_duration: 4,
+                            core_scene_info: 5,
+                            original_script_text: 6,
+                            environment_name: 7,
+                            linked_characters: 11,
+                            key_props: 12,
+                        }
+                        : {
+                            scene_no: 0,
+                            scene_name: 1,
+                            equivalent_duration: 2,
+                            core_scene_info: 3,
+                            original_script_text: 4,
+                            environment_name: 5,
+                            linked_characters: 6,
+                            key_props: 7,
+                        };
+
                     rows.push({
-                        scene_no: getVal('scene_no', 0),
-                        scene_name: getVal('scene_name', 1),
-                        equivalent_duration: getVal('equivalent_duration', 2),
-                        core_scene_info: getVal('core_scene_info', 3),
-                        original_script_text: getVal('original_script_text', 4),
-                        environment_name: getVal('environment_name', 5),
-                        linked_characters: getVal('linked_characters', 6),
-                        key_props: getVal('key_props', 7)
+                        scene_no: getVal('scene_no', fallback.scene_no),
+                        scene_name: getVal('scene_name', fallback.scene_name),
+                        equivalent_duration: getVal('equivalent_duration', fallback.equivalent_duration),
+                        core_scene_info: getVal('core_scene_info', fallback.core_scene_info),
+                        original_script_text: getVal('original_script_text', fallback.original_script_text),
+                        environment_name: getVal('environment_name', fallback.environment_name),
+                        linked_characters: getVal('linked_characters', fallback.linked_characters),
+                        key_props: getVal('key_props', fallback.key_props)
                     });
                 }
              }
@@ -6125,18 +6450,21 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
         }
     };
 
+    const buildSceneContentMarkdown = (sceneRows = []) => {
+        if (!activeEpisode) return '';
+        const contextInfo = `Project: ${project?.title || 'Unknown'} | Episode: ${activeEpisode?.title || 'Unknown'}\n`;
+        const header = `| Episode ID | Scene ID | Scene No. | Scene Name | Equivalent Duration | Core Scene Info | Original Script Text | Environment Name | Environment Relation | Entry State | Exit State | Linked Characters | Key Props |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|`;
+        const clean = (txt) => (txt || '').replace(/\n/g, '<br>').replace(/\|/g, '\\|');
+        const content = (sceneRows || []).map((s) => (
+            `| ${clean(activeEpisode?.id)} | ${clean(s.id)} | ${clean(s.scene_no)} | ${clean(s.scene_name)} | ${clean(s.equivalent_duration)} | ${clean(s.core_scene_info)} | ${clean(s.original_script_text)} | ${clean(s.environment_name)} | ${clean(s.environment_relation || '')} | ${clean(s.entry_state || '')} | ${clean(s.exit_state || '')} | ${clean(s.linked_characters)} | ${clean(s.key_props)} |`
+        )).join('\n');
+        return `${contextInfo}${header}\n${content}`;
+    };
+
     const handleSave = async () => {
         if (!activeEpisode) return;
         
         onLog?.('SceneManager: Saving content...', 'info');
-
-        const contextInfo = `Project: ${project?.title || 'Unknown'} | Episode: ${activeEpisode?.title || 'Unknown'}\n`;
-        const header = `| Scene No. | Scene Name | Equivalent Duration | Core Scene Info | Original Script Text | Environment Name | Linked Characters | Key Props |\n|---|---|---|---|---|---|---|---|`;
-        
-        const content = scenes.map(s => {
-             const clean = (txt) => (txt || '').replace(/\n/g, '<br>').replace(/\|/g, '\\|');
-             return `| ${clean(s.scene_no)} | ${clean(s.scene_name)} | ${clean(s.equivalent_duration)} | ${clean(s.core_scene_info)} | ${clean(s.original_script_text)} | ${clean(s.environment_name)} | ${clean(s.linked_characters)} | ${clean(s.key_props)} |`;
-        }).join('\n');
         
         try {
             // Update scenes in DB (Create if missing ID, Update if exists)
@@ -6164,7 +6492,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
             const savedScenes = await Promise.all(savePromises);
             setScenes(savedScenes);
 
-            await updateEpisode(activeEpisode.id, { scene_content: contextInfo + header + '\n' + content });
+            await updateEpisode(activeEpisode.id, { scene_content: buildSceneContentMarkdown(savedScenes) });
             onLog?.('SceneManager: Saved successfully.', 'success');
         } catch(e) {
             console.error(e);
@@ -6258,6 +6586,40 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
         }
     };
 
+    const handleDeleteScene = async (scene) => {
+        if (!scene?.id) {
+            const remaining = scenes.filter(s => s !== scene);
+            setScenes(remaining);
+            if (activeEpisode?.id) {
+                try {
+                    await updateEpisode(activeEpisode.id, { scene_content: buildSceneContentMarkdown(remaining) });
+                } catch (e) {
+                    console.warn('Failed to sync scene_content after local scene removal', e);
+                }
+            }
+            return;
+        }
+        const label = scene.scene_no || scene.scene_name || `#${scene.id}`;
+        if (!window.confirm(`Delete scene ${label}?`)) return;
+
+        try {
+            await deleteScene(scene.id);
+            const remaining = scenes.filter(s => s.id !== scene.id);
+            setScenes(remaining);
+            if (editingScene?.id === scene.id) {
+                setEditingScene(null);
+            }
+            if (activeEpisode?.id) {
+                await updateEpisode(activeEpisode.id, { scene_content: buildSceneContentMarkdown(remaining) });
+            }
+            onLog?.(`Scene deleted: ${label}`, 'success');
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'Failed to delete scene';
+            onLog?.(`Scene delete failed: ${detail}`, 'error');
+            alert(`Failed to delete scene: ${detail}`);
+        }
+    };
+
     const loadLatestAIShotsStaging = async (sceneId) => {
         if (!sceneId) {
             setAiShotsStaging(prev => ({
@@ -6333,6 +6695,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
                 saving: false,
                 applying: false,
             }));
+            setAiShotRowEditor({ open: false, index: -1, data: null });
         }
     }, [editingScene?.id]);
 
@@ -6390,7 +6753,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
              <div className="flex justify-between items-center mb-6 shrink-0">
                 <h2 className="text-2xl font-bold flex items-center gap-2">
                     Scenes
-                    <span className="text-sm font-normal text-muted-foreground bg-white/5 px-2 py-0.5 rounded-full">{scenes.length} Scenes</span>
+                    <span className="text-sm font-normal text-muted-foreground bg-white/5 px-2 py-0.5 rounded-full">{filteredScenes.length}/{scenes.length} Scenes</span>
                 </h2>
                 <div className="flex gap-2">
                      <button onClick={handleSave} className="px-4 py-2 bg-primary text-black rounded-lg text-sm font-bold hover:bg-primary/90 flex items-center gap-2">
@@ -6400,16 +6763,39 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
                 </div>
             </div>
 
+            <div className="mb-4 grid grid-cols-1 md:grid-cols-3 gap-2 shrink-0">
+                <input
+                    type="text"
+                    value={sceneHierarchyFilter}
+                    onChange={(e) => setSceneHierarchyFilter(e.target.value)}
+                    placeholder="Filter Scene ID / Scene No (e.g. EP01_SC03)"
+                    className="bg-black/40 border border-white/20 rounded px-3 py-2 text-sm text-white"
+                />
+                <input
+                    type="text"
+                    value={sceneKeywordFilter}
+                    onChange={(e) => setSceneKeywordFilter(e.target.value)}
+                    placeholder="Filter by name / env / cast / props"
+                    className="bg-black/40 border border-white/20 rounded px-3 py-2 text-sm text-white"
+                />
+                <button
+                    onClick={() => { setSceneHierarchyFilter(''); setSceneKeywordFilter(''); }}
+                    className="px-3 py-2 bg-white/10 hover:bg-white/20 rounded text-xs text-white border border-white/10"
+                >
+                    Clear Scene Filters
+                </button>
+            </div>
+
             <div className="flex-1 overflow-auto custom-scrollbar pb-20">
-                    {scenes.length === 0 ? (
+                    {filteredScenes.length === 0 ? (
                     <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
                         <Clapperboard className="w-12 h-12 mb-4 opacity-20" />
-                        <p>No scenes found.</p>
-                        <p className="text-xs mt-2 opacity-50">Paste a Markdown table in Import or generate content.</p>
+                        <p>{scenes.length === 0 ? 'No scenes found.' : 'No scenes match current filters.'}</p>
+                        <p className="text-xs mt-2 opacity-50">{scenes.length === 0 ? 'Paste a Markdown table in Import or generate content.' : 'Adjust Scene ID/keyword filters and try again.'}</p>
                     </div>
                     ) : (
                     <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-6">
-                        {scenes.map((scene, idx) => {
+                        {filteredScenes.map((scene, idx) => {
                             return (
                                 <SceneCard 
                                     key={idx} 
@@ -6417,6 +6803,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
                                     entities={entities} 
                                     onClick={() => setEditingScene(scene)} 
                                     onGenerateShots={handleGenerateShots}
+                                    onDelete={handleDeleteScene}
                                 />
                             );
                         })}
@@ -6437,6 +6824,22 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
                              <div className="p-4 border-b border-white/10 flex items-center justify-between bg-[#09090b]">
                                 <h3 className="font-bold text-lg">Edit Scene {editingScene.scene_no || editingScene.id}</h3>
                                 <div className="flex items-center gap-2">
+                                    <button
+                                        onClick={() => handleDeleteScene(editingScene)}
+                                        disabled={!editingScene?.id}
+                                        className="px-3 py-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/20 rounded text-xs flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        title={editingScene?.id ? "Delete this scene" : "Save scene first"}
+                                    >
+                                        <Trash2 className="w-3 h-3"/> Delete
+                                    </button>
+                                    <button
+                                        onClick={() => editingScene?.id && handleGenerateShots(editingScene.id)}
+                                        disabled={!editingScene?.id}
+                                        className="px-3 py-1.5 bg-primary/20 hover:bg-primary/30 text-primary border border-primary/20 rounded text-xs flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        title={editingScene?.id ? "Generate AI shots for this scene" : "Save scene first to generate AI shots"}
+                                    >
+                                        <Wand2 className="w-3 h-3"/> AI Shots
+                                    </button>
                                     <button onClick={() => setEditingScene(null)} className="p-2 hover:bg-white/10 rounded-full"><X className="w-5 h-5"/></button>
                                 </div>
                             </div>
@@ -6474,6 +6877,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
                                     <div className="pt-4 border-t border-white/5">
                                         <div className="flex items-center justify-between gap-3 mb-2">
                                             <label className="text-xs text-muted-foreground uppercase font-bold tracking-wider block text-primary/80">AI Shots (Staging)</label>
+                                            <div className="text-[10px] text-muted-foreground">双击任意行可弹窗编辑并保存更新</div>
                                             <div className="flex items-center gap-2">
                                                 <button
                                                     onClick={async () => {
@@ -6537,7 +6941,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
                                                     <table className="w-full text-xs text-left border-collapse">
                                                         <thead className="sticky top-0 bg-[#252525] z-10 shadow-md">
                                                             <tr>
-                                                                {['Shot ID', 'Shot Name', 'Content', 'Duration', 'Entities', 'Logic', 'Keyframes'].map(h => (
+                                                                {['Shot ID', 'Shot Name', 'Scene ID', 'Shot Logic (CN)', 'Start Frame', 'Video Content', 'Duration (s)', 'Keyframes', 'End Frame', 'Associated Entities'].map(h => (
                                                                     <th key={h} className="p-2 border-b border-white/10 font-bold text-white/70">{h}</th>
                                                                 ))}
                                                                 <th className="p-2 border-b border-white/10 w-10"></th>
@@ -6545,7 +6949,12 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
                                                         </thead>
                                                         <tbody className="divide-y divide-white/5">
                                                             {(aiShotsStaging.content || []).map((shot, idx) => (
-                                                                <tr key={idx} className="hover:bg-white/5 group">
+                                                                <tr
+                                                                    key={idx}
+                                                                    className="hover:bg-white/5 group cursor-pointer"
+                                                                    onDoubleClick={() => openAiShotRowEditor(shot, idx)}
+                                                                    title="Double click to edit this row in popup"
+                                                                >
                                                                     <td className="p-1">
                                                                         <input
                                                                             className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded"
@@ -6564,6 +6973,39 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
                                                                             onChange={e => {
                                                                                 const newData = [...(aiShotsStaging.content || [])];
                                                                                 newData[idx] = { ...shot, 'Shot Name': e.target.value };
+                                                                                setAiShotsStaging(prev => ({ ...prev, content: newData }));
+                                                                            }}
+                                                                        />
+                                                                    </td>
+                                                                    <td className="p-1">
+                                                                        <input
+                                                                            className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded"
+                                                                            value={shot['Scene ID'] || shot.scene_id || ''}
+                                                                            onChange={e => {
+                                                                                const newData = [...(aiShotsStaging.content || [])];
+                                                                                newData[idx] = { ...shot, 'Scene ID': e.target.value };
+                                                                                setAiShotsStaging(prev => ({ ...prev, content: newData }));
+                                                                            }}
+                                                                        />
+                                                                    </td>
+                                                                    <td className="p-1">
+                                                                        <input
+                                                                            className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded"
+                                                                            value={shot['Shot Logic (CN)'] || shot.shot_logic_cn || ''}
+                                                                            onChange={e => {
+                                                                                const newData = [...(aiShotsStaging.content || [])];
+                                                                                newData[idx] = { ...shot, 'Shot Logic (CN)': e.target.value };
+                                                                                setAiShotsStaging(prev => ({ ...prev, content: newData }));
+                                                                            }}
+                                                                        />
+                                                                    </td>
+                                                                    <td className="p-1">
+                                                                        <textarea
+                                                                            className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded resize-y min-h-[40px]"
+                                                                            value={shot['Start Frame'] || shot.start_frame || ''}
+                                                                            onChange={e => {
+                                                                                const newData = [...(aiShotsStaging.content || [])];
+                                                                                newData[idx] = { ...shot, 'Start Frame': e.target.value };
                                                                                 setAiShotsStaging(prev => ({ ...prev, content: newData }));
                                                                             }}
                                                                         />
@@ -6593,32 +7035,32 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
                                                                     <td className="p-1">
                                                                         <input
                                                                             className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded"
-                                                                            value={shot['Associated Entities'] || shot.associated_entities || ''}
-                                                                            onChange={e => {
-                                                                                const newData = [...(aiShotsStaging.content || [])];
-                                                                                newData[idx] = { ...shot, 'Associated Entities': e.target.value };
-                                                                                setAiShotsStaging(prev => ({ ...prev, content: newData }));
-                                                                            }}
-                                                                        />
-                                                                    </td>
-                                                                    <td className="p-1">
-                                                                        <input
-                                                                            className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded"
-                                                                            value={shot['Shot Logic (CN)'] || shot.shot_logic_cn || ''}
-                                                                            onChange={e => {
-                                                                                const newData = [...(aiShotsStaging.content || [])];
-                                                                                newData[idx] = { ...shot, 'Shot Logic (CN)': e.target.value };
-                                                                                setAiShotsStaging(prev => ({ ...prev, content: newData }));
-                                                                            }}
-                                                                        />
-                                                                    </td>
-                                                                    <td className="p-1">
-                                                                        <input
-                                                                            className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded"
                                                                             value={shot['Keyframes'] || shot.keyframes || ''}
                                                                             onChange={e => {
                                                                                 const newData = [...(aiShotsStaging.content || [])];
                                                                                 newData[idx] = { ...shot, 'Keyframes': e.target.value };
+                                                                                setAiShotsStaging(prev => ({ ...prev, content: newData }));
+                                                                            }}
+                                                                        />
+                                                                    </td>
+                                                                    <td className="p-1">
+                                                                        <textarea
+                                                                            className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded resize-y min-h-[40px]"
+                                                                            value={shot['End Frame'] || shot.end_frame || ''}
+                                                                            onChange={e => {
+                                                                                const newData = [...(aiShotsStaging.content || [])];
+                                                                                newData[idx] = { ...shot, 'End Frame': e.target.value };
+                                                                                setAiShotsStaging(prev => ({ ...prev, content: newData }));
+                                                                            }}
+                                                                        />
+                                                                    </td>
+                                                                    <td className="p-1">
+                                                                        <input
+                                                                            className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded"
+                                                                            value={shot['Associated Entities'] || shot.associated_entities || ''}
+                                                                            onChange={e => {
+                                                                                const newData = [...(aiShotsStaging.content || [])];
+                                                                                newData[idx] = { ...shot, 'Associated Entities': e.target.value };
                                                                                 setAiShotsStaging(prev => ({ ...prev, content: newData }));
                                                                             }}
                                                                         />
@@ -6744,6 +7186,58 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
                                 {shotPromptModal.loading ? <Loader2 className="animate-spin" size={16}/> : <Wand2 size={16}/>}
                                 {shotPromptModal.loading ? "Generating..." : "Generate Shots"}
                             </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {aiShotRowEditor.open && (
+                <div className="fixed inset-0 z-[60] bg-black/85 flex items-center justify-center p-4" onClick={() => setAiShotRowEditor({ open: false, index: -1, data: null })}>
+                    <div className="bg-[#1b1b1b] border border-white/10 rounded-xl w-full max-w-3xl max-h-[88vh] overflow-hidden shadow-2xl" onClick={e => e.stopPropagation()}>
+                        <div className="p-4 border-b border-white/10 flex items-center justify-between">
+                            <h3 className="font-bold text-white">Edit AI Shot Row #{aiShotRowEditor.index + 1}</h3>
+                            <button onClick={() => setAiShotRowEditor({ open: false, index: -1, data: null })} className="p-1 hover:bg-white/10 rounded"><X size={18}/></button>
+                        </div>
+                        <div className="p-4 space-y-3 overflow-y-auto custom-scrollbar max-h-[68vh]">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <InputGroup label="Shot ID" value={aiShotRowEditor.data?.shot_id || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), shot_id: v } }))} />
+                                <InputGroup label="Shot Name" value={aiShotRowEditor.data?.shot_name || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), shot_name: v } }))} />
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <InputGroup label="Scene ID" value={aiShotRowEditor.data?.scene_id || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), scene_id: v } }))} />
+                                <InputGroup label="Duration (s)" value={aiShotRowEditor.data?.duration || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), duration: v } }))} />
+                            </div>
+                            <InputGroup label="Shot Logic (CN)" value={aiShotRowEditor.data?.shot_logic_cn || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), shot_logic_cn: v } }))} />
+                            <InputGroup label="Associated Entities" value={aiShotRowEditor.data?.associated_entities || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), associated_entities: v } }))} />
+                            <InputGroup label="Keyframes" value={aiShotRowEditor.data?.keyframes || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), keyframes: v } }))} />
+                            <div>
+                                <label className="text-xs text-muted-foreground uppercase font-bold tracking-wider mb-1 block">Start Frame</label>
+                                <textarea
+                                    className="w-full bg-black/40 border border-white/10 rounded p-3 text-white text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-y custom-scrollbar font-mono leading-relaxed min-h-[120px]"
+                                    value={aiShotRowEditor.data?.start_frame || ''}
+                                    onChange={e => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), start_frame: e.target.value } }))}
+                                />
+                            </div>
+                            <div>
+                                <label className="text-xs text-muted-foreground uppercase font-bold tracking-wider mb-1 block">Video Content</label>
+                                <textarea
+                                    className="w-full bg-black/40 border border-white/10 rounded p-3 text-white text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-y custom-scrollbar font-mono leading-relaxed min-h-[180px]"
+                                    value={aiShotRowEditor.data?.video_content || ''}
+                                    onChange={e => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), video_content: e.target.value } }))}
+                                />
+                            </div>
+                            <div>
+                                <label className="text-xs text-muted-foreground uppercase font-bold tracking-wider mb-1 block">End Frame</label>
+                                <textarea
+                                    className="w-full bg-black/40 border border-white/10 rounded p-3 text-white text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-y custom-scrollbar font-mono leading-relaxed min-h-[120px]"
+                                    value={aiShotRowEditor.data?.end_frame || ''}
+                                    onChange={e => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), end_frame: e.target.value } }))}
+                                />
+                            </div>
+                        </div>
+                        <div className="p-4 border-t border-white/10 flex justify-end gap-2 bg-black/20">
+                            <button onClick={() => setAiShotRowEditor({ open: false, index: -1, data: null })} className="px-4 py-2 rounded hover:bg-white/10 text-sm">Cancel</button>
+                            <button onClick={saveAiShotRowEditor} className="px-5 py-2 bg-primary text-black rounded font-bold text-sm hover:bg-primary/90">Save Row</button>
                         </div>
                     </div>
                 </div>
@@ -8120,6 +8614,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const { generationConfig, saveToolConfig, savedToolConfigs, llmConfig } = useStore();
     const [scenes, setScenes] = useState([]);
     const [selectedSceneId, setSelectedSceneId] = useState('all');
+    const [sceneCodeFilter, setSceneCodeFilter] = useState('');
+    const [shotIdFilter, setShotIdFilter] = useState('');
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [shots, setShots] = useState([]);
     const [isImportOpen, setIsImportOpen] = useState(false);
@@ -8158,6 +8654,40 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const [isBatchGenerating, setIsBatchGenerating] = useState(false);
     const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0, status: '' }); // Progress tracking
     const [activeSources, setActiveSources] = useState({ Image: 'unset', Video: 'unset' });
+
+    const shotFilterStorageKey = useMemo(() => {
+        if (!activeEpisode?.id) return '';
+        return `aistory.shotFilters.${activeEpisode.id}`;
+    }, [activeEpisode?.id]);
+
+    useEffect(() => {
+        if (!shotFilterStorageKey) return;
+        try {
+            const raw = localStorage.getItem(shotFilterStorageKey);
+            if (!raw) return;
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object') {
+                setSelectedSceneId(String(parsed.selectedSceneId || 'all'));
+                setSceneCodeFilter(String(parsed.sceneCodeFilter || ''));
+                setShotIdFilter(String(parsed.shotIdFilter || ''));
+            }
+        } catch (e) {
+            console.warn('Failed to restore shot filters', e);
+        }
+    }, [shotFilterStorageKey]);
+
+    useEffect(() => {
+        if (!shotFilterStorageKey) return;
+        try {
+            localStorage.setItem(shotFilterStorageKey, JSON.stringify({
+                selectedSceneId,
+                sceneCodeFilter,
+                shotIdFilter,
+            }));
+        } catch (e) {
+            console.warn('Failed to persist shot filters', e);
+        }
+    }, [shotFilterStorageKey, selectedSceneId, sceneCodeFilter, shotIdFilter]);
 
     // Helper: Construct Global Context String from Episode Info
     const getGlobalContextStr = () => {
@@ -8312,20 +8842,44 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
     const refreshShots = useCallback(async () => {
         if (!selectedSceneId || !activeEpisode?.id) return;
+
+        const getSceneCodeFromShot = (shot) => {
+            const explicit = String(shot?.scene_code || '').trim();
+            if (explicit) return explicit.toUpperCase();
+            const shotId = String(shot?.shot_id || '').trim().toUpperCase();
+            const m = shotId.match(/^(EP\d{2}_SC\d{2})/);
+            return m ? m[1] : '';
+        };
         
         try {
+            const normalizedSceneCode = String(sceneCodeFilter || '').trim().toUpperCase();
+            const normalizedShotId = String(shotIdFilter || '').trim().toUpperCase();
+
             // Optimized: Fetch all shots for the EPISODE.
             // This satisfies the requirement to select based on Project/Episode, and associate via Scene ID locally.
             // Also fixes issues where unlinked shots or imports were hidden.
-            const allShots = await fetchEpisodeShots(activeEpisode.id);
+            const allShots = await fetchEpisodeShots(activeEpisode.id, {
+                scene_code: normalizedSceneCode || undefined,
+                shot_id: normalizedShotId || undefined,
+            });
             console.log(`[ShotsView] Loaded ${allShots.length} total shots for Episode ${activeEpisode.id}`);
 
-            if (selectedSceneId === 'all') {
-                setShots(allShots);
-            } else {
-                // Local Filter by scene_id
-                const filtered = allShots.filter(s => String(s.scene_id) === String(selectedSceneId));
-                setShots(filtered);
+            let filtered = selectedSceneId === 'all'
+                ? allShots
+                : allShots.filter(s => String(s.scene_id) === String(selectedSceneId));
+
+            if (normalizedSceneCode) {
+                filtered = filtered.filter((shot) => {
+                    const sceneCode = getSceneCodeFromShot(shot);
+                    return sceneCode.includes(normalizedSceneCode);
+                });
+            }
+
+            if (normalizedShotId) {
+                filtered = filtered.filter((shot) => String(shot?.shot_id || '').toUpperCase().includes(normalizedShotId));
+            }
+
+            setShots(filtered);
 
                 // Legacy Auto-Sync Check (Optional, but kept for script-to-shot workflow convenience)
                 if (filtered.length === 0 && (activeEpisode?.scene_content || activeEpisode?.shot_content)) {
@@ -8336,11 +8890,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                      // But if user relies on auto-generation... 
                      // Let's assume 'remove sync logic' refers to the strict scene_code matching.
                 }
-            }
         } catch (e) {
             console.error("Failed to refresh shots", e);
         }
-    }, [activeEpisode?.id, selectedSceneId]);
+    }, [activeEpisode?.id, selectedSceneId, sceneCodeFilter, shotIdFilter]);
 
     useEffect(() => {
         if(activeEpisode?.id) {
@@ -10917,6 +11470,29 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                 {shotPromptModal.loading ? "Generating..." : "Generate Shots"}
                             </button>
                         </div>
+
+                        <div className="mt-2 flex items-center gap-2">
+                            <input
+                                type="text"
+                                value={sceneCodeFilter}
+                                onChange={(e) => setSceneCodeFilter(e.target.value)}
+                                placeholder="Filter Scene Code (EPxx_SCyy)"
+                                className="bg-black/40 border border-white/20 rounded px-2.5 py-1.5 text-xs min-w-[200px] text-white"
+                            />
+                            <input
+                                type="text"
+                                value={shotIdFilter}
+                                onChange={(e) => setShotIdFilter(e.target.value)}
+                                placeholder="Filter Shot ID (EPxx_SCyy_SHzz)"
+                                className="bg-black/40 border border-white/20 rounded px-2.5 py-1.5 text-xs min-w-[220px] text-white"
+                            />
+                            <button
+                                onClick={() => { setSceneCodeFilter(''); setShotIdFilter(''); }}
+                                className="px-2.5 py-1.5 bg-white/10 hover:bg-white/20 rounded text-[11px] text-white border border-white/10"
+                            >
+                                Clear Shot Filters
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
@@ -11353,108 +11929,6 @@ const ImportModal = ({ isOpen, onClose, onImport, defaultType = 'auto', project 
         </div>
     )
 
-};
-
-const TranslateControl = ({ text, onUpdate, onSave }) => {
-    const { addLog } = useLog();
-    const [isTranslated, setIsTranslated] = useState(false);
-    const [loading, setLoading] = useState(false);
-    const [originalText, setOriginalText] = useState('');
-
-    const handleTranslate = async (e) => {
-        e.stopPropagation();
-        e.preventDefault();
-        
-        const textToTranslate = text || '';
-        if (!textToTranslate && !isTranslated) {
-             addLog("No text to translate", 'warning');
-             return;
-        }
-
-        setLoading(true);
-        try {
-            if (!isTranslated) {
-                // EN -> ZH
-                setOriginalText(textToTranslate);
-                const res = await translateText(textToTranslate, 'en', 'zh');
-                if (res.translated_text) {
-                    onUpdate(res.translated_text);
-                    setIsTranslated(true);
-                    addLog("Translated to Chinese", 'info');
-                } else {
-                    throw new Error("No translation returned");
-                }
-            } else {
-                // ZH -> EN (Save)
-                const res = await translateText(textToTranslate, 'zh', 'en');
-                if (res.translated_text) {
-                    onUpdate(res.translated_text);
-                    if (onSave) onSave(res.translated_text);
-                    setIsTranslated(false);
-                    addLog("Translated back and saved", 'success');
-                } else {
-                    // Try to handle case where empty string was desired?
-                    // But here textToTranslate is passed.
-                    if (textToTranslate.trim() === '') {
-                        onUpdate('');
-                        if (onSave) onSave('');
-                        setIsTranslated(false);
-                        return;
-                    }
-                     throw new Error("No translation returned");
-                }
-            }
-        } catch (e) {
-            console.error("Translation failed", e);
-            const msg = e.response?.data?.detail || e.message || "Unknown error";
-            addLog(`Translation error: ${msg}`, 'error');
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const handleCancel = (e) => {
-        e.stopPropagation();
-        onUpdate(originalText);
-        setIsTranslated(false);
-        addLog("Reverted to original English", 'info');
-    };
-
-    if (isTranslated) {
-        return (
-           <div className="flex items-center gap-1">
-               <button 
-                   onClick={handleTranslate} 
-                   disabled={loading}
-                   className="text-[10px] px-2 py-0.5 rounded flex items-center gap-1 transition-colors bg-indigo-500/80 text-white hover:bg-indigo-500"
-                   title="Translate back to English & Save"
-               >
-                   {loading ? <RefreshCw className="w-3 h-3 animate-spin"/> : <Languages className="w-3 h-3"/>}
-                   Save (EN)
-               </button>
-               <button 
-                   onClick={handleCancel}
-                   disabled={loading}
-                   className="text-[10px] px-2 py-0.5 rounded flex items-center gap-1 transition-colors bg-white/10 hover:bg-white/20 text-muted-foreground hover:text-white"
-                   title="Cancel edit and revert to original"
-               >
-                   <X className="w-3 h-3"/>
-               </button>
-           </div>
-        )
-   }
-
-    return (
-        <button 
-            onClick={handleTranslate} 
-            disabled={loading}
-            className={`text-[10px] px-2 py-0.5 rounded flex items-center gap-1 transition-colors ${isTranslated ? 'bg-indigo-500/80 text-white hover:bg-indigo-500' : 'bg-white/10 hover:bg-white/20 text-muted-foreground hover:text-white'}`}
-            title={isTranslated ? "Translate back to English & Save" : "Translate to Chinese for editing"}
-        >
-            {loading ? <RefreshCw className="w-3 h-3 animate-spin"/> : <Languages className="w-3 h-3"/>}
-            {isTranslated ? "Save (EN)" : "CN"}
-        </button>
-    );
 };
 
 const Editor = ({ projectId, onClose }) => {
@@ -11908,6 +12382,7 @@ const Editor = ({ projectId, onClose }) => {
                 let inShotTable = false;
                 let inSceneTable = false;
                 let shotHeaderMap = {};
+                let sceneHeaderMap = {};
 
                 for (let line of lines) {
                     const trimmed = line.trim();
@@ -11957,6 +12432,16 @@ const Editor = ({ projectId, onClose }) => {
                         inShotTable = false;
                         addLog("Found Scene Header (or Forced Type).", "info");
                         sceneLines.push(line);
+
+                        const curCols = line.split('|').map(c => c.trim());
+                        if (curCols.length > 0 && curCols[0] === "") curCols.shift();
+                        if (curCols.length > 0 && curCols[curCols.length-1] === "") curCols.pop();
+
+                        sceneHeaderMap = {};
+                        curCols.forEach((col, idx) => {
+                            const key = col.toLowerCase().replace(/[\(\)（）\s\.]/g, '');
+                            sceneHeaderMap[key] = idx;
+                        });
                         continue;
                     }
 
@@ -11982,15 +12467,26 @@ const Editor = ({ projectId, onClose }) => {
                              sceneLines.push(line);
                              
                              try {
+                                const getSceneVal = (keys, fallbackIdx) => {
+                                    for (const k of keys) {
+                                        if (sceneHeaderMap[k] !== undefined && sceneHeaderMap[k] < cols.length) {
+                                            return clean(cols[sceneHeaderMap[k]]);
+                                        }
+                                    }
+                                    return fallbackIdx < cols.length ? clean(cols[fallbackIdx]) : '';
+                                };
+
+                                const isNewSceneFormat = cols.length >= 13 || sceneHeaderMap['episodeid'] !== undefined || sceneHeaderMap['sceneid'] !== undefined;
+
                                 const scData = {
-                                    scene_no: clean(cols[0]),
-                                    scene_name: clean(cols[1]),
-                                    equivalent_duration: clean(cols[2]),
-                                    core_scene_info: clean(cols[3]),
-                                    original_script_text: clean(cols[4]), 
-                                    environment_name: clean(cols[5]),
-                                    linked_characters: clean(cols[6]),
-                                    key_props: clean(cols[7])
+                                    scene_no: getSceneVal(['sceneno', 'scene_no', '场次序号', '场次'], isNewSceneFormat ? 2 : 0),
+                                    scene_name: getSceneVal(['scenename', 'title', 'scene_name', '场景名称'], isNewSceneFormat ? 3 : 1),
+                                    equivalent_duration: getSceneVal(['equivalentduration', 'duration', 'equivalent_duration'], isNewSceneFormat ? 4 : 2),
+                                    core_scene_info: getSceneVal(['coresceneinfo', 'coregoal', 'core_scene_info'], isNewSceneFormat ? 5 : 3),
+                                    original_script_text: getSceneVal(['originalscripttext', 'description', 'original_script_text'], isNewSceneFormat ? 6 : 4),
+                                    environment_name: getSceneVal(['environmentname', 'environment', 'environment_name'], isNewSceneFormat ? 7 : 5),
+                                    linked_characters: getSceneVal(['linkedcharacters', 'linked_characters'], isNewSceneFormat ? 11 : 6),
+                                    key_props: getSceneVal(['keyprops', 'key_props'], isNewSceneFormat ? 12 : 7)
                                 };
                                 
                                 if (!scData.scene_no || String(scData.scene_no).trim().length === 0) {
@@ -12346,8 +12842,18 @@ const Editor = ({ projectId, onClose }) => {
             <div className="flex-1 overflow-hidden relative bg-background">
                 <div className="h-full overflow-y-auto custom-scrollbar p-0">
                     <div className="animate-in fade-in duration-300 min-h-full">
-                        {activeTab === 'overview' && <ProjectOverview id={id} key={refreshKey} onProjectUpdate={loadProjectData} />}
-                        {activeTab === 'ep_info' && <EpisodeInfo episode={activeEpisode} onUpdate={handleUpdateEpisodeInfo} />}
+                        {activeTab === 'overview' && (
+                            <ProjectOverview
+                                id={id}
+                                key={refreshKey}
+                                onProjectUpdate={loadProjectData}
+                                onJumpToEpisode={(episodeId) => {
+                                    setActiveEpisodeId(episodeId);
+                                    setActiveTab('script');
+                                }}
+                            />
+                        )}
+                        {activeTab === 'ep_info' && <EpisodeInfo episode={activeEpisode} onUpdate={handleUpdateEpisodeInfo} project={project} projectId={id} />}
                         {activeTab === 'script' && <ScriptEditor activeEpisode={activeEpisode} projectId={id} project={project} onUpdateScript={handleUpdateScript} onUpdateEpisodeInfo={handleUpdateEpisodeInfo} onLog={addLog} onImportText={handleImport} />}
                         {activeTab === 'scenes' && <SceneManager activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} />}
                         {activeTab === 'subjects' && <SubjectLibrary projectId={id} currentEpisode={activeEpisode} />}

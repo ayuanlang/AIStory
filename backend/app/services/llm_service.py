@@ -7,8 +7,33 @@ from typing import Dict, Any, List
 import logging
 import os
 import re
+from pathlib import Path
+from logging.handlers import RotatingFileHandler
+
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+_llm_call_logger = logging.getLogger("llm_call_audit")
+if not _llm_call_logger.handlers:
+    try:
+        log_dir = Path(settings.BASE_DIR) / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = log_dir / "llm_calls.log"
+        max_bytes = int(os.getenv("LLM_CALL_LOG_MAX_BYTES", str(20 * 1024 * 1024)))
+        backup_count = int(os.getenv("LLM_CALL_LOG_BACKUP_COUNT", "5"))
+        file_handler = RotatingFileHandler(
+            log_file,
+            maxBytes=max_bytes,
+            backupCount=backup_count,
+            encoding="utf-8",
+        )
+        file_handler.setFormatter(logging.Formatter('%(asctime)s | %(levelname)s | %(message)s'))
+        _llm_call_logger.addHandler(file_handler)
+        _llm_call_logger.setLevel(logging.INFO)
+        _llm_call_logger.propagate = False
+    except Exception as e:
+        logger.warning(f"Failed to initialize llm_call_audit logger: {e}")
 
 # Some providers (e.g., Ark/Doubao) can take several minutes for large prompts.
 DEFAULT_LLM_TIMEOUT_SECONDS = 600
@@ -60,6 +85,12 @@ If the user's request is not clear or does not require a tool, return an empty p
 """
 
 class LLMService:
+    def _safe_log_json(self, tag: str, payload: Dict[str, Any]) -> None:
+        try:
+            _llm_call_logger.info("%s %s", tag, json.dumps(payload, ensure_ascii=False, default=str))
+        except Exception as e:
+            logger.warning(f"Failed to write llm call audit log ({tag}): {e}")
+
     def _normalize_grsai_llm_base_url(self, base_url: str) -> str:
         url = (base_url or "").strip()
         if not url:
@@ -121,6 +152,43 @@ class LLMService:
                     normalized.append(item)
             return normalized
         return content
+
+    def _extract_text_from_content(self, content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            chunks = []
+            for item in content:
+                if isinstance(item, dict):
+                    txt = item.get("text")
+                    if isinstance(txt, str) and txt.strip():
+                        chunks.append(txt)
+                elif isinstance(item, str) and item.strip():
+                    chunks.append(item)
+            return "\n".join(chunks).strip()
+        return ""
+
+    def _extract_text_from_response(self, full_response: Dict[str, Any]) -> str:
+        choices = full_response.get("choices") or []
+        first = choices[0] if choices else {}
+        if isinstance(first, dict):
+            message = first.get("message") or {}
+            if isinstance(message, dict):
+                text = self._extract_text_from_content(message.get("content"))
+                if text:
+                    return text
+                reasoning_text = self._extract_text_from_content(message.get("reasoning_content"))
+                if reasoning_text:
+                    return reasoning_text
+                refusal = message.get("refusal")
+                if isinstance(refusal, str) and refusal.strip():
+                    return refusal
+
+            choice_text = first.get("text")
+            if isinstance(choice_text, str) and choice_text.strip():
+                return choice_text
+
+        return ""
 
     async def analyze_multimodal(self, prompt: str, image_url: str, config: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -313,7 +381,7 @@ class LLMService:
 
         try:
             full_response = await self._raw_llm_request_full(base_url, api_key, model, messages, extra_config)
-            content = full_response["choices"][0]["message"]["content"]
+            content = self._extract_text_from_response(full_response)
             content = self._sanitize_response_content(content)
             finish_reason = full_response.get("choices", [{}])[0].get("finish_reason")
             usage = full_response.get("usage", {})
@@ -324,9 +392,16 @@ class LLMService:
 
     async def _call_openai_compatible(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> Dict[str, Any]:
         full_response = await self._raw_llm_request_full(base_url, api_key, model, messages, extra_config)
-        content = full_response["choices"][0]["message"]["content"]
+        content = self._extract_text_from_response(full_response)
         content = self._sanitize_response_content(content)
         usage = full_response.get("usage", {})
+        finish_reason = None
+        try:
+            choices = full_response.get("choices") or []
+            first = choices[0] if choices else {}
+            finish_reason = first.get("finish_reason") if isinstance(first, dict) else None
+        except Exception:
+            finish_reason = None
         
         # Parse JSON from content
         # LLM might wrap in ```json ... ```
@@ -350,6 +425,7 @@ class LLMService:
             
             # Inject Usage
             result["usage"] = usage
+            result["finish_reason"] = finish_reason
             return result
 
         except json.JSONDecodeError:
@@ -357,7 +433,8 @@ class LLMService:
             return {
                 "reply": clean_content,
                 "plan": [],
-                "usage": usage
+                "usage": usage,
+                "finish_reason": finish_reason,
             }
 
 
@@ -431,30 +508,15 @@ class LLMService:
              # Unpack
              content = response.get("reply", "")
              usage = response.get("usage", {})
+             finish_reason = response.get("finish_reason")
              if not content and "content" in response:
                  content = response["content"] # fallback if _call_openai_compatible returns typical dict
              
-             return {"content": content, "usage": usage}
+             return {"content": content, "usage": usage, "finish_reason": finish_reason}
 
         except Exception as e:
              logger.error(f"Generate Content Error: {e}")
-             return {"content": f"Error: {e}", "usage": {}}
-
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt}
-        ]
-        
-        extra_config = config.get("config", {})
-
-        try:
-            full_response = await self._raw_llm_request_full(base_url, api_key, model, messages, extra_config)
-            content = full_response["choices"][0]["message"]["content"]
-            usage = full_response.get("usage", {})
-            return {"content": content, "usage": usage}
-        except Exception as e:
-            logger.error(f"LLM Call failed: {e}")
-            return {"content": f"Error: {str(e)}", "usage": {}}
+             return {"content": f"Error: {e}", "usage": {}, "finish_reason": None}
 
     async def _raw_llm_request(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> str:
         data = await self._raw_llm_request_full(base_url, api_key, model, messages, extra_config)
@@ -465,13 +527,27 @@ class LLMService:
         if not base_url:
             base_url = "https://api.openai.com/v1"  # Default to OpenAI if not set
 
+        resolved_category = str((extra_config or {}).get("__resolved_category") or "LLM").strip().upper()
         provider = (extra_config or {}).get("__provider") or self._infer_provider(base_url, model)
-        if provider == "grsai":
+        if provider == "grsai" and resolved_category == "LLM":
             base_url = self._normalize_grsai_llm_base_url(base_url)
 
-        url = base_url.rstrip("/")
-        if not url.endswith("/chat/completions"):
-            url = f"{url}/chat/completions"
+        configured_endpoint = ((extra_config or {}).get("endpoint") or "").strip()
+        if configured_endpoint and resolved_category == "LLM":
+            endpoint_lower = configured_endpoint.lower()
+            if "/chat/completions" in endpoint_lower:
+                url = configured_endpoint.rstrip("/")
+            else:
+                url = f"{configured_endpoint.rstrip('/')}/chat/completions"
+            url_source = "config.endpoint"
+        elif configured_endpoint and resolved_category != "LLM":
+            url = configured_endpoint.rstrip("/")
+            url_source = "config.endpoint(non-llm)"
+        else:
+            url = base_url.rstrip("/")
+            if resolved_category == "LLM" and not url.endswith("/chat/completions"):
+                url = f"{url}/chat/completions"
+            url_source = "base_url"
         
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -527,14 +603,35 @@ class LLMService:
             effective_max_tokens = payload.get("max_completion_tokens")
 
         logger.info(
-            "Calling LLM: url=%s model=%s messages=%s roles=%s prompt_chars=%s max_tokens=%s",
+            "Calling LLM: category=%s url=%s (source=%s) model=%s messages=%s roles=%s prompt_chars=%s max_tokens=%s",
+            resolved_category,
             url,
+            url_source,
             model,
             len(messages or []),
             roles,
             prompt_chars,
             effective_max_tokens,
         )
+
+        redacted_headers = {
+            **headers,
+            "Authorization": "Bearer ***REDACTED***",
+        }
+        self._safe_log_json("LLM_REQUEST", {
+            "provider": provider,
+            "category": resolved_category,
+            "url": url,
+            "url_source": url_source,
+            "model": model,
+            "headers": redacted_headers,
+            "payload": payload,
+            "message_count": len(messages or []),
+            "prompt_chars": prompt_chars,
+            "max_tokens": effective_max_tokens,
+            "resolved_source": (extra_config or {}).get("__resolved_source"),
+            "resolved_setting_id": (extra_config or {}).get("__resolved_setting_id"),
+        })
 
         def _request(bypass_proxy=False):
             kwargs = {
@@ -556,11 +653,31 @@ class LLMService:
             provider = (extra_config or {}).get("__provider") or (extra_config or {}).get("provider") or self._infer_provider(base_url, model)
             resolved_setting_id = (extra_config or {}).get("__resolved_setting_id")
             resolved_source = (extra_config or {}).get("__resolved_source")
+            self._safe_log_json("LLM_RESPONSE_ERROR", {
+                "provider": provider,
+                "category": resolved_category,
+                "url": url,
+                "model": model,
+                "status_code": response.status_code,
+                "response_text": response.text,
+                "resolved_source": resolved_source,
+                "resolved_setting_id": resolved_setting_id,
+            })
             raise Exception(
                 f"API Error {response.status_code} [provider={provider}, model={model}, endpoint={url}, setting_id={resolved_setting_id}, source={resolved_source}]: {response.text}"
             )
 
         data = response.json()
+        self._safe_log_json("LLM_RESPONSE", {
+            "provider": provider,
+            "category": resolved_category,
+            "url": url,
+            "model": model,
+            "status_code": response.status_code,
+            "response": data,
+            "resolved_source": (extra_config or {}).get("__resolved_source"),
+            "resolved_setting_id": (extra_config or {}).get("__resolved_setting_id"),
+        })
 
         # Normalize assistant text output across all text-LLM calls.
         if isinstance(data.get("choices"), list):
@@ -576,11 +693,7 @@ class LLMService:
             choices = data.get("choices") or []
             first = choices[0] if choices else {}
             finish_reason = first.get("finish_reason") if isinstance(first, dict) else None
-            content = ""
-            if isinstance(first, dict):
-                msg = first.get("message") or {}
-                if isinstance(msg, dict):
-                    content = msg.get("content") or ""
+            content = self._extract_text_from_response(data)
             usage = data.get("usage") or {}
             output_chars = len(content) if isinstance(content, str) else len(str(content))
             logger.info(
@@ -599,6 +712,16 @@ class LLMService:
                     usage.get("prompt_tokens") or usage.get("input_tokens"),
                     usage.get("completion_tokens") or usage.get("output_tokens"),
                     usage.get("total_tokens"),
+                    usage,
+                )
+            if output_chars == 0:
+                first_choice_keys = list(first.keys()) if isinstance(first, dict) else []
+                logger.warning(
+                    "LLM empty output detected: provider=%s model=%s finish_reason=%s first_choice_keys=%s usage=%s",
+                    provider,
+                    model,
+                    finish_reason,
+                    first_choice_keys,
                     usage,
                 )
         except Exception:

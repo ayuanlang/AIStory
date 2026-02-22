@@ -28,3 +28,5 @@ class AnalyzeSceneRequest(BaseModel):
     prompt_file: Optional[str] = "scene_analysis.txt"
     system_prompt: Optional[str] = None
     project_metadata: Optional[Dict[str, Any]] = None
+    analysis_attention_notes: Optional[str] = None
+    reuse_subject_assets: Optional[List[Dict[str, Any]]] = None

@@ -20,6 +20,10 @@ Rules:
 - AI scene-planning constraint: default every core venue to have two camera-direction variants (Front/Reverse) for downstream AI generation, unless axis is explicitly guaranteed never to reverse.
 - If axis/camera direction/background set changes, plan it as a new scene variant even inside the same physical venue.
 - Environment naming mandate: when proposing scene environments, use `[Venue]_[DirectionTag]_[ShotScale]_[LightingTagOptional]` (e.g., `GrandTheater_Front_Wide_Night`, `GrandTheater_Reverse_Mid_Night`).
+- Continuity ID contract (mandatory for downstream episode/scene/shot pipeline):
+	- Episode IDs must be canonical and zero-padded: `EP01 ... EP{N:02d}`.
+	- In section "分集规划", every episode line must begin with its canonical episode ID.
+	- For each episode, also provide 2-4 Core Venue Seeds (venue family names) and continuity anchors (must-track character/prop threads) for downstream scene coding.
 
 Output format (Markdown):
 # 故事框架（全局 Story DNA）
@@ -101,9 +105,11 @@ Output format (Markdown):
 - 伏笔清单（种子）：...
 - 回收清单（对应的兑现时刻）：...
 
-## 7) 分集规划（N 集）
-Provide a numbered list from Episode 1..N:
-- Episode X：定场/核心冲突/关键转折/小高潮/结尾钩子（1-2 句）
+## 7) 分集规划（N 集，编码强制）
+Provide a numbered list from Episode 1..N. Each line MUST follow:
+- `EPxx / Episode x`：定场/核心冲突/关键转折/小高潮/结尾钩子（1-2 句）
+	- Core Venue Seeds（2-4 个）：`[VenueFamilyA]`, `[VenueFamilyB]` ...
+	- Continuity Anchors（角色/道具/关系线程）：...
 
 ## 8) 最终高潮与结局（全局）
 - 最终高潮：...

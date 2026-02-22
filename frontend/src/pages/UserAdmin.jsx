@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { api, getPricingRules, createPricingRule, updatePricingRule, deletePricingRule, getTransactions, updateUserCredits, syncPricingRules, getBillingOptions } from '../services/api';
+import { api, getPricingRules, createPricingRule, updatePricingRule, deletePricingRule, getTransactions, updateUserCredits, syncPricingRules, getBillingOptions, getSystemSettingsManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, exportSystemSettingsManage, importSystemSettingsManage, getAdminLlmLogFiles, getAdminLlmLogView } from '../services/api';
 import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
-import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard } from 'lucide-react';
+import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download } from 'lucide-react';
 
 const UserAdmin = () => {
     const [activeTab, setActiveTab] = useState('users');
@@ -37,6 +37,28 @@ const UserAdmin = () => {
         use_mock: true
     });
     const [isPaymentConfigLoading, setIsPaymentConfigLoading] = useState(false);
+    const [systemApiRows, setSystemApiRows] = useState([]);
+    const [isSystemApiLoading, setIsSystemApiLoading] = useState(false);
+    const [isSystemApiImporting, setIsSystemApiImporting] = useState(false);
+    const [isSystemApiExporting, setIsSystemApiExporting] = useState(false);
+    const [selectedSystemApiId, setSelectedSystemApiId] = useState('');
+    const [systemApiForm, setSystemApiForm] = useState({
+        name: '',
+        category: 'LLM',
+        provider: '',
+        api_key: '',
+        base_url: '',
+        model: '',
+        webHook: '',
+        is_active: false,
+    });
+    const systemApiImportInputRef = React.useRef(null);
+    const [llmLogFiles, setLlmLogFiles] = useState([]);
+    const [selectedLlmLogFile, setSelectedLlmLogFile] = useState('llm_calls.log');
+    const [llmLogTailLines, setLlmLogTailLines] = useState(300);
+    const [llmLogContent, setLlmLogContent] = useState('');
+    const [isLlmLogsLoading, setIsLlmLogsLoading] = useState(false);
+    const [llmLogsError, setLlmLogsError] = useState('');
 
     // ... existing code ...
 
@@ -67,6 +89,225 @@ const UserAdmin = () => {
             fetchPaymentConfig();
         }
     }, [activeTab]);
+
+    useEffect(() => {
+        if (activeTab === 'llm_logs') {
+            fetchLlmLogs();
+        }
+    }, [activeTab]);
+
+    const fetchSystemApiManageRows = async () => {
+        setIsSystemApiLoading(true);
+        try {
+            const rows = await getSystemSettingsManage();
+            const normalized = Array.isArray(rows) ? rows : [];
+            setSystemApiRows(normalized);
+            if (normalized.length > 0) {
+                const current = normalized.find((row) => String(row.id) === String(selectedSystemApiId)) || normalized[0];
+                setSelectedSystemApiId(String(current.id));
+            } else {
+                setSelectedSystemApiId('');
+            }
+        } catch (e) {
+            console.error('Failed to load system API manage rows', e);
+            setSystemApiRows([]);
+            setSelectedSystemApiId('');
+        } finally {
+            setIsSystemApiLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        if (activeTab === 'system_api') {
+            fetchSystemApiManageRows();
+        }
+    }, [activeTab]);
+
+    useEffect(() => {
+        if (!selectedSystemApiId) {
+            setSystemApiForm({
+                name: '',
+                category: 'LLM',
+                provider: '',
+                api_key: '',
+                base_url: '',
+                model: '',
+                webHook: '',
+                is_active: false,
+            });
+            return;
+        }
+        const row = systemApiRows.find((item) => String(item.id) === String(selectedSystemApiId));
+        if (!row) return;
+        setSystemApiForm({
+            name: row.name || '',
+            category: row.category || 'LLM',
+            provider: row.provider || '',
+            api_key: '',
+            base_url: row.base_url || '',
+            model: row.model || '',
+            webHook: row?.config?.webHook || '',
+            is_active: !!row.is_active,
+        });
+    }, [selectedSystemApiId, systemApiRows]);
+
+    const handleCreateSystemApiSetting = async () => {
+        const provider = String(systemApiForm.provider || '').trim();
+        if (!provider) {
+            alert('Provider is required.');
+            return;
+        }
+        try {
+            await createSystemSettingManage({
+                name: String(systemApiForm.name || '').trim() || undefined,
+                category: systemApiForm.category || 'LLM',
+                provider,
+                api_key: String(systemApiForm.api_key || '').trim() || undefined,
+                base_url: String(systemApiForm.base_url || '').trim() || undefined,
+                model: String(systemApiForm.model || '').trim() || undefined,
+                config: { webHook: String(systemApiForm.webHook || '').trim() || '' },
+                is_active: !!systemApiForm.is_active,
+            });
+            await fetchSystemApiManageRows();
+            alert('System API setting created.');
+        } catch (e) {
+            alert(e?.response?.data?.detail || e.message || 'Failed to create system API setting');
+        }
+    };
+
+    const handleUpdateSystemApiSetting = async () => {
+        if (!selectedSystemApiId) {
+            alert('Select a setting first.');
+            return;
+        }
+        try {
+            await updateSystemSettingManage(Number(selectedSystemApiId), {
+                name: String(systemApiForm.name || '').trim() || undefined,
+                category: systemApiForm.category || 'LLM',
+                provider: String(systemApiForm.provider || '').trim() || undefined,
+                api_key: String(systemApiForm.api_key || '').trim() || undefined,
+                base_url: String(systemApiForm.base_url || '').trim() || undefined,
+                model: String(systemApiForm.model || '').trim() || undefined,
+                config: { webHook: String(systemApiForm.webHook || '').trim() || '' },
+                is_active: !!systemApiForm.is_active,
+            });
+            await fetchSystemApiManageRows();
+            alert('System API setting updated.');
+        } catch (e) {
+            alert(e?.response?.data?.detail || e.message || 'Failed to update system API setting');
+        }
+    };
+
+    const handleDeleteSystemApiSetting = async () => {
+        if (!selectedSystemApiId) {
+            alert('Select a setting first.');
+            return;
+        }
+        if (!window.confirm('Delete this system API setting?')) return;
+        try {
+            await deleteSystemSettingManage(Number(selectedSystemApiId));
+            await fetchSystemApiManageRows();
+            alert('System API setting deleted.');
+        } catch (e) {
+            alert(e?.response?.data?.detail || e.message || 'Failed to delete system API setting');
+        }
+    };
+
+    const handleExportSystemApiSettings = async () => {
+        setIsSystemApiExporting(true);
+        try {
+            const payload = await exportSystemSettingsManage();
+            const dataStr = JSON.stringify(payload, null, 2);
+            const blob = new Blob([dataStr], { type: 'application/json;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            const ts = new Date().toISOString().replace(/[:.]/g, '-');
+            a.href = url;
+            a.download = `system_api_settings_${ts}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            alert('System API settings exported.');
+        } catch (e) {
+            alert(e?.response?.data?.detail || e.message || 'Failed to export system API settings');
+        } finally {
+            setIsSystemApiExporting(false);
+        }
+    };
+
+    const handleOpenImportSystemApiSettings = () => {
+        if (systemApiImportInputRef.current) {
+            systemApiImportInputRef.current.value = '';
+            systemApiImportInputRef.current.click();
+        }
+    };
+
+    const handleImportSystemApiSettingsFile = async (event) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+
+        try {
+            const text = await file.text();
+            const parsed = JSON.parse(text);
+            const items = Array.isArray(parsed?.items) ? parsed.items : [];
+            if (!items.length) {
+                alert('No items found in import file. Expected { items: [...] }.');
+                return;
+            }
+
+            const replaceAll = window.confirm('Replace all existing system API settings before import? Click Cancel for merge/update mode.');
+            setIsSystemApiImporting(true);
+            const result = await importSystemSettingsManage({ items, replace_all: replaceAll });
+            await fetchSystemApiManageRows();
+            alert(`Import finished. Created: ${result?.created || 0}, Updated: ${result?.updated || 0}`);
+        } catch (e) {
+            alert(e?.response?.data?.detail || e.message || 'Failed to import system API settings');
+        } finally {
+            setIsSystemApiImporting(false);
+        }
+    };
+
+    const formatBytes = (value) => {
+        const n = Number(value || 0);
+        if (!Number.isFinite(n) || n <= 0) return '0 B';
+        if (n < 1024) return `${n} B`;
+        if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+        return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+    };
+
+    const fetchLlmLogs = async (preferredFile = null) => {
+        setIsLlmLogsLoading(true);
+        setLlmLogsError('');
+        try {
+            const files = await getAdminLlmLogFiles();
+            const normalizedFiles = Array.isArray(files) ? files : [];
+            setLlmLogFiles(normalizedFiles);
+
+            if (!normalizedFiles.length) {
+                setLlmLogContent('No llm log files found.');
+                return;
+            }
+
+            let targetFile = preferredFile || selectedLlmLogFile || normalizedFiles[0].name;
+            if (!normalizedFiles.some((f) => f.name === targetFile)) {
+                targetFile = normalizedFiles[0].name;
+            }
+            setSelectedLlmLogFile(targetFile);
+
+            const view = await getAdminLlmLogView({
+                filename: targetFile,
+                tail_lines: Math.max(1, Number(llmLogTailLines) || 300),
+            });
+            setLlmLogContent(view?.content || '');
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e.message || 'Failed to load LLM logs';
+            setLlmLogsError(detail);
+            setLlmLogContent('');
+        } finally {
+            setIsLlmLogsLoading(false);
+        }
+    };
 
     const handleSavePaymentConfig = async () => {
         try {
@@ -330,6 +571,8 @@ const UserAdmin = () => {
                         <TabButton id="users" label="Users" icon={User} />
                         <TabButton id="pricing" label="Pricing" icon={DollarSign} />
                         <TabButton id="transactions" label="History" icon={Activity} />
+                        <TabButton id="system_api" label="System API" icon={Key} />
+                        <TabButton id="llm_logs" label="LLM Logs" icon={List} />
                         <TabButton id="payment" label="Payment" icon={CreditCard} />
                     </div>
                 </div>
@@ -684,6 +927,251 @@ const UserAdmin = () => {
                                     </tbody>
                                 </table>
                             </div>
+                        </div>
+                    )}
+
+                    {/* SYSTEM API TAB */}
+                    {activeTab === 'system_api' && (
+                        <div className="space-y-4">
+                            <div className="flex items-center justify-between gap-2">
+                                <h3 className="text-lg font-bold">System API Settings (Superuser CRUD)</h3>
+                                <div className="flex items-center gap-2">
+                                    <input
+                                        ref={systemApiImportInputRef}
+                                        type="file"
+                                        accept="application/json,.json"
+                                        className="hidden"
+                                        onChange={handleImportSystemApiSettingsFile}
+                                    />
+                                    <button
+                                        onClick={handleOpenImportSystemApiSettings}
+                                        disabled={isSystemApiImporting || isSystemApiLoading}
+                                        className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded flex items-center gap-2 disabled:opacity-50"
+                                    >
+                                        <Upload size={16} /> {isSystemApiImporting ? 'Importing...' : 'Import'}
+                                    </button>
+                                    <button
+                                        onClick={handleExportSystemApiSettings}
+                                        disabled={isSystemApiExporting || isSystemApiLoading}
+                                        className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded flex items-center gap-2 disabled:opacity-50"
+                                    >
+                                        <Download size={16} /> {isSystemApiExporting ? 'Exporting...' : 'Export'}
+                                    </button>
+                                    <button
+                                        onClick={fetchSystemApiManageRows}
+                                        className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded flex items-center gap-2"
+                                    >
+                                        <RefreshCw size={16} /> Refresh
+                                    </button>
+                                </div>
+                            </div>
+
+                            {isSystemApiLoading ? (
+                                <div className="text-sm text-gray-400">Loading...</div>
+                            ) : (
+                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                    <div className="border border-white/10 rounded-lg p-4 bg-black/20 space-y-3">
+                                        <label className="text-xs uppercase text-gray-400">Select Existing Setting</label>
+                                        <select
+                                            value={selectedSystemApiId}
+                                            onChange={(e) => setSelectedSystemApiId(e.target.value)}
+                                            className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                        >
+                                            <option value="">Select...</option>
+                                            {systemApiRows.map((row) => (
+                                                <option key={row.id} value={row.id}>
+                                                    [{row.category}] {row.provider} / {row.model || '-'} (ID:{row.id})
+                                                </option>
+                                            ))}
+                                        </select>
+
+                                        <div className="overflow-y-auto max-h-[420px] border border-white/10 rounded">
+                                            <table className="w-full text-xs">
+                                                <thead className="bg-white/5 text-gray-400 sticky top-0">
+                                                    <tr>
+                                                        <th className="text-left p-2">ID</th>
+                                                        <th className="text-left p-2">Category</th>
+                                                        <th className="text-left p-2">Provider</th>
+                                                        <th className="text-left p-2">Model</th>
+                                                        <th className="text-left p-2">Active</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {systemApiRows.map((row) => (
+                                                        <tr
+                                                            key={row.id}
+                                                            onClick={() => setSelectedSystemApiId(String(row.id))}
+                                                            className={`border-t border-white/10 cursor-pointer ${String(selectedSystemApiId) === String(row.id) ? 'bg-primary/10' : 'hover:bg-white/5'}`}
+                                                        >
+                                                            <td className="p-2">{row.id}</td>
+                                                            <td className="p-2">{row.category}</td>
+                                                            <td className="p-2">{row.provider}</td>
+                                                            <td className="p-2">{row.model || '-'}</td>
+                                                            <td className="p-2">{row.is_active ? 'Yes' : 'No'}</td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+
+                                    <div className="border border-white/10 rounded-lg p-4 bg-black/20 space-y-3">
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                            <div>
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">Name</label>
+                                                <input
+                                                    value={systemApiForm.name}
+                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, name: e.target.value }))}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">Category</label>
+                                                <select
+                                                    value={systemApiForm.category}
+                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, category: e.target.value }))}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                >
+                                                    <option value="LLM">LLM</option>
+                                                    <option value="Image">Image</option>
+                                                    <option value="Video">Video</option>
+                                                    <option value="Vision">Vision</option>
+                                                    <option value="Tools">Tools</option>
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">Provider *</label>
+                                                <input
+                                                    value={systemApiForm.provider}
+                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, provider: e.target.value }))}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">Model</label>
+                                                <input
+                                                    value={systemApiForm.model}
+                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, model: e.target.value }))}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                />
+                                            </div>
+                                            <div className="md:col-span-2">
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">Endpoint</label>
+                                                <input
+                                                    value={systemApiForm.base_url}
+                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, base_url: e.target.value }))}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                />
+                                            </div>
+                                            <div className="md:col-span-2">
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">WebHook</label>
+                                                <input
+                                                    value={systemApiForm.webHook}
+                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, webHook: e.target.value }))}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                />
+                                            </div>
+                                            <div className="md:col-span-2">
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">API Key (leave blank to keep current shared key)</label>
+                                                <input
+                                                    type="password"
+                                                    value={systemApiForm.api_key}
+                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, api_key: e.target.value }))}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                />
+                                            </div>
+                                        </div>
+
+                                        <label className="flex items-center gap-2 text-xs text-gray-400">
+                                            <input
+                                                type="checkbox"
+                                                checked={!!systemApiForm.is_active}
+                                                onChange={(e) => setSystemApiForm((prev) => ({ ...prev, is_active: e.target.checked }))}
+                                            />
+                                            Set active for this category
+                                        </label>
+
+                                        <div className="flex flex-wrap gap-2 pt-2 border-t border-white/10">
+                                            <button
+                                                onClick={handleCreateSystemApiSetting}
+                                                className="px-3 py-2 bg-primary hover:bg-primary/90 text-black font-bold rounded"
+                                            >
+                                                Create
+                                            </button>
+                                            <button
+                                                onClick={handleUpdateSystemApiSetting}
+                                                disabled={!selectedSystemApiId}
+                                                className="px-3 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold rounded"
+                                            >
+                                                Update
+                                            </button>
+                                            <button
+                                                onClick={handleDeleteSystemApiSetting}
+                                                disabled={!selectedSystemApiId}
+                                                className="px-3 py-2 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white font-bold rounded"
+                                            >
+                                                Delete
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* LLM LOGS TAB */}
+                    {activeTab === 'llm_logs' && (
+                        <div className="space-y-4">
+                            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                                <h3 className="text-lg font-bold">LLM Call Logs</h3>
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <select
+                                        value={selectedLlmLogFile}
+                                        onChange={(e) => {
+                                            const fileName = e.target.value;
+                                            setSelectedLlmLogFile(fileName);
+                                            fetchLlmLogs(fileName);
+                                        }}
+                                        className="bg-black/40 border border-gray-700 rounded p-2 text-sm min-w-[220px]"
+                                    >
+                                        {llmLogFiles.map((f) => (
+                                            <option key={f.name} value={f.name}>
+                                                {f.name} ({formatBytes(f.size_bytes)})
+                                            </option>
+                                        ))}
+                                    </select>
+                                    <input
+                                        type="number"
+                                        min={1}
+                                        max={5000}
+                                        value={llmLogTailLines}
+                                        onChange={(e) => setLlmLogTailLines(e.target.value)}
+                                        className="w-24 bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                        title="Tail lines"
+                                    />
+                                    <button
+                                        onClick={() => fetchLlmLogs(selectedLlmLogFile)}
+                                        disabled={isLlmLogsLoading}
+                                        className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded flex items-center gap-2 disabled:opacity-50"
+                                    >
+                                        <RefreshCw size={16} className={isLlmLogsLoading ? 'animate-spin' : ''} /> Refresh
+                                    </button>
+                                </div>
+                            </div>
+
+                            {llmLogsError ? (
+                                <div className="text-sm text-red-300 bg-red-500/10 border border-red-500/30 rounded p-3">
+                                    {llmLogsError}
+                                </div>
+                            ) : null}
+
+                            <div className="text-xs text-gray-500">
+                                Showing last {Math.max(1, Number(llmLogTailLines) || 300)} lines from {selectedLlmLogFile}
+                            </div>
+
+                            <pre className="w-full min-h-[420px] max-h-[620px] overflow-auto bg-black/40 border border-gray-700 rounded p-3 text-xs text-gray-100 whitespace-pre-wrap break-all font-mono">
+                                {isLlmLogsLoading ? 'Loading LLM logs...' : (llmLogContent || 'No content')}
+                            </pre>
                         </div>
                     )}
 

@@ -20,6 +20,7 @@ from typing import List, Dict, Any, Optional, Union
 from app.db.session import SessionLocal
 from app.models.all_models import APISetting, SystemAPISetting
 from app.core.config import settings
+from sqlalchemy import cast, String
 
 # Suppress InsecureRequestWarning from urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -30,6 +31,68 @@ logger = logging.getLogger("media_service")
 
 class MediaGenerationService:
 # ...
+    def _safe_json_dict(self, value: Any) -> Dict[str, Any]:
+        if value is None:
+            return {}
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return {}
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                return {}
+            return parsed if isinstance(parsed, dict) else {}
+        return {}
+
+    def _repair_invalid_user_config_rows(self, session, user_id: int, category: Optional[str] = None) -> None:
+        q = session.query(
+            APISetting.id,
+            cast(APISetting.config, String).label("config_raw"),
+        ).filter(APISetting.user_id == user_id)
+        if category:
+            q = q.filter(APISetting.category == category)
+
+        bad_ids: List[int] = []
+        for row in q.all():
+            raw = getattr(row, "config_raw", None)
+            if isinstance(raw, str) and raw.strip() and not self._safe_json_dict(raw):
+                bad_ids.append(row.id)
+
+        if bad_ids:
+            logger.warning("Repair invalid api_settings.config rows in media service | user_id=%s category=%s ids=%s", user_id, category, bad_ids)
+            session.query(APISetting).filter(APISetting.id.in_(bad_ids)).update(
+                {APISetting.config: {}},
+                synchronize_session=False,
+            )
+            session.commit()
+
+    def _repair_invalid_system_config_rows(self, session, category: Optional[str] = None, provider: Optional[str] = None) -> None:
+        q = session.query(
+            SystemAPISetting.id,
+            cast(SystemAPISetting.config, String).label("config_raw"),
+        )
+        if category:
+            q = q.filter(SystemAPISetting.category == category)
+        if provider:
+            q = q.filter(SystemAPISetting.provider == provider)
+
+        bad_ids: List[int] = []
+        for row in q.all():
+            raw = getattr(row, "config_raw", None)
+            if isinstance(raw, str) and raw.strip() and not self._safe_json_dict(raw):
+                bad_ids.append(row.id)
+
+        if bad_ids:
+            logger.warning("Repair invalid system_api_settings.config rows in media service | category=%s provider=%s ids=%s", category, provider, bad_ids)
+            session.query(SystemAPISetting).filter(SystemAPISetting.id.in_(bad_ids)).update(
+                {SystemAPISetting.config: {}},
+                synchronize_session=False,
+            )
+            session.commit()
+
     def _system_setting_query(self, session, provider: str, category: str = None):
         query = session.query(SystemAPISetting).filter(
             SystemAPISetting.provider == provider,
@@ -46,6 +109,13 @@ class MediaGenerationService:
             "config": setting.config or {},
         }
 
+    def _get_active_user_setting(self, session, user_id: int, category: str) -> Optional[APISetting]:
+        return session.query(APISetting).filter(
+            APISetting.user_id == user_id,
+            APISetting.category == category,
+            APISetting.is_active == True,
+        ).order_by(APISetting.id.desc()).first()
+
     def get_api_config(
         self,
         provider: str,
@@ -54,10 +124,7 @@ class MediaGenerationService:
         requested_model: Optional[str] = None,
         user_credits: int = 0,
     ) -> Dict[str, Any]:
-        """
-        Retrieves API configuration for a specific provider from the database.
-        Falls back to environment variables or defaults if not configured.
-        """
+        """Resolves runtime API configuration by category active user setting -> system provider+model match."""
         defaults = {
             "openai": {"base_url": "https://api.openai.com/v1", "model": "gpt-4-turbo-preview"},
             "anthropic": {"base_url": "https://api.anthropic.com", "model": "claude-3-opus-20240229"},
@@ -73,90 +140,78 @@ class MediaGenerationService:
 
         try:
             with SessionLocal() as session:
-                user_setting = None
+                resolved_category = str(category or "").strip()
+                if not resolved_category:
+                    logger.warning("Missing category when resolving media API config | user_id=%s", user_id)
+                    return {}
 
-                # Prioritize Active setting for this provider
-                query = session.query(APISetting).filter(
-                    APISetting.user_id == user_id, 
-                    APISetting.provider == provider,
-                    APISetting.is_active == True
-                )
-                if category:
-                    query = query.filter(APISetting.category == category)
+                self._repair_invalid_user_config_rows(session, user_id, category=category)
+                self._repair_invalid_system_config_rows(session, category=category, provider=provider)
 
-                active_count = query.count()
-
-                if requested_model:
-                    user_setting = query.filter(APISetting.model == requested_model).order_by(APISetting.id.desc()).first()
-
+                user_setting = self._get_active_user_setting(session, user_id, resolved_category)
                 if not user_setting:
-                    user_setting = query.order_by(APISetting.id.desc()).first()
+                    logger.warning(
+                        "No active user api setting found in media service | user_id=%s category=%s",
+                        user_id,
+                        resolved_category,
+                    )
+                    return {}
 
-                # Rule A: if more than one active user setting exists in this scope, use user setting directly.
-                if user_setting and active_count > 1:
-                    return self._setting_to_config(user_setting, provider, defaults)
-                
-                # Fallback to any setting for this provider if none is explicitly active (relaxed check)
-                if not user_setting and not category:
-                    user_setting = session.query(APISetting).filter(
-                        APISetting.user_id == user_id, 
-                        APISetting.provider == provider
-                    ).order_by(APISetting.id.desc()).first()
+                target_provider = str(user_setting.provider or "").strip()
+                target_model = str(user_setting.model or "").strip()
+                if not target_provider or not target_model:
+                    logger.warning(
+                        "Active user setting missing provider/model in media service | user_id=%s category=%s setting_id=%s provider=%s model=%s",
+                        user_id,
+                        resolved_category,
+                        user_setting.id,
+                        user_setting.provider,
+                        user_setting.model,
+                    )
+                    return {}
 
-                if user_setting:
-                    # Explicit pointer to system setting selected by user on settings page
-                    use_system_setting_id = (user_setting.config or {}).get("use_system_setting_id")
-                    if use_system_setting_id and user_credits > 0:
-                        pointed = self._system_setting_query(session, provider, category).filter(
-                            SystemAPISetting.id == use_system_setting_id
-                        ).first()
-                        if pointed and (pointed.api_key or "").strip():
-                            merged = self._setting_to_config(pointed, provider, defaults)
-                            merged_cfg = dict(merged.get("config") or {})
-                            merged_cfg.update(user_setting.config or {})
-                            merged["config"] = merged_cfg
-                            return merged
+                system_setting = session.query(SystemAPISetting).filter(
+                    SystemAPISetting.category == resolved_category,
+                    SystemAPISetting.provider == target_provider,
+                    SystemAPISetting.model == target_model,
+                ).order_by(SystemAPISetting.id.desc()).first()
 
-                    if (user_setting.api_key or "").strip():
-                        return self._setting_to_config(user_setting, provider, defaults)
+                resolved_source = f"system_by_user_provider_model:{target_provider}/{target_model}"
 
-                # User has no key: if credits > 0, allow system key fallback by provider/model.
-                if user_credits > 0:
-                    preferred_model = requested_model or (user_setting.model if user_setting else None)
-                    system_query = self._system_setting_query(session, provider, category)
-
-                    system_setting = None
-                    if preferred_model:
-                        system_setting = system_query.filter(SystemAPISetting.model == preferred_model).first()
-                    if not system_setting:
-                        system_setting = system_query.filter(SystemAPISetting.is_active == True).first()
-                    if not system_setting:
-                        system_setting = system_query.first()
-
-                    if system_setting and (system_setting.api_key or "").strip():
-                        merged = self._setting_to_config(system_setting, provider, defaults)
-                        if user_setting and user_setting.config:
-                            merged_cfg = dict(merged.get("config") or {})
-                            merged_cfg.update(user_setting.config or {})
-                            merged["config"] = merged_cfg
-                        return merged
-
-                if user_setting:
-                    return self._setting_to_config(user_setting, provider, defaults)
+                if system_setting:
+                    logger.info(
+                        "Resolved media API config | user_id=%s category=%s provider=%s source=%s selection_source=system_only setting_id=%s model=%s endpoint=%s",
+                        user_id,
+                        resolved_category,
+                        target_provider,
+                        resolved_source,
+                        system_setting.id,
+                        system_setting.model,
+                        system_setting.base_url,
+                    )
+                    return {
+                        "provider": system_setting.provider,
+                        "api_key": system_setting.api_key,
+                        "base_url": system_setting.base_url or defaults.get(target_provider, {}).get("base_url"),
+                        "model": system_setting.model or defaults.get(target_provider, {}).get("model"),
+                        "config": {
+                            **(system_setting.config or {}),
+                            "__selection_source": "system_only",
+                            "__resolved_source": resolved_source,
+                            "__resolved_setting_id": system_setting.id,
+                        },
+                    }
+                logger.warning(
+                    "No matching system api setting by provider+model in media service | user_id=%s category=%s provider=%s model=%s",
+                    user_id,
+                    resolved_category,
+                    target_provider,
+                    target_model,
+                )
         except Exception as e:
             print(f"Error fetching settings for {provider}: {e}")
 
-        # Fallback to legacy/env
-        env_key = f"{provider.upper()}_API_KEY"
-        if os.getenv(env_key):
-             return {
-                 "api_key": os.getenv(env_key),
-                 "base_url": defaults.get(provider, {}).get("base_url"),
-                 "model": defaults.get(provider, {}).get("model"),
-                 "config": {}
-             }
-        
-        return defaults.get(provider, {})
+        return {}
 
     async def generate_image(self, prompt: str, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, width: int = None, height: int = None, aspect_ratio: str = None, user_id: int = 1, user_credits: int = 0, filename_base: Optional[str] = None):
         provider = None
@@ -173,20 +228,10 @@ class MediaGenerationService:
         if not provider:
             try:
                 with SessionLocal() as session:
-                    active_setting = session.query(APISetting).filter(
-                        APISetting.user_id == user_id,
-                        APISetting.category == "Image",
-                        APISetting.is_active == True
-                    ).first()
-                    if active_setting:
-                        provider = active_setting.provider
-                    elif user_credits > 0:
-                        system_active = session.query(SystemAPISetting).filter(
-                            SystemAPISetting.category == "Image",
-                            SystemAPISetting.is_active == True,
-                        ).first()
-                        if system_active:
-                            provider = system_active.provider
+                    self._repair_invalid_user_config_rows(session, user_id, category="Image")
+                    active_setting = self._get_active_user_setting(session, user_id, "Image")
+                    if active_setting and active_setting.provider:
+                        provider = str(active_setting.provider).strip()
             except Exception as e:
                 print(f"Error finding active provider: {e}")
         
@@ -252,20 +297,10 @@ class MediaGenerationService:
         if not provider:
             try:
                 with SessionLocal() as session:
-                    active_setting = session.query(APISetting).filter(
-                        APISetting.user_id == user_id,
-                        APISetting.category == "Video",
-                        APISetting.is_active == True
-                    ).first()
-                    if active_setting:
-                        provider = active_setting.provider
-                    elif user_credits > 0:
-                        system_active = session.query(SystemAPISetting).filter(
-                            SystemAPISetting.category == "Video",
-                            SystemAPISetting.is_active == True,
-                        ).first()
-                        if system_active:
-                            provider = system_active.provider
+                    self._repair_invalid_user_config_rows(session, user_id, category="Video")
+                    active_setting = self._get_active_user_setting(session, user_id, "Video")
+                    if active_setting and active_setting.provider:
+                        provider = str(active_setting.provider).strip()
             except Exception as e:
                 print(f"Error finding active provider: {e}")
 

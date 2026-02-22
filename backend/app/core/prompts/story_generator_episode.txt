@@ -12,6 +12,12 @@ Rules:
 - If camera direction/axis/background composition changes, treat it as a separate scene variant even in the same location.
 - Environment naming template: use `[Venue]_[DirectionTag]_[ShotScale]_[LightingTagOptional]`, and ensure DirectionTag clearly marks Front/Reverse.
 - Default Aesthetic Policy (when user gives no specific style): keep the episode visually premium/modern/elegant, characters attractive and charismatic with tasteful sensual tone (non-explicit), and props/environments refined and design-forward.
+- Hierarchical coding contract (mandatory):
+	- `episode_id` must be `EPxx` (zero-padded).
+	- Scene seeds in this outline must use `scene_id = EPxx_SCyy` (zero-padded scene index).
+	- `EPxx_SCyy` must be one-to-many children under the same `EPxx`; no cross-episode mixed coding.
+	- Every scene seed must include continuity handoff: `entry_state -> exit_state` for key character/prop/environment dynamic parts.
+	- Label mapping consistency: `entry_state` ↔ `Entry State`, `exit_state` ↔ `Exit State`, `Environment Seed` ↔ downstream `Environment Relation` routing context.
 
 Output format (Markdown):
 # 分集大纲（Episode Story DNA）
@@ -22,6 +28,7 @@ Output format (Markdown):
 
 ## 1) 本集身份
 - 集数：...
+- Episode ID（强制）：`EPxx`
 - 本集标题（可选）：...
 - 本集核心问题：...
 
@@ -55,8 +62,9 @@ Output format (Markdown):
 - 关系/案件/任务的收束：...
 - 角色状态变化：...
 
-## 4) 关键场景清单（6-12 场）
-1. ...
+## 4) 关键场景清单（6-12 场，供 Scene Generator 直接消费）
+For each item, use this strict line format:
+1. `EPxx_SCyy` | 场景名 | 主要目标/冲突/转折 | Environment Seed(`[Venue]_[DirectionTag]_[ShotScale]_[LightingTagOptional]`) | Linked Characters | Key Props | Entry State -> Exit State
 2. ...
 
 ## 5) 伏笔与回收

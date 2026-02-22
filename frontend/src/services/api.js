@@ -128,8 +128,8 @@ export const deleteEpisode = async (episodeId) => {
 }
 
 // Scenes
-export const fetchScenes = async (episodeId) => {
-    const response = await api.get(`/episodes/${episodeId}/scenes`);
+export const fetchScenes = async (episodeId, params = {}) => {
+    const response = await api.get(`/episodes/${episodeId}/scenes`, { params });
     return response.data;
 }
 
@@ -143,9 +143,14 @@ export const updateScene = async (sceneId, data) => {
     return response.data;
 }
 
+export const deleteScene = async (sceneId) => {
+    const response = await api.delete(`/scenes/${sceneId}`);
+    return response.data;
+}
+
 // Shots
-export const fetchEpisodeShots = async (episodeId) => {
-    const response = await api.get(`/episodes/${episodeId}/shots`);
+export const fetchEpisodeShots = async (episodeId, params = {}) => {
+    const response = await api.get(`/episodes/${episodeId}/shots`, { params });
     return response.data;
 }
 
@@ -267,6 +272,11 @@ export const generateProjectEpisodeScripts = async (projectId, payload) => {
     return response.data;
 }
 
+export const getProjectEpisodeScriptsStatus = async (projectId) => {
+    const response = await api.get(`/projects/${projectId}/script_generator/episodes/scripts/status`);
+    return response.data;
+}
+
 // Entities
 export const fetchEntities = async (projectId, type = null) => {
     const params = type ? { type } : {};
@@ -367,6 +377,31 @@ export const updateSystemSettingManage = async (settingId, data) => {
     return response.data;
 }
 
+export const deleteSystemSettingManage = async (settingId) => {
+    const response = await api.delete(`/settings/system/manage/${settingId}`);
+    return response.data;
+}
+
+export const exportSystemSettingsManage = async () => {
+    const response = await api.get('/settings/system/manage/export');
+    return response.data;
+}
+
+export const importSystemSettingsManage = async (payload) => {
+    const response = await api.post('/settings/system/manage/import', payload);
+    return response.data;
+}
+
+export const getAdminLlmLogFiles = async () => {
+    const response = await api.get('/admin/llm-logs/files');
+    return response.data;
+}
+
+export const getAdminLlmLogView = async (params = {}) => {
+    const response = await api.get('/admin/llm-logs/view', { params });
+    return response.data;
+}
+
 export const getEffectiveSettingSnapshot = async (params = {}) => {
     const response = await api.get('/settings/effective', { params });
     return response.data;
@@ -459,8 +494,8 @@ export const refinePrompt = async (original_prompt, instruction, type = 'image')
     return response.data;
 };
 
-export const analyzeScene = async (scriptText, systemPrompt = null, projectMetadata = null, episodeId = null) => {
-    console.log("[API] analyzeScene called", { hasMetadata: !!projectMetadata, episodeId });
+export const analyzeScene = async (scriptText, systemPrompt = null, projectMetadata = null, episodeId = null, analysisAttentionNotes = null, reuseSubjectAssets = null) => {
+    console.log("[API] analyzeScene called", { hasMetadata: !!projectMetadata, episodeId, hasAttentionNotes: !!analysisAttentionNotes, reuseSubjectCount: Array.isArray(reuseSubjectAssets) ? reuseSubjectAssets.length : 0 });
     const payload = { 
         text: scriptText,
         system_prompt: systemPrompt
@@ -470,6 +505,12 @@ export const analyzeScene = async (scriptText, systemPrompt = null, projectMetad
     }
     if (projectMetadata) {
         payload.project_metadata = projectMetadata;
+    }
+    if (analysisAttentionNotes && String(analysisAttentionNotes).trim()) {
+        payload.analysis_attention_notes = String(analysisAttentionNotes).trim();
+    }
+    if (Array.isArray(reuseSubjectAssets) && reuseSubjectAssets.length > 0) {
+        payload.reuse_subject_assets = reuseSubjectAssets;
     }
     const response = await api.post('/analyze_scene', payload);
     return response.data;

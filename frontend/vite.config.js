@@ -6,7 +6,16 @@ import path from 'path'
 // https://vitejs.dev/config/
 // Forced Reload Update
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react({
+      babel: {
+        compact: true,
+        generatorOpts: {
+          compact: true,
+        },
+      },
+    }),
+  ],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

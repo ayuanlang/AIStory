@@ -11,6 +11,7 @@ import asyncio
 import uuid
 import os
 import logging
+from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 from app.schemas.agent import AgentRequest, AgentResponse, AgentAction
@@ -20,6 +21,7 @@ from app.models.all_models import APISetting, SystemAPISetting, Entity, User
 from app.core.config import settings
 from app.services.billing_service import billing_service
 from sqlalchemy.orm import Session
+from sqlalchemy import cast, String
 # from app.db.session import db as legacy_db 
 # Mock legacy_db to prevent import error during refactor
 class MockLegacyDB:
@@ -33,10 +35,87 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logger = logging.getLogger(__name__)
 
 class AgentService:
-    def get_api_config(self, provider: str, user_id: int = 1) -> Dict[str, Any]:
+    def _safe_json_dict_or_none(self, value: Any) -> Optional[Dict[str, Any]]:
+        if value is None:
+            return {}
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return None
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                return None
+            return parsed if isinstance(parsed, dict) else None
+        return None
+
+    def _repair_invalid_user_config_rows(
+        self,
+        session: Session,
+        user_id: int,
+        category: Optional[str] = None,
+        provider: Optional[str] = None,
+    ) -> None:
+        q = session.query(
+            APISetting.id,
+            cast(APISetting.config, String).label("config_raw"),
+        ).filter(APISetting.user_id == user_id)
+        if category:
+            q = q.filter(APISetting.category == category)
+        if provider:
+            q = q.filter(APISetting.provider == provider)
+
+        bad_ids: List[int] = []
+        for row in q.all():
+            if self._safe_json_dict_or_none(row.config_raw) is None:
+                bad_ids.append(row.id)
+
+        if bad_ids:
+            logger.warning(
+                "Repair invalid api_settings.config rows | user_id=%s category=%s provider=%s ids=%s",
+                user_id,
+                category,
+                provider,
+                bad_ids,
+            )
+            session.query(APISetting).filter(APISetting.id.in_(bad_ids)).update(
+                {APISetting.config: {}},
+                synchronize_session=False,
+            )
+            session.commit()
+
+    def _repair_invalid_system_config_rows(self, session: Session, category: Optional[str] = None) -> None:
+        q = session.query(
+            SystemAPISetting.id,
+            cast(SystemAPISetting.config, String).label("config_raw"),
+        )
+        if category:
+            q = q.filter(SystemAPISetting.category == category)
+
+        bad_ids: List[int] = []
+        for row in q.all():
+            if self._safe_json_dict_or_none(row.config_raw) is None:
+                bad_ids.append(row.id)
+
+        if bad_ids:
+            logger.warning(
+                "Repair invalid system_api_settings.config rows | category=%s ids=%s",
+                category,
+                bad_ids,
+            )
+            session.query(SystemAPISetting).filter(SystemAPISetting.id.in_(bad_ids)).update(
+                {SystemAPISetting.config: {}},
+                synchronize_session=False,
+            )
+            session.commit()
+
+    def get_api_config(self, provider: str, user_id: int = 1, category: Optional[str] = None) -> Dict[str, Any]:
         """
-        Retrieves API configuration for a specific provider from the database.
-        Falls back to environment variables or defaults if not configured.
+        Resolves API configuration by:
+        1) finding user's active api_settings row in the given category,
+        2) using that row's provider+model to match system_api_settings.
         """
         defaults = {
             "openai": {"base_url": "https://api.openai.com/v1", "model": "gpt-4-turbo-preview"},
@@ -52,176 +131,157 @@ class AgentService:
 
         try:
             with SessionLocal() as session:
-                # Prioritize Active setting for this provider
-                setting = session.query(APISetting).filter(
-                    APISetting.user_id == user_id, 
-                    APISetting.provider == provider,
-                    APISetting.is_active == True
-                ).first()
-                
-                # Fallback to any setting for this provider if none is explicitly active
-                if not setting:
-                    setting = session.query(APISetting).filter(
-                        APISetting.user_id == user_id, 
-                        APISetting.provider == provider
-                    ).first()
+                resolved_category = str(category or "").strip()
+                if not resolved_category:
+                    logger.warning("Missing category when resolving API config | user_id=%s", user_id)
+                    return {}
+
+                self._repair_invalid_user_config_rows(session, user_id, category=resolved_category)
+                self._repair_invalid_system_config_rows(session, category=resolved_category)
+
+                active_user_setting = session.query(APISetting).filter(
+                    APISetting.user_id == user_id,
+                    APISetting.category == resolved_category,
+                    APISetting.is_active == True,
+                ).order_by(APISetting.id.desc()).first()
+
+                if not active_user_setting:
+                    logger.warning(
+                        "No active user api setting found | user_id=%s category=%s",
+                        user_id,
+                        resolved_category,
+                    )
+                    return {}
+
+                target_provider = str(active_user_setting.provider or "").strip()
+                target_model = str(active_user_setting.model or "").strip()
+                if not target_provider or not target_model:
+                    logger.warning(
+                        "Active user setting missing provider/model | user_id=%s category=%s setting_id=%s provider=%s model=%s",
+                        user_id,
+                        resolved_category,
+                        active_user_setting.id,
+                        active_user_setting.provider,
+                        active_user_setting.model,
+                    )
+                    return {}
+
+                setting = session.query(SystemAPISetting).filter(
+                    SystemAPISetting.category == resolved_category,
+                    SystemAPISetting.provider == target_provider,
+                    SystemAPISetting.model == target_model,
+                ).order_by(SystemAPISetting.id.desc()).first()
 
                 if setting:
                     return {
+                        "provider": setting.provider,
                         "api_key": setting.api_key,
-                        "base_url": setting.base_url or defaults.get(provider, {}).get("base_url"),
-                        "model": setting.model or defaults.get(provider, {}).get("model"),
+                        "base_url": setting.base_url or defaults.get(target_provider, {}).get("base_url"),
+                        "model": setting.model or defaults.get(target_provider, {}).get("model"),
                         "config": setting.config or {}
                     }
+                logger.warning(
+                    "No matching system api setting by provider+model | user_id=%s category=%s provider=%s model=%s",
+                    user_id,
+                    resolved_category,
+                    target_provider,
+                    target_model,
+                )
         except Exception as e:
-            print(f"Error fetching settings for {provider}: {e}")
+            logger.error(f"Error fetching system settings for {provider}: {e}")
 
-        # Fallback to legacy/env
-        env_key = f"{provider.upper()}_API_KEY"
-        if os.getenv(env_key):
-             return {
-                 "api_key": os.getenv(env_key),
-                 "base_url": defaults.get(provider, {}).get("base_url"),
-                 "model": defaults.get(provider, {}).get("model"),
-                 "config": {}
-             }
-        
-        return defaults.get(provider, {})
+        return {}
 
-    def get_active_llm_config(self, user_id: int = 1) -> Dict[str, Any]:
+    def get_active_llm_config(self, user_id: int = 1, category: str = "LLM") -> Dict[str, Any]:
         """
-        Retrieves the currently active LLM configuration.
+        Retrieves active API configuration by category by matching
+        active user api_settings(provider+model) -> system_api_settings.
         """
         try:
             with SessionLocal() as session:
-                user = session.query(User).filter(User.id == user_id).first()
-                if not user:
+                resolved_category = str(category or "LLM").strip() or "LLM"
+
+                self._repair_invalid_user_config_rows(session, user_id, category=resolved_category)
+                self._repair_invalid_system_config_rows(session, category=resolved_category)
+
+                def _is_endpoint_compatible(cfg: Dict[str, Any]) -> bool:
+                    endpoint = str((cfg or {}).get("endpoint") or "").strip().lower()
+                    if not endpoint:
+                        return True
+                    if resolved_category != "LLM":
+                        return True
+                    if "/chat/completions" in endpoint:
+                        return True
+                    media_tokens = ["/draw", "/video", "image2video", "video-synthesis", "generations/tasks"]
+                    return not any(token in endpoint for token in media_tokens)
+
+                active_user_setting = session.query(APISetting).filter(
+                    APISetting.user_id == user_id,
+                    APISetting.category == resolved_category,
+                    APISetting.is_active == True
+                ).order_by(APISetting.id.desc()).first()
+
+                if not active_user_setting:
+                    logger.warning(
+                        "No active user api setting found | user_id=%s category=%s",
+                        user_id,
+                        resolved_category,
+                    )
                     return {}
 
-                def _can_use_system_settings() -> bool:
-                    return bool(
-                        (user.credits or 0) > 0
-                        or user.is_superuser
-                        or user.is_system
-                        or user.is_authorized
+                selected: Optional[SystemAPISetting] = None
+                selected_source = "none"
+
+                target_provider = active_user_setting.provider if active_user_setting else None
+                target_model = active_user_setting.model if active_user_setting else None
+
+                if target_provider and target_model:
+                    selected = session.query(SystemAPISetting).filter(
+                        SystemAPISetting.category == resolved_category,
+                        SystemAPISetting.provider == target_provider,
+                        SystemAPISetting.model == target_model,
+                    ).order_by(SystemAPISetting.id.desc()).first()
+                    if selected:
+                        selected_source = f"system_by_user_provider_model:{target_provider}/{target_model}->{selected.id}"
+
+                if not selected and active_user_setting:
+                    logger.warning(
+                        "No matching system api setting by provider+model | user_id=%s category=%s user_setting_id=%s provider=%s model=%s",
+                        user_id,
+                        resolved_category,
+                        active_user_setting.id,
+                        target_provider,
+                        target_model,
                     )
-
-                def _query_system_llm_setting(
-                    setting_id: int = None,
-                    provider: str = None,
-                    model: str = None,
-                ) -> Optional[SystemAPISetting]:
-                    q = session.query(SystemAPISetting).filter(
-                        SystemAPISetting.category == "LLM",
-                    )
-                    if setting_id:
-                        return q.filter(SystemAPISetting.id == setting_id).first()
-                    if provider:
-                        q = q.filter(SystemAPISetting.provider == provider)
-                    if model:
-                        q = q.filter(SystemAPISetting.model == model)
-
-                    active = q.filter(SystemAPISetting.is_active == True).order_by(SystemAPISetting.id.desc()).first()
-                    if active:
-                        return active
-                    return q.order_by(SystemAPISetting.id.desc()).first()
-
-                # 1. Try User's own setting
-                active_query = session.query(APISetting).filter(
-                    APISetting.user_id == user_id,
-                    APISetting.category == "LLM",
-                    APISetting.is_active == True
-                )
-                active_count = active_query.count()
-                setting = active_query.order_by(APISetting.id.desc()).first()
-
-                selected = setting
-                selected_source = "user_active"
-                linked_system_setting = None
-
-                # Rule A: if user has multiple active LLM settings, use user setting directly.
-                if setting and active_count > 1:
-                    selected = setting
-                    selected_source = f"user_active_multi:{setting.id}"
-
-                marker = (setting.config or {}) if setting else {}
-                use_system_marker = str(marker.get("selection_source") or "").strip().lower() == "system"
-                use_system_setting_id = None
-                try:
-                    use_system_setting_id = int(marker.get("use_system_setting_id") or 0)
-                except Exception:
-                    use_system_setting_id = None
-
-                target_provider = setting.provider if setting else None
-                target_model = setting.model if setting else None
-
-                # Rule B: for non-multi-active case, resolve by user's provider+model first.
-                if setting and active_count <= 1 and target_provider:
-                    provider_model_query = session.query(APISetting).filter(
-                        APISetting.user_id == user_id,
-                        APISetting.category == "LLM",
-                        APISetting.provider == target_provider,
-                    )
-                    if target_model:
-                        provider_model_query = provider_model_query.filter(APISetting.model == target_model)
-
-                    user_provider_model_with_key = provider_model_query.filter(
-                        APISetting.api_key.isnot(None),
-                        APISetting.api_key != "",
-                    ).order_by(APISetting.is_active.desc(), APISetting.id.desc()).first()
-                    if user_provider_model_with_key:
-                        selected = user_provider_model_with_key
-                        selected_source = f"user_provider_model:{setting.id}->{user_provider_model_with_key.id}"
-
-                if setting and active_count <= 1 and _can_use_system_settings() and (use_system_marker or use_system_setting_id):
-                    if use_system_setting_id:
-                        linked_system_setting = _query_system_llm_setting(setting_id=use_system_setting_id)
-                        if linked_system_setting and (linked_system_setting.api_key or "").strip():
-                            selected = linked_system_setting
-                            selected_source = f"system_linked:{setting.id}->{linked_system_setting.id}"
-
-                    if selected is setting:
-                        fallback_system = _query_system_llm_setting(
-                            provider=setting.provider,
-                            model=setting.model,
-                        )
-                        if fallback_system and (fallback_system.api_key or "").strip():
-                            selected = fallback_system
-                            selected_source = f"system_marker_fallback:{setting.id}->{fallback_system.id}"
-
-                if setting and active_count <= 1 and not (setting.api_key or "").strip() and _can_use_system_settings():
-                    if use_system_setting_id:
-                        linked_system_setting = _query_system_llm_setting(setting_id=use_system_setting_id)
-                        if linked_system_setting and (linked_system_setting.api_key or "").strip():
-                            selected = linked_system_setting
-                            selected_source = f"system_linked:{setting.id}->{linked_system_setting.id}"
-
-                    if selected is setting:
-                        fallback_system = _query_system_llm_setting(
-                            provider=setting.provider,
-                            model=setting.model,
-                        )
-                        if fallback_system and (fallback_system.api_key or "").strip():
-                            selected = fallback_system
-                            selected_source = f"system_fallback:{setting.id}->{fallback_system.id}"
-
-                # 2. Fallback to system-level active/default LLM setting
-                if not selected and _can_use_system_settings():
-                    selected = _query_system_llm_setting()
-                    selected_source = "system_default"
 
                 if selected:
-                    # Import defaults here to avoid circular imports at top level if any
+                    if not _is_endpoint_compatible(selected.config or {}):
+                        logger.warning(
+                            "Skipping incompatible %s setting | user_id=%s setting_id=%s provider=%s model=%s endpoint=%s",
+                            resolved_category,
+                            user_id,
+                            selected.id,
+                            selected.provider,
+                            selected.model,
+                            (selected.config or {}).get("endpoint"),
+                        )
+                        selected = None
+
+                if selected:
                     from app.api.settings import DEFAULTS
                     default = DEFAULTS.get(selected.provider, {})
                     merged_config = dict(selected.config or default.get("config", {}) or {})
                     merged_config["__resolved_setting_id"] = selected.id
                     merged_config["__resolved_source"] = selected_source
+                    merged_config["__resolved_category"] = getattr(selected, "category", resolved_category)
+                    merged_config["__selection_source"] = "system_only"
+                    if active_user_setting:
+                        merged_config["__resolved_user_setting_id"] = active_user_setting.id
 
                     logger.info(
-                        "Resolved active LLM config | user_id=%s username=%s source=%s setting_id=%s provider=%s model=%s endpoint=%s",
+                        "Resolved active API config | user_id=%s category=%s source=%s selection_source=system_only setting_id=%s provider=%s model=%s endpoint=%s",
                         user_id,
-                        user.username,
+                        resolved_category,
                         selected_source,
                         selected.id,
                         selected.provider,
@@ -237,10 +297,9 @@ class AgentService:
                         "config": merged_config
                     }
         except Exception as e:
-            print(f"Error fetching active LLM: {e}")
-            
-        # Fallback to OpenAI if nothing active
-        return self.get_api_config("openai", user_id)
+            logger.error(f"Error fetching active API config ({category}): {e}")
+
+        return {}
 
     async def process_command(self, request: AgentRequest, db: Session, user_id: int) -> AgentResponse:
         project_id = request.context.get("project_id")
@@ -387,7 +446,7 @@ class AgentService:
             billing_service.check_balance(db, user_id, "image_gen", gen_provider, gen_model)
             
             try:
-                gen_result = await self._generate_image_with_metadata(prompt, llm_config, reference_image_url=reference_image_url)
+                gen_result = await self._generate_image_with_metadata(prompt, llm_config, user_id=user_id, reference_image_url=reference_image_url)
                 
                 # 2. Deduct Credits
                 # Only if successful
@@ -413,7 +472,7 @@ class AgentService:
             try:
                 prompt = params.get("prompt", "")
                 prompt = self._enrich_prompt_if_possible(prompt, project_id)
-                gen_result = await self._generate_image_with_metadata(prompt, llm_config)
+                gen_result = await self._generate_image_with_metadata(prompt, llm_config, user_id=user_id)
                 
                 billing_service.deduct_credits(db, user_id, "image_gen", gen_provider, gen_model, {"item": "image_from_tool"})
 
@@ -434,7 +493,7 @@ class AgentService:
                 prompt = params.get("prompt", "")
                 prompt = self._enrich_prompt_if_possible(prompt, project_id)
                 image_url = params.get("image_url", "")
-                gen_result = await self._generate_image_with_metadata(prompt, llm_config, reference_image_url=image_url)
+                gen_result = await self._generate_image_with_metadata(prompt, llm_config, user_id=user_id, reference_image_url=image_url)
                 
                 billing_service.deduct_credits(db, user_id, "image_gen", gen_provider, gen_model, {"item": "i2i_from_tool"})
                 
@@ -458,7 +517,7 @@ class AgentService:
                 target_type = context.get("target_type", "scene_item")
                 duration = -1
                 
-                gen_result = await self._generate_video_with_metadata(prompt, llm_config, duration=duration)
+                gen_result = await self._generate_video_with_metadata(prompt, llm_config, user_id=user_id, duration=duration)
                 
                 billing_service.deduct_credits(db, user_id, "video_gen", gen_provider, gen_model, {"item": "video_from_tool"})
                 
@@ -515,6 +574,7 @@ class AgentService:
                 gen_result = await self._generate_video_with_metadata(
                     prompt, 
                     llm_config, 
+                    user_id=user_id,
                     reference_image_url=image_url, 
                     last_frame_url=last_frame_url,
                     duration=duration
@@ -617,13 +677,12 @@ class AgentService:
             }
         }
 
-    async def _generate_image_with_metadata(self, prompt, llm_config, reference_image_url=None):
-        user_id = 1
+    async def _generate_image_with_metadata(self, prompt, llm_config, user_id: int, reference_image_url=None):
         provider = "stability"
         if llm_config and "provider" in llm_config:
             provider = llm_config["provider"]
         
-        api_config = self.get_api_config(provider, user_id)
+        api_config = self.get_api_config(provider, user_id, category="Image")
         
         if provider == "doubao":
              return await self._handle_doubao_generation("image", prompt, api_config, reference_image_url)
@@ -638,13 +697,12 @@ class AgentService:
             "metadata": {"provider": provider, "model": api_config.get("model", "default")}
         }
 
-    async def _generate_video_with_metadata(self, prompt, llm_config, reference_image_url=None, last_frame_url=None, duration=5):
-        user_id = 1
+    async def _generate_video_with_metadata(self, prompt, llm_config, user_id: int, reference_image_url=None, last_frame_url=None, duration=5):
         provider = "runway"
         if llm_config and "provider" in llm_config:
             provider = llm_config["provider"]
             
-        api_config = self.get_api_config(provider, user_id)
+        api_config = self.get_api_config(provider, user_id, category="Video")
 
         if provider == "doubao":
              return await self._handle_doubao_generation("video", prompt, api_config, reference_image_url)

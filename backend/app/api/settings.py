@@ -1,5 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy import cast, String
+import logging
+import json
+from datetime import datetime
 from app.db.session import get_db
 from app.models.all_models import APISetting, User, PricingRule, SystemAPISetting
 from app.schemas.settings import (
@@ -12,11 +16,13 @@ from app.schemas.settings import (
     SystemAPISelectionRequest,
     SystemAPISettingManageCreate,
     SystemAPISettingManageUpdate,
+    SystemAPISettingImportRequest,
 )
 from app.api.deps import get_current_user
 from typing import List, Dict, Tuple
 
 router = APIRouter()
+logger = logging.getLogger("settings_api")
 
 
 def _mask_api_key(api_key: str) -> str:
@@ -27,8 +33,25 @@ def _mask_api_key(api_key: str) -> str:
     return f"{api_key[:4]}***{api_key[-4:]}"
 
 
+def _safe_json_dict(value) -> Dict:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
 def _can_use_system_settings(user: User) -> bool:
-    return bool((user.credits or 0) > 0 or user.is_superuser or user.is_system)
+    return bool(user and user.is_active)
 
 
 def _can_manage_system_settings(user: User) -> bool:
@@ -258,26 +281,56 @@ def get_system_settings(
     if not _can_use_system_settings(current_user):
         return []
 
-    system_settings = db.query(SystemAPISetting).filter(
+    system_settings = db.query(
+        SystemAPISetting.id,
+        SystemAPISetting.name,
+        SystemAPISetting.provider,
+        SystemAPISetting.category,
+        SystemAPISetting.model,
+        SystemAPISetting.base_url,
+        SystemAPISetting.api_key,
+        cast(SystemAPISetting.config, String).label("config_raw"),
+    ).filter(
         SystemAPISetting.category != "System_Payment"
     ).all()
 
     # Build user's active map (one active per category should be maintained).
-    user_active_by_category: Dict[str, APISetting] = {}
-    user_active_rows = db.query(APISetting).filter(
+    user_active_by_category: Dict[str, Dict] = {}
+    user_active_rows = db.query(
+        APISetting.id,
+        APISetting.category,
+        APISetting.provider,
+        APISetting.model,
+        cast(APISetting.config, String).label("config_raw"),
+    ).filter(
         APISetting.user_id == current_user.id,
         APISetting.is_active == True,
     ).all()
     for row in user_active_rows:
         cat = row.category or "LLM"
+        row_data = {
+            "id": row.id,
+            "category": row.category,
+            "provider": row.provider,
+            "model": row.model,
+            "config": _safe_json_dict(getattr(row, "config_raw", None)),
+        }
         # Keep latest id if historical duplicates exist.
-        if cat not in user_active_by_category or (row.id or 0) > (user_active_by_category[cat].id or 0):
-            user_active_by_category[cat] = row
+        if cat not in user_active_by_category or (row.id or 0) > (user_active_by_category[cat].get("id") or 0):
+            user_active_by_category[cat] = row_data
 
     grouped: Dict[Tuple[str, str], Dict] = {}
     for item in system_settings:
         provider = item.provider or "unknown"
         category = item.category or "LLM"
+        item_config = _safe_json_dict(getattr(item, "config_raw", None))
+        if getattr(item, "config_raw", None) and not item_config:
+            logger.warning(
+                "Invalid JSON in system setting config, fallback to empty dict | setting_id=%s provider=%s category=%s",
+                item.id,
+                provider,
+                category,
+            )
         key = (provider, category)
         if key not in grouped:
             grouped[key] = {
@@ -291,14 +344,11 @@ def get_system_settings(
         grouped[key]["shared_key_configured"] = grouped[key]["shared_key_configured"] or has_key
 
         user_active = user_active_by_category.get(category)
-        user_selected_system_id = ((user_active.config or {}).get("use_system_setting_id") if user_active else None)
         user_is_active_for_row = False
-        if user_selected_system_id:
-            user_is_active_for_row = int(user_selected_system_id) == int(item.id)
-        elif user_active:
+        if user_active:
             user_is_active_for_row = (
-                (user_active.provider == item.provider)
-                and ((user_active.model or "") == (item.model or ""))
+                (user_active.get("provider") == item.provider)
+                and ((user_active.get("model") or "") == (item.model or ""))
             )
 
         grouped[key]["models"].append(
@@ -309,7 +359,7 @@ def get_system_settings(
                 category=category,
                 model=item.model,
                 base_url=item.base_url,
-                webhook_url=(item.config or {}).get("webHook"),
+                webhook_url=(item_config or {}).get("webHook"),
                 is_active=bool(user_is_active_for_row),
                 has_api_key=has_key,
                 api_key_masked=_mask_api_key(item.api_key or "") if has_key else "",
@@ -377,9 +427,6 @@ def select_system_setting(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    if not _can_use_system_settings(current_user):
-        raise HTTPException(status_code=403, detail="Insufficient credits to use system API settings")
-
     system_setting = db.query(SystemAPISetting).filter(
         SystemAPISetting.id == selection.setting_id,
     ).first()
@@ -401,7 +448,6 @@ def select_system_setting(
     ).first()
 
     marker_config = dict(system_setting.config or {})
-    marker_config["use_system_setting_id"] = system_setting.id
     marker_config["selection_source"] = "system"
 
     if user_setting:
@@ -534,6 +580,143 @@ def update_system_setting_for_manage(
     db.commit()
     db.refresh(target)
     return target
+
+
+@router.get("/settings/system/manage/export")
+def export_system_settings_for_manage(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+
+    rows = db.query(SystemAPISetting).filter(
+        SystemAPISetting.category != "System_Payment",
+    ).order_by(SystemAPISetting.category.asc(), SystemAPISetting.provider.asc(), SystemAPISetting.model.asc(), SystemAPISetting.id.asc()).all()
+
+    return {
+        "version": 1,
+        "exported_at": datetime.utcnow().isoformat(),
+        "count": len(rows),
+        "items": [
+            {
+                "name": row.name,
+                "category": row.category,
+                "provider": row.provider,
+                "api_key": row.api_key,
+                "base_url": row.base_url,
+                "model": row.model,
+                "config": row.config or {},
+                "is_active": bool(row.is_active),
+            }
+            for row in rows
+        ],
+    }
+
+
+@router.post("/settings/system/manage/import")
+def import_system_settings_for_manage(
+    payload: SystemAPISettingImportRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+
+    items = payload.items or []
+    if not items:
+        return {"ok": True, "created": 0, "updated": 0, "total": 0}
+
+    if payload.replace_all:
+        db.query(SystemAPISetting).filter(
+            SystemAPISetting.category != "System_Payment",
+        ).delete(synchronize_session=False)
+        db.flush()
+
+    created = 0
+    updated = 0
+    last_active_id_by_category: Dict[str, int] = {}
+
+    for item in items:
+        provider = (item.provider or "").strip()
+        category = (item.category or "LLM").strip() or "LLM"
+        model = (item.model or "").strip()
+        if not provider:
+            continue
+
+        target = db.query(SystemAPISetting).filter(
+            SystemAPISetting.category == category,
+            SystemAPISetting.provider == provider,
+            SystemAPISetting.model == model,
+        ).order_by(SystemAPISetting.id.desc()).first()
+
+        if target:
+            target.name = (item.name or target.name or "System Setting").strip() or "System Setting"
+            target.base_url = item.base_url
+            target.model = item.model
+            target.config = item.config if isinstance(item.config, dict) else {}
+            target.is_active = bool(item.is_active)
+            updated += 1
+        else:
+            target = SystemAPISetting(
+                name=(item.name or "System Setting").strip() or "System Setting",
+                category=category,
+                provider=provider,
+                api_key="",
+                base_url=item.base_url,
+                model=item.model,
+                config=item.config if isinstance(item.config, dict) else {},
+                is_active=bool(item.is_active),
+            )
+            db.add(target)
+            db.flush()
+            created += 1
+
+        effective_key = _sync_system_provider_shared_key(
+            db,
+            target.provider,
+            target.id,
+            item.api_key,
+        )
+        target.api_key = effective_key
+
+        if bool(item.is_active):
+            last_active_id_by_category[category] = target.id
+
+    for category, keep_id in last_active_id_by_category.items():
+        db.query(SystemAPISetting).filter(
+            SystemAPISetting.category == category,
+            SystemAPISetting.id != keep_id,
+            SystemAPISetting.is_active == True,
+        ).update({"is_active": False}, synchronize_session=False)
+
+    db.commit()
+    return {
+        "ok": True,
+        "created": created,
+        "updated": updated,
+        "total": created + updated,
+    }
+
+
+@router.delete("/settings/system/manage/{setting_id}")
+def delete_system_setting_for_manage(
+    setting_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+
+    target = db.query(SystemAPISetting).filter(
+        SystemAPISetting.id == setting_id,
+    ).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="System API setting not found")
+
+    db.delete(target)
+    db.commit()
+    return {"ok": True}
 
 @router.delete("/settings/{setting_id}")
 def delete_setting(

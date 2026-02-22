@@ -34,6 +34,8 @@ from PIL import Image
 import requests
 import asyncio
 import urllib.parse
+from pathlib import Path
+from collections import deque
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/login/access-token")
 
@@ -86,7 +88,7 @@ def get_system_api_setting(
     model: str = None,
     setting_id: int = None,
 ) -> Optional[SystemAPISetting]:
-    """Helper to find a system-level API configuration."""
+    """Helper to find a system-level API configuration by exact filters."""
     query = db.query(SystemAPISetting)
     if setting_id:
         query = query.filter(SystemAPISetting.id == setting_id)
@@ -96,13 +98,6 @@ def get_system_api_setting(
         query = query.filter(SystemAPISetting.category == category)
     if model:
         query = query.filter(SystemAPISetting.model == model)
-
-    if setting_id:
-        return query.first()
-
-    active = query.filter(SystemAPISetting.is_active == True).order_by(SystemAPISetting.id.desc()).first()
-    if active:
-        return active
     return query.order_by(SystemAPISetting.id.desc()).first()
 
 
@@ -112,123 +107,54 @@ def _resolve_effective_api_setting_meta(
     provider: str = None,
     category: str = None,
 ) -> Tuple[Optional[APISetting], str, Dict[str, Any]]:
+    resolved_category = str(category or "").strip()
+    if not resolved_category:
+        return None, "missing_category", {"active_count": 0}
+
     user_setting_query = db.query(APISetting).filter(
         APISetting.user_id == user.id,
+        APISetting.category == resolved_category,
         APISetting.is_active == True,
     )
-    if provider:
-        user_setting_query = user_setting_query.filter(APISetting.provider == provider)
-    if category:
-        user_setting_query = user_setting_query.filter(APISetting.category == category)
 
     active_count = user_setting_query.count()
     setting = user_setting_query.order_by(APISetting.id.desc()).first()
-    if setting:
-        if active_count > 1:
-            return setting, "user_active_multi", {"active_count": active_count, "marker_id": setting.id}
+    if not setting:
+        return None, "no_active_user_setting", {"active_count": active_count, "category": resolved_category}
 
-        marker = setting.config or {}
-        use_system_marker = str(marker.get("selection_source") or "").strip().lower() == "system"
+    target_provider = str(setting.provider or "").strip()
+    target_model = str(setting.model or "").strip()
+    if not target_provider or not target_model:
+        return None, "active_user_missing_provider_model", {
+            "active_count": active_count,
+            "marker_id": setting.id,
+            "category": resolved_category,
+            "provider": setting.provider,
+            "model": setting.model,
+        }
 
-        use_system_setting_id = None
-        try:
-            use_system_setting_id = int(marker.get("use_system_setting_id") or 0)
-        except Exception:
-            use_system_setting_id = None
+    system_setting = get_system_api_setting(
+        db,
+        provider=target_provider,
+        category=resolved_category,
+        model=target_model,
+    )
+    if system_setting:
+        return system_setting, "system_by_user_provider_model", {
+            "active_count": active_count,
+            "marker_id": setting.id,
+            "category": resolved_category,
+            "provider": target_provider,
+            "model": target_model,
+        }
 
-        target_provider = setting.provider or provider
-        target_category = setting.category or category
-        target_model = setting.model
-
-        if target_provider:
-            provider_model_query = db.query(APISetting).filter(
-                APISetting.user_id == user.id,
-                APISetting.provider == target_provider,
-            )
-            if target_category:
-                provider_model_query = provider_model_query.filter(APISetting.category == target_category)
-            if target_model:
-                provider_model_query = provider_model_query.filter(APISetting.model == target_model)
-
-            user_provider_model_with_key = provider_model_query.filter(
-                APISetting.api_key.isnot(None),
-                APISetting.api_key != "",
-            ).order_by(APISetting.is_active.desc(), APISetting.id.desc()).first()
-            if user_provider_model_with_key:
-                return user_provider_model_with_key, "user_provider_model", {
-                    "active_count": active_count,
-                    "marker_id": setting.id,
-                }
-
-        if _can_use_system_settings(user) and (use_system_marker or use_system_setting_id):
-            if use_system_setting_id:
-                pointed = get_system_api_setting(
-                    db,
-                    provider=target_provider,
-                    category=target_category,
-                    model=target_model,
-                    setting_id=use_system_setting_id,
-                )
-                if pointed and (pointed.api_key or "").strip():
-                    return pointed, "system_linked", {
-                        "active_count": active_count,
-                        "marker_id": setting.id,
-                        "use_system_setting_id": use_system_setting_id,
-                    }
-
-            system_by_context = get_system_api_setting(
-                db,
-                provider=target_provider,
-                category=target_category,
-                model=target_model,
-            )
-            if system_by_context and (system_by_context.api_key or "").strip():
-                return system_by_context, "system_marker_fallback", {
-                    "active_count": active_count,
-                    "marker_id": setting.id,
-                    "use_system_setting_id": use_system_setting_id,
-                }
-
-        if (setting.api_key or "").strip():
-            return setting, "user_active", {"active_count": active_count, "marker_id": setting.id}
-
-        if _can_use_system_settings(user):
-            if use_system_setting_id:
-                pointed = get_system_api_setting(
-                    db,
-                    provider=target_provider,
-                    category=target_category,
-                    model=target_model,
-                    setting_id=use_system_setting_id,
-                )
-                if pointed and (pointed.api_key or "").strip():
-                    return pointed, "system_linked", {
-                        "active_count": active_count,
-                        "marker_id": setting.id,
-                        "use_system_setting_id": use_system_setting_id,
-                    }
-
-            system_fallback = get_system_api_setting(
-                db,
-                provider=target_provider,
-                category=target_category,
-                model=target_model,
-            )
-            if system_fallback and (system_fallback.api_key or "").strip():
-                return system_fallback, "system_fallback", {
-                    "active_count": active_count,
-                    "marker_id": setting.id,
-                    "use_system_setting_id": use_system_setting_id,
-                }
-
-        return setting, "user_inactive_key", {"active_count": active_count, "marker_id": setting.id}
-
-    if _can_use_system_settings(user):
-        system_setting = get_system_api_setting(db, provider, category)
-        if system_setting:
-            return system_setting, "system_default", {"active_count": 0}
-
-    return None, "none", {"active_count": 0}
+    return None, "no_matching_system_setting", {
+        "active_count": active_count,
+        "marker_id": setting.id,
+        "category": resolved_category,
+        "provider": target_provider,
+        "model": target_model,
+    }
 
 def get_effective_api_setting(db: Session, user: User, provider: str = None, category: str = None) -> Optional[APISetting]:
     """
@@ -282,6 +208,7 @@ def get_effective_setting_snapshot(
     return {
         "found": True,
         "source": source,
+        "selection_source": "system_only",
         "setting_id": resolved_setting.id,
         "owner_user_id": getattr(resolved_setting, "user_id", None),
         "category": resolved_setting.category,
@@ -500,6 +427,66 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 len(meta_str),
                 _estimate_tokens(meta_str),
             )
+
+        attention_notes = (getattr(request, "analysis_attention_notes", None) or "").strip()
+        if attention_notes:
+            attention_block = (
+                "Regeneration Attention Notes (High Priority):\n"
+                "When regenerating AI Scene Analysis, you MUST prioritize and satisfy these constraints:\n"
+                f"{attention_notes}"
+            )
+            user_content = f"{attention_block}\n\n{user_content}"
+            logger.info(
+                "Injected analysis attention notes into prompt: chars=%s tokens_est=%s",
+                len(attention_notes),
+                _estimate_tokens(attention_notes),
+            )
+
+        reuse_subject_assets = getattr(request, "reuse_subject_assets", None) or []
+        if isinstance(reuse_subject_assets, list) and len(reuse_subject_assets) > 0:
+            normalized_assets = []
+            for item in reuse_subject_assets[:20]:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name") or "").strip()
+                if not name:
+                    continue
+                asset_type = str(item.get("type") or "").strip()
+                description = str(item.get("description") or "").strip()
+                anchor_description = str(item.get("anchor_description") or "").strip()
+                description = description[:600]
+                anchor_description = anchor_description[:300]
+                normalized_assets.append({
+                    "name": name,
+                    "type": asset_type,
+                    "description": description,
+                    "anchor_description": anchor_description,
+                })
+
+            if normalized_assets:
+                lines = [
+                    "Reusable Subject Assets (High Priority):",
+                    "The following assets are MUST-REUSE subjects for this analysis.",
+                    "Do NOT regenerate or rename them. Keep their identity and anchor traits consistent.",
+                ]
+                for asset in normalized_assets:
+                    detail_parts = []
+                    if asset.get("type"):
+                        detail_parts.append(f"type={asset['type']}")
+                    if asset.get("description"):
+                        detail_parts.append(f"description={asset['description']}")
+                    if asset.get("anchor_description"):
+                        detail_parts.append(f"anchors={asset['anchor_description']}")
+                    details = " | ".join(detail_parts)
+                    lines.append(f"- [{asset['name']}] {details}".strip())
+
+                reuse_block = "\n".join(lines)
+                user_content = f"{reuse_block}\n\n{user_content}"
+                logger.info(
+                    "Injected reusable subject assets into prompt: count=%s tokens_est=%s",
+                    len(normalized_assets),
+                    _estimate_tokens(reuse_block),
+                )
 
         # Construct messages
         messages = [
@@ -1153,6 +1140,9 @@ def sanitize_llm_markdown_output(text: str) -> str:
     content = str(text)
     content = re.sub(r"<think>[\s\S]*?</think>", "", content, flags=re.IGNORECASE).strip()
     content = content.replace("```markdown", "").replace("```md", "").replace("```", "").strip()
+    # Remove common safety/moderation marker leakage from upstream providers.
+    content = re.sub(r"^\s*=*\s*PROHIBITED_CONTENT\s*$", "", content, flags=re.IGNORECASE | re.MULTILINE)
+    content = re.sub(r"\n{3,}", "\n\n", content).strip()
 
     lines = content.splitlines()
     if not lines:
@@ -1222,14 +1212,65 @@ async def generate_markdown_with_retry(
     strict_markdown: bool = True,
     require_h1: bool = True,
 ) -> str:
-    resp = await llm_service.generate_content(user_prompt, sys_prompt, llm_config)
-    content = sanitize_llm_markdown_output(resp.get("content") or "")
+    def _is_prohibited_marker(text: str) -> bool:
+        if not text:
+            return False
+        t = text.strip().upper()
+        t = t.lstrip("=").strip()
+        return t == "PROHIBITED_CONTENT"
+
+    def _looks_like_error_text(text: str) -> bool:
+        if not text:
+            return False
+        t = text.strip().lower()
+        return (
+            t.startswith("error:")
+            or "api error" in t
+            or "no llm configuration" in t
+            or "please configure your llm api key" in t
+            or "prohibited_content" in t
+        )
+
+    async def _call_once(tag: str, up: str, sp: str) -> Tuple[str, str, Dict[str, Any]]:
+        resp = await llm_service.generate_content(up, sp, llm_config)
+        raw = str(resp.get("content") or "")
+        cleaned = sanitize_llm_markdown_output(raw)
+        finish_reason = str(resp.get("finish_reason") or "")
+        usage = resp.get("usage") or {}
+        logger.info(
+            f"[generate_markdown_with_retry] tag={tag} raw_len={len(raw)} clean_len={len(cleaned)} "
+            f"finish_reason={finish_reason or '-'} usage={usage} is_error_like={_looks_like_error_text(cleaned)}"
+        )
+        return raw, cleaned, {
+            "tag": tag,
+            "finish_reason": finish_reason,
+            "usage": usage,
+            "raw_len": len(raw),
+            "clean_len": len(cleaned),
+        }
+
+    def _is_truncated(meta: Optional[Dict[str, Any]]) -> bool:
+        reason = str((meta or {}).get("finish_reason") or "").strip().lower()
+        return reason == "length"
+
+    raw_1, content_1, meta_1 = await _call_once("initial", user_prompt, sys_prompt)
+    if _is_prohibited_marker(raw_1) or _is_prohibited_marker(content_1):
+        logger.error("[generate_markdown_with_retry] provider returned PROHIBITED_CONTENT on initial attempt")
+        raise RuntimeError("LLM content blocked by provider (PROHIBITED_CONTENT)")
+    if _looks_like_error_text(content_1):
+        lowered = (content_1 or "").strip().lower()
+        if "please configure your llm api key" in lowered or "no llm configuration" in lowered:
+            raise RuntimeError("No valid LLM API key configured in active settings")
 
     if not strict_markdown:
-        return content
+        if _is_truncated(meta_1):
+            raise RuntimeError("LLM output appears truncated (finish_reason=length) in non-strict mode")
+        if content_1 and not _looks_like_error_text(content_1):
+            return content_1
+        raise RuntimeError("LLM returned empty/error content in non-strict mode")
 
-    if content and is_valid_markdown_output(content, require_h1=require_h1):
-        return content
+    if content_1 and not _looks_like_error_text(content_1) and is_valid_markdown_output(content_1, require_h1=require_h1) and not _is_truncated(meta_1):
+        return content_1
 
     retry_sys_prompt = (
         f"{sys_prompt}\n\n"
@@ -1244,9 +1285,62 @@ async def generate_markdown_with_retry(
         "[RETRY INSTRUCTION]\n"
         "Only return corrected final markdown now."
     )
-    retry_resp = await llm_service.generate_content(retry_user_prompt, retry_sys_prompt, llm_config)
-    retry_content = sanitize_llm_markdown_output(retry_resp.get("content") or "")
-    return retry_content or content
+    raw_2, content_2, meta_2 = await _call_once("strict_retry", retry_user_prompt, retry_sys_prompt)
+    if _is_prohibited_marker(raw_2) or _is_prohibited_marker(content_2):
+        logger.error("[generate_markdown_with_retry] provider returned PROHIBITED_CONTENT on strict retry")
+        raise RuntimeError("LLM content blocked by provider (PROHIBITED_CONTENT)")
+    if content_2 and not _looks_like_error_text(content_2) and is_valid_markdown_output(content_2, require_h1=require_h1) and not _is_truncated(meta_2):
+        return content_2
+
+    fallback_sys_prompt = (
+        f"{sys_prompt}\n\n"
+        "[FINAL FALLBACK FORMAT]\n"
+        "Output ONLY markdown with this minimum structure:\n"
+        "# Episode Script Draft\n"
+        "## Core Conflict\n"
+        "- ...\n"
+        "## Beat Sheet\n"
+        "1. ...\n"
+        "2. ...\n"
+        "3. ...\n"
+        "No analysis text. No code fences."
+    )
+    fallback_user_prompt = (
+        f"{user_prompt}\n\n"
+        "[FINAL RETRY]\n"
+        "Return compact markdown draft even if partial."
+    )
+    raw_3, content_3, meta_3 = await _call_once("fallback_retry", fallback_user_prompt, fallback_sys_prompt)
+    if _is_prohibited_marker(raw_3) or _is_prohibited_marker(content_3):
+        logger.error("[generate_markdown_with_retry] provider returned PROHIBITED_CONTENT on fallback retry")
+        raise RuntimeError("LLM content blocked by provider (PROHIBITED_CONTENT)")
+    if content_3 and not _looks_like_error_text(content_3):
+        if require_h1 and not content_3.lstrip().startswith("#"):
+            content_3 = "# Episode Script Draft\n\n" + content_3
+        if is_valid_markdown_output(content_3, require_h1=require_h1) and not _is_truncated(meta_3):
+            return content_3
+
+    diagnostics = {
+        "initial_finish_reason": meta_1.get("finish_reason"),
+        "strict_retry_finish_reason": meta_2.get("finish_reason"),
+        "fallback_retry_finish_reason": meta_3.get("finish_reason"),
+        "initial_usage": meta_1.get("usage"),
+        "strict_retry_usage": meta_2.get("usage"),
+        "fallback_retry_usage": meta_3.get("usage"),
+        "initial_clean_len": len(content_1 or ""),
+        "strict_retry_clean_len": len(content_2 or ""),
+        "fallback_retry_clean_len": len(content_3 or ""),
+        "initial_error_like": _looks_like_error_text(content_1),
+        "strict_retry_error_like": _looks_like_error_text(content_2),
+        "fallback_retry_error_like": _looks_like_error_text(content_3),
+        "initial_raw_sample": (raw_1 or "")[:120],
+        "strict_retry_raw_sample": (raw_2 or "")[:120],
+        "fallback_retry_raw_sample": (raw_3 or "")[:120],
+    }
+    logger.error(f"[generate_markdown_with_retry] exhausted retries. {json.dumps(diagnostics, ensure_ascii=False)}")
+    if _is_truncated(meta_1) or _is_truncated(meta_2) or _is_truncated(meta_3):
+        raise RuntimeError("LLM output appears truncated (finish_reason=length). Check model max_tokens/context and retry.")
+    raise RuntimeError("LLM returned empty/invalid content after retries")
 
 @router.post("/projects/", response_model=ProjectOut)
 def create_project(
@@ -1329,6 +1423,8 @@ async def generate_project_story_dna_global(
     )
 
     llm_config = agent_service.get_active_llm_config(current_user.id)
+    if not llm_config or not (llm_config.get("api_key") or "").strip():
+        raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")
     provider = llm_config.get("provider") if llm_config else None
     model = llm_config.get("model") if llm_config else None
     billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
@@ -1736,6 +1832,8 @@ async def analyze_project_novel_to_story_generator_fields(
     user_prompt = f"Project Title: {project.title}\n\nNovel/Script Text:\n{novel_text}"
 
     llm_config = agent_service.get_active_llm_config(current_user.id)
+    if not llm_config or not (llm_config.get("api_key") or "").strip():
+        raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")
     provider = llm_config.get("provider") if llm_config else None
     model = llm_config.get("model") if llm_config else None
     resolved_id = ((llm_config or {}).get("config") or {}).get("__resolved_setting_id")
@@ -1851,7 +1949,7 @@ def update_project(
         project.title = project_in.title
     
     # Merge global_info updates - handle aspectRatio specially if provided separately
-    new_global_info = project.global_info # dict or None
+    new_global_info = project_in.global_info # dict or None
     if new_global_info is None:
          # If generic global_info not provided, maybe we init with existing?
          # But usually PUT overwrites or PATCH updates partial. 
@@ -2022,6 +2120,7 @@ class EpisodeOut(BaseModel):
 class ProjectEpisodeScriptsGenerateRequest(BaseModel):
     episodes_count: Optional[int] = None
     overwrite_existing: bool = False
+    retry_failed_only: bool = False
     extra_notes: Optional[str] = None
     strict_markdown: bool = True
 
@@ -2894,11 +2993,53 @@ async def generate_project_episode_scripts_from_global_framework(
 
     Creates missing episodes up to N and writes each draft into Episode.script_content.
     """
+    started_at = datetime.utcnow()
+    started_at_iso = started_at.isoformat()
+    call_meta = {
+        "project_id": project_id,
+        "user_id": current_user.id,
+        "episodes_count": req.episodes_count,
+        "overwrite_existing": req.overwrite_existing,
+        "retry_failed_only": req.retry_failed_only,
+        "strict_markdown": req.strict_markdown,
+        "extra_notes_len": len(req.extra_notes or ""),
+        "started_at": started_at_iso,
+    }
+    logger.info(f"[generate_episode_scripts] START {json.dumps(call_meta, ensure_ascii=False)}")
+
     project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
     if not project:
+        logger.warning(f"[generate_episode_scripts] project not found. project_id={project_id} user_id={current_user.id}")
+        logger.info(
+            f"[generate_episode_scripts] RESPONSE success=False status_code=404 project_id={project_id} detail=Project not found"
+        )
         raise HTTPException(status_code=404, detail="Project not found")
 
+    try:
+        log_action(
+            db,
+            user_id=current_user.id,
+            user_name=current_user.username,
+            action="GENERATE_EPISODE_SCRIPTS_START",
+            details=json.dumps(call_meta, ensure_ascii=False),
+        )
+    except Exception as e:
+        logger.warning(f"[generate_episode_scripts] failed to write START system log: {e}")
+
     gi = dict(project.global_info or {})
+    status_key = "episode_script_generation_status"
+
+    def _persist_run_status(status_payload: Dict[str, Any]) -> None:
+        try:
+            latest_project = db.query(Project).filter(Project.id == project_id).first()
+            latest_gi = dict((latest_project.global_info if latest_project else {}) or {})
+            latest_gi[status_key] = status_payload
+            if latest_project:
+                latest_project.global_info = latest_gi
+                db.add(latest_project)
+                db.commit()
+        except Exception as e:
+            logger.warning(f"[generate_episode_scripts] failed to persist run status: {e}")
 
     # Determine target episode count
     target_n: Optional[int] = None
@@ -2906,6 +3047,9 @@ async def generate_project_episode_scripts_from_global_framework(
         try:
             target_n = int(req.episodes_count)
         except Exception:
+            logger.info(
+                f"[generate_episode_scripts] RESPONSE success=False status_code=400 project_id={project_id} detail=episodes_count must be an integer"
+            )
             raise HTTPException(status_code=400, detail="episodes_count must be an integer")
     else:
         try:
@@ -2916,10 +3060,42 @@ async def generate_project_episode_scripts_from_global_framework(
             target_n = None
 
     if not target_n or target_n <= 0:
+        logger.warning(
+            f"[generate_episode_scripts] invalid episodes_count. project_id={project_id} user_id={current_user.id} req={req.episodes_count}"
+        )
+        try:
+            log_action(
+                db,
+                user_id=current_user.id,
+                user_name=current_user.username,
+                action="GENERATE_EPISODE_SCRIPTS_FAILED",
+                details=f"project_id={project_id}; reason=invalid_episodes_count; req={req.episodes_count}",
+            )
+        except Exception as e:
+            logger.warning(f"[generate_episode_scripts] failed to write FAILED system log: {e}")
+        logger.info(
+            f"[generate_episode_scripts] RESPONSE success=False status_code=400 project_id={project_id} detail=episodes_count is required"
+        )
         raise HTTPException(status_code=400, detail="episodes_count is required (or generate/save Global Story first)")
 
     global_md = str(gi.get("story_dna_global_md") or "").strip()
     if not global_md:
+        logger.warning(
+            f"[generate_episode_scripts] missing global framework. project_id={project_id} user_id={current_user.id}"
+        )
+        try:
+            log_action(
+                db,
+                user_id=current_user.id,
+                user_name=current_user.username,
+                action="GENERATE_EPISODE_SCRIPTS_FAILED",
+                details=f"project_id={project_id}; reason=missing_global_framework",
+            )
+        except Exception as e:
+            logger.warning(f"[generate_episode_scripts] failed to write FAILED system log: {e}")
+        logger.info(
+            f"[generate_episode_scripts] RESPONSE success=False status_code=400 project_id={project_id} detail=Generated Global Framework is empty"
+        )
         raise HTTPException(status_code=400, detail="Generated Global Framework (story_dna_global_md) is empty")
 
     character_canon_md = str(gi.get("character_canon_md") or "").strip()
@@ -2938,14 +3114,44 @@ async def generate_project_episode_scripts_from_global_framework(
         character_canon_md = "\n\n".join(blocks).strip()
 
     if not character_canon_md:
+        logger.warning(
+            f"[generate_episode_scripts] missing character canon. project_id={project_id} user_id={current_user.id}"
+        )
+        try:
+            log_action(
+                db,
+                user_id=current_user.id,
+                user_name=current_user.username,
+                action="GENERATE_EPISODE_SCRIPTS_FAILED",
+                details=f"project_id={project_id}; reason=missing_character_canon",
+            )
+        except Exception as e:
+            logger.warning(f"[generate_episode_scripts] failed to write FAILED system log: {e}")
+        logger.info(
+            f"[generate_episode_scripts] RESPONSE success=False status_code=400 project_id={project_id} detail=Character Canon is empty"
+        )
         raise HTTPException(status_code=400, detail="Character Canon (Project) is empty. Generate characters first.")
 
     relationships = str(gi.get("character_relationships") or "").strip()
+    constraints_obj = (project.global_info or {}).get("global_style_constraints")
+    has_constraints = bool(constraints_obj)
+    has_relationships = bool(relationships)
+    character_canon_source = "character_canon_md" if str(gi.get("character_canon_md") or "").strip() else "character_profiles_fallback"
+
+    logger.info(
+        "[generate_episode_scripts] INPUT_CONTEXT "
+        f"project_id={project_id} user_id={current_user.id} has_constraints={has_constraints} "
+        f"has_relationships={has_relationships} global_md_len={len(global_md)} "
+        f"character_canon_len={len(character_canon_md)} character_source={character_canon_source}"
+    )
 
     prompt_dir = os.path.join(str(settings.BASE_DIR), "app", "core", "prompts")
     prompt_path = os.path.join(prompt_dir, "script_generator_episode_script.txt")
     if not os.path.exists(prompt_path):
         logger.error(f"Episode script generator prompt not found at: {prompt_path}")
+        logger.info(
+            f"[generate_episode_scripts] RESPONSE success=False status_code=404 project_id={project_id} detail=Prompt file script_generator_episode_script.txt not found"
+        )
         raise HTTPException(status_code=404, detail="Prompt file 'script_generator_episode_script.txt' not found.")
     with open(prompt_path, "r", encoding="utf-8") as f:
         sys_prompt = f.read()
@@ -2968,32 +3174,124 @@ async def generate_project_episode_scripts_from_global_framework(
             by_title[title] = ep
         episodes_in_order.append(ep)
 
+    previous_status = gi.get(status_key) if isinstance(gi.get(status_key), dict) else {}
+    failed_episode_ids: set[int] = set()
+    previous_results = previous_status.get("results") if isinstance(previous_status, dict) else []
+    if isinstance(previous_results, list):
+        for item in previous_results:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("status") or "") != "failed":
+                continue
+            try:
+                ep_id = int(item.get("episode_id"))
+                failed_episode_ids.add(ep_id)
+            except Exception:
+                continue
+
+    episodes_with_index: List[Tuple[int, Episode]] = list(enumerate(episodes_in_order, start=1))
+    if req.retry_failed_only:
+        episodes_with_index = [(n, ep) for n, ep in episodes_with_index if ep.id in failed_episode_ids]
+
+    run_status = {
+        "project_id": project_id,
+        "running": True,
+        "mode": "retry_failed_only" if req.retry_failed_only else "full",
+        "started_at": started_at_iso,
+        "updated_at": started_at_iso,
+        "episodes_target": target_n,
+        "episodes_in_run": len(episodes_with_index),
+        "processed": 0,
+        "generated": 0,
+        "failed": 0,
+        "skipped": 0,
+        "results": [],
+    }
+
+    if req.retry_failed_only and len(episodes_with_index) == 0:
+        run_status["running"] = False
+        run_status["finished_at"] = datetime.utcnow().isoformat()
+        run_status["message"] = "No failed episodes found from previous run"
+        _persist_run_status(run_status)
+        return {
+            "success": True,
+            "generation_success": True,
+            "project_id": project_id,
+            "episodes_target": target_n,
+            "episodes_created": len(created_episodes),
+            "created_episode_ids": created_episodes,
+            "results": [],
+            "errors": [],
+            "message": "No failed episodes to retry",
+            "debug_context": {
+                "retry_failed_only": True,
+                "previous_failed_count": len(failed_episode_ids),
+            },
+        }
+
+    _persist_run_status(run_status)
+
     llm_config = agent_service.get_active_llm_config(current_user.id)
+    if not llm_config or not (llm_config.get("api_key") or "").strip():
+        raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")
     provider = llm_config.get("provider") if llm_config else None
     model = llm_config.get("model") if llm_config else None
 
     results: List[Dict[str, Any]] = []
     errors: List[Dict[str, Any]] = []
 
-    for idx, ep in enumerate(episodes_in_order, start=1):
+    def _safe_log_episode(action: str, payload: Dict[str, Any]) -> None:
+        try:
+            log_action(
+                db,
+                user_id=current_user.id,
+                user_name=current_user.username,
+                action=action,
+                details=json.dumps(payload, ensure_ascii=False),
+            )
+        except Exception as e:
+            logger.warning(f"[generate_episode_scripts] failed to write {action} system log: {e}")
+
+    for idx, ep in episodes_with_index:
         should_write = True
-        if not req.overwrite_existing and (ep.script_content or "").strip():
+        if not req.retry_failed_only and not req.overwrite_existing and (ep.script_content or "").strip():
             should_write = False
 
         if not should_write:
+            logger.info(
+                f"[generate_episode_scripts] SKIP episode_number={idx} episode_id={ep.id} title={ep.title!r} reason=existing_script"
+            )
+            _safe_log_episode("GENERATE_EPISODE_SCRIPT_SKIP", {
+                "project_id": project_id,
+                "episode_number": idx,
+                "episode_id": ep.id,
+                "episode_title": ep.title,
+                "reason": "script_content already exists",
+            })
             results.append({
                 "episode_id": ep.id,
+                "episode_number": idx,
                 "episode_title": ep.title,
                 "generated": False,
                 "skipped": True,
                 "reason": "script_content already exists",
             })
+            run_status["processed"] = int(run_status.get("processed") or 0) + 1
+            run_status["skipped"] = int(run_status.get("skipped") or 0) + 1
+            run_status["updated_at"] = datetime.utcnow().isoformat()
+            run_status["results"].append({
+                "episode_id": ep.id,
+                "episode_number": idx,
+                "episode_title": ep.title,
+                "status": "skipped",
+                "reason": "script_content already exists",
+            })
+            _persist_run_status(run_status)
             continue
 
         # Balance check per call (may raise 402)
         billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
 
-        constraints_obj = (project.global_info or {}).get("global_style_constraints")
         constraints_block = ""
         if constraints_obj:
             constraints_block = (
@@ -3024,6 +3322,14 @@ async def generate_project_episode_scripts_from_global_framework(
             sys_prompt_episode = sys_prompt
 
         try:
+            logger.info(
+                f"[generate_episode_scripts] GENERATE episode_number={idx} episode_id={ep.id} title={ep.title!r}"
+            )
+            logger.info(
+                f"[generate_episode_scripts] REQUEST_PAYLOAD episode_number={idx} episode_id={ep.id} "
+                f"user_prompt_len={len(user_prompt)} sys_prompt_len={len(sys_prompt_episode)} "
+                f"has_constraints_block={bool(constraints_block)} has_relationships_block={bool(relationships_block)}"
+            )
             content = await generate_markdown_with_retry(
                 user_prompt=user_prompt,
                 sys_prompt=sys_prompt_episode,
@@ -3043,17 +3349,47 @@ async def generate_project_episode_scripts_from_global_framework(
             db.commit()
             db.refresh(ep)
 
+            logger.info(
+                f"[generate_episode_scripts] SUCCESS episode_number={idx} episode_id={ep.id} output_chars={len(content)}"
+            )
+            _safe_log_episode("GENERATE_EPISODE_SCRIPT_SUCCESS", {
+                "project_id": project_id,
+                "episode_number": idx,
+                "episode_id": ep.id,
+                "episode_title": ep.title,
+                "output_chars": len(content),
+            })
+
             results.append({
                 "episode_id": ep.id,
+                "episode_number": idx,
                 "episode_title": ep.title,
                 "generated": True,
                 "skipped": False,
                 "output_chars": len(content),
             })
+            run_status["processed"] = int(run_status.get("processed") or 0) + 1
+            run_status["generated"] = int(run_status.get("generated") or 0) + 1
+            run_status["updated_at"] = datetime.utcnow().isoformat()
+            run_status["results"].append({
+                "episode_id": ep.id,
+                "episode_number": idx,
+                "episode_title": ep.title,
+                "status": "generated",
+                "output_chars": len(content),
+            })
+            _persist_run_status(run_status)
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"[episode_script_generator] Episode {idx} failed: {e}")
+            logger.exception(f"[generate_episode_scripts] FAILED episode_number={idx} episode_id={ep.id} error={e}")
+            _safe_log_episode("GENERATE_EPISODE_SCRIPT_FAILED", {
+                "project_id": project_id,
+                "episode_number": idx,
+                "episode_id": ep.id,
+                "episode_title": ep.title,
+                "error": str(e),
+            })
             errors.append({
                 "episode_number": idx,
                 "episode_id": ep.id,
@@ -3062,20 +3398,140 @@ async def generate_project_episode_scripts_from_global_framework(
             })
             results.append({
                 "episode_id": ep.id,
+                "episode_number": idx,
                 "episode_title": ep.title,
                 "generated": False,
                 "skipped": False,
                 "error": str(e),
             })
+            run_status["processed"] = int(run_status.get("processed") or 0) + 1
+            run_status["failed"] = int(run_status.get("failed") or 0) + 1
+            run_status["updated_at"] = datetime.utcnow().isoformat()
+            run_status["results"].append({
+                "episode_id": ep.id,
+                "episode_number": idx,
+                "episode_title": ep.title,
+                "status": "failed",
+                "error": str(e),
+            })
+            _persist_run_status(run_status)
 
-    return {
+            if "PROHIBITED_CONTENT" in str(e):
+                logger.warning(
+                    f"[generate_episode_scripts] ABORT remaining episodes due to provider moderation block at episode_number={idx}"
+                )
+                _safe_log_episode("GENERATE_EPISODE_SCRIPTS_ABORTED", {
+                    "project_id": project_id,
+                    "stopped_at_episode_number": idx,
+                    "reason": "provider moderation block (PROHIBITED_CONTENT)",
+                })
+                remaining = [(n, ep_rest) for n, ep_rest in episodes_with_index if n > idx]
+                for j, ep_rest in remaining:
+                    results.append({
+                        "episode_id": ep_rest.id,
+                        "episode_number": j,
+                        "episode_title": ep_rest.title,
+                        "generated": False,
+                        "skipped": True,
+                        "reason": "aborted due to provider moderation block",
+                    })
+                    run_status["processed"] = int(run_status.get("processed") or 0) + 1
+                    run_status["skipped"] = int(run_status.get("skipped") or 0) + 1
+                    run_status["results"].append({
+                        "episode_id": ep_rest.id,
+                        "episode_number": j,
+                        "episode_title": ep_rest.title,
+                        "status": "skipped",
+                        "reason": "aborted due to provider moderation block",
+                    })
+                run_status["updated_at"] = datetime.utcnow().isoformat()
+                _persist_run_status(run_status)
+                break
+
+    duration_ms = int((datetime.utcnow() - started_at).total_seconds() * 1000)
+    logger.info(
+        f"[generate_episode_scripts] END project_id={project_id} user_id={current_user.id} "
+        f"target={target_n} created={len(created_episodes)} generated={sum(1 for r in results if r.get('generated'))} "
+        f"errors={len(errors)} duration_ms={duration_ms}"
+    )
+
+    try:
+        summary = {
+            "project_id": project_id,
+            "target": target_n,
+            "created": len(created_episodes),
+            "generated": sum(1 for r in results if r.get("generated")),
+            "errors": len(errors),
+            "duration_ms": duration_ms,
+        }
+        log_action(
+            db,
+            user_id=current_user.id,
+            user_name=current_user.username,
+            action="GENERATE_EPISODE_SCRIPTS_END",
+            details=json.dumps(summary, ensure_ascii=False),
+        )
+    except Exception as e:
+        logger.warning(f"[generate_episode_scripts] failed to write END system log: {e}")
+
+    response_payload = {
+        "success": True,
+        "generation_success": len(errors) == 0,
         "project_id": project_id,
         "episodes_target": target_n,
         "episodes_created": len(created_episodes),
         "created_episode_ids": created_episodes,
         "results": results,
         "errors": errors,
+        "debug_context": {
+            "has_global_style_constraints": has_constraints,
+            "has_character_relationships": has_relationships,
+            "has_global_story_dna": bool(global_md),
+            "character_canon_source": character_canon_source,
+            "global_story_dna_length": len(global_md),
+            "character_canon_length": len(character_canon_md),
+            "constraints_keys": list(constraints_obj.keys()) if isinstance(constraints_obj, dict) else [],
+        },
     }
+
+    run_status["running"] = False
+    run_status["finished_at"] = datetime.utcnow().isoformat()
+    run_status["updated_at"] = run_status["finished_at"]
+    run_status["errors"] = errors
+    run_status["generation_success"] = len(errors) == 0
+    _persist_run_status(run_status)
+
+    logger.info(
+        f"[generate_episode_scripts] RESPONSE success=True status_code=200 project_id={project_id} "
+        f"generation_success={response_payload.get('generation_success')} errors={len(errors)}"
+    )
+    return response_payload
+
+
+@router.get("/projects/{project_id}/script_generator/episodes/scripts/status", response_model=Dict[str, Any])
+def get_project_episode_scripts_generation_status(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    gi = dict(project.global_info or {})
+    status_payload = gi.get("episode_script_generation_status") if isinstance(gi, dict) else None
+    if not isinstance(status_payload, dict):
+        return {
+            "project_id": project_id,
+            "running": False,
+            "processed": 0,
+            "generated": 0,
+            "failed": 0,
+            "skipped": 0,
+            "episodes_in_run": 0,
+            "results": [],
+        }
+    return status_payload
 
 @router.delete("/episodes/{episode_id}", status_code=204)
 def delete_episode(
@@ -3124,6 +3580,8 @@ class SceneOut(BaseModel):
 @router.get("/episodes/{episode_id}/scenes", response_model=List[SceneOut])
 def read_scenes(
     episode_id: int,
+    scene_code: Optional[str] = None,
+    keyword: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -3136,7 +3594,21 @@ def read_scenes(
     if not project:
         raise HTTPException(status_code=403, detail="Not authorized")
         
-    return db.query(Scene).filter(Scene.episode_id == episode_id).order_by(Scene.id).all()
+    query = db.query(Scene).filter(Scene.episode_id == episode_id)
+    if scene_code:
+        token = f"%{scene_code.strip()}%"
+        query = query.filter(Scene.scene_no.ilike(token))
+    if keyword:
+        token = f"%{keyword.strip()}%"
+        query = query.filter(
+            or_(
+                Scene.scene_name.ilike(token),
+                Scene.environment_name.ilike(token),
+                Scene.linked_characters.ilike(token),
+                Scene.key_props.ilike(token),
+            )
+        )
+    return query.order_by(Scene.id).all()
 
 @router.post("/episodes/{episode_id}/scenes", response_model=SceneOut)
 def create_scene(
@@ -3195,6 +3667,29 @@ def update_scene(
     db.refresh(db_scene)
     return db_scene
 
+
+@router.delete("/scenes/{scene_id}", status_code=204)
+def delete_scene(
+    scene_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    db_scene = db.query(Scene).filter(Scene.id == scene_id).first()
+    if not db_scene:
+        raise HTTPException(status_code=404, detail="Scene not found")
+
+    episode = db.query(Episode).filter(Episode.id == db_scene.episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+
+    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
+    if not project:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    db.delete(db_scene)
+    db.commit()
+    return None
+
 # --- Shots ---
 
 class ShotCreate(BaseModel):
@@ -3245,6 +3740,9 @@ class ShotOut(BaseModel):
 @router.get("/episodes/{episode_id}/shots", response_model=List[ShotOut])
 def read_episode_shots(
     episode_id: int,
+    scene_code: Optional[str] = None,
+    shot_id: Optional[str] = None,
+    keyword: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -3256,11 +3754,37 @@ def read_episode_shots(
     if not project:
          raise HTTPException(status_code=403, detail="Not authorized")
 
-    # Return ALL shots for the episode, regardless of scene association
-    return db.query(Shot).filter(
+    query = db.query(Shot).filter(
         Shot.project_id == project.id,
         Shot.episode_id == episode_id
-    ).all()
+    )
+
+    if scene_code:
+        normalized = scene_code.strip()
+        like_token = f"%{normalized}%"
+        query = query.filter(
+            or_(
+                Shot.scene_code.ilike(like_token),
+                Shot.shot_id.ilike(f"{normalized}%"),
+            )
+        )
+
+    if shot_id:
+        like_token = f"%{shot_id.strip()}%"
+        query = query.filter(Shot.shot_id.ilike(like_token))
+
+    if keyword:
+        like_token = f"%{keyword.strip()}%"
+        query = query.filter(
+            or_(
+                Shot.shot_name.ilike(like_token),
+                Shot.shot_logic_cn.ilike(like_token),
+                Shot.associated_entities.ilike(like_token),
+                Shot.video_content.ilike(like_token),
+            )
+        )
+
+    return query.order_by(Shot.id).all()
 
 class AIShotGenRequest(BaseModel):
     user_prompt: Optional[str] = None
@@ -4700,6 +5224,85 @@ def get_system_logs(
     
     logs = db.query(SystemLog).order_by(SystemLog.timestamp.desc()).offset(skip).limit(limit).all()
     return logs
+
+
+class LLMLogFileOut(BaseModel):
+    name: str
+    size_bytes: int
+    modified_at: str
+
+
+class LLMLogViewOut(BaseModel):
+    filename: str
+    tail_lines: int
+    size_bytes: int
+    modified_at: str
+    content: str
+
+
+@router.get("/admin/llm-logs/files", response_model=List[LLMLogFileOut])
+def list_llm_log_files(
+    current_user: User = Depends(get_current_user)
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Only superuser can view LLM logs")
+
+    log_dir = Path(settings.BASE_DIR) / "logs"
+    if not log_dir.exists() or not log_dir.is_dir():
+        return []
+
+    files: List[LLMLogFileOut] = []
+    for path in sorted(log_dir.glob("llm_calls.log*"), key=lambda p: p.stat().st_mtime, reverse=True):
+        if not path.is_file():
+            continue
+        stat = path.stat()
+        files.append(
+            LLMLogFileOut(
+                name=path.name,
+                size_bytes=int(stat.st_size),
+                modified_at=datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            )
+        )
+    return files
+
+
+@router.get("/admin/llm-logs/view", response_model=LLMLogViewOut)
+def view_llm_log_file(
+    filename: str = "llm_calls.log",
+    tail_lines: int = 300,
+    current_user: User = Depends(get_current_user)
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Only superuser can view LLM logs")
+
+    safe_name = str(filename or "").strip()
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="filename is required")
+    if "/" in safe_name or "\\" in safe_name or not safe_name.startswith("llm_calls.log"):
+        raise HTTPException(status_code=400, detail="invalid filename")
+
+    capped_tail = max(1, min(int(tail_lines or 300), 5000))
+    log_dir = (Path(settings.BASE_DIR) / "logs").resolve()
+    target = (log_dir / safe_name).resolve()
+
+    if target.parent != log_dir:
+        raise HTTPException(status_code=400, detail="invalid path")
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="log file not found")
+
+    line_buffer = deque(maxlen=capped_tail)
+    with target.open("r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line_buffer.append(line)
+
+    stat = target.stat()
+    return LLMLogViewOut(
+        filename=target.name,
+        tail_lines=capped_tail,
+        size_bytes=int(stat.st_size),
+        modified_at=datetime.fromtimestamp(stat.st_mtime).isoformat(),
+        content="".join(line_buffer),
+    )
 
 # --- Assets ---
 

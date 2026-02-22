@@ -3,7 +3,7 @@ import { useLocation } from 'react-router-dom';
 import { useStore } from '@/lib/store';
 import { Save, Info, Upload, Download, Coins, History } from 'lucide-react';
 import { API_URL } from '@/config';
-import { updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, getSystemSettingsCatalog, selectSystemSetting, getSystemSettingsManage, createSystemSettingManage, updateSystemSettingManage, getEffectiveSettingSnapshot } from '../services/api';
+import { updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, selectSystemSetting } from '../services/api';
 import RechargeModal from '../components/RechargeModal'; // Import RechargeModal
 
 const DEFAULT_CHARACTER_SUPPLEMENTS = [
@@ -75,31 +75,9 @@ const Settings = () => {
     const [isBillingLoading, setIsBillingLoading] = useState(false);
     const [showRecharge, setShowRecharge] = useState(false); // Recharge Modal State
     const [systemSettings, setSystemSettings] = useState([]);
-    const [systemCatalog, setSystemCatalog] = useState([]);
     const [isSystemSettingsLoading, setIsSystemSettingsLoading] = useState(false);
     const [selectingSystemId, setSelectingSystemId] = useState(null);
     const [selectedSystemCategory, setSelectedSystemCategory] = useState('All');
-    const [currentUserMeta, setCurrentUserMeta] = useState(null);
-    const [manageableSystemSettings, setManageableSystemSettings] = useState([]);
-    const [manageSettingId, setManageSettingId] = useState('');
-    const [manageApiKey, setManageApiKey] = useState('');
-    const [manageBaseUrl, setManageBaseUrl] = useState('');
-    const [manageModel, setManageModel] = useState('');
-    const [manageWebHook, setManageWebHook] = useState('');
-    const [isManageSaving, setIsManageSaving] = useState(false);
-    const [isManageCreating, setIsManageCreating] = useState(false);
-    const [createName, setCreateName] = useState('');
-    const [createProvider, setCreateProvider] = useState('');
-    const [createCategory, setCreateCategory] = useState('LLM');
-    const [createApiKey, setCreateApiKey] = useState('');
-    const [createBaseUrl, setCreateBaseUrl] = useState('');
-    const [createModel, setCreateModel] = useState('');
-    const [createWebHook, setCreateWebHook] = useState('');
-    const [createIsActive, setCreateIsActive] = useState(false);
-    const [errorLocatorInput, setErrorLocatorInput] = useState('');
-    const [isRowEditOpen, setIsRowEditOpen] = useState(false);
-    const [effectiveSnapshot, setEffectiveSnapshot] = useState(null);
-    const [isSnapshotLoading, setIsSnapshotLoading] = useState(false);
     const [activeSettingSources, setActiveSettingSources] = useState({
         LLM: 'none',
         Image: 'none',
@@ -161,231 +139,17 @@ const Settings = () => {
     const loadSystemSettingsCatalog = async () => {
         setIsSystemSettingsLoading(true);
         try {
-            const [userRes, systemRes, catalogRes] = await Promise.all([fetchMe(), getSystemSettings(), getSystemSettingsCatalog()]);
-            setCurrentUserMeta(userRes || null);
+            const [userRes, systemRes] = await Promise.all([fetchMe(), getSystemSettings()]);
             if (userRes && userRes.credits !== undefined) {
                 setUserCredits(userRes.credits);
             }
             setSystemSettings(Array.isArray(systemRes) ? systemRes : []);
-            setSystemCatalog(Array.isArray(catalogRes) ? catalogRes : []);
-
-            const canManage = !!(userRes?.is_superuser || userRes?.is_system);
-            if (canManage) {
-                const manageRows = await getSystemSettingsManage();
-                const normalized = Array.isArray(manageRows) ? manageRows : [];
-                setManageableSystemSettings(normalized);
-                if (!manageSettingId && normalized.length > 0) {
-                    const firstId = String(normalized[0].id);
-                    setManageSettingId(firstId);
-                }
-            } else {
-                setManageableSystemSettings([]);
-                setManageSettingId('');
-            }
         } catch (err) {
             console.error("Failed to load system API settings", err);
             setSystemSettings([]);
-            setSystemCatalog([]);
-            setManageableSystemSettings([]);
         } finally {
             setIsSystemSettingsLoading(false);
         }
-    };
-
-    useEffect(() => {
-        if (!manageSettingId) {
-            setManageApiKey('');
-            setManageBaseUrl('');
-            setManageModel('');
-            setManageWebHook('');
-            return;
-        }
-        const row = manageableSystemSettings.find((item) => String(item.id) === String(manageSettingId));
-        if (!row) return;
-        setManageApiKey('');
-        setManageBaseUrl(row.base_url || '');
-        setManageModel(row.model || '');
-        setManageWebHook(row.config?.webHook || '');
-    }, [manageSettingId, manageableSystemSettings]);
-
-    const handleSaveManagedSystemSetting = async () => {
-        if (!manageSettingId) {
-            showNotification('Please select a system setting to edit', 'error');
-            return;
-        }
-        setIsManageSaving(true);
-        try {
-            const selected = manageableSystemSettings.find((item) => String(item.id) === String(manageSettingId));
-            const nextConfig = {
-                ...(selected?.config || {}),
-                webHook: manageWebHook || '',
-            };
-
-            await updateSystemSettingManage(Number(manageSettingId), {
-                api_key: manageApiKey || undefined,
-                base_url: manageBaseUrl,
-                model: manageModel,
-                config: nextConfig,
-            });
-
-            showNotification('System API setting updated', 'success');
-            addLog('System API setting updated', 'success');
-            await loadSystemSettingsCatalog();
-        } catch (err) {
-            console.error('Failed to update system setting', err);
-            const msg = err?.response?.data?.detail || 'Failed to update system API setting';
-            showNotification(msg, 'error');
-        } finally {
-            setIsManageSaving(false);
-        }
-    };
-
-    const handleCreateManagedSystemSetting = async () => {
-        const provider = String(createProvider || '').trim();
-        if (!provider) {
-            showNotification('Provider is required to create system setting', 'error');
-            return;
-        }
-
-        setIsManageCreating(true);
-        try {
-            const payload = {
-                name: String(createName || '').trim() || undefined,
-                provider,
-                category: createCategory || 'LLM',
-                api_key: String(createApiKey || '').trim() || undefined,
-                base_url: String(createBaseUrl || '').trim() || undefined,
-                model: String(createModel || '').trim() || undefined,
-                config: { webHook: String(createWebHook || '').trim() || '' },
-                is_active: !!createIsActive,
-            };
-
-            const created = await createSystemSettingManage(payload);
-            showNotification('System API setting created', 'success');
-            addLog('System API setting created', 'success');
-
-            setCreateName('');
-            setCreateProvider('');
-            setCreateCategory('LLM');
-            setCreateApiKey('');
-            setCreateBaseUrl('');
-            setCreateModel('');
-            setCreateWebHook('');
-            setCreateIsActive(false);
-
-            await loadSystemSettingsCatalog();
-            if (created?.id) {
-                setManageSettingId(String(created.id));
-            }
-        } catch (err) {
-            console.error('Failed to create system setting', err);
-            const msg = err?.response?.data?.detail || 'Failed to create system API setting';
-            showNotification(msg, 'error');
-        } finally {
-            setIsManageCreating(false);
-        }
-    };
-
-    const handleLoadEffectiveSnapshot = async () => {
-        setIsSnapshotLoading(true);
-        try {
-            const data = await getEffectiveSettingSnapshot({ category: 'LLM' });
-            setEffectiveSnapshot(data || null);
-            if (!data?.found) {
-                showNotification('No effective LLM setting found', 'error');
-            }
-        } catch (err) {
-            console.error('Failed to fetch effective setting snapshot', err);
-            const msg = err?.response?.data?.detail || 'Failed to fetch effective setting snapshot';
-            showNotification(msg, 'error');
-        } finally {
-            setIsSnapshotLoading(false);
-        }
-    };
-
-    const canManageSystemSettings = !!(currentUserMeta?.is_superuser);
-
-    const openRowEditModal = (row) => {
-        if (!canManageSystemSettings || !row?.id) return;
-        setManageSettingId(String(row.id));
-        setManageApiKey('');
-        setManageBaseUrl(row.base_url || '');
-        setManageModel(row.model || '');
-        setManageWebHook(row.config?.webHook || '');
-        setIsRowEditOpen(true);
-    };
-
-    const closeRowEditModal = () => {
-        setIsRowEditOpen(false);
-    };
-
-    const handleSaveFromRowEdit = async () => {
-        await handleSaveManagedSystemSetting();
-        closeRowEditModal();
-    };
-
-    useEffect(() => {
-        if (!isRowEditOpen) return;
-        const onKeyDown = (event) => {
-            if (event.key === 'Escape') {
-                closeRowEditModal();
-            }
-        };
-        window.addEventListener('keydown', onKeyDown);
-        return () => window.removeEventListener('keydown', onKeyDown);
-    }, [isRowEditOpen]);
-
-    const normalizeEndpoint = (url) => {
-        const raw = String(url || '').trim().toLowerCase();
-        if (!raw) return '';
-        return raw
-            .replace(/\/chat\/completions$/i, '')
-            .replace(/\/responses$/i, '')
-            .replace(/\/$/, '');
-    };
-
-    const handleLocateSettingFromError = () => {
-        const raw = String(errorLocatorInput || '').trim();
-        if (!raw) {
-            showNotification('Paste error text first', 'error');
-            return;
-        }
-
-        const provider = (raw.match(/provider=([^,\]]+)/i)?.[1] || '').trim().toLowerCase();
-        const model = (raw.match(/model=([^,\]]+)/i)?.[1] || '').trim().toLowerCase();
-        const endpoint = normalizeEndpoint(raw.match(/endpoint=([^\]]+)/i)?.[1] || '');
-
-        if (!provider && !model && !endpoint) {
-            showNotification('Cannot parse provider/model/endpoint from error', 'error');
-            return;
-        }
-
-        let best = null;
-        let bestScore = -1;
-
-        for (const row of manageableSystemSettings) {
-            const rowProvider = String(row.provider || '').trim().toLowerCase();
-            const rowModel = String(row.model || '').trim().toLowerCase();
-            const rowEndpoint = normalizeEndpoint(row.base_url || '');
-
-            let score = 0;
-            if (provider && provider === rowProvider) score += 3;
-            if (model && model === rowModel) score += 3;
-            if (endpoint && rowEndpoint && (endpoint === rowEndpoint || endpoint.includes(rowEndpoint) || rowEndpoint.includes(endpoint))) score += 2;
-
-            if (score > bestScore) {
-                best = row;
-                bestScore = score;
-            }
-        }
-
-        if (!best || bestScore <= 0) {
-            showNotification('No matching system setting found from this error', 'error');
-            return;
-        }
-
-        setManageSettingId(String(best.id));
-        showNotification(`Matched: [${best.category}] ${best.provider} / ${best.model || '-'}`, 'success');
     };
 
     const refreshActiveSettingSources = async () => {
@@ -455,46 +219,6 @@ const Settings = () => {
         }));
     }, [systemSettings]);
 
-    const selectedManageRow = useMemo(() => {
-        if (!manageSettingId) return null;
-        return manageableSystemSettings.find((item) => String(item.id) === String(manageSettingId)) || null;
-    }, [manageableSystemSettings, manageSettingId]);
-
-    const createProviderSuggestions = useMemo(() => {
-        const cat = String(createCategory || 'LLM');
-        const providers = (systemCatalog || [])
-            .filter((item) => String(item?.category || '') === cat)
-            .map((item) => String(item?.provider || '').trim())
-            .filter(Boolean);
-        return [...new Set(providers)].sort((a, b) => a.localeCompare(b));
-    }, [systemCatalog, createCategory]);
-
-    const createModelSuggestions = useMemo(() => {
-        const cat = String(createCategory || 'LLM');
-        const selectedProvider = String(createProvider || '').trim().toLowerCase();
-        if (!selectedProvider) return [];
-
-        const hit = (systemCatalog || []).find((item) => {
-            const itemProvider = String(item?.provider || '').trim().toLowerCase();
-            return String(item?.category || '') === cat && itemProvider === selectedProvider;
-        });
-
-        return [...new Set((hit?.models || []).filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b)));
-    }, [systemCatalog, createCategory, createProvider]);
-
-    const manageModelSuggestions = useMemo(() => {
-        if (!selectedManageRow) return [];
-        const cat = String(selectedManageRow.category || 'Tools');
-        const selectedProvider = String(selectedManageRow.provider || '').trim().toLowerCase();
-        if (!selectedProvider) return [];
-
-        const hit = (systemCatalog || []).find((item) => {
-            const itemProvider = String(item?.provider || '').trim().toLowerCase();
-            return String(item?.category || '') === cat && itemProvider === selectedProvider;
-        });
-
-        return [...new Set((hit?.models || []).filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b)));
-    }, [systemCatalog, selectedManageRow]);
 
     const visibleSystemSettings = useMemo(() => {
         if (selectedSystemCategory === 'All') return categorizedSystemSettings;
@@ -1796,258 +1520,6 @@ const Settings = () => {
                 </div>
             ) : activeTab === 'system_api' ? (
                 <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                    {canManageSystemSettings && (
-                        <div className="space-y-4">
-                            <h2 className="text-xl font-semibold">System API Config Editor</h2>
-                            <div className="bg-black/20 p-6 rounded-xl border border-white/10 space-y-4 shadow-sm">
-                                <p className="text-xs text-muted-foreground">
-                                    Use this editor to fix provider authentication errors quickly (API Key / Model / Endpoint / WebHook).
-                                </p>
-
-                                <div className="space-y-3 border border-white/10 rounded-lg p-4 bg-white/5">
-                                    <div className="flex flex-wrap items-center justify-between gap-2">
-                                        <h3 className="text-sm font-semibold">Effective LLM Setting Snapshot</h3>
-                                        <button
-                                            onClick={handleLoadEffectiveSnapshot}
-                                            disabled={isSnapshotLoading}
-                                            className="text-xs px-3 py-1.5 rounded border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                                        >
-                                            {isSnapshotLoading ? 'Checking...' : 'Check Effective Setting'}
-                                        </button>
-                                    </div>
-
-                                    {effectiveSnapshot && (
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-                                            <div className="space-y-1">
-                                                <div className="text-muted-foreground">Source</div>
-                                                <div className="font-mono">{effectiveSnapshot.source || '-'}</div>
-                                            </div>
-                                            <div className="space-y-1">
-                                                <div className="text-muted-foreground">Setting ID</div>
-                                                <div className="font-mono">{effectiveSnapshot.setting_id || '-'}</div>
-                                            </div>
-                                            <div className="space-y-1">
-                                                <div className="text-muted-foreground">Provider / Model</div>
-                                                <div className="font-mono break-all">{effectiveSnapshot.provider || '-'} / {effectiveSnapshot.model || '-'}</div>
-                                            </div>
-                                            <div className="space-y-1">
-                                                <div className="text-muted-foreground">API Key</div>
-                                                <div className="font-mono">{effectiveSnapshot.api_key_masked || '(empty)'}</div>
-                                            </div>
-                                            <div className="space-y-1 md:col-span-2">
-                                                <div className="text-muted-foreground">Endpoint</div>
-                                                <div className="font-mono break-all">{effectiveSnapshot.endpoint || '-'}</div>
-                                            </div>
-                                            <div className="space-y-1 md:col-span-2">
-                                                <div className="text-muted-foreground">WebHook</div>
-                                                <div className="font-mono break-all">{effectiveSnapshot.webhook || '-'}</div>
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
-
-                                <div className="space-y-3 border border-white/10 rounded-lg p-4 bg-white/5">
-                                    <h3 className="text-sm font-semibold">Create New System Setting</h3>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                        <div className="space-y-2">
-                                            <label className="text-xs font-medium uppercase text-muted-foreground">Name</label>
-                                            <input
-                                                type="text"
-                                                value={createName}
-                                                onChange={(e) => setCreateName(e.target.value)}
-                                                placeholder="System Setting"
-                                                className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-white"
-                                            />
-                                        </div>
-                                        <div className="space-y-2">
-                                            <label className="text-xs font-medium uppercase text-muted-foreground">Provider *</label>
-                                            <input
-                                                list="system-provider-catalog"
-                                                type="text"
-                                                value={createProvider}
-                                                onChange={(e) => setCreateProvider(e.target.value)}
-                                                placeholder="openai / doubao / runway ..."
-                                                className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-white"
-                                            />
-                                        </div>
-                                        <div className="space-y-2">
-                                            <label className="text-xs font-medium uppercase text-muted-foreground">Category</label>
-                                            <select
-                                                value={createCategory}
-                                                onChange={(e) => setCreateCategory(e.target.value)}
-                                                className="w-full p-2 rounded-md bg-zinc-900 border border-white/10 text-white"
-                                            >
-                                                <option value="LLM">LLM</option>
-                                                <option value="Image">Image</option>
-                                                <option value="Video">Video</option>
-                                                <option value="Vision">Vision</option>
-                                                <option value="Tools">Tools</option>
-                                            </select>
-                                        </div>
-                                        <div className="space-y-2">
-                                            <label className="text-xs font-medium uppercase text-muted-foreground">API Key</label>
-                                            <input
-                                                type="password"
-                                                value={createApiKey}
-                                                onChange={(e) => setCreateApiKey(e.target.value)}
-                                                placeholder="Optional; shared by provider"
-                                                className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-white"
-                                            />
-                                        </div>
-                                        <div className="space-y-2">
-                                            <label className="text-xs font-medium uppercase text-muted-foreground">Endpoint</label>
-                                            <input
-                                                type="text"
-                                                value={createBaseUrl}
-                                                onChange={(e) => setCreateBaseUrl(e.target.value)}
-                                                placeholder="https://..."
-                                                className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-white"
-                                            />
-                                        </div>
-                                        <div className="space-y-2">
-                                            <label className="text-xs font-medium uppercase text-muted-foreground">Model</label>
-                                            <input
-                                                list="system-model-catalog-create"
-                                                type="text"
-                                                value={createModel}
-                                                onChange={(e) => setCreateModel(e.target.value)}
-                                                placeholder="model-id"
-                                                className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-white"
-                                            />
-                                        </div>
-                                        <div className="space-y-2 md:col-span-2">
-                                            <label className="text-xs font-medium uppercase text-muted-foreground">WebHook URL</label>
-                                            <input
-                                                type="text"
-                                                value={createWebHook}
-                                                onChange={(e) => setCreateWebHook(e.target.value)}
-                                                placeholder="https://callback..."
-                                                className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-white"
-                                            />
-                                        </div>
-                                    </div>
-
-                                    <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                                        <input
-                                            type="checkbox"
-                                            checked={createIsActive}
-                                            onChange={(e) => setCreateIsActive(e.target.checked)}
-                                            className="rounded border-white/20 bg-white/10"
-                                        />
-                                        Set as active for this category after create
-                                    </label>
-
-                                    <button
-                                        onClick={handleCreateManagedSystemSetting}
-                                        disabled={isManageCreating}
-                                        className="w-full md:w-auto text-sm px-4 py-2 rounded border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                                    >
-                                        {isManageCreating ? 'Creating...' : 'Create System Config'}
-                                    </button>
-                                </div>
-
-                                <div className="space-y-2">
-                                    <label className="text-xs font-medium uppercase text-muted-foreground">Paste Error To Locate Setting</label>
-                                    <textarea
-                                        value={errorLocatorInput}
-                                        onChange={(e) => setErrorLocatorInput(e.target.value)}
-                                        placeholder="Error: API Error 401 [provider=doubao, model=..., endpoint=...]..."
-                                        className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-white min-h-[90px]"
-                                    />
-                                    <button
-                                        onClick={handleLocateSettingFromError}
-                                        className="w-full md:w-auto text-xs px-3 py-1.5 rounded border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20"
-                                    >
-                                        Locate From Error
-                                    </button>
-                                </div>
-                                <div className="space-y-2">
-                                    <label className="text-xs font-medium uppercase text-muted-foreground">Target Setting</label>
-                                    <select
-                                        value={manageSettingId}
-                                        onChange={(e) => setManageSettingId(e.target.value)}
-                                        className="w-full p-2 rounded-md bg-zinc-900 border border-white/10 text-white"
-                                    >
-                                        <option value="">Select...</option>
-                                        {manageableSystemSettings.map((row) => (
-                                            <option key={row.id} value={row.id}>
-                                                [{row.category}] {row.provider} / {row.model || '-'} (ID:{row.id})
-                                            </option>
-                                        ))}
-                                    </select>
-                                </div>
-
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div className="space-y-2 md:col-span-2">
-                                        <label className="text-xs font-medium uppercase text-muted-foreground">API Key (Leave blank to keep current shared key)</label>
-                                        <input
-                                            type="password"
-                                            value={manageApiKey}
-                                            onChange={(e) => setManageApiKey(e.target.value)}
-                                            placeholder="Paste new key to rotate shared provider key"
-                                            className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-white"
-                                        />
-                                    </div>
-                                    <div className="space-y-2">
-                                        <label className="text-xs font-medium uppercase text-muted-foreground">Endpoint</label>
-                                        <input
-                                            type="text"
-                                            value={manageBaseUrl}
-                                            onChange={(e) => setManageBaseUrl(e.target.value)}
-                                            placeholder="https://..."
-                                            className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-white"
-                                        />
-                                    </div>
-                                    <div className="space-y-2">
-                                        <label className="text-xs font-medium uppercase text-muted-foreground">Model</label>
-                                        <input
-                                            list="system-model-catalog-manage"
-                                            type="text"
-                                            value={manageModel}
-                                            onChange={(e) => setManageModel(e.target.value)}
-                                            placeholder="doubao-seed-2-0-pro-260215"
-                                            className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-white"
-                                        />
-                                    </div>
-                                    <div className="space-y-2 md:col-span-2">
-                                        <label className="text-xs font-medium uppercase text-muted-foreground">WebHook URL</label>
-                                        <input
-                                            type="text"
-                                            value={manageWebHook}
-                                            onChange={(e) => setManageWebHook(e.target.value)}
-                                            placeholder="https://your-callback..."
-                                            className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-white"
-                                        />
-                                    </div>
-                                </div>
-
-                                <button
-                                    onClick={handleSaveManagedSystemSetting}
-                                    disabled={!manageSettingId || isManageSaving}
-                                    className="w-full md:w-auto text-sm px-4 py-2 rounded border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                                >
-                                    {isManageSaving ? 'Saving...' : 'Save System Config'}
-                                </button>
-
-                                <datalist id="system-provider-catalog">
-                                    {createProviderSuggestions.map((providerItem) => (
-                                        <option key={providerItem} value={providerItem} />
-                                    ))}
-                                </datalist>
-                                <datalist id="system-model-catalog-create">
-                                    {createModelSuggestions.map((modelItem) => (
-                                        <option key={modelItem} value={modelItem} />
-                                    ))}
-                                </datalist>
-                                <datalist id="system-model-catalog-manage">
-                                    {manageModelSuggestions.map((modelItem) => (
-                                        <option key={modelItem} value={modelItem} />
-                                    ))}
-                                </datalist>
-                            </div>
-                        </div>
-                    )}
-
                     <div className="space-y-4">
                         <h2 className="text-xl font-semibold">System API Settings</h2>
                         <div className="bg-black/20 p-6 rounded-xl border border-white/10 space-y-4 shadow-sm">
@@ -2058,7 +1530,7 @@ const Settings = () => {
                                 </span>
                             </div>
                             <p className="text-xs text-muted-foreground">
-                                System keys are shared by provider. Choose one model config in each category as your active setting.
+                                System keys are shared by provider. Choose one model config in each category as your active setting. Credits are checked at call time for billable actions.
                             </p>
 
                             {!isSystemSettingsLoading && categorizedSystemSettings.length > 0 && (
@@ -2083,10 +1555,6 @@ const Settings = () => {
 
                             {isSystemSettingsLoading ? (
                                 <div className="text-sm text-muted-foreground">Loading system settings...</div>
-                            ) : userCredits <= 0 ? (
-                                <div className="text-sm text-yellow-300 bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3">
-                                    Your credits are 0. Top up credits first to use system API settings.
-                                </div>
                             ) : systemSettings.length === 0 ? (
                                 <div className="text-sm text-muted-foreground">No system API settings available.</div>
                             ) : visibleSystemSettings.length === 0 ? (
@@ -2112,17 +1580,13 @@ const Settings = () => {
                                                             ) : (
                                                                 <span className="text-[10px] px-2 py-0.5 rounded border border-yellow-500/30 text-yellow-300 bg-yellow-500/10">No Shared Key</span>
                                                             )}
-                                                            {canManageSystemSettings && (
-                                                                <span className="text-[10px] px-2 py-0.5 rounded border border-white/20 text-muted-foreground">Click row to edit</span>
-                                                            )}
                                                         </div>
 
                                                         <div className="space-y-2">
                                                             {(group.models || []).map((row) => (
                                                                 <div
                                                                     key={row.id}
-                                                                    onClick={() => openRowEditModal(row)}
-                                                                    className={`grid grid-cols-1 md:grid-cols-12 gap-2 items-center p-2 rounded border border-white/10 bg-black/20 ${canManageSystemSettings ? 'cursor-pointer hover:bg-white/10 transition-colors' : ''}`}
+                                                                    className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center p-2 rounded border border-white/10 bg-black/20"
                                                                 >
                                                                     <div className="md:col-span-3 text-xs">
                                                                         <div className="text-muted-foreground">Model</div>
@@ -2160,85 +1624,6 @@ const Settings = () => {
                             )}
                         </div>
                     </div>
-
-                    {canManageSystemSettings && isRowEditOpen && (
-                        <div
-                            onClick={closeRowEditModal}
-                            className="fixed inset-0 z-[220] bg-black/70 flex items-center justify-center p-4"
-                        >
-                            <div
-                                onClick={(e) => e.stopPropagation()}
-                                className="w-full max-w-3xl bg-[#09090b] border border-white/10 rounded-xl p-5 space-y-4"
-                            >
-                                <div className="flex items-center justify-between">
-                                    <h3 className="text-lg font-semibold">Edit System API Setting</h3>
-                                    <button
-                                        onClick={closeRowEditModal}
-                                        className="text-xs px-2 py-1 rounded border border-white/10 hover:bg-white/10"
-                                    >
-                                        Close
-                                    </button>
-                                </div>
-
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div className="space-y-2 md:col-span-2">
-                                        <label className="text-xs font-medium uppercase text-muted-foreground">API Key (Leave blank to keep current shared key)</label>
-                                        <input
-                                            type="password"
-                                            value={manageApiKey}
-                                            onChange={(e) => setManageApiKey(e.target.value)}
-                                            placeholder="Paste new key to rotate shared provider key"
-                                            className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-white"
-                                        />
-                                    </div>
-                                    <div className="space-y-2">
-                                        <label className="text-xs font-medium uppercase text-muted-foreground">Endpoint</label>
-                                        <input
-                                            type="text"
-                                            value={manageBaseUrl}
-                                            onChange={(e) => setManageBaseUrl(e.target.value)}
-                                            className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-white"
-                                        />
-                                    </div>
-                                    <div className="space-y-2">
-                                        <label className="text-xs font-medium uppercase text-muted-foreground">Model</label>
-                                        <input
-                                            list="system-model-catalog-manage"
-                                            type="text"
-                                            value={manageModel}
-                                            onChange={(e) => setManageModel(e.target.value)}
-                                            className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-white"
-                                        />
-                                    </div>
-                                    <div className="space-y-2 md:col-span-2">
-                                        <label className="text-xs font-medium uppercase text-muted-foreground">WebHook URL</label>
-                                        <input
-                                            type="text"
-                                            value={manageWebHook}
-                                            onChange={(e) => setManageWebHook(e.target.value)}
-                                            className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-white"
-                                        />
-                                    </div>
-                                </div>
-
-                                <div className="flex justify-end gap-2">
-                                    <button
-                                        onClick={closeRowEditModal}
-                                        className="text-sm px-3 py-2 rounded border border-white/10 hover:bg-white/10"
-                                    >
-                                        Cancel
-                                    </button>
-                                    <button
-                                        onClick={handleSaveFromRowEdit}
-                                        disabled={!manageSettingId || isManageSaving}
-                                        className="text-sm px-4 py-2 rounded border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                                    >
-                                        {isManageSaving ? 'Saving...' : 'Save Changes'}
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
                 </div>
             ) : (
                 <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
