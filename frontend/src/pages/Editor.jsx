@@ -5444,7 +5444,7 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
         
         const uniqueRaws = [...new Set(rawMatches.map(s => s.trim()).filter(Boolean))];
         
-        // Helper to normalize punctuation (Full-width to Half-width)
+        // Helper to normalize punctuation while preserving full name semantics
         const normalize = (str) => {
             return (str || '')
                 .replace(/[（【〔［]/g, '(')
@@ -5461,24 +5461,9 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
             // Remove outer brackets [] {} first
             const content = raw.replace(/[\[\]\{\}【】｛｝]/g, '');
             
-            // Norm 1: Full content normalized
+            // Strict mode: only keep full normalized token (no parenthesis/content stripping)
             const base = normalize(content);
             if (base) candidates.add(base);
-            
-            // Norm 2: Strip parentheses content (Iterative to handle simple nesting or multiple groups)
-            let stripped = base;
-            let prev;
-            do {
-                prev = stripped;
-                stripped = stripped.replace(/\([^\(\)]*\)/g, '').trim();
-            } while (stripped !== prev);
-            
-            // Clean up double spaces created by deletion
-            stripped = stripped.replace(/\s+/g, ' ').trim();
-
-            if (stripped && stripped !== base) {
-                candidates.add(stripped);
-            }
         });
 
         // Debug Log
@@ -5506,19 +5491,13 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
                 // BUT "Isabella" candidate should match "Isabella" entity.
                 
                 // IMPORTANT: The `candidates` set contains BOTH raw strings (e.g. "isabella(dirty)") 
-                // AND stripped strings (e.g. "isabella") if parentheses stripping logic ran above.
+                // without stripped variants, to enforce full-name matching.
                 
                 // So we just need to ensure that the candidate string IS EXACTLY equal to the entity name.
                 // We should NOT do .includes() checks anymore per request.
 
                 if (cn && cand === cn) return true;
                 if (en && cand === en) return true;
-                
-                // Super Normalized Match (Ignore spaces and brackets)
-                // e.g. "公司门口(低角度)" matches "公司 门口 （低角度）"
-                const superNormalize = (s) => s.replace(/[\s\(\)\[\]\{\}（）]/g, '');
-                if (cn && superNormalize(cand) === superNormalize(cn)) return true;
-                if (en && superNormalize(cand) === superNormalize(en)) return true;
 
                 return false;
             });
@@ -9302,8 +9281,14 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
         // Updated Logic: Matches both [Name] and {Name}, allowing specific text source
         // Now synchronized with ReferenceManager logic for consistent robust matching
-        const cleanName = (s) => s.replace(/[\[\]\{\}【】"''“”‘’\(\)（）]/g, '').trim().toLowerCase();
-        const superNormalize = (s) => s.replace(/[\s\(\)\[\]\{\}【】（）\-_\.]/g, '').toLowerCase();
+        const normalizeName = (s) => (s || '')
+            .replace(/[（【〔［]/g, '(')
+            .replace(/[）】〕］]/g, ')')
+            .replace(/[“”"'‘’]/g, '')
+            .replace(/[\[\]\{\}【】｛｝]/g, '')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .toLowerCase();
         
         // Associated Entities (Included unless strictMode is true)
         const rawNames1 = strictMode ? [] : (shot.associated_entities || '').split(/[,，]/);
@@ -9343,12 +9328,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         
         // 3. Match Logic
         const candidates = [...rawNames1, ...rawNames2];
-        const normalizedCandidates = candidates.map(cleanName).filter(Boolean);
-        const superCandidates = candidates.map(superNormalize).filter(Boolean);
+        const normalizedCandidates = candidates.map(normalizeName).filter(Boolean);
 
         let refs = entList.filter(e => {
-            const cn = cleanName(e.name || '');
-            const en = cleanName(e.name_en || '');
+            const cn = normalizeName(e.name || '');
+            const en = normalizeName(e.name_en || '');
             
             // 3b. English Name extraction from Description (Legacy)
              if (!en && e.description) {
@@ -9360,16 +9344,9 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 }
             }
 
-            // Robust Check
+            // Strict full-name exact check only
             const isMatch = normalizedCandidates.some(n => n === cn || (en && n === en));
-            if (isMatch) return true;
-            
-            // Supercheck
-            const scn = superNormalize(e.name || '');
-            const sen = superNormalize(e.name_en || '');
-            const isSuperMatch = superCandidates.some(sn => sn === scn || (sen && sn === sen));
-            
-            return isSuperMatch;
+            return isMatch;
         }).map(e => e.image_url).filter(Boolean);
         
         return [...new Set(refs)];
@@ -9650,40 +9627,51 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         return { text: newText, modified };
     };
 
+    const isStartFrameInheritPrompt = (value) => {
+        const token = String(value || '').trim().toUpperCase();
+        return token === 'SAME' || token === 'SAP';
+    };
+
+    const findPrevShotEndFrameUrl = (shotId) => {
+        const currentIdx = shots.findIndex(s => s.id === shotId);
+        if (currentIdx <= 0) return null;
+        try {
+            const prevShot = shots[currentIdx - 1];
+            const prevTech = JSON.parse(prevShot.technical_notes || '{}');
+            return prevTech.end_frame_url || null;
+        } catch (e) {
+            return null;
+        }
+    };
+
     // --- Generation Handlers ---
     const handleGenerateStartFrame = async () => {
         if (!editingShot) return;
 
-        // Check for "SAME" logic - Inherit from previous End Frame
+        // Check inherit logic - Inherit from previous End Frame
         const currentPrompt = (editingShot.start_frame || "").trim();
-        if (currentPrompt === "SAME") {
-            const currentIdx = shots.findIndex(s => s.id === editingShot.id);
-            if (currentIdx > 0) {
-                const prevShot = shots[currentIdx - 1];
-                const prevTech = JSON.parse(prevShot.technical_notes || '{}');
-                const prevEndUrl = prevTech.end_frame_url;
+        if (isStartFrameInheritPrompt(currentPrompt)) {
+            const prevEndUrl = findPrevShotEndFrameUrl(editingShot.id);
 
-                if (prevEndUrl) {
-                    try {
-                        onLog?.('Inheriting Start Frame from previous shot...', 'info');
-                        const newData = { image_url: prevEndUrl }; // Keep prompt as "SAME"
-                        await onUpdateShot(editingShot.id, newData);
-                        setEditingShot(prev => ({...prev, ...newData}));
-                        onLog?.('Start Frame inherited successfully', 'success');
-                        showNotification('Start Frame inherited from previous shot', 'success');
-                        return; // Exit, do not generate
-                    } catch (err) {
-                        console.error("Error inheriting frame", err);
-                        showNotification("Failed to inherit frame", "error");
-                    }
-                } else {
-                    showNotification("Previous shot has no End Frame to inherit", "warning");
-                    // Fallthrough to attempt generation? No, "SAME" is bad prompt.
-                    return; 
+            if (prevEndUrl) {
+                try {
+                    onLog?.('Inheriting Start Frame from previous shot...', 'info');
+                    const newData = { image_url: prevEndUrl };
+                    await onUpdateShot(editingShot.id, newData);
+                    setEditingShot(prev => ({...prev, ...newData}));
+                    onLog?.('Start Frame inherited successfully', 'success');
+                    showNotification('Start Frame inherited from previous shot', 'success');
+                    return; // Exit, do not generate
+                } catch (err) {
+                    console.error("Error inheriting frame", err);
+                    showNotification("Failed to inherit frame", "error");
                 }
             } else {
-                 showNotification("No previous shot to inherit from", "warning");
-                 return;
+                const noPrevMsg = shots.findIndex(s => s.id === editingShot.id) <= 0
+                    ? 'No previous shot to inherit from'
+                    : 'Previous shot has no End Frame to inherit';
+                showNotification(noPrevMsg, 'warning');
+                return;
             }
         }
 
@@ -10066,6 +10054,21 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 try {
                     setBatchProgress({ current: processedCount, total: shots.length, status: `${statusBase}: Start Frame...` });
                     let prompt = shot.start_frame || shot.video_content || "A cinematic shot";
+
+                    if (isStartFrameInheritPrompt(prompt)) {
+                        const prevEndUrl = findPrevShotEndFrameUrl(shot.id);
+                        if (prevEndUrl) {
+                            const inheritData = { image_url: prevEndUrl };
+                            await onUpdateShot(shot.id, inheritData);
+                            shot.image_url = prevEndUrl;
+                            generatedCount++;
+                            onLog?.(`[Batch ${processedCount}/${shots.length}] Inherited Start for Shot ${shot.shot_id} via SAP/SAME`, 'success');
+                        } else {
+                            onLog?.(`[Batch ${processedCount}/${shots.length}] Skip Start for Shot ${shot.shot_id}: SAP/SAME but previous End Frame missing`, 'warning');
+                        }
+                        continue;
+                    }
+
                     const { text: injectedPrompt } = injectEntityFeatures(prompt);
                     
                     let refs = [];
@@ -10216,6 +10219,23 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     try {
                         setBatchProgress({ current: processedCount, total: shots.length, status: `${statusBase}: Start Frame...` });
                         let prompt = currentShot.start_frame || currentShot.video_content || "A cinematic shot";
+                        const isInheritPrompt = isStartFrameInheritPrompt(prompt);
+
+                        if (isInheritPrompt) {
+                            const prevEndUrl = findPrevShotEndFrameUrl(currentShot.id);
+                            if (prevEndUrl) {
+                                const inheritData = { image_url: prevEndUrl };
+                                await onUpdateShot(currentShot.id, inheritData);
+                                currentShot.image_url = prevEndUrl;
+                                onLog?.(`Inherited Start Frame for Shot ${currentShot.shot_id} via SAP/SAME`, 'success');
+                            } else {
+                                onLog?.(`Skip inheriting Start Frame for Shot ${currentShot.shot_id}: previous End Frame missing`, 'warning');
+                                // SAP/SAME without previous End Frame should not trigger image generation
+                                continue;
+                            }
+                            // continue to next steps (End/Video) using currentShot.image_url if inherited
+                        }
+
                         const { text: injectedPrompt } = injectEntityFeatures(prompt);
                         
                         let refs = [];
@@ -10231,19 +10251,21 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                         } catch(e) {}
                         refs = [...new Set(refs)].filter(Boolean);
 
-                        const res = await generateImage(injectedPrompt, null, refs.length > 0 ? refs : null, {
-                            project_id: projectId,
-                            shot_id: currentShot.id,
-                            shot_number: currentShot.shot_id,
-                            shot_name: currentShot.shot_name,
-                            asset_type: 'start_frame'
-                        });
+                        if (!isInheritPrompt || !currentShot.image_url) {
+                            const res = await generateImage(injectedPrompt, null, refs.length > 0 ? refs : null, {
+                                project_id: projectId,
+                                shot_id: currentShot.id,
+                                shot_number: currentShot.shot_id,
+                                shot_name: currentShot.shot_name,
+                                asset_type: 'start_frame'
+                            });
 
-                        if (res && res.url) {
-                            const newData = { image_url: res.url, start_frame: injectedPrompt };
-                            await onUpdateShot(currentShot.id, newData);
-                            currentShot.image_url = res.url; // Update local for video step
-                            onLog?.(`Generated Start Frame for Shot ${currentShot.shot_id}`, "success");
+                            if (res && res.url) {
+                                const newData = { image_url: res.url, start_frame: injectedPrompt };
+                                await onUpdateShot(currentShot.id, newData);
+                                currentShot.image_url = res.url; // Update local for video step
+                                onLog?.(`Generated Start Frame for Shot ${currentShot.shot_id}`, "success");
+                            }
                         }
                     } catch(e) { console.error("Batch Start Gen Error", e); }
                 }
@@ -10788,6 +10810,9 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                             storageKey="ref_image_urls"
                                             strictPromptOnly={true}
                                             additionalAutoRefs={(() => {
+                                                if (!isStartFrameInheritPrompt(editingShot.start_frame || '')) {
+                                                    return [];
+                                                }
                                                 // Find previous shot's End Frame (Automatic)
                                                 // Kept for backward compatibility or auto-suggestion
                                                 const idx = shots.findIndex(s => s.id === editingShot.id);
@@ -11631,180 +11656,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                      </div>
                  </div>
              )}
-        </div>
-    );
-};
-
-const AssetsLibrary = () => {
-    const [assets, setAssets] = useState([]);
-    const [selectedAsset, setSelectedAsset] = useState(null);
-
-    const handleFileUpload = (e) => {
-        const files = Array.from(e.target.files);
-        files.forEach(file => {
-            const reader = new FileReader();
-            reader.onload = (ev) => {
-                const type = file.type.startsWith('image') ? 'image' : 'video';
-                const newAsset = {
-                    id: Date.now() + Math.random(),
-                    name: file.name,
-                    type,
-                    url: ev.target.result,
-                    size: (file.size / 1024 / 1024).toFixed(2) + ' MB',
-                    dimensions: 'Computing...',
-                    createdAt: new Date().toLocaleString(),
-                    notes: ''
-                };
-
-                if (type === 'image') {
-                    const img = new Image();
-                    img.onload = () => {
-                        newAsset.dimensions = `${img.width} x ${img.height}`;
-                        setAssets(prev => [newAsset, ...prev]);
-                    };
-                    img.src = ev.target.result;
-                } else {
-                    setAssets(prev => [newAsset, ...prev]);
-                }
-            };
-            reader.readAsDataURL(file);
-        });
-    };
-
-    const handleUpdateNote = (id, note) => {
-        setAssets(prev => prev.map(a => a.id === id ? { ...a, notes: note } : a));
-        if (selectedAsset && selectedAsset.id === id) {
-            setSelectedAsset(prev => ({ ...prev, notes: note }));
-        }
-    };
-
-    return (
-        <div className="p-8 h-full flex flex-col w-full relative">
-            <div className="flex justify-between items-center mb-6 shrink-0">
-                <h2 className="text-2xl font-bold flex items-center gap-2">
-                    Assets Library
-                    <span className="text-sm font-normal text-muted-foreground bg-white/5 px-2 py-0.5 rounded-full">{assets.length} Items</span>
-                </h2>
-                <div className="relative">
-                    <input 
-                        type="file" 
-                        multiple 
-                        accept="image/*,video/*" 
-                        onChange={handleFileUpload} 
-                        className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                    />
-                    <button className="px-4 py-2 bg-primary text-black rounded-lg text-sm font-bold hover:bg-primary/90 flex items-center gap-2">
-                        <Upload className="w-4 h-4" /> Upload Assets
-                    </button>
-                </div>
-            </div>
-
-            {assets.length === 0 ? (
-                <div className="flex-1 border border-dashed border-white/10 rounded-xl flex flex-col items-center justify-center text-muted-foreground bg-black/20">
-                    <FolderOpen className="w-16 h-16 mb-4 opacity-20" />
-                    <p>No assets in library.</p>
-                    <p className="text-xs mt-2 opacity-50">Upload images or videos to manage your project assets.</p>
-                </div>
-            ) : (
-                <div className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-6 w-full overflow-y-auto pb-20">
-                    {assets.map(asset => (
-                        <div 
-                            key={asset.id} 
-                            className="group relative aspect-square bg-card border border-white/10 rounded-xl overflow-hidden cursor-pointer hover:border-primary/50 transition-all"
-                            onClick={() => setSelectedAsset(asset)}
-                        >
-                            {asset.type === 'image' ? (
-                                <img src={getFullUrl(asset.url)} alt={asset.name} className="w-full h-full object-cover" />
-                            ) : (
-                                <div className="w-full h-full flex items-center justify-center bg-black/50">
-                                    <Video className="w-12 h-12 text-white/50" />
-                                </div>
-                            )}
-                            <div className="absolute inset-0 bg-gradient-to-t from-black/90 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-3">
-                                <div className="text-xs font-bold text-white truncate">{asset.name}</div>
-                                <div className="text-[10px] text-gray-400 flex justify-between mt-1">
-                                    <span>{asset.type.toUpperCase()}</span>
-                                    <span>{asset.size}</span>
-                                </div>
-                            </div>
-                            <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <Maximize2 className="w-4 h-4 text-white drop-shadow-md" />
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            )}
-
-            {/* Asset Detail Modal */}
-            <AnimatePresence>
-                {selectedAsset && (
-                    <motion.div 
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="fixed inset-0 z-50 flex items-center justify-center p-8 bg-black/90 backdrop-blur-md"
-                        onClick={() => setSelectedAsset(null)}
-                    >
-                        <motion.div 
-                            initial={{ scale: 0.95, opacity: 0 }}
-                            animate={{ scale: 1, opacity: 1 }}
-                            exit={{ scale: 0.95, opacity: 0 }}
-                            className="bg-[#09090b] border border-white/10 rounded-xl w-full max-w-6xl h-[80vh] flex overflow-hidden shadow-2xl"
-                            onClick={e => e.stopPropagation()}
-                        >
-                            {/* Left: Preview */}
-                            <div className="flex-[2] bg-black flex items-center justify-center relative border-r border-white/10 p-4">
-                                {selectedAsset.type === 'image' ? (
-                                    <img src={getFullUrl(selectedAsset.url)} alt={selectedAsset.name} className="max-w-full max-h-full object-contain" />
-                                ) : (
-                                    <video src={getFullUrl(selectedAsset.url)} controls className="max-w-full max-h-full" />
-                                )}
-                            </div>
-
-                            {/* Right: Info */}
-                            <div className="flex-1 flex flex-col bg-card/50">
-                                <div className="p-6 border-b border-white/10 flex justify-between items-start">
-                                    <div>
-                                        <h3 className="text-lg font-bold text-white break-all">{selectedAsset.name}</h3>
-                                        <div className="flex items-center gap-2 mt-2">
-                                            <span className="px-2 py-0.5 rounded bg-white/10 text-[10px] font-bold text-muted-foreground uppercase">{selectedAsset.type}</span>
-                                            <span className="text-xs text-muted-foreground">{selectedAsset.createdAt}</span>
-                                        </div>
-                                    </div>
-                                    <button onClick={() => setSelectedAsset(null)} className="p-1 hover:bg-white/10 rounded text-muted-foreground hover:text-white">
-                                        <X className="w-5 h-5" />
-                                    </button>
-                                </div>
-                                
-                                <div className="p-6 space-y-6 flex-1 overflow-y-auto">
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div className="bg-white/5 p-3 rounded-lg border border-white/5">
-                                            <div className="text-[10px] uppercase text-muted-foreground font-bold mb-1">Dimensions</div>
-                                            <div className="text-sm font-mono text-white">{selectedAsset.dimensions}</div>
-                                        </div>
-                                        <div className="bg-white/5 p-3 rounded-lg border border-white/5">
-                                            <div className="text-[10px] uppercase text-muted-foreground font-bold mb-1">File Size</div>
-                                            <div className="text-sm font-mono text-white">{selectedAsset.size}</div>
-                                        </div>
-                                    </div>
-
-                                    <div className="flex-1 flex flex-col">
-                                        <label className="text-xs uppercase text-muted-foreground font-bold mb-2 flex items-center gap-2">
-                                            <Edit3 className="w-3 h-3" /> Notes & Tags
-                                        </label>
-                                        <textarea 
-                                            className="flex-1 min-h-[200px] w-full bg-black/20 border border-white/10 rounded-lg p-4 text-sm text-white focus:border-primary/50 focus:outline-none resize-none leading-relaxed"
-                                            placeholder="Add descriptions, tags, or usage notes for this asset..."
-                                            value={selectedAsset.notes}
-                                            onChange={(e) => handleUpdateNote(selectedAsset.id, e.target.value)}
-                                        />
-                                    </div>
-                                </div>
-                            </div>
-                        </motion.div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
         </div>
     );
 };
@@ -12700,9 +12551,8 @@ const Editor = ({ projectId, onClose }) => {
         { id: 'overview', label: 'Overview', icon: LayoutDashboard },
         { id: 'ep_info', label: 'Ep. Info', icon: Info },
         { id: 'script', label: 'Script', icon: FileText },
-        { id: 'scenes', label: 'Scenes', icon: Clapperboard },
         { id: 'subjects', label: 'Subjects', icon: Users },
-        { id: 'assets', label: 'Assets', icon: FolderOpen },
+        { id: 'scenes', label: 'Scenes', icon: Clapperboard },
         { id: 'shots', label: 'Shots', icon: Film },
         { id: 'montage', label: 'Montage', icon: Video },
     ];
@@ -12855,9 +12705,8 @@ const Editor = ({ projectId, onClose }) => {
                         )}
                         {activeTab === 'ep_info' && <EpisodeInfo episode={activeEpisode} onUpdate={handleUpdateEpisodeInfo} project={project} projectId={id} />}
                         {activeTab === 'script' && <ScriptEditor activeEpisode={activeEpisode} projectId={id} project={project} onUpdateScript={handleUpdateScript} onUpdateEpisodeInfo={handleUpdateEpisodeInfo} onLog={addLog} onImportText={handleImport} />}
-                        {activeTab === 'scenes' && <SceneManager activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} />}
                         {activeTab === 'subjects' && <SubjectLibrary projectId={id} currentEpisode={activeEpisode} />}
-                        {activeTab === 'assets' && <AssetsLibrary projectId={id} onLog={addLog} />}
+                        {activeTab === 'scenes' && <SceneManager activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} />}
                         {activeTab === 'shots' && <ShotsView activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} editingShot={editingShot} setEditingShot={setEditingShot} />}
                         {activeTab === 'montage' && <VideoStudio activeEpisode={activeEpisode} projectId={id} onLog={addLog} />}
                     </div>

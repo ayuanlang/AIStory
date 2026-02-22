@@ -136,6 +136,15 @@
   - **Momentum Consistency (动势连续)**：若 Shot A 结束时摄影机向右摇，Shot B 最好接续向右的动势或静止，避免无理由的反向运动（除非是为了制造冲突感）。
   - **Eyeline Match (视线匹配)**：确保相邻镜头间的人物视线方向符合空间逻辑（A看右，B看左）。
   - **Snapshot Reconciliation (快照对齐，强制)**：当该 Scene 存在 `[State Snapshot]` 时，你必须在生成完所有 Shots 后进行一次对齐检查：最后一镜 End Frame 是否与快照一致；若不一致，必须通过合并/调整最后 1-2 镜的动作演化来达成快照，而不是修改快照或忽略。
+  - **SAP Start Frame Protocol（首帧复用协议，强制优先）**：
+    - **Default Rule**：同一 Scene 内，除第一个 Shot 外，后续 Shot 的 `Start Frame` **原则上直接复用**上一 Shot 的 `End Frame`。
+    - **Output Rule**：当可复用时，`Start Frame` 单元格必须且只能填写 **`SAP`**（大小写固定）。
+    - **Zero-Noise Constraint**：填写 `SAP` 时，禁止任何其他文字、标签、标点、空格或换行。
+    - **Exception Rule（必须重写 Start Frame）**：若存在明确的大镜头变化，则**禁止**使用 `SAP`，必须完整填写新的 `Start Frame`。包含但不限于：
+      1) 过肩镜头/正反打（OTS / Reverse Angle）；
+      2) 主观镜头切换（POV）；
+      3) 明显机位轴线重置、朝向反转或景别级别突变（如 Wide -> ECU）；
+      4) 时间跳跃、空间跳切、场面调度发生显著重构。
 
 ## 二、场景类型规则 (Scene-Type Rules)
 按剧情类型细化的镜头逻辑，指导分镜节奏与光影风格。**Guideline**: 当剧情需要或能提升信息表达时，优先选用下述的 "Advanced FX" 或 "Perspective & Traversal"；若会破坏可生成稳定性或不符合剧情，则允许全部采用基础运镜与经典正反打。
@@ -147,6 +156,7 @@
   - **信息封闭 (Information Closure)**：假设阅读者（AI或制作人员）只看当前这一行的信息。**绝对禁止**引用“上一个镜头”或“场景开头”的信息。必须将当前时刻所需的所有视觉细节（环境、光影、人物状态）完整复述。
 - **禁止省略 (No Shortcuts)**：**严禁使用** "Same as above", "Continued from previous shot", "Same setting", "Unchanged", "See previous" 等指代性词汇。如果不写清楚，生图AI将无法生成画面。
 - **全量重写 (Full Rewrite)**：即使当前镜头接续上一镜头（Continuity），也必须**重新完整描写**所有的视觉元素。不能假设 AI 会“记得”刚才站在哪里，必须在每一个 Shot 中重新定义。
+- **唯一例外 (Only Exception)**：仅当命中 **一-6 SAP Start Frame Protocol** 的可复用条件时，`Start Frame` 允许只写 `SAP`；除此之外，任何省略写法一律禁止。
 
 ### 1. 情感对话 (Dialogue & Emotion)
 - **Core Logic**: "Relation & Reaction". 重点往往不在说话的人，而在听话的人（反应）。
@@ -270,7 +280,11 @@
 
 #### B. 静态维度 (Start Frame 描述)
 - **定义**：明示动作开始瞬间的机位、焦段、构图与主体状态。此部分**仅描述起始状态 (T=0s)**，不包含任何动作或结果。
-- **严禁 "Same as" (Strictly Forbidden)**：同 **二-0 独立描述原则**，禁止任何 “Same as/Continued/Unchanged/See previous” 之类的省略写法。
+- **SAP 特殊输出规则（高优先级覆盖）**：
+  - 若根据 **一-6 SAP Start Frame Protocol** 判定可复用上一镜尾帧，则本镜 `Start Frame` 只输出 `SAP`。
+  - `SAP` 仅可用于同一 Scene 的第 2 镜及之后；该 Scene 第 1 镜禁止使用 `SAP`。
+  - 一旦使用 `SAP`，本节其余 Start Frame 描述要求对该镜头不再展开（无需重复写机位/构图/层级文本）。
+- **非SAP严禁 "Same as" (Strictly Forbidden)**：同 **二-0 独立描述原则**，禁止任何 “Same as/Continued/Unchanged/See previous” 之类的省略写法。
 - **强制机位物理定义 (Mandatory Camera Physics)**：
   - 在描述任何视觉内容前，必须先使用自然语言明确 **[Camera Setup]**。
   - **Environment-Relative (环境基准)**：机位描述必须以 **[Environment Anchor]** 为坐标系，绝对位置固定（如 "Near the north window"），严禁仅使用 "Behind character" 等相对描述。即使是跟拍，也要说明 "Tracking character along the corridor walls"。
@@ -282,6 +296,9 @@
 - **必须包含 (Mandatory Elements)**：
   - **[Global Style]**：所有描述必须以 `[Global Style]` 开头。
   - **[Camera Position] + [Shooting Direction] (强制同时出现)**：必须同时给出机位落点与拍摄朝向，缺一不可。
+  - **角色朝向显式化 (Facing Declaration, 强制)**：在 Start Frame 中，每个可见核心角色都必须明确写出其相对镜头朝向；不得省略。
+    - 可用枚举：`Facing Camera`（正对镜头）/ `Back to Lens`（背对镜头）/ `Profile Left`（左侧对）/ `Profile Right`（右侧对）/ `3/4 View Left` / `3/4 View Right`。
+    - 禁止模糊词：如 `facing sideways`、`turned a bit`、`angled`、`partially facing` 等不可判定表达。
   - **[Camera Description]**: 必须包含 **Framing** (景别) 和 **Angle** (角度)。
   - **光影与色调 (Lighting & Color)**：严格继承 `[Global Style]` 的视觉基调。必须明确描述**光源性质**（Hard/Soft）、**光影对比度**（High key/Low key/Chiaroscuro）以及**主色调**（Color Palette）。例如：若风格为 "Neon Noir"，则描述 "Harsh neon side lighting, deep shadows, wet pavement reflections, cyan and magenta contrast"。
   - **构图法则 (Composition Technique)**：必须指定一种经典的构图方式以增强形式感。可选技法包括：**Symmetrical Composition** (对称), **Rule of Thirds** (三分法), **Leading Lines** (引导线), **Center Framed** (中心), **Frame within a Frame** (框中框), **Triangular** (三角), **Negative Space** (留白)。
@@ -293,6 +310,7 @@
     - **Standard Static Syntax (标准静态句式)**：在主体出现的层级中，紧接主体名称必须严格遵循以下标准句式：
       - **Formula**: `[Subject Name] [Subject Info: Shot Size + Screen Position + Camera-Relative Facing + Static Pose + Expression]`
       - **Constraint**: Each field must use **Relative/Visual terms**, not absolute physics.
+      - **Facing Mandatory Check**：`Subject Info` 中的 `Camera-Relative Facing` 为必填且必须可判定 Front/Back/Left/Right/3/4；缺失或模糊视为无效输出。
       - **Element Definition**:
         - `Shot Size`: Visual scale (e.g., "Full Body", "Cowboy Shot", "Extreme Close Up").
         - `Screen Position`: 2D Plane coordinates. (e.g., "Center", "Rule of Thirds Left/Right", "Bottom Frame").
@@ -320,6 +338,10 @@
   
 #### C. 动态维度 (Video Content)
 - **定义**：描述从 `Start Frame` 到 `End Frame` 的完整时空演变过程。
+- **角色朝向链路强制 (Facing Transition Chain, 强制)**：
+  - Video Content 中凡涉及角色转身/位移/交互，必须明确记录其相对镜头朝向变化链路（例如：`Profile Left -> Facing Camera -> 3/4 View Right`）。
+  - 若角色朝向在整段动作中不变，必须显式写明 `facing remains unchanged`（或等效明确表述）。
+  - 禁止仅写“turns/moves/reacts”而不交代朝向结果；禁止模糊朝向词（如 `slightly turned`、`angled`）而无可判定方向。
 - **核心原则：视动协同 (Synergy of Camera & Action)**：
   - **Motivated Movement (动机驱动)**：每一个运镜都必须服务于动作或情绪。严禁为了运镜而运镜。
     - *Reaction*: 运镜是对动作的反应。e.g. "As [Subject] approaches, Camera pulls back."
@@ -409,6 +431,7 @@
   4.  **实体状态与交互 (Entity Status & Interaction)**：
       *   **强制状态描述**: 画面中所有可见的 `Linked Characters` 和 `Key Props` 都必须有动态描述。
           - **无动作**：必须显式标记为静止（e.g., "[Subject] remains static"），严禁忽略。
+      *   **朝向状态描述 (Facing State, 强制)**：每个可见核心角色在动作段落中都必须有可判定朝向（Facing Camera / Back to Lens / Profile Left / Profile Right / 3/4 View Left / 3/4 View Right），并与运镜方向保持可推导一致。
       *   **表情演变 (Facial Expression Evolution)**：必须明确描述表情随时间的演变细节（Micro-expressions）。
           - e.g., "Smile fading into seriousness", "Eyebrows furrowing slightly".
       *   **非焦点反应 (Persistent Presence)**：背景角色或非焦点角色不能冻结，必须有符合情境的持续动作。
@@ -436,6 +459,7 @@
 
 #### D. 结果维度 (End Frame 描述)
 - **定义**：这是 Video Content 演变结束后的最终定格状态 (T=Duration)。
+- **终态朝向明确 (Final Facing Declaration, 强制)**：End Frame 中每个可见核心角色必须明确给出最终朝向（Facing Camera / Back to Lens / Profile Left / Profile Right / 3/4 View Left / 3/4 View Right），禁止省略或模糊。
 - **完全一致简化 (Identical Frame)**：仅当 Video Content 为完全静止（无任何运镜与动作）导致 End Frame 与 Start Frame 像素级一致时，填写 **NO**。否则必须完整填写。
 - **核心原则：独立全量重绘 (Independent Full Redraw)**
   - **禁止差分描述 (No Delta)**：同 **二-0 独立描述原则**，严禁任何引用/差分写法；End Frame 必须自包含、可独立生图。
@@ -447,6 +471,7 @@
         - **Full Structure**: 必须重新构建 `[Foreground]`, `[Midground]`, `[Background]` 层级。
         - **Subject Info Update**: 针对核心角色，**必须**再次调用 `Standard Static Syntax` 完整重绘其最终状态。
           - **Formula**: `[Subject Name] [Subject Info: New Shot Size + New Screen Position + New Facing + New Pose + New Expression]`
+          - **Facing Mandatory Check**：`New Facing` 必须是可判定枚举值（Front/Back/Profile Left/Profile Right/3/4 Left/3/4 Right）；若 Video Content 存在转身动作，则 End Frame 的 `New Facing` 必须与动作结果一致。
         - **State Recalculation (状态重算)**:
           - `New Screen Position`: Must reflect the result of Camera Move + Character Move.
           - `New Pose`: Must reflect the execution of the Action.
