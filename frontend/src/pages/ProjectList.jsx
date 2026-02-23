@@ -1,6 +1,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { api, fetchProjects, createProject, getSettings, updateSetting, getSettingDefaults, deleteSetting, deleteProject } from '../services/api';
+import { BASE_URL } from '../config';
 import Editor from './Editor';
 import SettingsPage from './Settings';
 import AssetsLibrary from '../components/AssetsLibrary';
@@ -43,6 +44,18 @@ const cinematicImages = [
     "https://images.unsplash.com/photo-1598899134739-24c46f58b8c0?w=500&q=80", // Movie set
     "https://images.unsplash.com/photo-1517602302552-471fe67acf66?w=500&q=80", // Vibes
 ];
+
+const getAvatarUrl = (url) => {
+    if (!url) return '';
+    if (url.startsWith('http') || url.startsWith('blob:') || url.startsWith('data:')) return url;
+    if (url.startsWith('/')) {
+        const base = BASE_URL.endsWith('/') ? BASE_URL.slice(0, -1) : BASE_URL;
+        return `${base}${url}`;
+    }
+    return url;
+};
+
+const USER_PROFILE_UPDATED_EVENT = 'aistory.user.profile.updated';
 
 const THEMES = {
     default: {
@@ -147,7 +160,20 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                  console.error("Failed to fetch user info", e);
              }
         };
+        const handleProfileUpdated = (event) => {
+            const updated = event?.detail;
+            if (updated && typeof updated === 'object') {
+                setCurrentUser(updated);
+                return;
+            }
+            fetchMe();
+        };
+
         fetchMe();
+        window.addEventListener(USER_PROFILE_UPDATED_EVENT, handleProfileUpdated);
+        return () => {
+            window.removeEventListener(USER_PROFILE_UPDATED_EVENT, handleProfileUpdated);
+        };
     }, []);
 
     useEffect(() => {
@@ -309,7 +335,15 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                 <div className="mt-auto border-t pt-6">
                     <div className="flex items-center gap-3 px-2 mb-4">
                         <div className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center">
-                            <User className="w-5 h-5 text-muted-foreground" />
+                            {currentUser?.avatar_url ? (
+                                <img
+                                    src={getAvatarUrl(currentUser.avatar_url)}
+                                    alt={currentUser?.full_name || currentUser?.username || 'avatar'}
+                                    className="w-10 h-10 rounded-full object-cover"
+                                />
+                            ) : (
+                                <User className="w-5 h-5 text-muted-foreground" />
+                            )}
                         </div>
                         <div className="flex-1 overflow-hidden">
                             <p className="text-sm font-medium truncate">{currentUser?.full_name || currentUser?.username || t('访客用户', 'Guest User')}</p>

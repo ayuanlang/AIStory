@@ -613,6 +613,25 @@ export const fetchMe = async () => {
     return response.data;
 };
 
+export const updateMyProfile = async (payload) => {
+    const response = await api.put('/users/me/profile', payload || {});
+    return response.data;
+};
+
+export const updateMyPassword = async (payload) => {
+    const response = await api.put('/users/me/password', payload || {});
+    return response.data;
+};
+
+export const uploadMyAvatar = async (file) => {
+    const form = new FormData();
+    form.append('file', file);
+    const response = await api.post('/users/me/avatar', form, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+    });
+    return response.data;
+};
+
 // Prompt Helper Export
 export const injectEntityFeatures = (prompt, entities = []) => {
     let text = prompt || '';

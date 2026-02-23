@@ -1,11 +1,21 @@
 
 import logging
 import bcrypt
+import os
 from sqlalchemy import text, inspect
 from app.db.session import engine, SessionLocal
 from app.models.all_models import PricingRule, APISetting, User, SystemAPISetting
 
 logger = logging.getLogger(__name__)
+
+
+def _should_manage_api_settings_on_init() -> bool:
+    """
+    Whether init/deploy flow is allowed to mutate API settings data records.
+    Default is OFF to protect existing website data; use import/export for changes.
+    Enable only when explicitly needed for bootstrap/migration.
+    """
+    return str(os.getenv("AISTORY_MANAGE_API_SETTINGS_ON_INIT", "0")).strip().lower() in {"1", "true", "yes", "on"}
 
 def create_default_superuser():
     """Ensure default system user exists."""
@@ -61,31 +71,34 @@ def check_and_migrate_tables():
         except Exception as e:
             logger.error(f"Failed to ensure system_api_settings table: {e}")
 
-        # Migrate legacy system-owned rows from api_settings into system_api_settings.
-        try:
-            with SessionLocal() as session:
-                system_count = session.query(SystemAPISetting).count()
-                if system_count == 0:
-                    legacy_rows = session.query(APISetting).join(User, APISetting.user_id == User.id).filter(
-                        User.is_system == True,
-                        APISetting.category != "System_Payment",
-                    ).all()
-                    for row in legacy_rows:
-                        session.add(SystemAPISetting(
-                            name=row.name,
-                            category=row.category or "LLM",
-                            provider=row.provider or "unknown",
-                            api_key=row.api_key or "",
-                            base_url=row.base_url,
-                            model=row.model,
-                            config=row.config or {},
-                            is_active=bool(row.is_active),
-                        ))
-                    if legacy_rows:
-                        session.commit()
-                        logger.info("Migrated %s legacy system API rows into system_api_settings", len(legacy_rows))
-        except Exception as e:
-            logger.error(f"Failed migrating legacy system API settings: {e}")
+        # Migrate legacy system-owned rows from api_settings into system_api_settings (opt-in only).
+        if _should_manage_api_settings_on_init():
+            try:
+                with SessionLocal() as session:
+                    system_count = session.query(SystemAPISetting).count()
+                    if system_count == 0:
+                        legacy_rows = session.query(APISetting).join(User, APISetting.user_id == User.id).filter(
+                            User.is_system == True,
+                            APISetting.category != "System_Payment",
+                        ).all()
+                        for row in legacy_rows:
+                            session.add(SystemAPISetting(
+                                name=row.name,
+                                category=row.category or "LLM",
+                                provider=row.provider or "unknown",
+                                api_key=row.api_key or "",
+                                base_url=row.base_url,
+                                model=row.model,
+                                config=row.config or {},
+                                is_active=bool(row.is_active),
+                            ))
+                        if legacy_rows:
+                            session.commit()
+                            logger.info("Migrated %s legacy system API rows into system_api_settings", len(legacy_rows))
+            except Exception as e:
+                logger.error(f"Failed migrating legacy system API settings: {e}")
+        else:
+            logger.info("Skip legacy API settings migration on init (AISTORY_MANAGE_API_SETTINGS_ON_INIT is disabled)")
 
         is_postgres = engine.dialect.name == 'postgresql'
         
@@ -96,7 +109,8 @@ def check_and_migrate_tables():
                 ("is_superuser", "BOOLEAN DEFAULT FALSE"),
                 ("is_authorized", "BOOLEAN DEFAULT FALSE"),
                 ("is_system", "BOOLEAN DEFAULT FALSE"),
-                ("credits", "INTEGER DEFAULT 0")
+                ("credits", "INTEGER DEFAULT 0"),
+                ("avatar_url", "VARCHAR")
             ]
             with engine.begin() as conn:
                  for col_name, col_type in user_columns_pg:
@@ -118,7 +132,8 @@ def check_and_migrate_tables():
             ("is_superuser", "BOOLEAN DEFAULT FALSE"),
             ("is_authorized", "BOOLEAN DEFAULT FALSE"),
             ("is_system", "BOOLEAN DEFAULT FALSE"),
-            ("credits", "INTEGER DEFAULT 0")
+            ("credits", "INTEGER DEFAULT 0"),
+            ("avatar_url", "VARCHAR")
         ]
 
         columns_to_add = []
@@ -686,10 +701,13 @@ def init_initial_data():
     db = SessionLocal()
     try:
         init_pricing_rules(db)
-        init_api_settings(db)
-        cleanup_api_settings_active_conflicts(db)
-        normalize_grsai_user_api_settings(db)
-        init_system_api_settings(db)
+        if _should_manage_api_settings_on_init():
+            init_api_settings(db)
+            cleanup_api_settings_active_conflicts(db)
+            normalize_grsai_user_api_settings(db)
+            init_system_api_settings(db)
+        else:
+            logger.info("Skip API settings data init/normalize on deploy (managed via import/export)")
     except Exception as e:
         logger.error(f"Failed to initialize data: {e}")
     finally:

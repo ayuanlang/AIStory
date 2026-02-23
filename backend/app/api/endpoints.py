@@ -5169,6 +5169,7 @@ class UserOut(BaseModel):
     username: str
     email: Optional[str]
     full_name: Optional[str]
+    avatar_url: Optional[str] = None
     is_active: bool
     is_superuser: bool
     is_authorized: bool
@@ -6642,12 +6643,96 @@ class UserUpdate(BaseModel):
     password: Optional[str] = None
 
 
+class UserProfileUpdate(BaseModel):
+    full_name: Optional[str] = None
+
+
+class UserPasswordUpdate(BaseModel):
+    current_password: str
+    new_password: str
+
+
 @router.get("/users/me", response_model=UserOut)
 def read_users_me(current_user: User = Depends(get_current_user)):
     """
     Get current user.
     """
     return current_user
+
+
+@router.put("/users/me/profile", response_model=UserOut)
+def update_my_profile(
+    payload: UserProfileUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    user = db.query(User).filter(User.id == current_user.id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if payload.full_name is not None:
+        user.full_name = (payload.full_name or "").strip() or None
+
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@router.put("/users/me/password")
+def update_my_password(
+    payload: UserPasswordUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    user = db.query(User).filter(User.id == current_user.id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if not verify_password(payload.current_password, user.hashed_password):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+    new_password = (payload.new_password or "").strip()
+    if len(new_password) < 6:
+        raise HTTPException(status_code=400, detail="New password must be at least 6 characters")
+
+    user.hashed_password = get_password_hash(new_password)
+    db.commit()
+    return {"status": "success", "message": "Password updated"}
+
+
+@router.post("/users/me/avatar", response_model=UserOut)
+async def update_my_avatar(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    user = db.query(User).filter(User.id == current_user.id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    ext = (Path(file.filename or "").suffix or "").lower()
+    if ext not in {".jpg", ".jpeg", ".png", ".webp"}:
+        raise HTTPException(status_code=400, detail="Avatar must be .jpg, .jpeg, .png or .webp")
+
+    upload_root = settings.UPLOAD_DIR
+    avatar_dir = os.path.join(upload_root, str(current_user.id), "avatars")
+    os.makedirs(avatar_dir, exist_ok=True)
+
+    filename = f"avatar_{uuid.uuid4().hex[:10]}{ext}"
+    save_path = os.path.join(avatar_dir, filename)
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty avatar file")
+
+    with open(save_path, "wb") as f:
+        f.write(content)
+
+    relative_path = os.path.relpath(save_path, upload_root).replace("\\", "/")
+    user.avatar_url = f"/uploads/{relative_path}"
+    db.commit()
+    db.refresh(user)
+    return user
 
 @router.get("/users", response_model=List[UserOut])
 def get_users(

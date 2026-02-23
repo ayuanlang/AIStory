@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useStore } from '@/lib/store';
-import { Save, Info, Upload, Download, Coins, History, Palette, CheckCircle, ArrowLeft } from 'lucide-react';
+import { Save, Info, Upload, Download, Coins, History, Palette, CheckCircle, ArrowLeft, User, KeyRound } from 'lucide-react';
 import { API_URL } from '@/config';
-import { updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, selectSystemSetting } from '../services/api';
+import { updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, selectSystemSetting, updateMyProfile, updateMyPassword, uploadMyAvatar } from '../services/api';
 import RechargeModal from '../components/RechargeModal'; // Import RechargeModal
 import { getUiLang, setUiLang as setGlobalUiLang, tUI, UI_LANG_EVENT } from '../lib/uiLang';
 
@@ -19,6 +19,8 @@ const DEFAULT_SCENE_SUPPLEMENTS = [
     "Anchor Clarity Mandate: keep environment/character/prop anchors explicit and stable; never trade anchor consistency for style.",
     "If user style constraints are provided, obey them first.",
 ].join('\n');
+
+const USER_PROFILE_UPDATED_EVENT = 'aistory.user.profile.updated';
 
 const THEMES = {
     default: {
@@ -126,6 +128,17 @@ const Settings = () => {
 
     // State for tabs
     const [activeTab, setActiveTab] = useState('general');
+
+    // Account Management
+    const [profileName, setProfileName] = useState('');
+    const [profileEmail, setProfileEmail] = useState('');
+    const [profileAvatarUrl, setProfileAvatarUrl] = useState('');
+    const [isSavingProfile, setIsSavingProfile] = useState(false);
+    const [currentPassword, setCurrentPassword] = useState('');
+    const [newPassword, setNewPassword] = useState('');
+    const [confirmPassword, setConfirmPassword] = useState('');
+    const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
+    const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
     
     // Billing State
     const [userCredits, setUserCredits] = useState(0);
@@ -212,6 +225,14 @@ const Settings = () => {
         setGlobalUiLang(next);
     };
 
+    const notifyUserProfileUpdated = (userData) => {
+        try {
+            window.dispatchEvent(new CustomEvent(USER_PROFILE_UPDATED_EVENT, { detail: userData || null }));
+        } catch {
+            // ignore event dispatch failures
+        }
+    };
+
     const handleExitSettings = () => {
         const params = new URLSearchParams(location.search || '');
         const returnToRaw = params.get('return_to') || '';
@@ -236,6 +257,75 @@ const Settings = () => {
         });
         localStorage.setItem('theme', themeKey);
         showNotification(t('页面风格已切换', 'Theme updated'), 'success');
+    };
+
+    const loadMyProfile = async () => {
+        try {
+            const me = await fetchMe();
+            setProfileName(me?.full_name || '');
+            setProfileEmail(me?.email || '');
+            setProfileAvatarUrl(me?.avatar_url || '');
+        } catch (e) {
+            console.error('Failed to load profile', e);
+        }
+    };
+
+    const handleSaveProfile = async () => {
+        setIsSavingProfile(true);
+        try {
+            const updated = await updateMyProfile({ full_name: profileName });
+            setProfileName(updated?.full_name || '');
+            setProfileEmail(updated?.email || '');
+            setProfileAvatarUrl(updated?.avatar_url || '');
+            notifyUserProfileUpdated(updated);
+            showNotification(t('用户资料已更新', 'Profile updated'), 'success');
+        } catch (e) {
+            showNotification(t(`资料更新失败：${e.message}`, `Failed to update profile: ${e.message}`), 'error');
+        } finally {
+            setIsSavingProfile(false);
+        }
+    };
+
+    const handleChangePassword = async () => {
+        if (!currentPassword || !newPassword) {
+            showNotification(t('请填写当前密码和新密码', 'Please enter current and new password'), 'error');
+            return;
+        }
+        if (newPassword !== confirmPassword) {
+            showNotification(t('两次输入的新密码不一致', 'New passwords do not match'), 'error');
+            return;
+        }
+
+        setIsUpdatingPassword(true);
+        try {
+            await updateMyPassword({ current_password: currentPassword, new_password: newPassword });
+            setCurrentPassword('');
+            setNewPassword('');
+            setConfirmPassword('');
+            showNotification(t('密码修改成功', 'Password updated successfully'), 'success');
+        } catch (e) {
+            showNotification(t(`密码修改失败：${e.message}`, `Failed to update password: ${e.message}`), 'error');
+        } finally {
+            setIsUpdatingPassword(false);
+        }
+    };
+
+    const handleAvatarFileChange = async (event) => {
+        const file = event?.target?.files?.[0];
+        if (!file) return;
+
+        setIsUploadingAvatar(true);
+        try {
+            const updated = await uploadMyAvatar(file);
+            setProfileAvatarUrl(updated?.avatar_url || '');
+            notifyUserProfileUpdated(updated);
+            showNotification(t('头像已更新', 'Avatar updated'), 'success');
+        } catch (e) {
+            showNotification(t(`头像上传失败：${e.message}`, `Failed to upload avatar: ${e.message}`), 'error');
+        } finally {
+            setIsUploadingAvatar(false);
+            if (event?.target) event.target.value = '';
+        }
     };
 
     // Helper: Refresh Billing Data
@@ -492,7 +582,14 @@ const Settings = () => {
              }
         }
         fetchSettings();
+        loadMyProfile();
     }, []);
+
+    useEffect(() => {
+        if (activeTab === 'account') {
+            loadMyProfile();
+        }
+    }, [activeTab]);
 
     const handleSaveTranslation = async () => {
          try {
@@ -1113,6 +1210,12 @@ const Settings = () => {
                             >
                                          {t('API 设置', 'API Settings')}
                             </button>
+                            <button
+                                onClick={() => setActiveTab('account')}
+                                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'account' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
+                            >
+                                {t('用户管理', 'Account')}
+                            </button>
                         <button 
                              onClick={() => setActiveTab('usage')}
                              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'usage' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
@@ -1196,6 +1299,113 @@ const Settings = () => {
                     ))}
                 </div>
             </section>
+            )}
+
+            {activeTab === 'account' && (
+                <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                    <section className="bg-black/20 p-6 rounded-xl border border-white/10 space-y-4 shadow-sm">
+                        <h2 className="text-lg font-semibold flex items-center gap-2">
+                            <User className="w-5 h-5 text-primary" />
+                            {t('用户资料', 'Profile')}
+                        </h2>
+
+                        <div className="flex flex-col sm:flex-row gap-4 sm:items-center">
+                            <div className="w-20 h-20 rounded-full overflow-hidden border border-white/20 bg-white/5 flex items-center justify-center shrink-0">
+                                {profileAvatarUrl ? (
+                                    <img src={profileAvatarUrl} alt="avatar" className="w-full h-full object-cover" />
+                                ) : (
+                                    <User className="w-8 h-8 text-muted-foreground" />
+                                )}
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-xs text-muted-foreground uppercase font-bold">{t('头像', 'Avatar')}</label>
+                                <input
+                                    type="file"
+                                    accept="image/png,image/jpeg,image/webp"
+                                    onChange={handleAvatarFileChange}
+                                    disabled={isUploadingAvatar}
+                                    className="block text-sm text-muted-foreground file:mr-3 file:px-3 file:py-1.5 file:rounded file:border-0 file:bg-white/10 file:text-white hover:file:bg-white/20"
+                                />
+                                <div className="text-xs text-muted-foreground">{isUploadingAvatar ? t('上传中...', 'Uploading...') : t('支持 PNG/JPG/WEBP', 'PNG/JPG/WEBP supported')}</div>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium">{t('名称', 'Name')}</label>
+                                <input
+                                    type="text"
+                                    value={profileName}
+                                    onChange={(e) => setProfileName(e.target.value)}
+                                    placeholder={t('输入你的显示名称', 'Enter your display name')}
+                                    className="w-full p-2 rounded-md bg-white/10 border border-white/10"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium">{t('邮箱', 'Email')}</label>
+                                <input
+                                    type="text"
+                                    value={profileEmail}
+                                    readOnly
+                                    className="w-full p-2 rounded-md bg-white/5 border border-white/10 text-muted-foreground"
+                                />
+                            </div>
+                        </div>
+
+                        <button
+                            onClick={handleSaveProfile}
+                            disabled={isSavingProfile}
+                            className="px-4 py-2 bg-primary text-black rounded-lg text-sm font-bold hover:opacity-90 disabled:opacity-50"
+                        >
+                            {isSavingProfile ? t('保存中...', 'Saving...') : t('保存资料', 'Save Profile')}
+                        </button>
+                    </section>
+
+                    <section className="bg-black/20 p-6 rounded-xl border border-white/10 space-y-4 shadow-sm">
+                        <h2 className="text-lg font-semibold flex items-center gap-2">
+                            <KeyRound className="w-5 h-5 text-primary" />
+                            {t('修改密码', 'Change Password')}
+                        </h2>
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium">{t('当前密码', 'Current Password')}</label>
+                                <input
+                                    type="password"
+                                    value={currentPassword}
+                                    onChange={(e) => setCurrentPassword(e.target.value)}
+                                    className="w-full p-2 rounded-md bg-white/10 border border-white/10"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium">{t('新密码', 'New Password')}</label>
+                                <input
+                                    type="password"
+                                    value={newPassword}
+                                    onChange={(e) => setNewPassword(e.target.value)}
+                                    className="w-full p-2 rounded-md bg-white/10 border border-white/10"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium">{t('确认新密码', 'Confirm New Password')}</label>
+                                <input
+                                    type="password"
+                                    value={confirmPassword}
+                                    onChange={(e) => setConfirmPassword(e.target.value)}
+                                    className="w-full p-2 rounded-md bg-white/10 border border-white/10"
+                                />
+                            </div>
+                        </div>
+
+                        <button
+                            onClick={handleChangePassword}
+                            disabled={isUpdatingPassword}
+                            className="px-4 py-2 bg-white/10 border border-white/10 rounded-lg text-sm font-bold hover:bg-white/20 disabled:opacity-50"
+                        >
+                            {isUpdatingPassword ? t('更新中...', 'Updating...') : t('更新密码', 'Update Password')}
+                        </button>
+                    </section>
+                </div>
             )}
             
             {activeTab === 'usage' ? (
