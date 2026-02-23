@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useStore } from '@/lib/store';
-import { Save, Info, Upload, Download, Coins, History } from 'lucide-react';
+import { Save, Info, Upload, Download, Coins, History, Palette, CheckCircle } from 'lucide-react';
 import { API_URL } from '@/config';
 import { updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, selectSystemSetting } from '../services/api';
 import RechargeModal from '../components/RechargeModal'; // Import RechargeModal
@@ -20,6 +20,57 @@ const DEFAULT_SCENE_SUPPLEMENTS = [
     "If user style constraints are provided, obey them first.",
 ].join('\n');
 
+const THEMES = {
+    default: {
+        name: { zh: '电影暗夜', en: 'Cinematic Dark' },
+        description: { zh: '深色高对比，聚焦创作内容。', en: 'Deep blacks and high contrast for focus.' },
+        colors: {
+            '--background': '224 71% 4%',
+            '--card': '224 71% 4%',
+            '--primary': '210 40% 98%',
+            '--secondary': '222.2 47.4% 11.2%',
+            '--muted': '223 47% 11%',
+            '--border': '216 34% 17%'
+        }
+    },
+    midnight: {
+        name: { zh: '午夜蓝', en: 'Midnight Blue' },
+        description: { zh: '专业感深蓝色调。', en: 'Professional deep blue tones.' },
+        colors: {
+            '--background': '222 47% 11%',
+            '--card': '223 47% 13%',
+            '--primary': '210 40% 98%',
+            '--secondary': '217 33% 17%',
+            '--muted': '217 33% 15%',
+            '--border': '217 33% 20%'
+        }
+    },
+    slate: {
+        name: { zh: '钛灰', en: 'Titanium Slate' },
+        description: { zh: '中性工业灰风格。', en: 'Neutral, industrial grey tones.' },
+        colors: {
+            '--background': '210 14% 12%',
+            '--card': '210 14% 14%',
+            '--primary': '210 40% 98%',
+            '--secondary': '210 10% 20%',
+            '--muted': '210 10% 18%',
+            '--border': '210 10% 22%'
+        }
+    },
+    nebula: {
+        name: { zh: '星云紫', en: 'Cosmic Nebula' },
+        description: { zh: '紫色深空氛围感。', en: 'Atmospheric purple and deep space vibes.' },
+        colors: {
+            '--background': '260 40% 8%',
+            '--card': '260 40% 10%',
+            '--primary': '280 70% 85%',
+            '--secondary': '260 30% 18%',
+            '--muted': '260 30% 14%',
+            '--border': '260 30% 18%'
+        }
+    }
+};
+
 const Settings = () => {
     const [uiLang, setUiLang] = useState(getUiLang());
     const t = (zh, en) => tUI(uiLang, zh, en);
@@ -34,6 +85,9 @@ const Settings = () => {
     
     // Hidden file input ref
     const fileInputRef = useRef(null);
+
+    // Theme / Appearance
+    const [currentTheme, setCurrentTheme] = useState('default');
 
     // State for generation supplements
     const [charSupplements, setCharSupplements] = useState(DEFAULT_CHARACTER_SUPPLEMENTS);
@@ -70,7 +124,7 @@ const Settings = () => {
     const [baiduToken, setBaiduToken] = useState("");
 
     // State for tabs
-    const [activeTab, setActiveTab] = useState('api');
+    const [activeTab, setActiveTab] = useState('general');
     
     // Billing State
     const [userCredits, setUserCredits] = useState(0);
@@ -92,10 +146,10 @@ const Settings = () => {
     useEffect(() => {
         const params = new URLSearchParams(location.search || '');
         const tab = params.get('tab');
-        if (tab === 'billing') {
-            setActiveTab('billing');
-        } else if (tab === 'system-api' || tab === 'system_api') {
-            setActiveTab('system_api');
+        if (tab === 'billing' || tab === 'usage') {
+            setActiveTab('usage');
+        } else if (tab === 'system-api' || tab === 'system_api' || tab === 'api' || tab === 'api-settings') {
+            setActiveTab('api_settings');
         }
 
         // If we navigated here due to insufficient credits, auto-open the modal.
@@ -108,19 +162,25 @@ const Settings = () => {
         }
 
         if (shouldOpen) {
-            setActiveTab('billing');
+            setActiveTab('usage');
             setShowRecharge(true);
         }
     }, [location.search]);
 
     useEffect(() => {
         const fn = () => {
-            setActiveTab('billing');
+            setActiveTab('usage');
             setShowRecharge(true);
         };
         window.addEventListener('SHOW_RECHARGE_MODAL', fn);
         return () => window.removeEventListener('SHOW_RECHARGE_MODAL', fn);
     }, []);
+
+    useEffect(() => {
+        if (activeTab === 'api' || activeTab === 'prompts') {
+            setActiveTab('api_settings');
+        }
+    }, [activeTab]);
 
     useEffect(() => {
         const onUiLangChanged = (e) => {
@@ -149,6 +209,17 @@ const Settings = () => {
         const next = lang === 'en' ? 'en' : 'zh';
         setUiLang(next);
         setGlobalUiLang(next);
+    };
+
+    const handleThemeChange = (themeKey) => {
+        if (!THEMES[themeKey]) return;
+        setCurrentTheme(themeKey);
+        const root = document.documentElement;
+        Object.entries(THEMES[themeKey].colors).forEach(([property, value]) => {
+            root.style.setProperty(property, value);
+        });
+        localStorage.setItem('theme', themeKey);
+        showNotification(t('页面风格已切换', 'Theme updated'), 'success');
     };
 
     // Helper: Refresh Billing Data
@@ -258,16 +329,23 @@ const Settings = () => {
     }, [categorizedSystemSettings, selectedSystemCategory]);
 
     useEffect(() => {
-        if (activeTab === 'billing') {
+        if (activeTab === 'usage') {
             refreshBilling();
         }
-        if (activeTab === 'api') {
-            refreshActiveSettingSources();
-        }
-        if (activeTab === 'system_api') {
+        if (activeTab === 'api_settings') {
             loadSystemSettingsCatalog();
         }
     }, [activeTab]);
+
+    useEffect(() => {
+        const savedTheme = localStorage.getItem('theme');
+        const key = savedTheme && THEMES[savedTheme] ? savedTheme : 'default';
+        setCurrentTheme(key);
+        const root = document.documentElement;
+        Object.entries(THEMES[key].colors).forEach(([property, value]) => {
+            root.style.setProperty(property, value);
+        });
+    }, []);
 
     // UI Notification State
     const [notification, setNotification] = useState(null);
@@ -1007,27 +1085,21 @@ const Settings = () => {
             <header className="flex flex-col md:flex-row justify-between items-center gap-4 bg-card p-4 rounded-xl border border-white/10 shadow-sm bg-black/20">
                 <div className="flex items-center gap-6 overflow-x-auto w-full md:w-auto no-scrollbar">
                     <div className="flex bg-white/5 p-1 rounded-lg shrink-0">
-                        <button 
-                            onClick={() => setActiveTab('api')}
-                            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'api' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
-                        >
-                            {t('常规', 'General')}
-                        </button>
-                        <button 
-                             onClick={() => setActiveTab('prompts')}
-                             className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'prompts' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
-                        >
-                            {t('提示词优化器', 'Prompt Optimizers')}
-                        </button>
                             <button 
-                                onClick={() => setActiveTab('system_api')}
-                                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'system_api' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
+                                onClick={() => setActiveTab('general')}
+                                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'general' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
                             >
-                                         {t('系统 API', 'System API')}
+                                         {t('常规', 'General')}
+                            </button>
+                            <button 
+                                onClick={() => setActiveTab('api_settings')}
+                                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'api_settings' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
+                            >
+                                         {t('API 设置', 'API Settings')}
                             </button>
                         <button 
-                             onClick={() => setActiveTab('billing')}
-                             className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'billing' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
+                             onClick={() => setActiveTab('usage')}
+                             className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'usage' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
                         >
                             <span className="flex items-center gap-2"><Coins size={14}/> {t('用量', 'Usage')}</span>
                         </button>
@@ -1077,8 +1149,32 @@ const Settings = () => {
                     />
                 </div>
             </header>
+
+            {activeTab === 'general' && (
+            <section className="bg-black/20 p-6 rounded-xl border border-white/10 space-y-4 shadow-sm">
+                <h2 className="text-lg font-semibold flex items-center gap-2">
+                    <Palette className="w-5 h-5 text-primary" />
+                    {t('页面风格', 'Page Appearance')}
+                </h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                    {Object.entries(THEMES).map(([themeKey, theme]) => (
+                        <button
+                            key={themeKey}
+                            onClick={() => handleThemeChange(themeKey)}
+                            className={`text-left rounded-xl border p-4 transition-all ${currentTheme === themeKey ? 'border-primary ring-2 ring-primary/20 bg-white/10' : 'border-white/10 bg-white/5 hover:bg-white/10'}`}
+                        >
+                            <div className="flex items-center justify-between mb-1">
+                                <div className="text-sm font-bold">{t(theme.name.zh, theme.name.en)}</div>
+                                {currentTheme === themeKey && <CheckCircle className="w-4 h-4 text-green-400" />}
+                            </div>
+                            <div className="text-xs text-muted-foreground">{t(theme.description.zh, theme.description.en)}</div>
+                        </button>
+                    ))}
+                </div>
+            </section>
+            )}
             
-            {activeTab === 'billing' ? (
+            {activeTab === 'usage' ? (
                 <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
                     <div className="grid grid-cols-1 gap-6">
                         <div className="bg-black/20 p-6 rounded-xl border border-white/10 shadow-sm flex flex-col items-center justify-center text-center relative">
@@ -1566,7 +1662,7 @@ const Settings = () => {
                         </div>
                     </div>
                 </div>
-            ) : activeTab === 'system_api' ? (
+            ) : activeTab === 'api_settings' ? (
                 <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
                     <div className="space-y-4">
                         <h2 className="text-xl font-semibold">{t('系统 API 设置', 'System API Settings')}</h2>
@@ -1636,17 +1732,9 @@ const Settings = () => {
                                                                     key={row.id}
                                                                     className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center p-2 rounded border border-white/10 bg-black/20"
                                                                 >
-                                                                    <div className="md:col-span-3 text-xs">
+                                                                    <div className="md:col-span-9 text-xs">
                                                                         <div className="text-muted-foreground">{t('模型', 'Model')}</div>
                                                                         <div className="font-mono break-all">{row.model || '-'}</div>
-                                                                    </div>
-                                                                    <div className="md:col-span-5 text-xs">
-                                                                        <div className="text-muted-foreground">{t('端点', 'Endpoint')}</div>
-                                                                        <div className="font-mono break-all">{row.base_url || '-'}</div>
-                                                                    </div>
-                                                                    <div className="md:col-span-2 text-xs">
-                                                                        <div className="text-muted-foreground">{t('回调 WebHook', 'WebHook')}</div>
-                                                                        <div className="font-mono break-all">{row.webhook_url || '-'}</div>
                                                                     </div>
                                                                     <div className="md:col-span-2 flex md:justify-end">
                                                                         <button
@@ -1673,58 +1761,7 @@ const Settings = () => {
                         </div>
                     </div>
                 </div>
-            ) : (
-                <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                    <h2 className="text-xl font-semibold">{t('生成提示词设置', 'Generation Prompt Settings')}</h2>
-                    <div className="bg-black/20 p-6 rounded-xl border border-white/10 space-y-4 shadow-sm">
-                        
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium">{t('语言策略', 'Language Strategy')}</label>
-                            <select 
-                                value={promptLanguage} 
-                                onChange={(e) => setPromptLanguage(e.target.value)}
-                                className="w-full p-2 rounded-md bg-zinc-900 border border-white/10 text-white"
-                            >
-                                <option className="bg-zinc-900" value="mixed">{t('混合（中文人名/对白 + 英文描述）', 'Mixed (Chinese Names/Dialogue + English Descriptions)')}</option>
-                                <option className="bg-zinc-900" value="en">{t('纯英文（强制全部翻译）', 'Pure English (Force Translate All)')}</option>
-                            </select>
-                            <p className="text-xs text-muted-foreground">
-                                {t('控制生成英文提示词时如何处理中文元素（人名、对白）。', 'Controls how Chinese elements (Names, Dialogues) are handled in the generated English prompts.')}
-                            </p>
-                        </div>
-
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium">{t('角色生成补充提示词', 'Character Generation Supplementary Prompts')}</label>
-                            <p className="text-xs text-muted-foreground">{t('在生成角色描述时附加的额外指令。', 'Additional instructions appended when generating character descriptions.')}</p>
-                            <textarea 
-                                value={charSupplements} 
-                                onChange={(e) => setCharSupplements(e.target.value)}
-                                placeholder={t('例如：始终强调东方特征...', 'e.g. Always emphasize eastern features...')}
-                                className="w-full p-4 h-32 rounded-md bg-white/10 border border-white/10 resize-none text-white"
-                            />
-                        </div>
-                        
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium">{t('场景生成补充提示词', 'Scene Generation Supplementary Prompts')}</label>
-                            <p className="text-xs text-muted-foreground">{t('在生成场景画面/节奏时附加的额外指令。', 'Additional instructions appended when generating scene visuals/beats.')}</p>
-                            <textarea 
-                                value={sceneSupplements} 
-                                onChange={(e) => setSceneSupplements(e.target.value)}
-                                placeholder={t('例如：保持黑暗电影感基调...', 'e.g. Maintain a dark, cinematic tone...')}
-                                className="w-full p-4 h-32 rounded-md bg-white/10 border border-white/10 resize-none text-white"
-                            />
-                        </div>
-
-                        <button 
-                            onClick={handleSaveGeneration}
-                            className="mt-6 w-full flex items-center justify-center space-x-2 bg-primary text-black border border-primary px-4 py-3 rounded-lg hover:opacity-90 transition-opacity font-medium font-bold"
-                        >
-                            <Save size={18} />
-                            <span>{t('保存提示词设置', 'Save Prompt Settings')}</span>
-                        </button>
-                    </div>
-                </div>
-            )}
+            ) : null}
         </div>
     )
 }

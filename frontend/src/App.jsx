@@ -5,7 +5,6 @@ import Home from './pages/Home';
 import ProjectList from './pages/ProjectList';
 import Editor from './pages/Editor';
 import AdvancedAnalysisResult from './pages/AdvancedAnalysisResult';
-import Settings from './pages/Settings';
 import Auth from './pages/Auth';
 import UserAdmin from './pages/UserAdmin';
 import SystemLogs from './pages/SystemLogs';
@@ -74,7 +73,7 @@ function App() {
             <Route path="/" element={<PublicRoute><Home /></PublicRoute>} />
             <Route path="/auth" element={<PublicRoute><Auth /></PublicRoute>} />
             <Route path="/projects" element={<PrivateRoute><ProjectList /></PrivateRoute>} />
-            <Route path="/settings" element={<PrivateRoute><Settings /></PrivateRoute>} />
+            <Route path="/settings" element={<PrivateRoute><ProjectList initialTab="settings" /></PrivateRoute>} />
             <Route path="/editor/:id" element={<PrivateRoute><Editor /></PrivateRoute>} />
             <Route path="/editor/:id/analysis" element={<PrivateRoute><AdvancedAnalysisResult /></PrivateRoute>} />
             <Route path="/admin/users" element={<PrivateRoute><UserAdmin /></PrivateRoute>} />

@@ -29,7 +29,7 @@ import {
     Activity,
     Shield
 } from 'lucide-react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { confirmUiMessage } from '../lib/uiMessage';
 import { getUiLang, tUI } from '../lib/uiLang';
@@ -119,13 +119,14 @@ const THEMES = {
     }
 };
 
-const ProjectList = () => {
+const ProjectList = ({ initialTab = 'projects' }) => {
     const uiLang = getUiLang();
     const t = (zh, en) => tUI(uiLang, zh, en);
+    const location = useLocation();
     const [projects, setProjects] = useState([]);
     const [isCreating, setIsCreating] = useState(false);
     const [newTitle, setNewTitle] = useState('');
-    const [activeTab, setActiveTab] = useState('projects');
+    const [activeTab, setActiveTab] = useState(initialTab);
     const [selectedProjectId, setSelectedProjectId] = useState(null);
     const [currentUser, setCurrentUser] = useState(null); // Simple user state to check permissions if we had endpoint
     const navigate = useNavigate();
@@ -155,6 +156,22 @@ const ProjectList = () => {
              handleThemeChange(savedTheme, false);
         }
     }, []);
+
+    useEffect(() => {
+        if (initialTab === 'projects' || initialTab === 'assets' || initialTab === 'settings') {
+            setActiveTab(initialTab);
+            setSelectedProjectId(null);
+        }
+    }, [initialTab]);
+
+    useEffect(() => {
+        if (location.pathname === '/settings') {
+            setActiveTab('settings');
+            setSelectedProjectId(null);
+        } else if (location.pathname === '/projects' && initialTab === 'projects') {
+            setActiveTab('projects');
+        }
+    }, [location.pathname, initialTab]);
 
     const handleThemeChange = (key, showToast = true) => {
         setCurrentTheme(key);
@@ -275,7 +292,17 @@ const ProjectList = () => {
                             </button>
                         </>
                     )}
-                    <SidebarItem id="settings" icon={Settings} label={t('设置', 'Settings')} />
+                    <button
+                        onClick={() => {
+                            setActiveTab('settings');
+                            setSelectedProjectId(null);
+                            navigate('/settings');
+                        }}
+                        className="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
+                    >
+                        <Settings className="w-5 h-5" />
+                        {t('设置', 'Settings')}
+                    </button>
                 </div>
 
                 <div className="mt-auto border-t pt-6">
@@ -336,6 +363,17 @@ const ProjectList = () => {
                                             className="flex items-center gap-2 px-5 py-2.5 bg-primary text-primary-foreground rounded-full hover:bg-primary/90 shadow-lg shadow-primary/20 transition-all hover:scale-105 font-medium"
                                         >
                                             <Plus className="w-4 h-4" /> {t('新建项目', 'New Project')}
+                                        </button>
+                                        <button
+                                            onClick={() => {
+                                                setActiveTab('settings');
+                                                setSelectedProjectId(null);
+                                                navigate('/settings');
+                                            }}
+                                            title={t('打开设置', 'Open Settings')}
+                                            className="p-2.5 rounded-full bg-secondary/60 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+                                        >
+                                            <Settings className="w-4 h-4" />
                                         </button>
                                     </>
                                 )}
@@ -503,11 +541,9 @@ const ProjectList = () => {
                         )}
 
                         {activeTab === 'settings' && (
-                           <SettingsPanel 
-                                currentTheme={currentTheme}
-                                handleThemeChange={handleThemeChange}
-                                          uiLang={uiLang}
-                           />
+                           <div className="h-full bg-card/30 rounded-3xl border border-white/5 overflow-hidden">
+                                <SettingsPage />
+                           </div>
                         )}
                     </div>
                 </div>
