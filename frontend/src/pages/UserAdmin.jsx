@@ -1040,7 +1040,7 @@ const UserAdmin = () => {
                                                     onChange={(e) => setSystemApiForm((prev) => ({ ...prev, category: e.target.value }))}
                                                     className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
                                                 >
-                                                    <option value="LLM">LLM</option>
+                                                    <option value="LLM">{t('大语言模型', 'LLM')}</option>
                                                     <option value="Image">{t('图片', 'Image')}</option>
                                                     <option value="Video">{t('视频', 'Video')}</option>
                                                     <option value="Vision">{t('视觉', 'Vision')}</option>

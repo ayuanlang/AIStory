@@ -46,8 +46,14 @@ const cinematicImages = [
 
 const THEMES = {
     default: {
-        name: "Cinematic Dark",
-        description: "Deep blacks and high contrast for focus.",
+        name: {
+            zh: "电影暗夜",
+            en: "Cinematic Dark",
+        },
+        description: {
+            zh: "深色高对比，聚焦创作内容。",
+            en: "Deep blacks and high contrast for focus.",
+        },
         colors: {
             "--background": "224 71% 4%",
             "--card": "224 71% 4%",
@@ -58,8 +64,14 @@ const THEMES = {
         }
     },
     midnight: {
-        name: "Midnight Blue",
-        description: "Professional deep blue tones.",
+        name: {
+            zh: "午夜蓝",
+            en: "Midnight Blue",
+        },
+        description: {
+            zh: "专业感深蓝色调。",
+            en: "Professional deep blue tones.",
+        },
         colors: {
             "--background": "222 47% 11%",
             "--card": "223 47% 13%",
@@ -70,8 +82,14 @@ const THEMES = {
         }
     },
     slate: {
-        name: "Titanium Slate",
-        description: "Neutral, industrial grey tones.",
+        name: {
+            zh: "钛灰",
+            en: "Titanium Slate",
+        },
+        description: {
+            zh: "中性工业灰风格。",
+            en: "Neutral, industrial grey tones.",
+        },
         colors: {
             "--background": "210 14% 12%",
             "--card": "210 14% 14%",
@@ -82,8 +100,14 @@ const THEMES = {
         }
     },
     nebula: {
-        name: "Cosmic Nebula",
-        description: "Atmospheric purple and deep space vibes.",
+        name: {
+            zh: "星云紫",
+            en: "Cosmic Nebula",
+        },
+        description: {
+            zh: "紫色深空氛围感。",
+            en: "Atmospheric purple and deep space vibes.",
+        },
             colors: {
             "--background": "260 40% 8%",
             "--card": "260 40% 10%",
@@ -141,7 +165,7 @@ const ProjectList = () => {
         });
         localStorage.setItem('theme', key);
         if (showToast) {
-            setToast({ type: 'success', message: t(`${theme.name} 已启用`, `${theme.name} Activated`) });
+            setToast({ type: 'success', message: t(`${theme.name.zh} 已启用`, `${theme.name.en} Activated`) });
             setTimeout(() => setToast(null), 2000);
         }
     };
@@ -334,7 +358,7 @@ const ProjectList = () => {
                     >
                          {[...cinematicImages, ...cinematicImages].map((src, idx) => (
                              <div key={idx} className="w-64 h-36 rounded-xl overflow-hidden flex-shrink-0 border border-white/10 shadow-2xl transform -skew-x-12 hover:skew-x-0 transition-transform duration-500 origin-bottom">
-                                 <img src={src} alt="Cinematic element" className="w-full h-full object-cover scale-125" />
+                                 <img src={src} alt={t('电影视觉元素', 'Cinematic element')} className="w-full h-full object-cover scale-125" />
                                  <div className="absolute inset-0 bg-blue-900/20 mix-blend-overlay"></div>
                              </div>
                          ))}
@@ -482,6 +506,7 @@ const ProjectList = () => {
                            <SettingsPanel 
                                 currentTheme={currentTheme}
                                 handleThemeChange={handleThemeChange}
+                                          uiLang={uiLang}
                            />
                         )}
                     </div>
@@ -492,15 +517,16 @@ const ProjectList = () => {
 };
 
 
-const SettingsPanel = ({ currentTheme, handleThemeChange }) => {
+const SettingsPanel = ({ currentTheme, handleThemeChange, uiLang }) => {
+    const t = (zh, en) => tUI(uiLang, zh, en);
     const [section, setSection] = useState('general');
 
     return (
         <div className="w-full h-full"> 
             <div className="flex items-center justify-between mb-8">
                 <div className="flex space-x-1 bg-card/50 p-1 rounded-xl border border-white/5">
-                    <button onClick={() => setSection('general')} className={`px-5 py-2 rounded-lg text-sm font-medium transition-all ${section === 'general' ? 'bg-primary text-black font-bold shadow-lg' : 'text-muted-foreground'}`}>General</button>
-                    <button onClick={() => setSection('configuration')} className={`px-5 py-2 rounded-lg text-sm font-medium transition-all ${section === 'configuration' ? 'bg-primary text-black font-bold shadow-lg' : 'text-muted-foreground'}`}>Configuration</button>
+                    <button onClick={() => setSection('general')} className={`px-5 py-2 rounded-lg text-sm font-medium transition-all ${section === 'general' ? 'bg-primary text-black font-bold shadow-lg' : 'text-muted-foreground'}`}>{t('常规', 'General')}</button>
+                    <button onClick={() => setSection('configuration')} className={`px-5 py-2 rounded-lg text-sm font-medium transition-all ${section === 'configuration' ? 'bg-primary text-black font-bold shadow-lg' : 'text-muted-foreground'}`}>{t('配置', 'Configuration')}</button>
                 </div>
             </div>
 
@@ -509,7 +535,7 @@ const SettingsPanel = ({ currentTheme, handleThemeChange }) => {
                      <section>
                          <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
                              <Palette className="w-5 h-5 text-primary" />
-                             Interface Appearance
+                             {t('界面外观', 'Interface Appearance')}
                          </h3>
                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                              {Object.entries(THEMES).map(([key, theme]) => (
@@ -532,10 +558,10 @@ const SettingsPanel = ({ currentTheme, handleThemeChange }) => {
                                      </div>
                                      <div className="p-4 bg-card/50 backdrop-blur-sm">
                                          <div className="flex justify-between items-center mb-1">
-                                            <h4 className="font-bold text-sm tracking-wide">{theme.name}</h4>
+                                            <h4 className="font-bold text-sm tracking-wide">{t(theme.name.zh, theme.name.en)}</h4>
                                             {currentTheme === key && <CheckCircle className="w-4 h-4 text-green-500" />}
                                          </div>
-                                         <p className="text-xs text-muted-foreground opacity-70 leading-relaxed font-light">{theme.description}</p>
+                                         <p className="text-xs text-muted-foreground opacity-70 leading-relaxed font-light">{t(theme.description.zh, theme.description.en)}</p>
                                      </div>
                                  </div>
                              ))}

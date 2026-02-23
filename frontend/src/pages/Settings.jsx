@@ -875,7 +875,7 @@ const Settings = () => {
                 return (
                     <>
                         <div className="space-y-2">
-                            <label className="text-sm font-medium">API Key</label>
+                            <label className="text-sm font-medium">{t('API 密钥', 'API Key')}</label>
                             <input 
                                 type="password" 
                                 value={apiKey}
@@ -910,7 +910,7 @@ const Settings = () => {
                 return (
                     <>
                          <div className="space-y-2">
-                                    <label className="text-sm font-medium">API Key</label>
+                                    <label className="text-sm font-medium">{t('API 密钥', 'API Key')}</label>
                             <input 
                                 type="password" 
                                 value={apiKey}
@@ -926,7 +926,7 @@ const Settings = () => {
                                 onChange={(e) => setModel(e.target.value)}
                                 className="w-full p-2 rounded-md bg-zinc-900 border border-white/10 text-white"
                             >
-                                <option className="bg-zinc-900" value="gemini-3-pro">Gemini 3 Pro</option>
+                                <option className="bg-zinc-900" value="gemini-3-pro">{t('Gemini 3 Pro（推荐）', 'Gemini 3 Pro (Recommended)')}</option>
                                 <option className="bg-zinc-900" value="gemini-2.5-pro">Gemini 2.5 Pro</option>
                                 <option className="bg-zinc-900" value="gemini-3-flash">Gemini 3 Flash</option>
                                 <option className="bg-zinc-900" value="gemini-2.5-flash">Gemini 2.5 Flash</option>
@@ -951,7 +951,7 @@ const Settings = () => {
                 return (
                     <>
                          <div className="space-y-2">
-                                    <label className="text-sm font-medium">API Key</label>
+                                    <label className="text-sm font-medium">{t('API 密钥', 'API Key')}</label>
                             <input 
                                 type="password" 
                                 value={apiKey}
@@ -1011,7 +1011,7 @@ const Settings = () => {
                             onClick={() => setActiveTab('api')}
                             className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'api' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
                         >
-                            General
+                            {t('常规', 'General')}
                         </button>
                         <button 
                              onClick={() => setActiveTab('prompts')}
@@ -1176,10 +1176,10 @@ const Settings = () => {
                                     onChange={(e) => handleProviderChange(e.target.value)}
                                     className="w-full p-2 rounded-md bg-zinc-900 border border-white/10 text-white"
                                 >
-                                    <option className="bg-zinc-900" value="openai">OpenAI / Compatible</option>
+                                        <option className="bg-zinc-900" value="openai">{t('OpenAI / 兼容接口', 'OpenAI / Compatible')}</option>
                                     <option className="bg-zinc-900" value="doubao">{t('豆包（火山引擎）', 'Doubao (Volcengine)')}</option>
                                     <option className="bg-zinc-900" value="ollama">{t('Ollama（本地）', 'Ollama (Local)')}</option>
-                                    <option className="bg-zinc-900" value="deepseek">DeepSeek</option>
+                                        <option className="bg-zinc-900" value="deepseek">{t('DeepSeek（深度求索）', 'DeepSeek')}</option>
                                     <option className="bg-zinc-900" value="grsai">{t('Grsai（聚合）', 'Grsai (Aggregation)')}</option>
                                 </select>
                             </div>
@@ -1265,7 +1265,7 @@ const Settings = () => {
                                         <option className="bg-zinc-900" value="DALL-E 3">DALL-E 3</option>
                                         <option className="bg-zinc-900" value="Stable Diffusion">{t('Stable Diffusion（SDXL/Pony）', 'Stable Diffusion (SDXL/Pony)')}</option>
                                         <option className="bg-zinc-900" value="Flux">Flux.1</option>
-                                        <option className="bg-zinc-900" value="Tencent Hunyuan">Tencent Hunyuan (腾讯混元)</option>
+                                        <option className="bg-zinc-900" value="Tencent Hunyuan">{t('腾讯混元（Tencent Hunyuan）', 'Tencent Hunyuan (腾讯混元)')}</option>
                                     </select>
                                     <p className="text-xs text-muted-foreground">{t('选择工具以配置凭据和提示词优化参数。', 'Select tool to configure credentials and prompt optimization.')}</p>
                                 </div>
@@ -1273,7 +1273,7 @@ const Settings = () => {
                                 {/* Dynamic fields for Image Tool */}
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-white/5 p-4 rounded-lg animate-in fade-in">
                                     <div className="space-y-2 col-span-2 md:col-span-1">
-                                        <label className="text-xs font-medium uppercase text-muted-foreground">API Key</label>
+                                        <label className="text-xs font-medium uppercase text-muted-foreground">{t('API 密钥', 'API Key')}</label>
                                         <input 
                                             type="password" 
                                             value={imgToolKey}
@@ -1348,7 +1348,7 @@ const Settings = () => {
                                         />
                                     </div>
                                     <div className="space-y-2 col-span-2">
-                                        <label className="text-xs font-medium uppercase text-muted-foreground">{t('WebHook URL', 'WebHook URL')}</label>
+                                        <label className="text-xs font-medium uppercase text-muted-foreground">{t('回调 URL（Webhook）', 'WebHook URL')}</label>
                                         <input 
                                             type="text" 
                                             value={imgToolWebHook}
@@ -1375,13 +1375,13 @@ const Settings = () => {
                                         onChange={(e) => handleVideoToolChange(e.target.value)}
                                         className="w-full p-2 rounded-md bg-zinc-900 border border-white/10 text-white"
                                     >
-                                        <option className="bg-zinc-900" value="Runway">Runway Gen-2/Gen-3</option>
+                                        <option className="bg-zinc-900" value="Runway">{t('Runway Gen-2/Gen-3（跑道）', 'Runway Gen-2/Gen-3')}</option>
                                         <option className="bg-zinc-900" value="Luma">{t('Luma 梦境引擎', 'Luma Dream Machine')}</option>
                                         <option className="bg-zinc-900" value="Kling">{t('Kling AI（可灵）', 'Kling AI (可灵)')}</option>
                                         <option className="bg-zinc-900" value="Sora">Sora (OpenAI)</option>
                                         <option className="bg-zinc-900" value="Grsai-Video">{t('Grsai（标准）', 'Grsai (Standard)')}</option>
                                         <option className="bg-zinc-900" value="Grsai-Video (Upload)">{t('Grsai（文件上传）', 'Grsai (File Upload)')}</option>
-                                        <option className="bg-zinc-900" value="Stable Video">Stable Video Component</option>
+                                        <option className="bg-zinc-900" value="Stable Video">{t('Stable Video 组件', 'Stable Video Component')}</option>
                                         <option className="bg-zinc-900" value="Doubao Video">{t('Doubao（豆包 - 火山引擎）', 'Doubao (豆包 - Volcengine)')}</option>
                                         <option className="bg-zinc-900" value="Wanxiang">{t('Wanxiang（通义万相 - 阿里云）', 'Wanxiang (通义万相 - Aliyun)')}</option>
                                         <option className="bg-zinc-900" value="Vidu (Video)">{t('Vidu（生数）', 'Vidu (Shengshu)')}</option>
@@ -1390,7 +1390,7 @@ const Settings = () => {
 
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-white/5 p-4 rounded-lg animate-in fade-in">
                                     <div className="space-y-2 col-span-2 md:col-span-1">
-                                        <label className="text-xs font-medium uppercase text-muted-foreground">API Key</label>
+                                        <label className="text-xs font-medium uppercase text-muted-foreground">{t('API 密钥', 'API Key')}</label>
                                         <input 
                                             type="password" 
                                             value={vidToolKey}
@@ -1464,7 +1464,7 @@ const Settings = () => {
                                         )}
                                     </div>
                                     <div className="space-y-2 col-span-2">
-                                        <label className="text-xs font-medium uppercase text-muted-foreground">WebHook URL</label>
+                                        <label className="text-xs font-medium uppercase text-muted-foreground">{t('回调 URL（Webhook）', 'WebHook URL')}</label>
                                         <input 
                                             type="text" 
                                             value={vidToolWebHook}
@@ -1522,7 +1522,7 @@ const Settings = () => {
                                 {visionModel === "Grsai-Vision" && (
                                     <div className="space-y-2 pl-4 border-l-2 border-pink-400/30">
                                          <div className="space-y-1">
-                                            <label className="text-xs font-medium text-muted-foreground">API Key</label>
+                                            <label className="text-xs font-medium text-muted-foreground">{t('API 密钥', 'API Key')}</label>
                                             <input 
                                                 type="password" 
                                                 value={visToolKey}

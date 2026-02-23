@@ -4,8 +4,11 @@ import { Link } from 'react-router-dom';
 import { ArrowRight, Sparkles, Play } from 'lucide-react';
 import Navbar from '../components/Navbar';
 import { motion } from 'framer-motion';
+import { getUiLang, tUI } from '../lib/uiLang';
 
 const Home = () => {
+    const uiLang = getUiLang();
+    const t = (zh, en) => tUI(uiLang, zh, en);
     return (
         <div className="min-h-screen flex flex-col font-sans bg-background text-foreground overflow-hidden selection:bg-primary/20">
             <Navbar />
@@ -28,29 +31,28 @@ const Home = () => {
                     >
                         <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/5 border border-primary/20 text-primary text-sm font-medium hover:bg-primary/10 transition-colors cursor-default">
                             <Sparkles className="w-4 h-4" />
-                            <span>AI-Powered Storyboard Generation v2.0</span>
+                            <span>{t('AI 驱动的分镜生成 v2.0', 'AI-Powered Storyboard Generation v2.0')}</span>
                         </div>
                         
                         <h1 className="text-5xl md:text-7xl lg:text-8xl font-black tracking-tight leading-tight">
-                            Script to Screen <br />
+                            {t('从剧本到画面', 'Script to Screen')} <br />
                             <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-primary to-purple-400 animate-gradient">
-                                in Minutes
+                                {t('几分钟完成', 'in Minutes')}
                             </span>
                         </h1>
                         
                         <p className="text-lg md:text-2xl text-muted-foreground max-w-2xl mx-auto leading-relaxed">
-                            Stop drawing by hand. AI Story transforms your screenplay into 
-                            professional, cinematic shots automatically.
+                            {t('告别手工绘制。AI Story 会自动将你的剧本转化为专业电影级分镜。', 'Stop drawing by hand. AI Story transforms your screenplay into professional, cinematic shots automatically.')}
                         </p>
                         
                         <div className="flex flex-col sm:flex-row gap-4 justify-center items-center pt-8">
                             <Link to="/auth">
                                 <button className="h-14 px-8 rounded-full bg-primary text-primary-foreground text-lg font-bold hover:bg-white/90 transition-all shadow-[0_0_20px_rgba(255,255,255,0.3)] hover:shadow-[0_0_30px_rgba(255,255,255,0.5)] flex items-center gap-2 group">
-                                    Start Creating <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform"/>
+                                    {t('开始创作', 'Start Creating')} <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform"/>
                                 </button>
                             </Link>
                             <button className="h-14 px-8 rounded-full bg-secondary/50 backdrop-blur-sm border border-border text-foreground text-lg font-semibold hover:bg-secondary/80 transition-colors flex items-center gap-2">
-                                <Play className="w-5 h-5 fill-current"/> Watch Demo
+                                <Play className="w-5 h-5 fill-current"/> {t('观看演示', 'Watch Demo')}
                             </button>
                         </div>
                     </motion.div>
@@ -58,7 +60,7 @@ const Home = () => {
             </main>
             
             <footer className="relative z-10 py-6 text-center text-sm text-muted-foreground">
-                <p>&copy; 2024 AI Story. All rights reserved.</p>
+                <p>&copy; 2024 AI Story. {t('版权所有。', 'All rights reserved.')}</p>
             </footer>
         </div>
     );

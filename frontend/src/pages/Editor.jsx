@@ -1634,7 +1634,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                 rows.push({
                     episode_number: i,
                     episode_id: row?.episode_id,
-                    episode_title: row?.episode_title || knownTitle || `Episode ${i}`,
+                    episode_title: row?.episode_title || knownTitle || t(`第 ${i} 集`, `Episode ${i}`),
                     status: row?.status || (row?.generated ? 'generated' : row?.skipped ? 'skipped' : row?.error ? 'failed' : 'unknown'),
                     output_chars: row?.output_chars,
                     error: row?.error,
@@ -1643,7 +1643,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
             } else {
                 rows.push({
                     episode_number: i,
-                    episode_title: knownTitle || `Episode ${i}`,
+                    episode_title: knownTitle || t(`第 ${i} 集`, `Episode ${i}`),
                     status: 'pending',
                 });
             }
@@ -1653,7 +1653,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
 
     const failedEpisodeRows = episodeResultRows.filter(item => item?.status === 'failed' && item?.episode_id);
 
-    if (!project) return <div className="p-8 text-muted-foreground">Loading...</div>;
+    if (!project) return <div className="p-8 text-muted-foreground">{t('加载中...', 'Loading...')}</div>;
 
     const prefix = "proj-";
 
@@ -2330,34 +2330,34 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                                 <>
                                     <div className="grid grid-cols-2 md:grid-cols-6 gap-3 text-sm">
                                         <div className="border border-white/10 rounded-lg p-3 bg-black/20">
-                                            <div className="text-xs text-muted-foreground">Mode</div>
+                                            <div className="text-xs text-muted-foreground">{t('模式', 'Mode')}</div>
                                             <div className="font-bold text-white">{episodeScriptsProgress.mode || 'full'}</div>
                                         </div>
                                         <div className="border border-white/10 rounded-lg p-3 bg-black/20">
-                                            <div className="text-xs text-muted-foreground">Status</div>
-                                            <div className="font-bold text-white">{episodeScriptsProgress.running ? 'Running' : 'Idle'}</div>
+                                            <div className="text-xs text-muted-foreground">{t('状态', 'Status')}</div>
+                                            <div className="font-bold text-white">{episodeScriptsProgress.running ? t('运行中', 'Running') : t('空闲', 'Idle')}</div>
                                         </div>
                                         <div className="border border-white/10 rounded-lg p-3 bg-black/20">
-                                            <div className="text-xs text-muted-foreground">Processed</div>
+                                            <div className="text-xs text-muted-foreground">{t('已处理', 'Processed')}</div>
                                             <div className="font-bold text-white">{processedCount} / {episodesInRun}</div>
                                         </div>
                                         <div className="border border-white/10 rounded-lg p-3 bg-black/20">
-                                            <div className="text-xs text-muted-foreground">Generated</div>
+                                            <div className="text-xs text-muted-foreground">{t('已生成', 'Generated')}</div>
                                             <div className="font-bold text-white">{episodeScriptsProgress.generated || 0}</div>
                                         </div>
                                         <div className="border border-white/10 rounded-lg p-3 bg-black/20">
-                                            <div className="text-xs text-muted-foreground">Failed</div>
+                                            <div className="text-xs text-muted-foreground">{t('失败', 'Failed')}</div>
                                             <div className="font-bold text-white">{episodeScriptsProgress.failed || 0}</div>
                                         </div>
                                         <div className="border border-white/10 rounded-lg p-3 bg-black/20">
-                                            <div className="text-xs text-muted-foreground">Skipped</div>
+                                            <div className="text-xs text-muted-foreground">{t('跳过', 'Skipped')}</div>
                                             <div className="font-bold text-white">{episodeScriptsProgress.skipped || 0}</div>
                                         </div>
                                     </div>
 
                                     <div className="space-y-2">
                                         <div className="flex items-center justify-between text-xs text-muted-foreground">
-                                            <span>Overall Progress</span>
+                                            <span>{t('总体进度', 'Overall Progress')}</span>
                                             <span>{progressPercent}%</span>
                                         </div>
                                         <div className="h-2 rounded bg-white/10 overflow-hidden">
@@ -2367,7 +2367,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
 
                                     {failedEpisodeRows.length > 0 && (
                                         <div className="border border-red-500/30 rounded-lg p-3 bg-red-500/10">
-                                            <div className="text-xs text-red-200 mb-2">Failed Episodes (click to jump)</div>
+                                            <div className="text-xs text-red-200 mb-2">{t('失败分集（点击跳转）', 'Failed Episodes (click to jump)')}</div>
                                             <div className="flex flex-wrap gap-2">
                                                 {failedEpisodeRows.map((item, idx) => (
                                                     <button
@@ -2376,7 +2376,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                                                             if (onJumpToEpisode && item.episode_id) onJumpToEpisode(item.episode_id);
                                                         }}
                                                         className="px-2 py-1 rounded text-xs bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 text-red-100"
-                                                        title={item.error || 'Jump to episode'}
+                                                        title={item.error || t('跳转到分集', 'Jump to episode')}
                                                     >
                                                         {buildEpisodeDisplayLabel({
                                                             episodeNumber: item?.episode_number,
@@ -2392,10 +2392,10 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                                     <div className="border border-white/10 rounded-lg overflow-hidden">
                                         <div className="grid grid-cols-12 bg-white/5 text-xs text-muted-foreground px-3 py-2">
                                             <div className="col-span-1">#</div>
-                                            <div className="col-span-4">Episode</div>
-                                            <div className="col-span-2">Status</div>
-                                            <div className="col-span-3">Result</div>
-                                            <div className="col-span-2 text-right">Action</div>
+                                            <div className="col-span-4">{t('分集', 'Episode')}</div>
+                                            <div className="col-span-2">{t('状态', 'Status')}</div>
+                                            <div className="col-span-3">{t('结果', 'Result')}</div>
+                                            <div className="col-span-2 text-right">{t('操作', 'Action')}</div>
                                         </div>
                                         <div className="max-h-[38vh] overflow-y-auto">
                                             {episodeResultRows.length > 0 ? episodeResultRows.map((row, idx) => {
@@ -2408,7 +2408,17 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                                                             : status === 'skipped'
                                                                 ? 'bg-yellow-500/20 text-yellow-200 border-yellow-500/30'
                                                                 : 'bg-white/10 text-white/80 border-white/20';
-                                                const resultText = row?.error || row?.reason || (row?.output_chars ? `${row.output_chars} chars` : (status === 'pending' ? 'Waiting' : '-'));
+                                                const resultText = row?.error || row?.reason || (row?.output_chars ? `${row.output_chars} ${t('字符', 'chars')}` : (status === 'pending' ? t('等待中', 'Waiting') : '-'));
+                                                const statusLabel =
+                                                    status === 'generated'
+                                                        ? t('已生成', 'Generated')
+                                                        : status === 'failed'
+                                                            ? t('失败', 'Failed')
+                                                            : status === 'skipped'
+                                                                ? t('跳过', 'Skipped')
+                                                                : status === 'pending'
+                                                                    ? t('待处理', 'Pending')
+                                                                    : status;
                                                 return (
                                                     <div key={`${row?.episode_number || idx}_${idx}`} className="grid grid-cols-12 px-3 py-2 text-sm border-t border-white/5 items-center">
                                                         <div className="col-span-1 text-white/90">{row?.episode_number || '-'}</div>
@@ -2427,7 +2437,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                                                             })}
                                                         </div>
                                                         <div className="col-span-2">
-                                                            <span className={`px-2 py-0.5 rounded text-xs border ${statusClass}`}>{status}</span>
+                                                            <span className={`px-2 py-0.5 rounded text-xs border ${statusClass}`}>{statusLabel}</span>
                                                         </div>
                                                         <div className="col-span-3 text-xs text-white/70 truncate" title={resultText}>{resultText}</div>
                                                         <div className="col-span-2 text-right">
@@ -2436,7 +2446,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                                                                     onClick={() => onJumpToEpisode && onJumpToEpisode(row.episode_id)}
                                                                     className="px-2 py-1 rounded text-xs bg-white/10 text-white hover:bg-white/20"
                                                                 >
-                                                                    Open
+                                                                    {t('打开', 'Open')}
                                                                 </button>
                                                             ) : (
                                                                 <span className="text-xs text-white/40">-</span>
@@ -2445,7 +2455,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                                                     </div>
                                                 );
                                             }) : (
-                                                <div className="px-3 py-6 text-center text-sm text-muted-foreground">No episode run records yet.</div>
+                                                <div className="px-3 py-6 text-center text-sm text-muted-foreground">{t('暂无分集运行记录。', 'No episode run records yet.')}</div>
                                             )}
                                         </div>
                                     </div>
@@ -2707,10 +2717,10 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                                                 okDb = false;
                                                 console.error('[Character Canon Categories] Save failed:', e);
                                             }
-                                            alert(ok1 && ok2 && okDb ? '已保存标签配置（数据库+localStorage）' : '保存失败');
+                                            alert(ok1 && ok2 && okDb ? t('已保存标签配置（数据库+localStorage）', 'Tag configuration saved (database + localStorage)') : t('保存失败', 'Save failed'));
                                         }}
                                     >
-                                        <Save className="w-4 h-4 inline-block mr-2" /> 保存标签配置
+                                        <Save className="w-4 h-4 inline-block mr-2" /> {t('保存标签配置', 'Save Tag Configuration')}
                                     </button>
                                 )}
                                 <button
@@ -2718,14 +2728,14 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                                     onClick={closeCanonModal}
                                     disabled={isGeneratingCanon}
                                 >
-                                    关闭
+                                    {t('关闭', 'Close')}
                                 </button>
                                 <button
                                     className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${isGeneratingCanon ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-primary text-black hover:bg-primary/90'}`}
                                     onClick={handleGenerateProjectCanon}
                                     disabled={isGeneratingCanon}
                                 >
-                                    {isGeneratingCanon ? <><Loader2 className="w-4 h-4 animate-spin" /> Generating...</> : <><Sparkles className="w-4 h-4" /> Generate & Append</>}
+                                    {isGeneratingCanon ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('生成中...', 'Generating...')}</> : <><Sparkles className="w-4 h-4" /> {t('生成并追加', 'Generate & Append')}</>}
                                 </button>
                             </div>
                         </div>
@@ -3036,7 +3046,7 @@ const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'en' }) =
         updateField('borrowed_films', arr);
     };
 
-    if (!episode) return <div className="p-8 text-muted-foreground">Select an episode to view info.</div>;
+    if (!episode) return <div className="p-8 text-muted-foreground">{t('请选择分集以查看信息。', 'Select an episode to view info.')}</div>;
 
     const data = info.e_global_info;
     const prefix = "ep-";
@@ -3706,7 +3716,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             mainContent = mainContent.trim();
             const lines = mainContent.split('\n').filter(l => l.trim().length > 0);
             
-            const title = (lines.length > 0 && lines[0].length < 50) ? lines[0] : "Untitled Segment";
+            const title = (lines.length > 0 && lines[0].length < 50) ? lines[0] : t('未命名片段', 'Untitled Segment');
             const textBody = (lines.length > 0 && lines[0].length < 50) ? lines.slice(1).join('\n') : lines.join('\n');
 
             parsed.push({ 
@@ -5197,12 +5207,12 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                                 onClick={() => {
                                     const fullText = `[System Instruction]\n${systemPrompt}\n\n[User Input]\n${userPrompt}`;
                                     navigator.clipboard.writeText(fullText);
-                                    if(onLog) onLog("Copied full prompt to clipboard.", "success");
-                                    alert("Full prompt copied!");
+                                    if(onLog) onLog(t('完整提示词已复制到剪贴板。', 'Copied full prompt to clipboard.'), "success");
+                                    alert(t('完整提示词已复制！', 'Full prompt copied!'));
                                 }}
                                 className="flex items-center gap-2 px-4 py-2 bg-white/5 hover:bg-white/10 rounded-lg font-medium transition-colors text-white border border-white/10"
                              >
-                                <Copy className="w-4 h-4" /> Copy Full Prompt
+                                <Copy className="w-4 h-4" /> {t('复制完整提示词', 'Copy Full Prompt')}
                              </button>
                              <button 
                                           onClick={() => executeAdvancedAnalysis(userPrompt, systemPrompt)}
@@ -5210,7 +5220,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                                 className="flex items-center gap-2 px-6 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                              >
                                 {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
-                                Run Analysis
+                                          {t('运行分析', 'Run Analysis')}
                              </button>
                         </div>
                     </div>
@@ -5514,8 +5524,8 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
                                 onChange={(e) => setFilterValue(e.target.value)}
                                 className="bg-[#151515] border border-white/10 rounded text-xs px-2 py-1 text-white outline-none focus:border-primary/50 max-w-[150px]"
                             >
-                                <option value="">Select Shot...</option>
-                                {availableShots.map(s => <option key={s.id} value={s.id}>{s.shot_id} - {s.shot_name || 'Untitled'}</option>)}
+                                <option value="">{t('选择镜头...', 'Select Shot...')}</option>
+                                {availableShots.map(s => <option key={s.id} value={s.id}>{s.shot_id} - {s.shot_name || t('未命名', 'Untitled')}</option>)}
                             </select>
                         )}
 
@@ -5566,7 +5576,7 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
                                     </button>
                                 </div>
                             ))}
-                            {assets.length === 0 && <div className="col-span-4 text-center text-muted-foreground py-8">No assets found</div>}
+                            {assets.length === 0 && <div className="col-span-4 text-center text-muted-foreground py-8">{t('未找到素材', 'No assets found')}</div>}
                         </div>
                     )}
                     
@@ -5576,7 +5586,7 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
                              <div className="flex justify-between items-center p-3 border-b border-white/10 bg-black/20">
                                 <h4 className="font-bold text-sm flex items-center gap-2">
                                     <button onClick={() => setSelectedAsset(null)} className="hover:bg-white/10 p-1 rounded"><ArrowLeft size={16}/></button>
-                                    Asset Details
+                                    {t('素材详情', 'Asset Details')}
                                 </h4>
                                 <div className="flex gap-2">
                                      <button 
@@ -5597,8 +5607,8 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
                                 </div>
                                 <div className="w-80 bg-[#151515] border-l border-white/10 p-4 overflow-y-auto space-y-4">
                                     <div>
-                                        <label className="text-[10px] tx-muted-foreground font-bold uppercase">Name</label>
-                                        <div className="text-sm font-medium">{selectedAsset.name || 'Untitled'}</div>
+                                        <label className="text-[10px] tx-muted-foreground font-bold uppercase">{t('名称', 'Name')}</label>
+                                        <div className="text-sm font-medium">{selectedAsset.name || t('未命名', 'Untitled')}</div>
                                     </div>
                                     
                                     {selectedAsset.meta_info?.entity_id && (
@@ -5659,8 +5669,8 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
                                     </div>
 
                                     <div className="text-[10px] text-muted-foreground pt-4 border-t border-white/5">
-                                        File: {selectedAsset.url.split('/').pop()} <br/>
-                                        Created: {new Date(selectedAsset.created_at).toLocaleString()}
+                                        {t('文件', 'File')}: {selectedAsset.url.split('/').pop()} <br/>
+                                        {t('创建时间', 'Created')}: {new Date(selectedAsset.created_at).toLocaleString()}
                                     </div>
                                 </div>
                             </div>
@@ -5679,7 +5689,7 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
                                 />
                                 {uploading ? <RefreshCw className="animate-spin text-primary mb-2" size={32} /> : <Upload className="text-muted-foreground mb-2" size={32} />}
                                 <span className="text-sm font-medium text-muted-foreground">
-                                    {uploading ? 'Uploading...' : 'Click or drop file here'}
+                                    {uploading ? t('上传中...', 'Uploading...') : t('点击或拖拽文件到此处', 'Click or drop file here')}
                                 </span>
                             </div>
                         </div>
@@ -5689,7 +5699,7 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
                          <div className="flex flex-col items-center justify-center h-full">
                             <div className="w-full max-w-sm space-y-4">
                                 <div>
-                                    <label className="text-xs font-bold uppercase text-muted-foreground mb-1 block">Image / Video URL</label>
+                                    <label className="text-xs font-bold uppercase text-muted-foreground mb-1 block">{t('图片 / 视频 URL', 'Image / Video URL')}</label>
                                     <input 
                                         type="text" 
                                         id="media-url-input"
@@ -6329,7 +6339,7 @@ const SceneCard = ({ scene, entities, onClick, onGenerateShots, onDelete, uiLang
                 ) : (
                     <div className="flex flex-col items-center gap-2 opacity-50">
                         <ImageIcon className="w-8 h-8" />
-                        <span className="text-xs">No Env Image</span>
+                        <span className="text-xs">{t('无环境图', 'No Env Image')}</span>
                     </div>
                 )}
                 
@@ -7245,7 +7255,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, uiLang = 'zh' 
 
                                         {!editingScene.id ? (
                                             <div className="text-xs text-muted-foreground bg-white/5 border border-white/10 rounded p-3">
-                                                Save this Scene first to create a DB record before loading or applying AI shots.
+                                                {t('请先保存当前场景，以创建数据库记录后再加载或应用 AI 镜头。', 'Save this Scene first to create a DB record before loading or applying AI shots.')}
                                             </div>
                                         ) : aiShotsStaging.error ? (
                                             <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/20 rounded p-3">
@@ -7255,7 +7265,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, uiLang = 'zh' 
                                             <div className="flex items-center justify-center h-24"><Loader2 className="animate-spin text-primary" size={24}/></div>
                                         ) : (aiShotsStaging.content || []).length === 0 ? (
                                             <div className="text-xs text-muted-foreground bg-white/5 border border-white/10 rounded p-3">
-                                                No staged AI shots yet. Generate AI shots for this scene first.
+                                                {t('暂无暂存 AI 镜头。请先为该场景生成 AI 镜头。', 'No staged AI shots yet. Generate AI shots for this scene first.')}
                                             </div>
                                         ) : (
                                             <div className="bg-black/30 border border-white/10 rounded-md overflow-hidden">
@@ -7488,17 +7498,17 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, uiLang = 'zh' 
                                 onClick={() => {
                                     const full = (shotPromptModal.data?.system_prompt || '') + "\n\n" + (shotPromptModal.data?.user_prompt || '');
                                     navigator.clipboard.writeText(full);
-                                    onLog?.("Full prompt copied to clipboard", "success");
+                                    onLog?.(t('完整提示词已复制到剪贴板', 'Full prompt copied to clipboard'), "success");
                                 }}
                                 className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded text-sm font-medium flex items-center gap-2 mr-auto"
                             >
-                                <Copy size={16}/> Copy Full Prompt
+                                <Copy size={16}/> {t('复制完整提示词', 'Copy Full Prompt')}
                             </button>
                             <button 
                                 onClick={() => setShotPromptModal({open: false, sceneId: null, data: null, loading: false})}
                                 className="px-4 py-2 rounded hover:bg-white/10 text-sm"
                             >
-                                Cancel
+                                {t('取消', 'Cancel')}
                             </button>
                             <button 
                                 onClick={handleConfirmGenerateShots}
@@ -7506,7 +7516,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, uiLang = 'zh' 
                                 className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium flex items-center gap-2"
                             >
                                 {shotPromptModal.loading ? <Loader2 className="animate-spin" size={16}/> : <Wand2 size={16}/>}
-                                {shotPromptModal.loading ? "Generating..." : "Generate Shots"}
+                                {shotPromptModal.loading ? t('生成中...', 'Generating...') : t('生成镜头', 'Generate Shots')}
                             </button>
                         </div>
                     </div>
@@ -7517,23 +7527,23 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, uiLang = 'zh' 
                 <div className="fixed inset-0 z-[60] bg-black/85 flex items-center justify-center p-4" onClick={() => setAiShotRowEditor({ open: false, index: -1, data: null })}>
                     <div className="bg-[#1b1b1b] border border-white/10 rounded-xl w-full max-w-3xl max-h-[88vh] overflow-hidden shadow-2xl" onClick={e => e.stopPropagation()}>
                         <div className="p-4 border-b border-white/10 flex items-center justify-between">
-                            <h3 className="font-bold text-white">Edit AI Shot Row #{aiShotRowEditor.index + 1}</h3>
+                            <h3 className="font-bold text-white">{t('编辑 AI 镜头行', 'Edit AI Shot Row')} #{aiShotRowEditor.index + 1}</h3>
                             <button onClick={() => setAiShotRowEditor({ open: false, index: -1, data: null })} className="p-1 hover:bg-white/10 rounded"><X size={18}/></button>
                         </div>
                         <div className="p-4 space-y-3 overflow-y-auto custom-scrollbar max-h-[68vh]">
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                <InputGroup label="Shot ID" value={aiShotRowEditor.data?.shot_id || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), shot_id: v } }))} />
-                                <InputGroup label="Shot Name" value={aiShotRowEditor.data?.shot_name || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), shot_name: v } }))} />
+                                <InputGroup label={t('镜头 ID', 'Shot ID')} value={aiShotRowEditor.data?.shot_id || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), shot_id: v } }))} />
+                                <InputGroup label={t('镜头名称', 'Shot Name')} value={aiShotRowEditor.data?.shot_name || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), shot_name: v } }))} />
                             </div>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                <InputGroup label="Scene ID" value={aiShotRowEditor.data?.scene_id || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), scene_id: v } }))} />
-                                <InputGroup label="Duration (s)" value={aiShotRowEditor.data?.duration || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), duration: v } }))} />
+                                <InputGroup label={t('场景 ID', 'Scene ID')} value={aiShotRowEditor.data?.scene_id || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), scene_id: v } }))} />
+                                <InputGroup label={t('时长（秒）', 'Duration (s)')} value={aiShotRowEditor.data?.duration || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), duration: v } }))} />
                             </div>
-                            <InputGroup label="Shot Logic (CN)" value={aiShotRowEditor.data?.shot_logic_cn || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), shot_logic_cn: v } }))} />
-                            <InputGroup label="Associated Entities" value={aiShotRowEditor.data?.associated_entities || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), associated_entities: v } }))} />
-                            <InputGroup label="Keyframes" value={aiShotRowEditor.data?.keyframes || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), keyframes: v } }))} />
+                            <InputGroup label={t('镜头逻辑（中文）', 'Shot Logic (CN)')} value={aiShotRowEditor.data?.shot_logic_cn || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), shot_logic_cn: v } }))} />
+                            <InputGroup label={t('关联实体', 'Associated Entities')} value={aiShotRowEditor.data?.associated_entities || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), associated_entities: v } }))} />
+                            <InputGroup label={t('关键帧', 'Keyframes')} value={aiShotRowEditor.data?.keyframes || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), keyframes: v } }))} />
                             <div>
-                                <label className="text-xs text-muted-foreground uppercase font-bold tracking-wider mb-1 block">Start Frame</label>
+                                <label className="text-xs text-muted-foreground uppercase font-bold tracking-wider mb-1 block">{t('起始帧', 'Start Frame')}</label>
                                 <textarea
                                     className="w-full bg-black/40 border border-white/10 rounded p-3 text-white text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-y custom-scrollbar font-mono leading-relaxed min-h-[120px]"
                                     value={aiShotRowEditor.data?.start_frame || ''}
@@ -7541,7 +7551,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, uiLang = 'zh' 
                                 />
                             </div>
                             <div>
-                                <label className="text-xs text-muted-foreground uppercase font-bold tracking-wider mb-1 block">Video Content</label>
+                                <label className="text-xs text-muted-foreground uppercase font-bold tracking-wider mb-1 block">{t('视频内容', 'Video Content')}</label>
                                 <textarea
                                     className="w-full bg-black/40 border border-white/10 rounded p-3 text-white text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-y custom-scrollbar font-mono leading-relaxed min-h-[180px]"
                                     value={aiShotRowEditor.data?.video_content || ''}
@@ -7549,7 +7559,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, uiLang = 'zh' 
                                 />
                             </div>
                             <div>
-                                <label className="text-xs text-muted-foreground uppercase font-bold tracking-wider mb-1 block">End Frame</label>
+                                <label className="text-xs text-muted-foreground uppercase font-bold tracking-wider mb-1 block">{t('结束帧', 'End Frame')}</label>
                                 <textarea
                                     className="w-full bg-black/40 border border-white/10 rounded p-3 text-white text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-y custom-scrollbar font-mono leading-relaxed min-h-[120px]"
                                     value={aiShotRowEditor.data?.end_frame || ''}
@@ -7558,8 +7568,8 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, uiLang = 'zh' 
                             </div>
                         </div>
                         <div className="p-4 border-t border-white/10 flex justify-end gap-2 bg-black/20">
-                            <button onClick={() => setAiShotRowEditor({ open: false, index: -1, data: null })} className="px-4 py-2 rounded hover:bg-white/10 text-sm">Cancel</button>
-                            <button onClick={saveAiShotRowEditor} className="px-5 py-2 bg-primary text-black rounded font-bold text-sm hover:bg-primary/90">Save Row</button>
+                            <button onClick={() => setAiShotRowEditor({ open: false, index: -1, data: null })} className="px-4 py-2 rounded hover:bg-white/10 text-sm">{t('取消', 'Cancel')}</button>
+                            <button onClick={saveAiShotRowEditor} className="px-5 py-2 bg-primary text-black rounded font-bold text-sm hover:bg-primary/90">{t('保存行', 'Save Row')}</button>
                         </div>
                     </div>
                 </div>
@@ -8212,7 +8222,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                 ) : (
                                     <div className="flex flex-col items-center justify-center text-white/20">
                                         <Users size={64} />
-                                        <span className="mt-4 text-sm font-bold uppercase">No Image</span>
+                                        <span className="mt-4 text-sm font-bold uppercase">{t('无图片', 'No Image')}</span>
                                     </div>
                                 )}
                                 
@@ -8485,13 +8495,13 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                                 onClick={() => setViewingEntity(null)}
                                                 className="px-4 py-2 rounded-lg font-bold text-xs text-muted-foreground hover:bg-white/10 transition-colors uppercase"
                                             >
-                                                Cancel
+                                                {t('取消', 'Cancel')}
                                             </button>
                                             <button 
                                                 onClick={handleCommitCreate}
                                                 className="px-6 py-2 rounded-lg font-bold text-xs bg-primary text-black hover:brightness-110 flex items-center gap-2 uppercase tracking-wide shadow-lg shadow-primary/20 transition-all active:scale-95"
                                             >
-                                                <Plus size={14} strokeWidth={3} /> Create Subject
+                                                <Plus size={14} strokeWidth={3} /> {t('创建主体', 'Create Subject')}
                                             </button>
                                         </div>
                                     )}
@@ -8652,7 +8662,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                         ))}
                                         {assets.length === 0 && (
                                             <div className="col-span-4 py-12 text-center text-muted-foreground">
-                                                No images found in library
+                                                {t('素材库中未找到图片', 'No images found in library')}
                                             </div>
                                         )}
                                     </div>
@@ -8674,16 +8684,16 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                                 <Upload className="text-muted-foreground mb-2" size={32} />
                                             )}
                                             <span className="text-sm font-medium text-muted-foreground">
-                                                {uploading ? 'Uploading...' : 'Click or drop image here'}
+                                                {uploading ? t('上传中...', 'Uploading...') : t('点击或拖拽图片到此处', 'Click or drop image here')}
                                             </span>
                                         </div>
                                         
                                         <div className="w-full max-w-sm mt-8">
-                                             <div className="text-xs text-muted-foreground mb-2 uppercase font-bold tracking-wider">Or import from URL</div>
+                                             <div className="text-xs text-muted-foreground mb-2 uppercase font-bold tracking-wider">{t('或通过 URL 导入', 'Or import from URL')}</div>
                                              <div className="flex gap-2">
                                                 <input 
                                                     type="text" 
-                                                    placeholder="https://..." 
+                                                    placeholder={t('请输入图片链接（https://...）', 'Enter image URL (https://...)')} 
                                                     className="flex-1 bg-black/40 border border-white/10 rounded-md px-3 py-2 text-sm focus:border-primary/50 outline-none"
                                                     onKeyDown={(e) => {
                                                         if (e.key === 'Enter') updateEntityImage(e.target.value);
@@ -8883,7 +8893,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                                                      </div>
                                                                  ))}
                                                                  {assets.length === 0 && (
-                                                                     <div className="col-span-4 py-8 text-center text-xs text-muted-foreground">No assets found</div>
+                                                                     <div className="col-span-4 py-8 text-center text-xs text-muted-foreground">{t('未找到素材', 'No assets found')}</div>
                                                                  )}
                                                              </div>
                                                          </div>
@@ -10955,7 +10965,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                     ) : (
                                         <div className="flex flex-col items-center gap-2 opacity-50">
                                             <ImageIcon className="w-8 h-8" />
-                                            <span className="text-xs">No Image</span>
+                                            <span className="text-xs">{t('无图片', 'No Image')}</span>
                                         </div>
                                     )}
                                     <div className="absolute top-2 left-2 bg-black/60 px-2 py-1 rounded text-xs font-mono font-bold text-white border border-white/10 pointer-events-none">
@@ -10976,7 +10986,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                     <div className="flex justify-between items-center">
                                         <h3 className="font-bold text-sm text-white line-clamp-2" title={shot.shot_name}>
                                             <span className="text-primary mr-2 font-mono">{shot.shot_id}</span>
-                                            {shot.shot_name || 'Untitled'}
+                                            {shot.shot_name || t('未命名', 'Untitled')}
                                         </h3>
                                         {/* Optional: Show duration if available, keep it minimal */}
                                         {shot.duration && (
@@ -10998,15 +11008,15 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                         {shots.length === 0 && (
                             <div className="col-span-full h-64 flex flex-col items-center justify-center text-muted-foreground border-2 border-dashed border-white/10 rounded-xl">
                                 <Film className="w-12 h-12 mb-4 opacity-20" />
-                                <p>No shots in this scene.</p>
-                                <button className="text-primary text-sm hover:underline mt-2" onClick={() => setIsImportOpen(true)}>Import Shots Table</button>
+                                <p>{t('该场景暂无镜头。', 'No shots in this scene.')}</p>
+                                <button className="text-primary text-sm hover:underline mt-2" onClick={() => setIsImportOpen(true)}>{t('导入镜头表', 'Import Shots Table')}</button>
                             </div>
                         )}
                      </div>
                  ) : (
                      <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
                          <Clapperboard className="w-16 h-16 mb-4 opacity-20" />
-                         <p className="text-lg font-medium">Select a Scene to manage shots</p>
+                         <p className="text-lg font-medium">{t('选择一个场景来管理镜头', 'Select a Scene to manage shots')}</p>
                          <p className="text-sm opacity-50 max-w-md text-center mt-2">
                             Available scenes are loaded from the database. <br/>
                             If your list is empty, make sure you have created scenes in the "Scenes" tab.

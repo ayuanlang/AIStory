@@ -2,8 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { fetchSystemLogs } from '../services/api';
 import { ArrowLeft, RefreshCw, Layers } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { getUiLang, tUI } from '../lib/uiLang';
 
 const SystemLogs = () => {
+    const uiLang = getUiLang();
+    const t = (zh, en) => tUI(uiLang, zh, en);
     const [logs, setLogs] = useState([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
@@ -17,7 +20,7 @@ const SystemLogs = () => {
             setLogs(data);
         } catch (e) {
             console.error(e);
-            setError("Failed to load logs. You might not have permission.");
+            setError(t('日志加载失败，可能没有权限。', 'Failed to load logs. You might not have permission.'));
         } finally {
             setLoading(false);
         }
@@ -37,7 +40,7 @@ const SystemLogs = () => {
                     </button>
                     <h1 className="text-xl font-bold flex items-center gap-2">
                         <Layers className="text-primary" />
-                        System Logs
+                        {t('系统日志', 'System Logs')}
                     </h1>
                 </div>
                 <button 
@@ -60,11 +63,11 @@ const SystemLogs = () => {
                     <table className="w-full text-sm text-left">
                         <thead className="bg-black/30 text-muted-foreground uppercase text-xs">
                             <tr>
-                                <th className="px-6 py-3">Timestamp</th>
-                                <th className="px-6 py-3">User</th>
-                                <th className="px-6 py-3">Action</th>
-                                <th className="px-6 py-3">Details</th>
-                                <th className="px-6 py-3">IP</th>
+                                <th className="px-6 py-3">{t('时间戳', 'Timestamp')}</th>
+                                <th className="px-6 py-3">{t('用户', 'User')}</th>
+                                <th className="px-6 py-3">{t('动作', 'Action')}</th>
+                                <th className="px-6 py-3">{t('详情', 'Details')}</th>
+                                <th className="px-6 py-3">{t('IP 地址', 'IP')}</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-white/5">
@@ -74,7 +77,7 @@ const SystemLogs = () => {
                                         {new Date(log.timestamp).toLocaleString()}
                                     </td>
                                     <td className="px-6 py-3 font-medium text-white">
-                                        {log.user_name || `User #${log.user_id}`}
+                                        {log.user_name || `${t('用户', 'User')} #${log.user_id}`}
                                     </td>
                                     <td className="px-6 py-3">
                                         <span className={`px-2 py-0.5 rounded text-xs font-bold ${
@@ -96,7 +99,7 @@ const SystemLogs = () => {
                             {logs.length === 0 && !loading && (
                                 <tr>
                                     <td colSpan={5} className="px-6 py-8 text-center text-muted-foreground">
-                                        No logs found.
+                                        {t('暂无日志。', 'No logs found.')}
                                     </td>
                                 </tr>
                             )}
