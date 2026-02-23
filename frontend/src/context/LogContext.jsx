@@ -11,7 +11,6 @@ export const LogProvider = ({ children }) => {
 
     const addLog = useCallback((msg, type='info') => {
         const timestamp = new Date().toLocaleTimeString();
-        console.log(`[${type.toUpperCase()}] ${msg}`);
         setLogs(prev => [`[${timestamp}] [${type.toUpperCase()}] ${msg}`, ...prev]);
     }, []);
 

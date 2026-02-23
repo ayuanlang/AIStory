@@ -129,8 +129,6 @@ export const StoreProvider = ({ children }) => {
                     }
                 }
             });
-
-            console.log("Refreshed settings from backend");
             setSavedConfigs(newSavedConfigs);
             setSavedToolConfigs(newSavedToolConfigs);
             

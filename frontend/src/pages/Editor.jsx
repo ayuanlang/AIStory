@@ -1463,13 +1463,11 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                 `[DEBUG][Before API] Generate Episode Scripts payload: ${JSON.stringify({ episodes_count: n, overwrite_existing: overwriteExisting, retry_failed_only: retryFailedOnly })}`,
                 'info'
             );
-            console.log('[ProjectOverview] generate episode scripts: start', { projectId: id, episodes_count: n, retry_failed_only: retryFailedOnly, overwrite_existing: overwriteExisting });
             const res = await generateProjectEpisodeScripts(id, {
                 episodes_count: n,
                 overwrite_existing: overwriteExisting,
                 retry_failed_only: retryFailedOnly,
             });
-            console.log('[ProjectOverview] generate episode scripts: response', res);
 
             await pollEpisodeScriptsStatus();
             addLog?.(
@@ -4746,8 +4744,6 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         try {
             // Include project metadata if available, unless skipped (baked in)
             const metadata = skipMetadata ? null : (project?.global_info || null);
-            console.log("[ScriptEditor] Executing Analysis. Project Prop:", project);
-            console.log("[ScriptEditor] Using Metadata:", metadata);
             
             const result = await analyzeScene(
                 content,
@@ -4761,7 +4757,6 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
 
             if (result && result.meta) {
                 try {
-                    console.log("[AI Scene Analysis] meta:", result.meta);
                     const m = result.meta;
                     const usage = m.usage || {};
                     if (onLog) onLog(
@@ -4857,7 +4852,6 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
 
             if (result && result.meta) {
                 try {
-                    console.log("[Advanced AI Analysis] meta:", result.meta);
                     const m = result.meta;
                     const usage = m.usage || {};
                     if (onLog) onLog(
@@ -5812,8 +5806,6 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
             /｛([\s\S]+?)｝/g      // ｛...｝ (Full-width braces)
         ];
 
-        console.log("Ref Parsing Prompt Length:", promptText?.length || 0);
-
         if (promptText) {
             regexes.forEach(regex => {
                 let match;
@@ -5853,14 +5845,6 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
             if (base) candidates.add(base);
         });
 
-        // Debug Log
-        console.log(`[${title}] Ref Debug:`, { 
-            promptText: (promptText || '').slice(0, 50) + "...", 
-            uniqueRaws, 
-            candidates: Array.from(candidates),
-            entitiesCount: entities.length
-        });
-
         // 3. Match against Entities
         return entities.filter(e => {
             const cn = normalize(e.name);
@@ -5888,10 +5872,6 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
 
                 return false;
             });
-
-            if (isMatch) {
-               console.log(`Matched Entity [${e.name}] (norm: ${cn}) with Candidates`, Array.from(candidates));
-            }
             // Optional: Log Failures for target specific debugging
             // if (e.name.includes("动物园")) console.log(`Checking Entity [${e.name}] (norm: ${cn}) against`, Array.from(candidates), isMatch);
             
@@ -6721,11 +6701,6 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         setAiShotRowEditor({ open: false, index: -1, data: null });
     };
 
-    // Debug: Monitor Data State
-    useEffect(() => {
-        console.log("[SceneManager] Component Active. ProjectId:", projectId, "Episode:", activeEpisode?.id);
-    }, [projectId, activeEpisode]);
-
     useEffect(() => {
         fetchMe().then((user) => {
             setIsSuperuser(!!user?.is_superuser);
@@ -6733,16 +6708,6 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
             setIsSuperuser(false);
         });
     }, []);
-
-    useEffect(() => {
-        console.log(`[SceneManager] Scenes Updated: ${scenes.length} items`);
-        if (scenes.length > 0) console.log("Sample Scene:", scenes[0]);
-    }, [scenes]);
-
-    useEffect(() => {
-        console.log(`[SceneManager] Entities Updated: ${entities.length} items`);
-        if (entities.length > 0) console.log("Sample Entity:", entities[0]);
-    }, [entities]);
 
     // Fetch Entities (Environment) for image matching
     useEffect(() => {
@@ -6856,7 +6821,6 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                          // Check for incomplete data (Schema Update Backfill)
                          const inContent = activeEpisode.scene_content;
                          if (inContent && dbScenes.some(s => !s.linked_characters && !s.key_props)) {
-                             console.log("[SceneManager] Detected stale DB records. Attempting merge from text content...");
                              const parsed = parseScenesFromText(inContent);
                              if (parsed.length > 0) {
                                  const merged = dbScenes.map(dbS => {
@@ -6958,9 +6922,6 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         const rawLoc = sourceText.replace(/[\[\]\*]/g, '').trim().toLowerCase();
         
         if (!rawLoc) return null;
-
-        // Debug Log - Unconditionally log for now to verify execution
-        console.log(`[SceneManager] Matching Image for Scene: "${scene.scene_name}" using Anchor: "${sourceText}" (Cleaned: "${rawLoc}")`);
         
         const cleanForMatch = (str) => (str || '').replace(/[（\(\)）]/g, '').trim().toLowerCase();
         const targetName = cleanForMatch(rawLoc);
@@ -6979,11 +6940,6 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
 
             const isMatch = cn === targetName || enClean === targetName;
             
-            // Debugging specific failing case
-            if (rawLoc.includes("废弃")) {
-                 console.log(`Checking Entity: "${e.name}" (CN: "${cn}") vs Target: "${targetName}" -> Match? ${isMatch}`);
-            }
-            
             return isMatch;
         });
 
@@ -7000,20 +6956,13 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                 const enClean = cleanForMatch(en);
 
                 if (cn && (cn.includes(targetName) || targetName.includes(cn))) {
-                    if (rawLoc.includes("废弃")) console.log(`  -> Fuzzy Match Found (CN): ${cn} <-> ${targetName}`);
                     return true;
                 }
                 if (enClean && (enClean.includes(targetName) || targetName.includes(enClean))) {
-                    if (rawLoc.includes("废弃")) console.log(`  -> Fuzzy Match Found (EN): ${enClean} <-> ${targetName}`);
                     return true;
                 }
                 return false;
              });
-        }
-        
-        if (rawLoc.includes("废弃") && !match) {
-            console.log("  -> No match found for", rawLoc);
-            console.log("  -> Available Entities:", entities.map(e => e.name));
         }
 
         return match ? match.image_url : null;
@@ -8197,8 +8146,6 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     
     // Open Image Modal
     const handleOpenImageModal = (entity, defaultTab = 'library') => {
-        console.log("Opening Modal for:", entity.name, "EpInfo:", currentEpisode?.episode_info);
-
         setSelectedEntity(entity);
         setImageModalTab(defaultTab); // This might cause render before prompt is set?
         
@@ -8229,8 +8176,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         if (suffixes.length > 0) {
             processed += ", " + suffixes.join(", ");
         }
-        
-        console.log("Setting processed prompt:", processed);
+
         setPrompt(processed);
         setShowImageModal(true); // Show AFTER setting everything
 
@@ -8322,9 +8268,6 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
             
             // Deduplicate
             const uniqueRefs = [...new Set(allRefs)];
-            
-            console.log(`[Editor] Generating Image. Providers: ${provider || 'Auto'}`);
-            console.log(`[Editor] Refs (Total ${uniqueRefs.length}):`, uniqueRefs);
 
             const asset = await generateImage(finalPrompt, provider || null, uniqueRefs.length > 0 ? uniqueRefs : null, {
                 project_id: projectId,
@@ -9642,7 +9585,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 scene_code: normalizedSceneCode || undefined,
                 shot_id: normalizedShotId || undefined,
             });
-            console.log(`[ShotsView] Loaded ${allShots.length} total shots for Episode ${activeEpisode.id}`);
 
             let filtered = selectedSceneId === 'all'
                 ? allShots
@@ -9797,7 +9739,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                      } else if (dbScenes.length === 0) {
                          // Only create if NO scenes exist (assuming shot-only import)
                          try {
-                              console.log("Creating Default Scene for orphaned shots...");
                               // We need to await inside loop, but it's only once
                               // eslint-disable-next-line no-await-in-loop
                               const newScene = await createScene(activeEpisode.id, {
@@ -9919,8 +9860,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                          const key = col.toLowerCase().replace(/[\(\)（）\s\.]/g, '');
                          headerMap[key] = idx;
                      });
-                     console.log("Import Header Map FULL:", JSON.stringify(headerMap));
-                     console.log("Looking for keys: shotlogiccn, shotlogic, etc.");
                      onLog?.("Parsed Headers: " + Object.keys(headerMap).join(", "), "info");
                      continue;
                  }
@@ -9976,7 +9915,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                          associated_entities: useMap ? getVal(['associatedentities', 'entities', 'associated', '实体'], 6) : clean(cols[colStart+4]),
                          shot_logic_cn: (() => {
                              const val = useMap ? getVal(['shotlogiccn', 'shotlogic', 'logic', 'logiccn', 'shotlogic(cn)'], 7) : '';
-                             if (val) console.log("DEBUG: Found shot_logic_cn:", val);
                              return val;
                          })(),
                          keyframes: useMap ? getVal(['keyframes', 'key frames', '关键帧', 'kf'], 8) : '',
@@ -10030,7 +9968,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     if (!s.scene_code && currentScene) s.scene_code = currentScene.scene_no;
                     
                     if (count === 0) {
-                        console.log("First Shot Payload:", s);
                         if (!s.shot_logic_cn) {
                              onLog?.("Warning: 'Shot Logic (CN)' is empty in the parsed data.", "warning");
                         }
@@ -10056,7 +9993,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     const sceneSpecific = await fetchShots(selectedSceneId);
                     if (sceneSpecific && sceneSpecific.length > 0) {
                         setShots(sceneSpecific);
-                        console.log("[Import] Force set shots via direct Scene Fetch:", sceneSpecific.length);
                     }
                 } catch(e) { console.error("Post-import fetch failed", e); }
 
@@ -10546,7 +10482,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     
                     // Always calculate auto-suggested refs first (with new robust logic)
                     const autoMatches = getSuggestedRefImages(editingShot, prompt, true);
-                    console.log("Auto-Detected Matches:", autoMatches);
 
                     if (Array.isArray(tech.ref_image_urls)) {
                         // Manual Mode: Merge saved list with NEW auto-matches (respecting deletions)
@@ -10558,10 +10493,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                         );
                         
                         refs = [...savedRefs, ...newAutoMatches];
-                        console.log("Merged Manual Refs:", refs);
                     } else {
                         // Auto-populate mode
-                        console.log("Auto-populating Refs for Start Generation...");
                         refs = autoMatches;
                         
                         try {
@@ -10571,7 +10504,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                 const prevTech = JSON.parse(prevShot.technical_notes || '{}');
                                 if (prevTech.end_frame_url && !refs.includes(prevTech.end_frame_url)) {
                                     refs.unshift(prevTech.end_frame_url);
-                                    console.log("Inherited Prev End Frame:", prevTech.end_frame_url);
                                 }
                             }
                         } catch(err) { console.error("Prev shot lookup failed", err); }
@@ -10583,7 +10515,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 
                 // Final clean
                 refs = refs.filter(Boolean);
-                console.log("Final Refs being sent to Generate:", refs);
 
                 // NEW: Inject Global Context
                 const globalCtx = getGlobalContextStr();
@@ -10710,7 +10641,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const handleGenerateVideo = async () => {
         if (!editingShot) return;
         if (generatingState.video) {
-             console.log("Video generation already in progress used. Ignoring double click.");
              return; 
         }
 
@@ -10807,20 +10737,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 }
             }
             
-            console.log("[Editor] Video Generation Refs (Ordered):", uniqueRefs);
-            console.log("[Editor] Selected Start:", finalStartRef);
-            console.log("[Editor] Selected End:", finalEndRef);
-            
             // Duration Logic: Use Shot Duration (s) if valid, else default to 5
             const durParam = parseFloat(editingShot.duration) || 5;
 
             // NEW: Inject Global Context
             const globalCtx = getGlobalContextStr();
             const finalPrompt = prompt + globalCtx;
-            
-            console.log("--------------------------------------------------");
-            console.log("[DEBUG] Final Video Prompt (Single):", finalPrompt);
-            console.log("--------------------------------------------------");
 
             const res = await generateVideo(finalPrompt, null, finalStartRef, finalEndRef, durParam, {
                 project_id: projectId,
@@ -11181,10 +11103,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                         onLog?.(`[Batch ${processedCount}/${shots.length}] Generating Video for Shot ${currentShot.shot_id}...`, "info");
                         
                         const durParam = parseFloat(currentShot.duration) || 5;
-
-                        console.log("--------------------------------------------------");
-                        console.log(`[DEBUG] Final Video Prompt (Batch - Shot ${currentShot.shot_id}):`, injectedPrompt);
-                        console.log("--------------------------------------------------");
 
                         const res = await generateVideo(injectedPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, lastFrame, durParam, {
                             project_id: projectId,
@@ -12671,8 +12589,6 @@ const Editor = ({ projectId, onClose }) => {
          if (!id) return;
          try {
             const p = await fetchProject(id);
-            console.log("[Editor] Loaded Project Data (Full):", p);
-            console.log("[Editor] Global Info:", p?.global_info);
             setProject(p);
          } catch (e) {
             console.error("Failed to fetch project title", e);
@@ -13117,11 +13033,6 @@ const Editor = ({ projectId, onClose }) => {
                         if (trimmed.endsWith('|') && cols.length > 0 && cols[cols.length-1] === "") cols.pop();
                     }
 
-                    // DEBUG LOG
-                    if (trimmed.length > 0 && (inSceneTable || inShotTable || isTableRow)) {
-                        console.log(`[Import] Line: "${trimmed.substring(0, 30)}..." | TableRow=${isTableRow} | Cols=${cols.length} | InScene=${inSceneTable} | IsSep=${line.includes('---')} | Skip=${(cols.length < 2 || line.includes('---'))}`);
-                    }
-
                     // 1. Header Detection (Relaxed)
                     const isShotKey = (isTableRow || line.includes('|')) && (line.includes("Shot ID") || line.includes("镜头ID") || line.includes("Shot Name") || line.includes("Shot No"));
                     const isSceneKey = (isTableRow || line.includes('|')) && (line.includes('Scene No') || line.includes('场次序号') || (line.includes('Scene ID') && !line.includes('Shot ID')));
@@ -13182,7 +13093,6 @@ const Editor = ({ projectId, onClose }) => {
 
                          // A. Handle Scene Row
                          if (inSceneTable) {
-                             console.log("DEBUG: HIT SCENE ROW BLOCK");
                              sceneLines.push(line);
                              
                              try {

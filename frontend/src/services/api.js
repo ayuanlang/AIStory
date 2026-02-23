@@ -1,8 +1,6 @@
 import axios from 'axios';
 import { API_URL } from '../config';
 
-console.log("Initializing API Helper with Base URL:", API_URL);
-
 // Use API_URL from config which supports production env vars
 export const api = axios.create({
   baseURL: API_URL,
@@ -224,7 +222,6 @@ export const createShot = async (sceneId, data) => {
 }
 
 export const updateShot = async (shotId, data) => {
-    console.log(`[API] updateShot ${shotId} payload:`, JSON.stringify(data, null, 2));
     const response = await api.put(`/shots/${shotId}`, data);
     return response.data;
 }
@@ -247,19 +244,9 @@ export const generateSceneShots = async (sceneId, promptData = null) => {
         userPromptLen: String(promptData?.user_prompt || '').length,
         systemPromptLen: String(promptData?.system_prompt || '').length,
     };
-    console.log('[API] generateSceneShots request', { sceneId, payloadMeta });
     try {
         const response = await api.post(`/scenes/${sceneId}/ai_generate_shots`, promptData);
         const data = response?.data;
-        console.log('[API] generateSceneShots response', {
-            sceneId,
-            status: response?.status,
-            dataType: typeof data,
-            keys: data && typeof data === 'object' ? Object.keys(data) : [],
-            contentCount: Array.isArray(data?.content) ? data.content.length : null,
-            hasRawText: Boolean(data?.raw_text),
-            hasTimestamp: Boolean(data?.timestamp),
-        });
         return data;
     } catch (error) {
         console.error('[API] generateSceneShots failed', {
@@ -399,7 +386,6 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
 }
 
 export const generateVideo = async (prompt, provider = null, ref_image_url = null, last_frame_url = null, duration = 5, options = {}, keyframes = []) => {
-    console.log("[DEBUG API] generateVideo Prompt:", prompt);
     const response = await api.post('/generate/video', { prompt, provider, ref_image_url, last_frame_url, duration, keyframes, ...options });
     return response.data;
 }
@@ -504,10 +490,8 @@ export const deleteSetting = async (id) => {
 }
 
 export const analyzeEntityImage = async (entityId) => {
-    console.log(`[API CALL] analyzeEntityImage for ${entityId}`);
     try {
         const response = await api.post(`/entities/${entityId}/analyze`);
-        console.log(`[API SUCCESS] analyzeEntityImage response:`, response);
         return response.data;
     } catch (e) {
         console.error(`[API FAIL] analyzeEntityImage failed:`, e);
@@ -581,7 +565,6 @@ export const refinePrompt = async (original_prompt, instruction, type = 'image')
 };
 
 export const analyzeScene = async (scriptText, systemPrompt = null, projectMetadata = null, episodeId = null, analysisAttentionNotes = null, reuseSubjectAssets = null) => {
-    console.log("[API] analyzeScene called", { hasMetadata: !!projectMetadata, episodeId, hasAttentionNotes: !!analysisAttentionNotes, reuseSubjectCount: Array.isArray(reuseSubjectAssets) ? reuseSubjectAssets.length : 0 });
     const payload = { 
         text: scriptText,
         system_prompt: systemPrompt

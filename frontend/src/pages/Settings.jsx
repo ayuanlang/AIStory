@@ -922,7 +922,6 @@ const Settings = () => {
             };
 
             const saved = await updateSetting(payload);
-            console.log(`Synced ${category}/${backendProvider} to backend. Model: ${configData.model}`);
             return saved;
         } catch (e) {
             console.error(`Failed to sync ${category} setting to backend`, e);
