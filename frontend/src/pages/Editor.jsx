@@ -11073,7 +11073,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                             </h3>
                             <div className="flex items-center gap-2">
                                 <button
-                                    onClick={() => setIsSettingsOpen(true)}
+                                    onClick={() => window.location.assign('/settings?tab=api-settings')}
                                     className="p-2 hover:bg-white/10 text-white rounded-lg border border-white/10 transition-colors"
                                     title={t('打开生成设置', 'Open Generation Settings')}
                                 >
@@ -13131,7 +13131,11 @@ const Editor = ({ projectId, onClose }) => {
                         <Download className="w-4 h-4" />
                         <span className="text-xs font-medium hidden sm:block">{t('导出', 'Export')}</span>
                     </button>
-                    <button className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors" title={t('设置', 'Settings')}>
+                    <button
+                        onClick={() => window.location.assign('/settings?tab=api-settings')}
+                        className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors"
+                        title={t('设置', 'Settings')}
+                    >
                         <SettingsIcon className="w-4 h-4" />
                     </button>
                     <button 
