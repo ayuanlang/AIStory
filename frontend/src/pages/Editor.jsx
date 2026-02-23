@@ -3359,7 +3359,7 @@ const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'en' }) =
 };
 
 
-const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpdateEpisodeInfo, onLog, onImportText, uiLang = 'zh' }) => {
+const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpdateEpisodeInfo, onLog, onImportText, onSwitchToScenes, uiLang = 'zh' }) => {
     const navigate = useNavigate();
     const [segments, setSegments] = useState([]);
     const [showMerged, setShowMerged] = useState(false);
@@ -3375,6 +3375,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
     const [reuseSubjectKeyword, setReuseSubjectKeyword] = useState('');
     const [isLoadingSubjectAssets, setIsLoadingSubjectAssets] = useState(false);
     const [isSavingReuseSubjects, setIsSavingReuseSubjects] = useState(false);
+    const [analysisFlowStatus, setAnalysisFlowStatus] = useState({ phase: 'idle', message: '' });
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
 
     const isEpisodeOnePage = useMemo(() => {
@@ -3549,6 +3550,35 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         } catch (e) {
             if (onLog) onLog(`Import failed: ${e.message}`, 'error');
         }
+    };
+
+    const runAutoImportAndSwitchToScenes = async (analyzedText) => {
+        if (typeof onImportText !== 'function') {
+            if (onLog) onLog('Import is not available in this context.', 'warning');
+            setAnalysisFlowStatus({
+                phase: 'completed',
+                message: t('分析完成（当前上下文不支持自动导入）', 'Analysis completed (auto import is not available in this context)'),
+            });
+            return;
+        }
+
+        setAnalysisFlowStatus({
+            phase: 'importing',
+            message: t('LLM 已返回，正在自动导入...', 'LLM response received, auto-importing...'),
+        });
+
+        if (onLog) onLog('Auto-importing analysis result...', 'process');
+        await onImportText(analyzedText || '', 'auto');
+        if (onLog) onLog('Auto-import finished.', 'success');
+
+        if (typeof onSwitchToScenes === 'function') {
+            onSwitchToScenes();
+        }
+
+        setAnalysisFlowStatus({
+            phase: 'completed',
+            message: t('分析与导入已完成，已切换到 Scenes。', 'Analysis and import completed, switched to Scenes.'),
+        });
     };
 
     const parseMarkdownTable = (text) => {
@@ -4707,6 +4737,10 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
 
     const executeAnalysis = async (content, customSystemPrompt = null, skipMetadata = false) => {
         setIsAnalyzing(true);
+        setAnalysisFlowStatus({
+            phase: 'analyzing',
+            message: t('AI Scene Analysis 进行中...', 'AI Scene Analysis in progress...'),
+        });
         if (onLog) onLog("Starting AI Scene Analysis...", "start");
 
         try {
@@ -4763,12 +4797,16 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 await refreshAnalysisFromDB();
             }
             
+            await runAutoImportAndSwitchToScenes(analyzedText);
             if (onLog) onLog("AI Analysis applied and saved.", "success");
-            alert("AI Scene Analysis Completed!");
             setShowAnalysisModal(false);
         } catch (e) {
             console.error(e);
             if (onLog) onLog(`Analysis Failed: ${e.message}`, "error");
+            setAnalysisFlowStatus({
+                phase: 'failed',
+                message: t(`分析失败：${e.message}`, `Analysis failed: ${e.message}`),
+            });
             alert(`Analysis failed: ${e.message}`);
         } finally {
             setIsAnalyzing(false);
@@ -4800,6 +4838,10 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         }
 
         setIsAnalyzing(true);
+        setAnalysisFlowStatus({
+            phase: 'analyzing',
+            message: t('AI Scene Analysis 进行中...', 'AI Scene Analysis in progress...'),
+        });
         if (onLog) onLog("Starting Advanced AI Analysis (Superuser)...", "start");
 
         try {
@@ -4848,19 +4890,16 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 await refreshAnalysisFromDB();
             }
 
-            // Auto-run import immediately using the existing import logic
-            if (typeof onImportText === 'function') {
-                if (onLog) onLog("Auto-importing analysis result...", "process");
-                await onImportText(analyzedText || "", 'auto');
-                if (onLog) onLog("Auto-import finished.", "success");
-            } else {
-                if (onLog) onLog("Import is not available in this context.", "warning");
-            }
+            await runAutoImportAndSwitchToScenes(analyzedText || "");
 
             setShowAnalysisModal(false);
         } catch (e) {
             console.error(e);
             if (onLog) onLog(`Advanced analysis failed: ${e.message}`, "error");
+            setAnalysisFlowStatus({
+                phase: 'failed',
+                message: t(`分析失败：${e.message}`, `Analysis failed: ${e.message}`),
+            });
             alert(`Analysis failed: ${e.message}`);
         } finally {
             setIsAnalyzing(false);
@@ -4921,6 +4960,25 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                     <button onClick={handleSave} className="px-4 py-2 bg-primary text-black rounded-lg text-sm font-bold hover:bg-primary/90">{t('保存修改', 'Save Changes')}</button>
                 </div>
             </div>
+
+            {analysisFlowStatus.phase !== 'idle' && (
+                <div className={`mb-4 rounded-lg border px-4 py-2.5 flex items-center gap-2 text-sm ${
+                    analysisFlowStatus.phase === 'failed'
+                        ? 'border-red-500/30 bg-red-500/10 text-red-200'
+                        : analysisFlowStatus.phase === 'completed'
+                            ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100'
+                            : 'border-purple-500/30 bg-purple-500/10 text-purple-100'
+                }`}>
+                    {analysisFlowStatus.phase === 'completed' ? (
+                        <CheckCircle className="w-4 h-4" />
+                    ) : analysisFlowStatus.phase === 'failed' ? (
+                        <X className="w-4 h-4" />
+                    ) : (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                    )}
+                    <span>{analysisFlowStatus.message}</span>
+                </div>
+            )}
 
             <div className="flex-1 overflow-hidden border border-white/10 rounded-xl bg-black/20 flex flex-col">
                 <div className="flex-1 overflow-hidden">
@@ -6235,7 +6293,7 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
     )
 };
 
-const SceneCard = ({ scene, entities, onClick, onGenerateShots, onDelete, uiLang = 'zh' }) => {
+const SceneCard = ({ scene, entities, onClick, onGenerateShots, onDelete, selected = false, onToggleSelect, uiLang = 'zh' }) => {
     const [images, setImages] = useState([]);
     const [currentIndex, setCurrentIndex] = useState(0);
     const [isGenerating, setIsGenerating] = useState(false);
@@ -6318,6 +6376,11 @@ const SceneCard = ({ scene, entities, onClick, onGenerateShots, onDelete, uiLang
         await onDelete(scene);
     };
 
+    const handleToggleSelect = (e) => {
+        e.stopPropagation();
+        if (typeof onToggleSelect === 'function') onToggleSelect(scene);
+    };
+
     const imgUrl = images.length > 0 ? images[currentIndex] : null;
 
     return (
@@ -6352,7 +6415,19 @@ const SceneCard = ({ scene, entities, onClick, onGenerateShots, onDelete, uiLang
                     </div>
                 )}
 
-                <div className="absolute top-2 left-2 bg-black/60 px-2 py-1 rounded text-xs font-mono font-bold text-white border border-white/10 z-10 max-w-[80%] truncate">
+                <label
+                    className="absolute top-2 left-2 z-30 flex items-center justify-center w-6 h-6 rounded bg-black/60 border border-white/20 cursor-pointer"
+                    title={t('选择场景', 'Select scene')}
+                >
+                    <input
+                        type="checkbox"
+                        checked={!!selected}
+                        onChange={handleToggleSelect}
+                        className="accent-primary"
+                    />
+                </label>
+
+                <div className="absolute top-2 left-10 bg-black/60 px-2 py-1 rounded text-xs font-mono font-bold text-white border border-white/10 z-10 max-w-[70%] truncate">
                     {scene.scene_no || scene.id}
                 </div>
                 <div className="absolute top-2 right-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -6445,14 +6520,27 @@ const SceneCard = ({ scene, entities, onClick, onGenerateShots, onDelete, uiLang
     );
 };
 
-const SceneManager = ({ activeEpisode, projectId, project, onLog, uiLang = 'zh' }) => {
+const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShots, uiLang = 'zh' }) => {
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
     const [scenes, setScenes] = useState([]);
+    const [selectedSceneKeys, setSelectedSceneKeys] = useState([]);
     const [entities, setEntities] = useState([]);
+    const [isSuperuser, setIsSuperuser] = useState(false);
     const [sceneHierarchyFilter, setSceneHierarchyFilter] = useState('');
     const [sceneKeywordFilter, setSceneKeywordFilter] = useState('');
     const [editingScene, setEditingScene] = useState(null);
     const [shotPromptModal, setShotPromptModal] = useState({ open: false, sceneId: null, data: null, loading: false });
+    const [aiShotsFlowStatus, setAiShotsFlowStatus] = useState({ phase: 'idle', message: '', sceneId: null });
+    const [batchAiShotsProgress, setBatchAiShotsProgress] = useState({
+        running: false,
+        total: 0,
+        completed: 0,
+        success: 0,
+        failed: 0,
+        currentSceneLabel: '',
+        message: '',
+        errors: [],
+    });
     const [aiShotsStaging, setAiShotsStaging] = useState({
         loading: false,
         sceneId: null,
@@ -6502,6 +6590,11 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, uiLang = 'zh' 
         }
     }, [sceneFilterStorageKey, sceneHierarchyFilter, sceneKeywordFilter]);
 
+    const getSceneSelectionKey = (scene) => {
+        if (scene?.id) return `id:${scene.id}`;
+        return `draft:${scene?.scene_no || ''}|${scene?.scene_name || ''}|${scene?.environment_name || ''}|${scene?.original_script_text || ''}`;
+    };
+
     const filteredScenes = useMemo(() => {
         const hierarchy = String(sceneHierarchyFilter || '').trim().toLowerCase();
         const keyword = String(sceneKeywordFilter || '').trim().toLowerCase();
@@ -6528,6 +6621,40 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, uiLang = 'zh' 
             return text.includes(keyword);
         });
     }, [scenes, sceneHierarchyFilter, sceneKeywordFilter, activeEpisode?.title, activeEpisode?.episode_number]);
+
+    useEffect(() => {
+        const validKeys = new Set((scenes || []).map(getSceneSelectionKey));
+        setSelectedSceneKeys((prev) => prev.filter((key) => validKeys.has(key)));
+    }, [scenes]);
+
+    const selectedSceneKeySet = useMemo(() => new Set(selectedSceneKeys), [selectedSceneKeys]);
+    const filteredSceneKeys = useMemo(() => (filteredScenes || []).map(getSceneSelectionKey), [filteredScenes]);
+    const selectedFilteredCount = useMemo(
+        () => filteredSceneKeys.filter((key) => selectedSceneKeySet.has(key)).length,
+        [filteredSceneKeys, selectedSceneKeySet]
+    );
+    const allFilteredSelected = filteredSceneKeys.length > 0 && selectedFilteredCount === filteredSceneKeys.length;
+
+    const toggleSceneSelected = (scene) => {
+        const key = getSceneSelectionKey(scene);
+        setSelectedSceneKeys((prev) => (
+            prev.includes(key)
+                ? prev.filter((k) => k !== key)
+                : [...prev, key]
+        ));
+    };
+
+    const toggleSelectAllFiltered = () => {
+        if (!filteredSceneKeys.length) return;
+        setSelectedSceneKeys((prev) => {
+            const prevSet = new Set(prev);
+            if (allFilteredSelected) {
+                return prev.filter((key) => !filteredSceneKeys.includes(key));
+            }
+            filteredSceneKeys.forEach((key) => prevSet.add(key));
+            return Array.from(prevSet);
+        });
+    };
 
     const getStagingShotField = (shot, field) => {
         if (!shot) return '';
@@ -6598,6 +6725,14 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, uiLang = 'zh' 
     useEffect(() => {
         console.log("[SceneManager] Component Active. ProjectId:", projectId, "Episode:", activeEpisode?.id);
     }, [projectId, activeEpisode]);
+
+    useEffect(() => {
+        fetchMe().then((user) => {
+            setIsSuperuser(!!user?.is_superuser);
+        }).catch(() => {
+            setIsSuperuser(false);
+        });
+    }, []);
 
     useEffect(() => {
         console.log(`[SceneManager] Scenes Updated: ${scenes.length} items`);
@@ -6884,21 +7019,117 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, uiLang = 'zh' 
         return match ? match.image_url : null;
     };
 
+    const executeGenerateShots = async ({ sceneId, promptData }) => {
+        setAiShotsFlowStatus({
+            phase: 'generating',
+            sceneId,
+            message: t('AI Shots 生成中...', 'AI Shots generating...'),
+        });
+        onLog?.(`SceneManager: Generating shots for Scene ${sceneId}...`, 'info');
+
+        try {
+            const result = await generateSceneShots(sceneId, {
+                user_prompt: promptData?.user_prompt,
+                system_prompt: promptData?.system_prompt,
+            });
+
+            const generatedRows = Array.isArray(result?.content) ? result.content : [];
+            const generatedRaw = String(result?.raw_text || '').trim();
+            if (generatedRows.length === 0) {
+                if (generatedRaw) {
+                    const rawPreview = generatedRaw.replace(/\s+/g, ' ').slice(0, 300);
+                    onLog?.(`SceneManager: Generate Shots returned 0 parsed rows. Raw preview: ${rawPreview}`, 'warning');
+                    console.warn('[SceneManager] Generate Shots parse-empty with raw_text preview', {
+                        sceneId,
+                        rawLen: generatedRaw.length,
+                        rawPreview,
+                    });
+                    throw new Error(`Generate Shots returned 0 parsed rows; raw preview: ${rawPreview}`);
+                }
+                throw new Error('Generate Shots returned empty result (no rows and no raw text)');
+            }
+
+            onLog?.(`SceneManager: Shot list generated for Scene ${sceneId}.`, 'success');
+            setShotPromptModal({ open: false, sceneId: null, data: null, loading: false });
+
+            const sceneObj = scenes.find(s => s.id === sceneId) || { id: sceneId, scene_no: sceneId };
+            setEditingScene(sceneObj);
+            setAiShotsStaging(prev => ({
+                ...prev,
+                sceneId,
+                content: generatedRows,
+                rawText: result?.raw_text || '',
+                usage: result?.usage || null,
+                timestamp: result?.timestamp || null,
+                loading: false,
+                error: null,
+            }));
+
+            setAiShotsFlowStatus({
+                phase: 'importing',
+                sceneId,
+                message: t('生成完成，正在自动导入 Shots...', 'Generated. Auto-importing into Shots...'),
+            });
+            onLog?.(`SceneManager: Auto-importing shots for Scene ${sceneId}...`, 'info');
+
+            await applySceneAIResult(sceneId, { content: generatedRows });
+
+            onLog?.(`SceneManager: Auto-import finished for Scene ${sceneId}.`, 'success');
+            if (typeof onSwitchToShots === 'function') {
+                onSwitchToShots();
+            }
+            setAiShotsFlowStatus({
+                phase: 'completed',
+                sceneId,
+                message: t('AI Shots 已导入，已切换到 Shots 页面。', 'AI Shots imported. Switched to Shots page.'),
+            });
+        } catch (e) {
+            console.error(e);
+            onLog?.(`SceneManager: Failed to generate/apply shots - ${e.message}`, 'error');
+            setAiShotsFlowStatus({
+                phase: 'failed',
+                sceneId,
+                message: t(`AI Shots 失败：${e.message}`, `AI Shots failed: ${e.message}`),
+            });
+            alert("Failed to generate shots: " + e.message);
+            setShotPromptModal(prev => ({ ...prev, loading: false }));
+        }
+    };
+
     const handleGenerateShots = async (sceneId) => {
         if (!sceneId) {
             alert("Please save the scene list first to create database records before generating shots.");
             return;
         }
 
-
-        setShotPromptModal({ open: true, sceneId: sceneId, data: null, loading: true });
+        if (isSuperuser) {
+            setShotPromptModal({ open: true, sceneId: sceneId, data: null, loading: true });
+            try {
+                const data = await fetchSceneShotsPrompt(sceneId);
+                setShotPromptModal({ open: true, sceneId: sceneId, data: data, loading: false });
+            } catch (e) {
+                onLog?.(`SceneManager: Failed to fetch prompt preview - ${e.message}`, 'error');
+                setShotPromptModal({ open: false, sceneId: null, data: null, loading: false });
+            }
+            return;
+        }
 
         try {
+            setAiShotsFlowStatus({
+                phase: 'preparing',
+                sceneId,
+                message: t('正在准备 AI Shots 请求...', 'Preparing AI Shots request...'),
+            });
             const data = await fetchSceneShotsPrompt(sceneId);
-            setShotPromptModal({ open: true, sceneId: sceneId, data: data, loading: false });
+            await executeGenerateShots({ sceneId, promptData: data });
         } catch (e) {
-             onLog?.(`SceneManager: Failed to fetch prompt preview - ${e.message}`, 'error');
-             setShotPromptModal({ open: false, sceneId: null, data: null, loading: false });
+            onLog?.(`SceneManager: Failed to prepare AI shots - ${e.message}`, 'error');
+            setAiShotsFlowStatus({
+                phase: 'failed',
+                sceneId,
+                message: t(`AI Shots 失败：${e.message}`, `AI Shots failed: ${e.message}`),
+            });
+            alert(`Failed to prepare AI shots: ${e.message}`);
         }
     };
 
@@ -6934,6 +7165,174 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, uiLang = 'zh' 
             onLog?.(`Scene delete failed: ${detail}`, 'error');
             alert(`Failed to delete scene: ${detail}`);
         }
+    };
+
+    const runBatchGenerateAiShotsForAllScenes = async () => {
+        const allScenes = Array.isArray(scenes) ? scenes : [];
+        const targets = allScenes.filter((scene) => !!scene?.id);
+        const skipped = allScenes.length - targets.length;
+
+        if (targets.length === 0) {
+            alert(t('没有可执行 AI Shots 的已保存场景。', 'No saved scenes available for AI Shots batch run.'));
+            return;
+        }
+
+        const confirmText = t(
+            `确认后台批量执行 AI Shots？将处理 ${targets.length} 个场景${skipped > 0 ? `（跳过 ${skipped} 个未保存场景）` : ''}。`,
+            `Run AI Shots in background for ${targets.length} scenes${skipped > 0 ? ` (skip ${skipped} unsaved scenes)` : ''}?`
+        );
+        if (!await confirmUiMessage(confirmText)) return;
+
+        setBatchAiShotsProgress({
+            running: true,
+            total: targets.length,
+            completed: 0,
+            success: 0,
+            failed: 0,
+            currentSceneLabel: '',
+            message: t('批量任务已启动...', 'Batch task started...'),
+            errors: [],
+        });
+
+        onLog?.(`SceneManager: Batch AI Shots started. total=${targets.length}, skipped_unsaved=${skipped}`, 'info');
+
+        let completed = 0;
+        let success = 0;
+        let failed = 0;
+        const errors = [];
+
+        for (const scene of targets) {
+            const label = scene?.scene_no || scene?.scene_name || `#${scene?.id}`;
+            setBatchAiShotsProgress((prev) => ({
+                ...prev,
+                currentSceneLabel: label,
+                message: t(`正在处理：${label}`, `Processing: ${label}`),
+            }));
+
+            try {
+                const promptData = await fetchSceneShotsPrompt(scene.id);
+                const result = await generateSceneShots(scene.id, {
+                    user_prompt: promptData?.user_prompt,
+                    system_prompt: promptData?.system_prompt,
+                });
+
+                const generatedRows = Array.isArray(result?.content) ? result.content : [];
+                const generatedRaw = String(result?.raw_text || '').trim();
+                if (generatedRows.length === 0) {
+                    if (generatedRaw) {
+                        const rawPreview = generatedRaw.replace(/\s+/g, ' ').slice(0, 180);
+                        throw new Error(`No parsed rows. Raw preview: ${rawPreview}`);
+                    }
+                    throw new Error('No parsed rows returned');
+                }
+
+                await applySceneAIResult(scene.id, { content: generatedRows });
+                success += 1;
+                onLog?.(`SceneManager: Batch AI Shots success for ${label}`, 'success');
+            } catch (e) {
+                failed += 1;
+                const detail = e?.response?.data?.detail || e?.message || 'Unknown error';
+                errors.push(`${label}: ${detail}`);
+                onLog?.(`SceneManager: Batch AI Shots failed for ${label} - ${detail}`, 'error');
+            } finally {
+                completed += 1;
+                setBatchAiShotsProgress((prev) => ({
+                    ...prev,
+                    completed,
+                    success,
+                    failed,
+                    errors,
+                    message: t(
+                        `进度 ${completed}/${targets.length}（成功 ${success}，失败 ${failed}）`,
+                        `Progress ${completed}/${targets.length} (success ${success}, failed ${failed})`
+                    ),
+                }));
+            }
+        }
+
+        setBatchAiShotsProgress((prev) => ({
+            ...prev,
+            running: false,
+            message: t(
+                `批量完成：成功 ${success}，失败 ${failed}${skipped > 0 ? `，跳过 ${skipped}` : ''}`,
+                `Batch done: success ${success}, failed ${failed}${skipped > 0 ? `, skipped ${skipped}` : ''}`
+            ),
+        }));
+
+        onLog?.(`SceneManager: Batch AI Shots finished. success=${success}, failed=${failed}, skipped=${skipped}`, failed > 0 ? 'warning' : 'success');
+
+        if (typeof onSwitchToShots === 'function') {
+            onSwitchToShots();
+        }
+    };
+
+    const deleteSceneBatch = async (targetScenes, modeLabel = 'selected') => {
+        const targets = Array.isArray(targetScenes) ? targetScenes : [];
+        if (targets.length === 0) return;
+
+        const confirmText = modeLabel === 'filtered'
+            ? t(`确认删除当前筛选的 ${targets.length} 个场景？`, `Delete all ${targets.length} currently filtered scenes?`)
+            : t(`确认删除已选中的 ${targets.length} 个场景？`, `Delete ${targets.length} selected scenes?`);
+        if (!await confirmUiMessage(confirmText)) return;
+
+        const deletableKeys = new Set();
+        const failedLabels = [];
+
+        for (const scene of targets) {
+            const key = getSceneSelectionKey(scene);
+            const label = scene?.scene_no || scene?.scene_name || (scene?.id ? `#${scene.id}` : t('未命名场景', 'Untitled Scene'));
+            if (!scene?.id) {
+                deletableKeys.add(key);
+                continue;
+            }
+            try {
+                await deleteScene(scene.id);
+                deletableKeys.add(key);
+            } catch (e) {
+                failedLabels.push(`${label}: ${e?.response?.data?.detail || e?.message || 'delete failed'}`);
+            }
+        }
+
+        if (deletableKeys.size === 0 && failedLabels.length > 0) {
+            onLog?.(t('批量删除失败。', 'Bulk delete failed.'), 'error');
+            alert(failedLabels.slice(0, 5).join('\n'));
+            return;
+        }
+
+        const remaining = (scenes || []).filter((scene) => !deletableKeys.has(getSceneSelectionKey(scene)));
+        setScenes(remaining);
+        setSelectedSceneKeys((prev) => prev.filter((key) => !deletableKeys.has(key)));
+
+        if (editingScene && deletableKeys.has(getSceneSelectionKey(editingScene))) {
+            setEditingScene(null);
+        }
+
+        if (activeEpisode?.id) {
+            try {
+                await updateEpisode(activeEpisode.id, { scene_content: buildSceneContentMarkdown(remaining) });
+            } catch (e) {
+                console.warn('Failed to sync scene_content after batch delete', e);
+            }
+        }
+
+        onLog?.(
+            t(`批量删除完成：删除 ${deletableKeys.size} 个场景。`, `Bulk delete completed: removed ${deletableKeys.size} scenes.`),
+            'success'
+        );
+
+        if (failedLabels.length > 0) {
+            onLog?.(t(`有 ${failedLabels.length} 个场景删除失败。`, `${failedLabels.length} scenes failed to delete.`), 'warning');
+            alert(failedLabels.slice(0, 5).join('\n'));
+        }
+    };
+
+    const handleDeleteSelectedScenes = async () => {
+        const targets = (filteredScenes || []).filter((scene) => selectedSceneKeySet.has(getSceneSelectionKey(scene)));
+        await deleteSceneBatch(targets, 'selected');
+    };
+
+    const handleDeleteFilteredScenes = async () => {
+        await deleteSceneBatch(filteredScenes || [], 'filtered');
     };
 
     const loadLatestAIShotsStaging = async (sceneId) => {
@@ -7018,63 +7417,9 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, uiLang = 'zh' 
     const handleConfirmGenerateShots = async () => {
          const { sceneId, data } = shotPromptModal;
          if (!await confirmUiMessage("This will overwrite existing shots for this scene. Continue?")) return;
-         
+
          setShotPromptModal(prev => ({ ...prev, loading: true }));
-         onLog?.(`SceneManager: Generating shots for Scene ${sceneId}...`, 'info');
-         try {
-             // Now returns { content: [...], timestamp }
-             const result = await generateSceneShots(sceneId, { 
-                 user_prompt: data.user_prompt,
-                 system_prompt: data.system_prompt 
-             });
-            const generatedRows = Array.isArray(result?.content) ? result.content : [];
-            const generatedRaw = String(result?.raw_text || '').trim();
-            if (generatedRows.length === 0) {
-                if (generatedRaw) {
-                    const rawPreview = generatedRaw.replace(/\s+/g, ' ').slice(0, 300);
-                    onLog?.(`SceneManager: Generate Shots returned 0 parsed rows. Raw preview: ${rawPreview}`, 'warning');
-                    console.warn('[SceneManager] Generate Shots parse-empty with raw_text preview', {
-                        sceneId,
-                        rawLen: generatedRaw.length,
-                        rawPreview,
-                    });
-                    throw new Error(`Generate Shots returned 0 parsed rows; raw preview: ${rawPreview}`);
-                }
-                throw new Error('Generate Shots returned empty result (no rows and no raw text)');
-            }
-             onLog?.(`SceneManager: Shot list generated for Scene ${sceneId}. Please Review/Apply.`, 'success');
-             
-             // Close Prompt Modal, Open Review Modal
-             setShotPromptModal({ open: false, sceneId: null, data: null, loading: false });
-
-             // Open the Scene detail modal and embed the staging editor there
-             const sceneObj = scenes.find(s => s.id === sceneId) || { id: sceneId, scene_no: sceneId };
-             setEditingScene(sceneObj);
-             setAiShotsStaging(prev => ({
-                ...prev,
-                sceneId,
-                     content: generatedRows,
-                rawText: result?.raw_text || '',
-                usage: result?.usage || null,
-                timestamp: result?.timestamp || null,
-                loading: false,
-                error: null,
-             }));
-
-             // Auto-import/apply immediately after generation
-             try {
-                 onLog?.(`SceneManager: Auto-importing shots for Scene ${sceneId}...`, 'info');
-                 await applySceneAIResult(sceneId, { content: generatedRows });
-                 onLog?.(`SceneManager: Auto-import finished for Scene ${sceneId}.`, 'success');
-             } catch (e) {
-                 onLog?.(`SceneManager: Auto-import failed - ${(e?.response?.data?.detail || e?.message)}`, 'error');
-             }
-         } catch (e) {
-             console.error(e);
-             onLog?.(`SceneManager: Failed to generate shots - ${e.message}`, 'error');
-             alert("Failed to generate shots: " + e.message);
-             setShotPromptModal(prev => ({ ...prev, loading: false }));
-         }
+         await executeGenerateShots({ sceneId, promptData: data });
     };
 
     if (!activeEpisode) return <div className="p-6 text-muted-foreground">{t('请选择分集以管理场景。', 'Select an episode to manage scenes.')}</div>;
@@ -7087,12 +7432,37 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, uiLang = 'zh' 
                     <span className="text-sm font-normal text-muted-foreground bg-white/5 px-2 py-0.5 rounded-full">{filteredScenes.length}/{scenes.length} {t('场景', 'Scenes')}</span>
                 </h2>
                 <div className="flex gap-2">
+                    <button
+                        onClick={runBatchGenerateAiShotsForAllScenes}
+                        disabled={batchAiShotsProgress.running || scenes.length === 0}
+                        className="px-4 py-2 bg-blue-600/90 text-white rounded-lg text-sm font-bold hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                        title={t('后台批量对当前分集所有场景执行 AI Shots 并自动导入', 'Run AI Shots in background for all scenes in this episode and auto-apply')}
+                    >
+                        {batchAiShotsProgress.running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
+                        {batchAiShotsProgress.running ? t('批量执行中...', 'Batch Running...') : t('批量 AI Shots（全部）', 'Batch AI Shots (All)')}
+                    </button>
                      <button onClick={handleSave} className="px-4 py-2 bg-primary text-black rounded-lg text-sm font-bold hover:bg-primary/90 flex items-center gap-2">
                         <CheckCircle className="w-4 h-4" />
                         {t('保存修改', 'Save Changes')}
                      </button>
                 </div>
             </div>
+
+            {(batchAiShotsProgress.running || batchAiShotsProgress.total > 0) && (
+                <div className={`mb-4 rounded-lg border px-4 py-2.5 flex items-center gap-2 text-sm shrink-0 ${
+                    batchAiShotsProgress.running
+                        ? 'border-blue-500/30 bg-blue-500/10 text-blue-100'
+                        : batchAiShotsProgress.failed > 0
+                            ? 'border-yellow-500/30 bg-yellow-500/10 text-yellow-100'
+                            : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100'
+                }`}>
+                    {batchAiShotsProgress.running ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
+                    <span>
+                        {batchAiShotsProgress.message}
+                        {batchAiShotsProgress.currentSceneLabel ? ` · ${t('当前', 'Current')}: ${batchAiShotsProgress.currentSceneLabel}` : ''}
+                    </span>
+                </div>
+            )}
 
             <div className="mb-4 grid grid-cols-1 md:grid-cols-3 gap-2 shrink-0">
                 <input
@@ -7117,6 +7487,58 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, uiLang = 'zh' 
                 </button>
             </div>
 
+            <div className="mb-4 flex flex-wrap items-center gap-2 shrink-0">
+                <label className="flex items-center gap-2 px-3 py-2 bg-white/5 border border-white/10 rounded text-xs text-white">
+                    <input
+                        type="checkbox"
+                        checked={allFilteredSelected}
+                        onChange={toggleSelectAllFiltered}
+                        disabled={filteredScenes.length === 0}
+                        className="accent-primary"
+                    />
+                    <span>{t('全选当前筛选', 'Select All Filtered')}</span>
+                </label>
+
+                <div className="text-xs text-muted-foreground px-2">
+                    {t('已选', 'Selected')} {selectedFilteredCount} / {filteredScenes.length}
+                </div>
+
+                <button
+                    onClick={handleDeleteSelectedScenes}
+                    disabled={selectedFilteredCount === 0}
+                    className="px-3 py-2 bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 rounded text-xs text-red-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                    {t('删除已选', 'Delete Selected')}
+                </button>
+
+                <button
+                    onClick={handleDeleteFilteredScenes}
+                    disabled={filteredScenes.length === 0}
+                    className="px-3 py-2 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded text-xs text-red-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                    {t('删除当前筛选全部', 'Delete All Filtered')}
+                </button>
+            </div>
+
+            {aiShotsFlowStatus.phase !== 'idle' && (
+                <div className={`mb-4 rounded-lg border px-4 py-2.5 flex items-center gap-2 text-sm shrink-0 ${
+                    aiShotsFlowStatus.phase === 'failed'
+                        ? 'border-red-500/30 bg-red-500/10 text-red-200'
+                        : aiShotsFlowStatus.phase === 'completed'
+                            ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100'
+                            : 'border-primary/30 bg-primary/10 text-primary'
+                }`}>
+                    {aiShotsFlowStatus.phase === 'completed' ? (
+                        <CheckCircle className="w-4 h-4" />
+                    ) : aiShotsFlowStatus.phase === 'failed' ? (
+                        <X className="w-4 h-4" />
+                    ) : (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                    )}
+                    <span>{aiShotsFlowStatus.message}</span>
+                </div>
+            )}
+
             <div className="flex-1 overflow-auto custom-scrollbar pb-20">
                     {filteredScenes.length === 0 ? (
                     <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
@@ -7127,12 +7549,15 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, uiLang = 'zh' 
                     ) : (
                     <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-6">
                         {filteredScenes.map((scene, idx) => {
+                            const sceneKey = getSceneSelectionKey(scene);
                             return (
                                 <SceneCard 
                                     key={idx} 
                                     scene={scene} 
                                     entities={entities} 
                                     uiLang={uiLang}
+                                    selected={selectedSceneKeySet.has(sceneKey)}
+                                    onToggleSelect={toggleSceneSelected}
                                     onClick={() => setEditingScene(scene)} 
                                     onGenerateShots={handleGenerateShots}
                                     onDelete={handleDeleteScene}
@@ -11073,7 +11498,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                             </h3>
                             <div className="flex items-center gap-2">
                                 <button
-                                    onClick={() => window.location.assign('/settings?tab=api-settings')}
+                                    onClick={() => {
+                                        const returnTo = encodeURIComponent(`${window.location.pathname}${window.location.search}${window.location.hash}`);
+                                        window.location.assign(`/settings?tab=api-settings&return_to=${returnTo}`);
+                                    }}
                                     className="p-2 hover:bg-white/10 text-white rounded-lg border border-white/10 transition-colors"
                                     title={t('打开生成设置', 'Open Generation Settings')}
                                 >
@@ -13132,7 +13560,10 @@ const Editor = ({ projectId, onClose }) => {
                         <span className="text-xs font-medium hidden sm:block">{t('导出', 'Export')}</span>
                     </button>
                     <button
-                        onClick={() => window.location.assign('/settings?tab=api-settings')}
+                        onClick={() => {
+                            const returnTo = encodeURIComponent(`${window.location.pathname}${window.location.search}${window.location.hash}`);
+                            window.location.assign(`/settings?tab=api-settings&return_to=${returnTo}`);
+                        }}
                         className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors"
                         title={t('设置', 'Settings')}
                     >
@@ -13168,9 +13599,9 @@ const Editor = ({ projectId, onClose }) => {
                             />
                         )}
                         {activeTab === 'ep_info' && <EpisodeInfo episode={activeEpisode} onUpdate={handleUpdateEpisodeInfo} project={project} projectId={id} uiLang={uiLang} />}
-                        {activeTab === 'script' && <ScriptEditor activeEpisode={activeEpisode} projectId={id} project={project} onUpdateScript={handleUpdateScript} onUpdateEpisodeInfo={handleUpdateEpisodeInfo} onLog={addLog} onImportText={handleImport} uiLang={uiLang} />}
+                        {activeTab === 'script' && <ScriptEditor activeEpisode={activeEpisode} projectId={id} project={project} onUpdateScript={handleUpdateScript} onUpdateEpisodeInfo={handleUpdateEpisodeInfo} onLog={addLog} onImportText={handleImport} onSwitchToScenes={() => setActiveTab('scenes')} uiLang={uiLang} />}
                         {activeTab === 'subjects' && <SubjectLibrary projectId={id} currentEpisode={activeEpisode} uiLang={uiLang} />}
-                        {activeTab === 'scenes' && <SceneManager activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} uiLang={uiLang} />}
+                        {activeTab === 'scenes' && <SceneManager activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} onSwitchToShots={() => setActiveTab('shots')} uiLang={uiLang} />}
                         {activeTab === 'shots' && <ShotsView activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} editingShot={editingShot} setEditingShot={setEditingShot} uiLang={uiLang} />}
                         {activeTab === 'montage' && <VideoStudio activeEpisode={activeEpisode} projectId={id} onLog={addLog} />}
                     </div>

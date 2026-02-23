@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useStore } from '@/lib/store';
-import { Save, Info, Upload, Download, Coins, History, Palette, CheckCircle } from 'lucide-react';
+import { Save, Info, Upload, Download, Coins, History, Palette, CheckCircle, ArrowLeft } from 'lucide-react';
 import { API_URL } from '@/config';
 import { updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, selectSystemSetting } from '../services/api';
 import RechargeModal from '../components/RechargeModal'; // Import RechargeModal
@@ -75,6 +75,7 @@ const Settings = () => {
     const [uiLang, setUiLang] = useState(getUiLang());
     const t = (zh, en) => tUI(uiLang, zh, en);
     const location = useLocation();
+    const navigate = useNavigate();
     const { llmConfig, setLLMConfig, savedConfigs, saveProviderConfig, addLog, generationConfig, setGenerationConfig, savedToolConfigs, saveToolConfig } = useStore();
     
     // Internal state for form
@@ -209,6 +210,21 @@ const Settings = () => {
         const next = lang === 'en' ? 'en' : 'zh';
         setUiLang(next);
         setGlobalUiLang(next);
+    };
+
+    const handleExitSettings = () => {
+        const params = new URLSearchParams(location.search || '');
+        const returnToRaw = params.get('return_to') || '';
+        const returnTo = decodeURIComponent(returnToRaw || '').trim();
+        if (returnTo && returnTo.startsWith('/') && !returnTo.startsWith('//')) {
+            navigate(returnTo);
+            return;
+        }
+        if (window.history.length > 1) {
+            navigate(-1);
+            return;
+        }
+        navigate('/projects');
     };
 
     const handleThemeChange = (themeKey) => {
@@ -1139,6 +1155,14 @@ const Settings = () => {
                     >
                         <Download size={14} />
                         <span>{t('导出', 'Export')}</span>
+                    </button>
+                    <button
+                        onClick={handleExitSettings}
+                        className="flex items-center space-x-2 bg-white/5 border border-white/10 px-3 py-1.5 rounded-lg hover:bg-white/10 text-xs transition-colors"
+                        title={t('退出设置并返回来源页面', 'Exit settings and return to caller page')}
+                    >
+                        <ArrowLeft size={14} />
+                        <span>{t('退出', 'Exit')}</span>
                     </button>
                     <input 
                         type="file" 

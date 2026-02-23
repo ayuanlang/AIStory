@@ -13,6 +13,7 @@ import os
 import random
 import io
 import traceback
+import math
 from PIL import Image
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Union
@@ -31,6 +32,8 @@ logger = logging.getLogger("media_service")
 
 class MediaGenerationService:
 # ...
+    DOUBAO_MIN_IMAGE_PIXELS = 3_686_400
+
     def _safe_json_dict(self, value: Any) -> Dict[str, Any]:
         if value is None:
             return {}
@@ -46,6 +49,37 @@ class MediaGenerationService:
                 return {}
             return parsed if isinstance(parsed, dict) else {}
         return {}
+
+    def _normalize_doubao_size(self, width: Any, height: Any) -> Optional[str]:
+        try:
+            w = int(width)
+            h = int(height)
+        except Exception:
+            return None
+
+        if w <= 0 or h <= 0:
+            return None
+
+        pixels = w * h
+        if pixels >= self.DOUBAO_MIN_IMAGE_PIXELS:
+            return f"{w}x{h}"
+
+        scale = math.sqrt(self.DOUBAO_MIN_IMAGE_PIXELS / float(pixels))
+        new_w = max(1, int(math.ceil(w * scale)))
+        new_h = max(1, int(math.ceil(h * scale)))
+
+        # Safety loop against rounding edge cases
+        while new_w * new_h < self.DOUBAO_MIN_IMAGE_PIXELS:
+            if new_w <= new_h:
+                new_w += 1
+            else:
+                new_h += 1
+
+        logger.info(
+            "Doubao size normalized | input=%sx%s pixels=%s min_pixels=%s normalized=%sx%s",
+            w, h, pixels, self.DOUBAO_MIN_IMAGE_PIXELS, new_w, new_h,
+        )
+        return f"{new_w}x{new_h}"
 
     def _repair_invalid_user_config_rows(self, session, user_id: int, category: Optional[str] = None) -> None:
         q = session.query(
@@ -383,7 +417,12 @@ class MediaGenerationService:
                         "watermark": False
                     }
                     if tool_conf.get("width") and tool_conf.get("height"):
-                        payload["size"] = f"{tool_conf.get('width')}x{tool_conf.get('height')}"
+                        normalized_size = self._normalize_doubao_size(
+                            tool_conf.get("width"),
+                            tool_conf.get("height"),
+                        )
+                        if normalized_size:
+                            payload["size"] = normalized_size
 
                     url = f"{endpoint.rstrip('/')}/images/generations"
                     return await self._common_requests_post(url, payload, api_key, "doubao_image_multiref", extra_metadata=base_metadata)
