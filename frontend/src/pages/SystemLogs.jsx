@@ -31,6 +31,17 @@ const SystemLogs = () => {
         loadLogs();
     }, []);
 
+    useEffect(() => {
+        if (!selectedLog) return;
+        const handleEsc = (event) => {
+            if (event.key === 'Escape') {
+                setSelectedLog(null);
+            }
+        };
+        window.addEventListener('keydown', handleEsc);
+        return () => window.removeEventListener('keydown', handleEsc);
+    }, [selectedLog]);
+
     return (
         <div className="flex flex-col h-full bg-[#121212] text-white">
             {/* Header */}
@@ -69,6 +80,7 @@ const SystemLogs = () => {
                                 <th className="px-6 py-3">{t('动作', 'Action')}</th>
                                 <th className="px-6 py-3">{t('详情', 'Details')}</th>
                                 <th className="px-6 py-3">{t('IP 地址', 'IP')}</th>
+                                <th className="px-6 py-3 text-right">{t('操作', 'Action')}</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-white/5">
@@ -100,11 +112,22 @@ const SystemLogs = () => {
                                     <td className="px-6 py-3 text-white/40 font-mono text-xs">
                                         {log.ip_address || '-'}
                                     </td>
+                                    <td className="px-6 py-3 text-right">
+                                        <button
+                                            className="px-2.5 py-1 rounded-md text-xs bg-white/10 hover:bg-white/20 transition-colors"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                setSelectedLog(log);
+                                            }}
+                                        >
+                                            {t('详情', 'Details')}
+                                        </button>
+                                    </td>
                                 </tr>
                             ))}
                             {logs.length === 0 && !loading && (
                                 <tr>
-                                    <td colSpan={5} className="px-6 py-8 text-center text-muted-foreground">
+                                    <td colSpan={6} className="px-6 py-8 text-center text-muted-foreground">
                                         {t('暂无日志。', 'No logs found.')}
                                     </td>
                                 </tr>
@@ -115,8 +138,14 @@ const SystemLogs = () => {
             </div>
 
             {selectedLog && (
-                <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-                    <div className="w-full max-w-2xl bg-[#1e1e1e] border border-white/15 rounded-xl shadow-2xl overflow-hidden">
+                <div
+                    className="fixed inset-0 z-[9999] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+                    onClick={() => setSelectedLog(null)}
+                >
+                    <div
+                        className="w-full max-w-2xl bg-[#1e1e1e] border border-white/15 rounded-xl shadow-2xl overflow-hidden"
+                        onClick={(e) => e.stopPropagation()}
+                    >
                         <div className="flex items-center justify-between px-5 py-4 border-b border-white/10">
                             <h2 className="text-base font-semibold">
                                 {t('日志详情', 'Log Details')} #{selectedLog.id}
