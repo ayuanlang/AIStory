@@ -1,5 +1,5 @@
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import Home from './pages/Home';
 import ProjectList from './pages/ProjectList';
@@ -12,6 +12,7 @@ import SystemLogs from './pages/SystemLogs';
 import { LogProvider } from './context/LogContext';
 import LogPanel from './components/LogPanel';
 import GlobalMessageHost from './components/GlobalMessageHost';
+import { getUiLang, UI_LANG_EVENT, UI_LANG_KEY } from './lib/uiLang';
 
 // Helper component to protect routes that require authentication
 const PrivateRoute = ({ children }) => {
@@ -26,6 +27,26 @@ const PublicRoute = ({ children }) => {
 };
 
 function App() {
+  const [appUiLang, setAppUiLang] = useState(getUiLang());
+
+  useEffect(() => {
+    const sync = () => {
+      const next = getUiLang();
+      setAppUiLang(prev => (prev === next ? prev : next));
+    };
+
+    const onStorage = (e) => {
+      if (e.key === UI_LANG_KEY) sync();
+    };
+
+    window.addEventListener('storage', onStorage);
+    window.addEventListener(UI_LANG_EVENT, sync);
+    return () => {
+      window.removeEventListener('storage', onStorage);
+      window.removeEventListener(UI_LANG_EVENT, sync);
+    };
+  }, []);
+
   const RechargeListener = () => {
     const navigate = useNavigate();
     useEffect(() => {
@@ -47,7 +68,7 @@ function App() {
   return (
     <LogProvider>
       <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-        <div className="min-h-screen bg-background text-foreground font-sans antialiased relative">
+        <div key={`app-ui-lang-${appUiLang}`} className="min-h-screen bg-background text-foreground font-sans antialiased relative">
           <RechargeListener />
           <Routes>
             <Route path="/" element={<PublicRoute><Home /></PublicRoute>} />

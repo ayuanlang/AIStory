@@ -5,7 +5,7 @@ import { Save, Info, Upload, Download, Coins, History } from 'lucide-react';
 import { API_URL } from '@/config';
 import { updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, selectSystemSetting } from '../services/api';
 import RechargeModal from '../components/RechargeModal'; // Import RechargeModal
-import { getUiLang, tUI } from '../lib/uiLang';
+import { getUiLang, setUiLang as setGlobalUiLang, tUI, UI_LANG_EVENT } from '../lib/uiLang';
 
 const DEFAULT_CHARACTER_SUPPLEMENTS = [
     "Default Aesthetic Policy (when no explicit style is provided): prioritize premium cinematic beauty and modern elegance.",
@@ -21,7 +21,7 @@ const DEFAULT_SCENE_SUPPLEMENTS = [
 ].join('\n');
 
 const Settings = () => {
-    const uiLang = getUiLang();
+    const [uiLang, setUiLang] = useState(getUiLang());
     const t = (zh, en) => tUI(uiLang, zh, en);
     const location = useLocation();
     const { llmConfig, setLLMConfig, savedConfigs, saveProviderConfig, addLog, generationConfig, setGenerationConfig, savedToolConfigs, saveToolConfig } = useStore();
@@ -121,6 +121,35 @@ const Settings = () => {
         window.addEventListener('SHOW_RECHARGE_MODAL', fn);
         return () => window.removeEventListener('SHOW_RECHARGE_MODAL', fn);
     }, []);
+
+    useEffect(() => {
+        const onUiLangChanged = (e) => {
+            const detailLang = e?.detail;
+            if (detailLang === 'zh' || detailLang === 'en') {
+                setUiLang(detailLang);
+            } else {
+                setUiLang(getUiLang());
+            }
+        };
+
+        const onStorage = (e) => {
+            if (e.key === 'aistory.ui.lang') {
+                setUiLang(e.newValue === 'en' ? 'en' : 'zh');
+            }
+        };
+        window.addEventListener('storage', onStorage);
+        window.addEventListener(UI_LANG_EVENT, onUiLangChanged);
+        return () => {
+            window.removeEventListener('storage', onStorage);
+            window.removeEventListener(UI_LANG_EVENT, onUiLangChanged);
+        };
+    }, []);
+
+    const handleUiLangChange = (lang) => {
+        const next = lang === 'en' ? 'en' : 'zh';
+        setUiLang(next);
+        setGlobalUiLang(next);
+    };
 
     // Helper: Refresh Billing Data
     const refreshBilling = () => {
@@ -1005,7 +1034,24 @@ const Settings = () => {
                     </div>
                 </div>
 
-                <div className="flex gap-2 shrink-0">
+                <div className="flex gap-2 shrink-0 items-center">
+                    <div className="flex items-center gap-2 bg-white/5 border border-white/10 px-2 py-1.5 rounded-lg">
+                        <span className="text-[11px] text-muted-foreground">{t('界面语言', 'UI Language')}</span>
+                        <div className="flex bg-black/20 rounded-md p-0.5 border border-white/10">
+                            <button
+                                onClick={() => handleUiLangChange('zh')}
+                                className={`px-2 py-1 rounded text-[11px] transition-colors ${uiLang === 'zh' ? 'bg-primary text-black font-medium' : 'text-muted-foreground hover:text-white'}`}
+                            >
+                                中文
+                            </button>
+                            <button
+                                onClick={() => handleUiLangChange('en')}
+                                className={`px-2 py-1 rounded text-[11px] transition-colors ${uiLang === 'en' ? 'bg-primary text-black font-medium' : 'text-muted-foreground hover:text-white'}`}
+                            >
+                                EN
+                            </button>
+                        </div>
+                    </div>
                     <button 
                         onClick={handleImportClick}
                         className="flex items-center space-x-2 bg-white/5 border border-white/10 px-3 py-1.5 rounded-lg hover:bg-white/10 text-xs transition-colors"

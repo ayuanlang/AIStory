@@ -9,6 +9,7 @@ import AgentChat from '../components/AgentChat';
 import { MessageSquare, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL } from '../config';
+import { setUiLang as setGlobalUiLang } from '../lib/uiLang';
 
 // Helper to handle relative URLs
 const getFullUrl = (url) => {
@@ -12224,7 +12225,7 @@ const Editor = ({ projectId, onClose }) => {
 
     useEffect(() => {
         try {
-            localStorage.setItem('aistory.ui.lang', uiLang);
+            setGlobalUiLang(uiLang);
         } catch (e) {}
     }, [uiLang]);
 
