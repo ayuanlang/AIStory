@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { fetchSystemLogs } from '../services/api';
-import { ArrowLeft, RefreshCw, Layers } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Layers, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { getUiLang, tUI } from '../lib/uiLang';
 
@@ -10,6 +10,7 @@ const SystemLogs = () => {
     const [logs, setLogs] = useState([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
+    const [selectedLog, setSelectedLog] = useState(null);
     const navigate = useNavigate();
 
     const loadLogs = async () => {
@@ -72,7 +73,12 @@ const SystemLogs = () => {
                         </thead>
                         <tbody className="divide-y divide-white/5">
                             {logs.map((log) => (
-                                <tr key={log.id} className="hover:bg-white/5 transition-colors">
+                                <tr
+                                    key={log.id}
+                                    className="hover:bg-white/5 transition-colors cursor-pointer"
+                                    onClick={() => setSelectedLog(log)}
+                                    title={t('点击查看详情', 'Click to view details')}
+                                >
                                     <td className="px-6 py-3 text-white/60 whitespace-nowrap">
                                         {new Date(log.timestamp).toLocaleString()}
                                     </td>
@@ -107,6 +113,59 @@ const SystemLogs = () => {
                     </table>
                 </div>
             </div>
+
+            {selectedLog && (
+                <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+                    <div className="w-full max-w-2xl bg-[#1e1e1e] border border-white/15 rounded-xl shadow-2xl overflow-hidden">
+                        <div className="flex items-center justify-between px-5 py-4 border-b border-white/10">
+                            <h2 className="text-base font-semibold">
+                                {t('日志详情', 'Log Details')} #{selectedLog.id}
+                            </h2>
+                            <button
+                                onClick={() => setSelectedLog(null)}
+                                className="p-1.5 rounded-md hover:bg-white/10 transition-colors"
+                                title={t('关闭', 'Close')}
+                            >
+                                <X size={18} />
+                            </button>
+                        </div>
+
+                        <div className="px-5 py-4 space-y-3 text-sm">
+                            <div className="grid grid-cols-3 gap-3">
+                                <span className="text-white/50">{t('时间戳', 'Timestamp')}</span>
+                                <span className="col-span-2">{new Date(selectedLog.timestamp).toLocaleString()}</span>
+                            </div>
+                            <div className="grid grid-cols-3 gap-3">
+                                <span className="text-white/50">{t('用户', 'User')}</span>
+                                <span className="col-span-2">{selectedLog.user_name || `${t('用户', 'User')} #${selectedLog.user_id}`}</span>
+                            </div>
+                            <div className="grid grid-cols-3 gap-3">
+                                <span className="text-white/50">{t('动作', 'Action')}</span>
+                                <span className="col-span-2">{selectedLog.action}</span>
+                            </div>
+                            <div className="grid grid-cols-3 gap-3">
+                                <span className="text-white/50">{t('IP 地址', 'IP')}</span>
+                                <span className="col-span-2 font-mono text-xs">{selectedLog.ip_address || '-'}</span>
+                            </div>
+                            <div className="grid grid-cols-3 gap-3 items-start">
+                                <span className="text-white/50">{t('详情', 'Details')}</span>
+                                <pre className="col-span-2 whitespace-pre-wrap break-words bg-black/20 border border-white/10 rounded-md p-3 text-white/85 text-xs">
+                                    {selectedLog.details || '-'}
+                                </pre>
+                            </div>
+                        </div>
+
+                        <div className="px-5 py-3 border-t border-white/10 flex justify-end">
+                            <button
+                                onClick={() => setSelectedLog(null)}
+                                className="px-3 py-1.5 text-xs rounded-md bg-white/10 hover:bg-white/20 transition-colors"
+                            >
+                                {t('关闭', 'Close')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

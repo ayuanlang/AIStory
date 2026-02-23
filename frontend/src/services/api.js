@@ -122,6 +122,15 @@ export const fetchSystemLogs = async (skip = 0, limit = 100) => {
     return response.data;
 }
 
+export const recordSystemLogAction = async (payload = {}) => {
+    try {
+        const response = await api.post('/system/logs/action', payload || {});
+        return response.data;
+    } catch {
+        return null;
+    }
+}
+
 export const fetchProject = async (id) => {
     const response = await api.get(`/projects/${id}`);
     return response.data;

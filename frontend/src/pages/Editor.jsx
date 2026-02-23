@@ -128,6 +128,7 @@ import {
     saveProjectCharacterCanonInput,
     saveProjectCharacterCanonCategories,
     updateProjectCharacterProfiles,
+    recordSystemLogAction,
 } from '../services/api';
 
 import RefineControl from '../components/RefineControl.jsx';
@@ -13343,6 +13344,61 @@ const Editor = ({ projectId, onClose }) => {
         { id: 'montage', label: t('剪辑', 'Montage'), icon: Video },
     ];
 
+    const trackMenuAction = (menuKey, menuLabel, actionFn) => {
+        const page = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+        void recordSystemLogAction({
+            action: 'MENU_CLICK',
+            menu_key: menuKey,
+            menu_label: menuLabel,
+            page,
+        });
+
+        try {
+            const actionResult = actionFn?.();
+            if (actionResult && typeof actionResult.then === 'function') {
+                actionResult
+                    .then(() => {
+                        void recordSystemLogAction({
+                            action: 'MENU_CLICK_RESULT',
+                            menu_key: menuKey,
+                            menu_label: menuLabel,
+                            page,
+                            result: 'success',
+                        });
+                    })
+                    .catch((error) => {
+                        void recordSystemLogAction({
+                            action: 'MENU_CLICK_RESULT',
+                            menu_key: menuKey,
+                            menu_label: menuLabel,
+                            page,
+                            result: 'failed',
+                            details: error?.message || 'unknown error',
+                        });
+                    });
+                return;
+            }
+
+            void recordSystemLogAction({
+                action: 'MENU_CLICK_RESULT',
+                menu_key: menuKey,
+                menu_label: menuLabel,
+                page,
+                result: 'success',
+            });
+        } catch (error) {
+            void recordSystemLogAction({
+                action: 'MENU_CLICK_RESULT',
+                menu_key: menuKey,
+                menu_label: menuLabel,
+                page,
+                result: 'failed',
+                details: error?.message || 'unknown error',
+            });
+            throw error;
+        }
+    };
+
     return (
         <div className="flex flex-col h-screen w-full bg-background overflow-hidden relative text-foreground">
             {/* Top Navigation Bar - Compact */}
@@ -13351,7 +13407,7 @@ const Editor = ({ projectId, onClose }) => {
                 <div className="flex items-center gap-4">
                      {/* Back Button if in embedded mode */}
                      {onClose && (
-                        <button onClick={onClose} className="p-1.5 hover:bg-white/10 rounded-md text-muted-foreground hover:text-white transition-colors mr-2">
+                                <button onClick={() => trackMenuAction('editor.back.embedded', t('返回项目', 'Back to Projects'), onClose)} className="p-1.5 hover:bg-white/10 rounded-md text-muted-foreground hover:text-white transition-colors mr-2">
                             <ArrowLeft className="w-5 h-5" />
                         </button>
                      )}
@@ -13363,7 +13419,7 @@ const Editor = ({ projectId, onClose }) => {
                         {/* Episode Dropdown */}
                         <div className="relative">
                             <button 
-                                onClick={() => setIsEpisodeMenuOpen(!isEpisodeMenuOpen)}
+                                onClick={() => trackMenuAction('editor.episode.dropdown_toggle', t('剧集菜单', 'Episode Menu'), () => setIsEpisodeMenuOpen(!isEpisodeMenuOpen))}
                                 className="w-[260px] flex items-center justify-between gap-2 px-3 py-1 bg-white/5 hover:bg-white/10 border border-white/10 rounded-md text-xs font-medium text-white transition-colors"
                             >
                                 <span className="truncate text-left">{activeEpisodeLabel}</span>
@@ -13378,8 +13434,10 @@ const Editor = ({ projectId, onClose }) => {
                                             key={ep.id}
                                             className={`px-3 py-2 text-xs flex justify-between items-center group cursor-pointer ${activeEpisodeId === ep.id ? 'bg-primary/20 text-primary' : 'text-muted-foreground hover:bg-white/5 hover:text-white'}`}
                                             onClick={() => {
-                                                setActiveEpisodeId(ep.id);
-                                                setIsEpisodeMenuOpen(false);
+                                                trackMenuAction('editor.episode.select', buildEpisodeDisplayLabel({ episodeNumber: ep?.episode_number, title: ep?.title, fallbackNumber: index + 1 }), () => {
+                                                    setActiveEpisodeId(ep.id);
+                                                    setIsEpisodeMenuOpen(false);
+                                                });
                                             }}
                                         >
                                             <span className="truncate flex-1 pr-2" title={buildEpisodeDisplayLabel({ episodeNumber: ep?.episode_number, title: ep?.title, fallbackNumber: index + 1 })}>
@@ -13395,7 +13453,7 @@ const Editor = ({ projectId, onClose }) => {
                                     ))}
                                     <div className="border-t border-white/10 mt-1 pt-1 px-1">
                                          <button 
-                                            onClick={handleCreateEpisode}
+                                            onClick={() => trackMenuAction('editor.episode.create', t('新建分集', 'New Episode'), handleCreateEpisode)}
                                             className="w-full flex items-center gap-2 px-2 py-1.5 text-xs text-muted-foreground hover:text-white hover:bg-white/5 rounded transition-colors"
                                         >
                                             <Plus className="w-3 h-3" /> {t('新建分集', 'New Episode')}
@@ -13416,8 +13474,10 @@ const Editor = ({ projectId, onClose }) => {
                             <button
                                 key={item.id}
                                 onClick={() => {
-                                    setActiveTab(item.id);
-                                    if (item.id === 'shots') setEditingShot(null);
+                                    trackMenuAction(`editor.top_menu.${item.id}`, item.label, () => {
+                                        setActiveTab(item.id);
+                                        if (item.id === 'shots') setEditingShot(null);
+                                    });
                                 }}
                                 className={`flex items-center gap-2 px-4 py-1.5 text-xs font-bold transition-all relative ${isActive ? 'text-primary' : 'text-muted-foreground hover:text-white'}`}
                             >
@@ -13432,7 +13492,7 @@ const Editor = ({ projectId, onClose }) => {
                 {/* Right: Actions */}
                 <div className="flex items-center gap-3">
                     <button
-                        onClick={() => setUiLang(prev => prev === 'zh' ? 'en' : 'zh')}
+                        onClick={() => trackMenuAction('editor.ui_language.toggle', t('切换界面语言', 'Toggle UI Language'), () => setUiLang(prev => prev === 'zh' ? 'en' : 'zh'))}
                         className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1.5"
                         title={t('切换到英文界面', 'Switch to Chinese UI')}
                     >
@@ -13441,11 +13501,13 @@ const Editor = ({ projectId, onClose }) => {
                     </button>
                     <button
                         onClick={() => {
-                            if (onClose) {
-                                onClose();
-                                return;
-                            }
-                            navigate('/projects');
+                            trackMenuAction('editor.back.projects', t('返回项目', 'Back to Projects'), () => {
+                                if (onClose) {
+                                    onClose();
+                                    return;
+                                }
+                                navigate('/projects');
+                            });
                         }}
                         className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1.5"
                         title={t('返回项目列表', 'Back to Projects')}
@@ -13454,7 +13516,7 @@ const Editor = ({ projectId, onClose }) => {
                         <span className="text-xs font-medium hidden sm:block">{t('返回项目', 'Back to Projects')}</span>
                     </button>
                     <button 
-                        onClick={() => setIsImportOpen(true)}
+                        onClick={() => trackMenuAction('editor.action.import', t('导入内容', 'Import Content'), () => setIsImportOpen(true))}
                         className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1.5" 
                         title={t('导入内容', 'Import Content')}
                     >
@@ -13462,7 +13524,7 @@ const Editor = ({ projectId, onClose }) => {
                         <span className="text-xs font-medium hidden sm:block">{t('导入', 'Import')}</span>
                     </button>
                     <button 
-                        onClick={handleExport}
+                        onClick={() => trackMenuAction('editor.action.export', t('导出项目', 'Export Project'), handleExport)}
                         className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1.5" 
                         title={t('导出项目', 'Export Project')}
                     >
@@ -13471,8 +13533,10 @@ const Editor = ({ projectId, onClose }) => {
                     </button>
                     <button
                         onClick={() => {
-                            const returnTo = encodeURIComponent(`${window.location.pathname}${window.location.search}${window.location.hash}`);
-                            window.location.assign(`/settings?tab=api-settings&return_to=${returnTo}`);
+                            trackMenuAction('editor.action.settings', t('设置', 'Settings'), () => {
+                                const returnTo = encodeURIComponent(`${window.location.pathname}${window.location.search}${window.location.hash}`);
+                                window.location.assign(`/settings?tab=api-settings&return_to=${returnTo}`);
+                            });
                         }}
                         className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors"
                         title={t('设置', 'Settings')}
@@ -13480,7 +13544,7 @@ const Editor = ({ projectId, onClose }) => {
                         <SettingsIcon className="w-4 h-4" />
                     </button>
                     <button 
-                        onClick={() => setIsAgentOpen(!isAgentOpen)}
+                        onClick={() => trackMenuAction('editor.action.ai_agent', t('AI 助手', 'AI Agent'), () => setIsAgentOpen(!isAgentOpen))}
                         className={`flex items-center gap-2 px-3 py-1 rounded-md text-xs font-bold transition-colors ${isAgentOpen ? 'bg-secondary text-white' : 'bg-primary text-black'}`}
                     >
                         <MessageSquare className="w-3.5 h-3.5" />

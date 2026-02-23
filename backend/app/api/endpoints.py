@@ -5278,6 +5278,55 @@ def login_json(login_data: LoginRequest, db: Session = Depends(get_db)):
 
 from app.models.all_models import SystemLog
 
+class SystemLogActionIn(BaseModel):
+    action: str = "MENU_CLICK"
+    menu_key: Optional[str] = None
+    menu_label: Optional[str] = None
+    page: Optional[str] = None
+    result: Optional[str] = None
+    details: Optional[str] = None
+
+
+@router.post("/system/logs/action")
+def create_system_log_action(
+    payload: SystemLogActionIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    action = (payload.action or "MENU_CLICK").strip()[:128]
+    menu_key = (payload.menu_key or "").strip()
+    menu_label = (payload.menu_label or "").strip()
+    page = (payload.page or "").strip()
+    result = (payload.result or "").strip()
+    extra_details = (payload.details or "").strip()
+
+    details_parts = []
+    if menu_key:
+        details_parts.append(f"menu_key={menu_key}")
+    if menu_label:
+        details_parts.append(f"menu_label={menu_label}")
+    if page:
+        details_parts.append(f"page={page}")
+    if result:
+        details_parts.append(f"result={result}")
+    if extra_details:
+        details_parts.append(extra_details)
+
+    details = " | ".join(details_parts) if details_parts else None
+    ip_address = request.client.host if request and request.client else None
+
+    log_action(
+        db,
+        user_id=current_user.id,
+        user_name=current_user.username,
+        action=action,
+        details=details,
+        ip_address=ip_address,
+    )
+
+    return {"ok": True}
+
 @router.get("/system/logs", response_model=List[SystemLogOut])
 def get_system_logs(
     skip: int = 0,

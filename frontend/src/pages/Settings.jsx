@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useStore } from '@/lib/store';
 import { Save, Info, Upload, Download, Coins, History, Palette, CheckCircle, ArrowLeft, User, KeyRound } from 'lucide-react';
 import { API_URL } from '@/config';
-import { updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, selectSystemSetting, updateMyProfile, updateMyPassword, uploadMyAvatar } from '../services/api';
+import { updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, selectSystemSetting, updateMyProfile, updateMyPassword, uploadMyAvatar, recordSystemLogAction } from '../services/api';
 import RechargeModal from '../components/RechargeModal'; // Import RechargeModal
 import { getUiLang, setUiLang as setGlobalUiLang, tUI, UI_LANG_EVENT } from '../lib/uiLang';
 
@@ -257,6 +257,61 @@ const Settings = () => {
         });
         localStorage.setItem('theme', themeKey);
         showNotification(t('页面风格已切换', 'Theme updated'), 'success');
+    };
+
+    const trackMenuAction = (menuKey, menuLabel, actionFn) => {
+        const page = `${location.pathname}${location.search}${location.hash}`;
+        void recordSystemLogAction({
+            action: 'MENU_CLICK',
+            menu_key: menuKey,
+            menu_label: menuLabel,
+            page,
+        });
+
+        try {
+            const actionResult = actionFn?.();
+            if (actionResult && typeof actionResult.then === 'function') {
+                actionResult
+                    .then(() => {
+                        void recordSystemLogAction({
+                            action: 'MENU_CLICK_RESULT',
+                            menu_key: menuKey,
+                            menu_label: menuLabel,
+                            page,
+                            result: 'success',
+                        });
+                    })
+                    .catch((error) => {
+                        void recordSystemLogAction({
+                            action: 'MENU_CLICK_RESULT',
+                            menu_key: menuKey,
+                            menu_label: menuLabel,
+                            page,
+                            result: 'failed',
+                            details: error?.message || 'unknown error',
+                        });
+                    });
+                return;
+            }
+
+            void recordSystemLogAction({
+                action: 'MENU_CLICK_RESULT',
+                menu_key: menuKey,
+                menu_label: menuLabel,
+                page,
+                result: 'success',
+            });
+        } catch (error) {
+            void recordSystemLogAction({
+                action: 'MENU_CLICK_RESULT',
+                menu_key: menuKey,
+                menu_label: menuLabel,
+                page,
+                result: 'failed',
+                details: error?.message || 'unknown error',
+            });
+            throw error;
+        }
     };
 
     const loadMyProfile = async () => {
@@ -1198,25 +1253,25 @@ const Settings = () => {
                 <div className="flex items-center gap-6 overflow-x-auto w-full md:w-auto no-scrollbar">
                     <div className="flex bg-white/5 p-1 rounded-lg shrink-0">
                             <button 
-                                onClick={() => setActiveTab('general')}
+                                onClick={() => trackMenuAction('settings.tab.general', t('常规', 'General'), () => setActiveTab('general'))}
                                 className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'general' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
                             >
                                          {t('常规', 'General')}
                             </button>
                             <button 
-                                onClick={() => setActiveTab('api_settings')}
+                                onClick={() => trackMenuAction('settings.tab.api_settings', t('API 设置', 'API Settings'), () => setActiveTab('api_settings'))}
                                 className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'api_settings' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
                             >
                                          {t('API 设置', 'API Settings')}
                             </button>
                             <button
-                                onClick={() => setActiveTab('account')}
+                                onClick={() => trackMenuAction('settings.tab.account', t('用户管理', 'Account'), () => setActiveTab('account'))}
                                 className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'account' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
                             >
                                 {t('用户管理', 'Account')}
                             </button>
                         <button 
-                             onClick={() => setActiveTab('usage')}
+                             onClick={() => trackMenuAction('settings.tab.usage', t('用量', 'Usage'), () => setActiveTab('usage'))}
                              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'usage' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
                         >
                             <span className="flex items-center gap-2"><Coins size={14}/> {t('用量', 'Usage')}</span>
@@ -1229,13 +1284,13 @@ const Settings = () => {
                         <span className="text-[11px] text-muted-foreground">{t('界面语言', 'UI Language')}</span>
                         <div className="flex bg-black/20 rounded-md p-0.5 border border-white/10">
                             <button
-                                onClick={() => handleUiLangChange('zh')}
+                                onClick={() => trackMenuAction('settings.ui_lang.zh', '中文', () => handleUiLangChange('zh'))}
                                 className={`px-2 py-1 rounded text-[11px] transition-colors ${uiLang === 'zh' ? 'bg-primary text-black font-medium' : 'text-muted-foreground hover:text-white'}`}
                             >
                                 中文
                             </button>
                             <button
-                                onClick={() => handleUiLangChange('en')}
+                                onClick={() => trackMenuAction('settings.ui_lang.en', 'EN', () => handleUiLangChange('en'))}
                                 className={`px-2 py-1 rounded text-[11px] transition-colors ${uiLang === 'en' ? 'bg-primary text-black font-medium' : 'text-muted-foreground hover:text-white'}`}
                             >
                                 EN
@@ -1243,7 +1298,7 @@ const Settings = () => {
                         </div>
                     </div>
                     <button 
-                        onClick={handleImportClick}
+                        onClick={() => trackMenuAction('settings.action.import', t('导入', 'Import'), handleImportClick)}
                         className="flex items-center space-x-2 bg-white/5 border border-white/10 px-3 py-1.5 rounded-lg hover:bg-white/10 text-xs transition-colors"
                         title={t('导入设置 JSON', 'Import Settings JSON')}
                     >
@@ -1251,7 +1306,7 @@ const Settings = () => {
                         <span>{t('导入', 'Import')}</span>
                     </button>
                     <button 
-                        onClick={handleExportSettings}
+                        onClick={() => trackMenuAction('settings.action.export', t('导出', 'Export'), handleExportSettings)}
                         className="flex items-center space-x-2 bg-white/5 border border-white/10 px-3 py-1.5 rounded-lg hover:bg-white/10 text-xs transition-colors"
                         title={t('导出设置 JSON', 'Export Settings JSON')}
                     >
@@ -1259,7 +1314,7 @@ const Settings = () => {
                         <span>{t('导出', 'Export')}</span>
                     </button>
                     <button
-                        onClick={handleExitSettings}
+                        onClick={() => trackMenuAction('settings.action.exit', t('退出', 'Exit'), handleExitSettings)}
                         className="flex items-center space-x-2 bg-white/5 border border-white/10 px-3 py-1.5 rounded-lg hover:bg-white/10 text-xs transition-colors"
                         title={t('退出设置并返回来源页面', 'Exit settings and return to caller page')}
                     >

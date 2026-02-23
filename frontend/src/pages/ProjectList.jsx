@@ -1,6 +1,6 @@
 
 import React, { useEffect, useState } from 'react';
-import { api, fetchProjects, createProject, getSettings, updateSetting, getSettingDefaults, deleteSetting, deleteProject } from '../services/api';
+import { api, fetchProjects, createProject, getSettings, updateSetting, getSettingDefaults, deleteSetting, deleteProject, recordSystemLogAction } from '../services/api';
 import { BASE_URL } from '../config';
 import Editor from './Editor';
 import SettingsPage from './Settings';
@@ -237,8 +237,76 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     };
 
     const handleLogout = () => {
+        void recordSystemLogAction({
+            action: 'MENU_CLICK',
+            menu_key: 'project_list.sign_out',
+            menu_label: 'Sign Out',
+            page: `${location.pathname}${location.search}${location.hash}`,
+        });
         localStorage.removeItem('token');
         navigate('/');
+        void recordSystemLogAction({
+            action: 'MENU_CLICK_RESULT',
+            menu_key: 'project_list.sign_out',
+            menu_label: 'Sign Out',
+            page: `${location.pathname}${location.search}${location.hash}`,
+            result: 'success',
+        });
+    };
+
+    const trackMenuAction = (menuKey, menuLabel, actionFn) => {
+        const page = `${location.pathname}${location.search}${location.hash}`;
+        void recordSystemLogAction({
+            action: 'MENU_CLICK',
+            menu_key: menuKey,
+            menu_label: menuLabel,
+            page,
+        });
+
+        try {
+            const actionResult = actionFn?.();
+            if (actionResult && typeof actionResult.then === 'function') {
+                actionResult
+                    .then(() => {
+                        void recordSystemLogAction({
+                            action: 'MENU_CLICK_RESULT',
+                            menu_key: menuKey,
+                            menu_label: menuLabel,
+                            page,
+                            result: 'success',
+                        });
+                    })
+                    .catch((error) => {
+                        void recordSystemLogAction({
+                            action: 'MENU_CLICK_RESULT',
+                            menu_key: menuKey,
+                            menu_label: menuLabel,
+                            page,
+                            result: 'failed',
+                            details: error?.message || 'unknown error',
+                        });
+                    });
+                return;
+            }
+
+            void recordSystemLogAction({
+                action: 'MENU_CLICK_RESULT',
+                menu_key: menuKey,
+                menu_label: menuLabel,
+                page,
+                result: 'success',
+            });
+        } catch (error) {
+            void recordSystemLogAction({
+                action: 'MENU_CLICK_RESULT',
+                menu_key: menuKey,
+                menu_label: menuLabel,
+                page,
+                result: 'failed',
+                details: error?.message || 'unknown error',
+            });
+            throw error;
+        }
     };
 
     const handleDeleteProject = async (e, projectId) => {
@@ -261,8 +329,10 @@ const ProjectList = ({ initialTab = 'projects' }) => {
         <button 
             onClick={() => {
                 if (disabled) return;
-                setActiveTab(id);
-                setSelectedProjectId(null); // Return to list view when switching tabs
+                trackMenuAction(`project_list.sidebar.${id}`, label, () => {
+                    setActiveTab(id);
+                    setSelectedProjectId(null); // Return to list view when switching tabs
+                });
             }}
             className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors ${
                 activeTab === id && !selectedProjectId
@@ -303,14 +373,14 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                     {currentUser?.is_superuser && (
                         <>
                             <button 
-                                onClick={() => navigate('/admin/logs')}
+                                onClick={() => trackMenuAction('project_list.admin.system_logs', t('系统日志', 'System Logs'), () => navigate('/admin/logs'))}
                                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-muted-foreground hover:bg-secondary/50 hover:text-foreground`}
                             >
                                 <Activity className="w-5 h-5" />
                                 {t('系统日志', 'System Logs')}
                             </button>
                             <button 
-                                onClick={() => navigate('/admin/users')}
+                                onClick={() => trackMenuAction('project_list.admin.user_admin', t('管理面板', 'Admin Panel'), () => navigate('/admin/users'))}
                                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-muted-foreground hover:bg-secondary/50 hover:text-foreground`}
                             >
                                 <Shield className="w-5 h-5 text-red-500" />
@@ -320,10 +390,12 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                     )}
                     <button
                         onClick={() => {
-                            setActiveTab('settings');
-                            setSelectedProjectId(null);
-                            const returnTo = encodeURIComponent(`${location.pathname}${location.search}${location.hash}`);
-                            navigate(`/settings?return_to=${returnTo}`);
+                            trackMenuAction('project_list.sidebar.settings', t('设置', 'Settings'), () => {
+                                setActiveTab('settings');
+                                setSelectedProjectId(null);
+                                const returnTo = encodeURIComponent(`${location.pathname}${location.search}${location.hash}`);
+                                navigate(`/settings?return_to=${returnTo}`);
+                            });
                         }}
                         className="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
                     >
@@ -401,10 +473,12 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                         </button>
                                         <button
                                             onClick={() => {
-                                                setActiveTab('settings');
-                                                setSelectedProjectId(null);
-                                                const returnTo = encodeURIComponent(`${location.pathname}${location.search}${location.hash}`);
-                                                navigate(`/settings?return_to=${returnTo}`);
+                                                trackMenuAction('project_list.header.settings', t('打开设置', 'Open Settings'), () => {
+                                                    setActiveTab('settings');
+                                                    setSelectedProjectId(null);
+                                                    const returnTo = encodeURIComponent(`${location.pathname}${location.search}${location.hash}`);
+                                                    navigate(`/settings?return_to=${returnTo}`);
+                                                });
                                             }}
                                             title={t('打开设置', 'Open Settings')}
                                             className="p-2.5 rounded-full bg-secondary/60 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
