@@ -23,6 +23,57 @@ const getFullUrl = (url) => {
     return url;
 };
 
+const parseEpisodeNumberFromText = (value) => {
+    const text = String(value || '').trim();
+    if (!text) return null;
+
+    const patterns = [
+        /^episode\s*0*(\d+)\b/i,
+        /^ep\s*0*(\d+)\b/i,
+        /^第\s*0*(\d+)\s*集/i,
+        /^0*(\d+)\s*[-:：]/,
+    ];
+
+    for (const pattern of patterns) {
+        const matched = text.match(pattern);
+        if (matched && matched[1]) {
+            const parsed = Number(matched[1]);
+            if (Number.isFinite(parsed) && parsed > 0) return parsed;
+        }
+    }
+
+    return null;
+};
+
+const normalizeEpisodeTitleForDisplay = (rawTitle) => {
+    const text = String(rawTitle || '').trim();
+    if (!text) return '';
+
+    return text
+        .replace(/^episode\s*\d+\s*[-:：]?\s*/i, '')
+        .replace(/^ep\s*\d+\s*[-:：]?\s*/i, '')
+        .replace(/^第\s*\d+\s*集\s*[-:：]?\s*/i, '')
+        .replace(/^\d+\s*[-:：]\s*/, '')
+        .trim();
+};
+
+const buildEpisodeDisplayLabel = ({ episodeNumber, title, fallbackNumber } = {}) => {
+    const directNumber = Number(episodeNumber);
+    const fallback = Number(fallbackNumber);
+    const inferred = parseEpisodeNumberFromText(title);
+    const resolvedNumber = Number.isFinite(directNumber) && directNumber > 0
+        ? directNumber
+        : (Number.isFinite(fallback) && fallback > 0 ? fallback : inferred);
+
+    const normalizedTitle = normalizeEpisodeTitleForDisplay(title);
+    if (resolvedNumber) {
+        const resolvedTitle = normalizedTitle || `Episode ${resolvedNumber}`;
+        return `${resolvedNumber}-${resolvedTitle}`;
+    }
+
+    return normalizedTitle || 'Untitled Episode';
+};
+
 import { 
     fetchProject, 
     updateProject,
@@ -617,7 +668,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode }) => {
             });
         } catch (e) {
             console.error('[Character Canon] Delete failed:', e);
-            alert('Delete failed. Please try again.');
+            alert(`Delete failed: ${e?.message || 'Unknown error'}`);
         }
     };
 
@@ -1156,7 +1207,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode }) => {
             if (onProjectUpdate) onProjectUpdate();
         } catch (e) {
             console.error("Failed to save", e);
-            alert("Failed to save.");
+            alert(`Failed to save: ${e?.message || 'Unknown error'}`);
         }
     };
 
@@ -2292,7 +2343,11 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode }) => {
                                                         className="px-2 py-1 rounded text-xs bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 text-red-100"
                                                         title={item.error || 'Jump to episode'}
                                                     >
-                                                        {item.episode_title || `Episode ${item.episode_number || item.episode_id}`}
+                                                        {buildEpisodeDisplayLabel({
+                                                            episodeNumber: item?.episode_number,
+                                                            title: item?.episode_title,
+                                                            fallbackNumber: Number(item?.episode_number || 0) || null,
+                                                        })}
                                                     </button>
                                                 ))}
                                             </div>
@@ -2322,7 +2377,20 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode }) => {
                                                 return (
                                                     <div key={`${row?.episode_number || idx}_${idx}`} className="grid grid-cols-12 px-3 py-2 text-sm border-t border-white/5 items-center">
                                                         <div className="col-span-1 text-white/90">{row?.episode_number || '-'}</div>
-                                                        <div className="col-span-4 text-white/90 truncate" title={row?.episode_title || ''}>{row?.episode_title || '-'}</div>
+                                                        <div
+                                                            className="col-span-4 text-white/90 truncate"
+                                                            title={buildEpisodeDisplayLabel({
+                                                                episodeNumber: row?.episode_number,
+                                                                title: row?.episode_title,
+                                                                fallbackNumber: Number(row?.episode_number || 0) || null,
+                                                            })}
+                                                        >
+                                                            {buildEpisodeDisplayLabel({
+                                                                episodeNumber: row?.episode_number,
+                                                                title: row?.episode_title,
+                                                                fallbackNumber: Number(row?.episode_number || 0) || null,
+                                                            })}
+                                                        </div>
                                                         <div className="col-span-2">
                                                             <span className={`px-2 py-0.5 rounded text-xs border ${statusClass}`}>{status}</span>
                                                         </div>
@@ -2807,7 +2875,7 @@ const EpisodeInfo = ({ episode, onUpdate, project, projectId }) => {
             alert("Episode global info saved!");
         } catch (e) {
             console.error("Failed to save", e);
-            alert("Failed to save.");
+            alert(`Failed to save: ${e?.message || 'Unknown error'}`);
         }
     };
 
@@ -4758,7 +4826,10 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         <div className="p-4 sm:p-8 h-full flex flex-col w-full max-w-full overflow-hidden">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4 shrink-0">
                 <h2 className="text-2xl font-bold flex items-center gap-2">
-                    {activeEpisode.title}
+                    {buildEpisodeDisplayLabel({
+                        episodeNumber: activeEpisode?.episode_number,
+                        title: activeEpisode?.title,
+                    })}
                     <span className="text-sm font-normal text-muted-foreground bg-white/5 px-2 py-0.5 rounded-full">
                         {isRawMode ? 'Raw Editor' : `${segments.length} Segments`}
                     </span>
@@ -6383,6 +6454,10 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
     const filteredScenes = useMemo(() => {
         const hierarchy = String(sceneHierarchyFilter || '').trim().toLowerCase();
         const keyword = String(sceneKeywordFilter || '').trim().toLowerCase();
+        const episodeKeywordLabel = buildEpisodeDisplayLabel({
+            episodeNumber: activeEpisode?.episode_number,
+            title: activeEpisode?.title,
+        }).toLowerCase();
 
         return (scenes || []).filter((scene) => {
             const sceneCode = String(scene?.scene_id || scene?.scene_no || '').trim().toLowerCase();
@@ -6396,10 +6471,12 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
                 scene?.linked_characters,
                 scene?.key_props,
                 scene?.core_scene_info,
+                activeEpisode?.title,
+                episodeKeywordLabel,
             ].map(v => String(v || '').toLowerCase()).join(' ');
             return text.includes(keyword);
         });
-    }, [scenes, sceneHierarchyFilter, sceneKeywordFilter]);
+    }, [scenes, sceneHierarchyFilter, sceneKeywordFilter, activeEpisode?.title, activeEpisode?.episode_number]);
 
     const getStagingShotField = (shot, field) => {
         if (!shot) return '';
@@ -6685,7 +6762,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
         } catch(e) {
             console.error(e);
             onLog?.(`SceneManager: Save failed - ${e.message}`, 'error');
-            alert("Failed to save scenes");
+            alert(`Failed to save scenes: ${e?.message || 'Unknown error'}`);
         }
     };
 
@@ -6978,7 +7055,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog }) => {
                     type="text"
                     value={sceneKeywordFilter}
                     onChange={(e) => setSceneKeywordFilter(e.target.value)}
-                    placeholder="Filter by name / env / cast / props"
+                    placeholder="Filter by name / env / cast / props / episode"
                     className="bg-black/40 border border-white/20 rounded px-3 py-2 text-sm text-white"
                 />
                 <button
@@ -7624,7 +7701,7 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
             if (viewingEntity?.id === entity.id) setViewingEntity(null);
         } catch (e) {
             console.error(e);
-            alert("Failed to delete entity");
+            alert(`Failed to delete entity: ${e?.message || 'Unknown error'}`);
         }
     };
 
@@ -7636,7 +7713,7 @@ const SubjectLibrary = ({ projectId, currentEpisode }) => {
             setViewingEntity(null);
         } catch (e) {
             console.error(e);
-            alert("Failed to delete all entities");
+            alert(`Failed to delete all entities: ${e?.message || 'Unknown error'}`);
         }
     };
     
@@ -9903,7 +9980,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     return; // Exit, do not generate
                 } catch (err) {
                     console.error("Error inheriting frame", err);
-                    showNotification("Failed to inherit frame", "error");
+                    showNotification(`Failed to inherit frame: ${err?.message || 'Unknown error'}`, "error");
                 }
             } else {
                 const noPrevMsg = shots.findIndex(s => s.id === editingShot.id) <= 0
@@ -12780,11 +12857,19 @@ const Editor = ({ projectId, onClose }) => {
         } catch (e) {
             console.error(e);
             addLog(`Export failed: ${e.message}`, "error");
-            alert("Failed to export project.");
+            alert(`Failed to export project: ${e?.message || 'Unknown error'}`);
         }
     };
 
     const activeEpisode = episodes.find(e => e.id === activeEpisodeId);
+    const activeEpisodeIndex = activeEpisode ? episodes.findIndex((episode) => episode.id === activeEpisode.id) : -1;
+    const activeEpisodeLabel = activeEpisode
+        ? buildEpisodeDisplayLabel({
+            episodeNumber: activeEpisode?.episode_number,
+            title: activeEpisode?.title,
+            fallbackNumber: activeEpisodeIndex >= 0 ? activeEpisodeIndex + 1 : null,
+        })
+        : 'Select Episode';
 
     const MENU_ITEMS = [
         { id: 'overview', label: 'Overview', icon: LayoutDashboard },
@@ -12819,14 +12904,14 @@ const Editor = ({ projectId, onClose }) => {
                                 onClick={() => setIsEpisodeMenuOpen(!isEpisodeMenuOpen)}
                                 className="flex items-center gap-2 px-3 py-1 bg-white/5 hover:bg-white/10 border border-white/10 rounded-md text-xs font-medium text-white transition-colors"
                             >
-                                <span className="max-w-[100px] truncate">{activeEpisode ? activeEpisode.title : 'Select Episode'}</span>
+                                <span className="max-w-[140px] truncate">{activeEpisodeLabel}</span>
                                 <ChevronDown className="w-3 h-3 text-muted-foreground" />
                             </button>
 
                             {/* Dropdown Menu */}
                             {isEpisodeMenuOpen && (
                                 <div className="absolute top-full left-0 mt-2 w-48 bg-[#09090b] border border-white/10 rounded-lg shadow-xl py-1 z-50">
-                                    {episodes.map(ep => (
+                                    {episodes.map((ep, index) => (
                                         <div 
                                             key={ep.id}
                                             className={`px-3 py-2 text-xs flex justify-between items-center group cursor-pointer ${activeEpisodeId === ep.id ? 'bg-primary/20 text-primary' : 'text-muted-foreground hover:bg-white/5 hover:text-white'}`}
@@ -12835,7 +12920,9 @@ const Editor = ({ projectId, onClose }) => {
                                                 setIsEpisodeMenuOpen(false);
                                             }}
                                         >
-                                            <span className="truncate flex-1">{ep.title}</span>
+                                            <span className="truncate flex-1" title={buildEpisodeDisplayLabel({ episodeNumber: ep?.episode_number, title: ep?.title, fallbackNumber: index + 1 })}>
+                                                {buildEpisodeDisplayLabel({ episodeNumber: ep?.episode_number, title: ep?.title, fallbackNumber: index + 1 })}
+                                            </span>
                                             <button 
                                                 onClick={(e) => handleDeleteEpisode(e, ep.id)}
                                                 className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-500/20 hover:text-red-500 rounded"

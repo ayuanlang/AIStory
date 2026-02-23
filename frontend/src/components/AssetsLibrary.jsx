@@ -867,7 +867,7 @@ const AssetDetailModal = ({ asset, onClose, onUpdate }) => {
                                              await uploadAsset(file);
                                              onUpdate();
                                              alert("Refined version saved as new asset!");
-                                        } catch(e) { console.error(e); alert("Failed to save result"); }
+                                        } catch(e) { console.error(e); alert(`Failed to save result: ${e?.message || 'Unknown error'}`); }
                                     }}
                                     type="image"
                                 />

@@ -263,7 +263,7 @@ const Settings = () => {
             showNotification("Settings exported successfully!", "success");
         } catch (e) {
             console.error("Export failed", e);
-            showNotification("Failed to export settings", "error");
+            showNotification(`Failed to export settings: ${e?.message || 'Unknown error'}`, "error");
         }
     };
 
@@ -802,7 +802,7 @@ const Settings = () => {
             await refreshActiveSettingSources();
         } catch (err) {
             console.error('Failed to select system setting', err);
-            const msg = err?.response?.data?.detail || 'Failed to activate system setting';
+            const msg = err?.message || 'Failed to activate system setting';
             showNotification(msg, 'error');
         } finally {
             setSelectingSystemId(null);

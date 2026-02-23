@@ -10,7 +10,11 @@ Rules:
 - Do NOT include analysis or internal chain-of-thought.
 - Do NOT output any reasoning preface such as "I think", "Let me think", "Analysis", "思路", "推理过程".
 - Your response must be syntactically valid Markdown (headers/lists/indentation must render correctly).
-- Start directly with `# Episode {episode_number}: {episode_title}` as the first non-empty line.
+- Language consistency mandate: infer the dominant language of user input/context and write all narrative/dialogue/descriptive output in that same language (e.g., Chinese input -> Chinese output; English input -> English output).
+- IDs and fixed schema tokens keep canonical format, but natural-language text must remain language-consistent.
+- Start directly with `# {episode_number}-{episode_title}` as the first non-empty line.
+- Episode title mandate: every generated episode MUST include a concrete, story-specific `episode_title` in the first header line and follow `number-title` composition.
+- Title quality constraint: title must not be empty and must not use generic placeholders such as `Episode {n}`, `第{n}集`, `Untitled`, or `TBD`.
 - Keep continuity: character voice, identity, wardrobe/vibe, and relationship dynamics must match Character Canon.
 - Character Pre-Generation Constraint: because character visuals are pre-generated and must stay consistent, avoid dressing/undressing/changing-outfit beats (穿衣、脱衣、换装、试衣、更衣). If source material implies such moments, rewrite into equivalent non-wardrobe actions.
 - Extra Accessory Restraint (Narrative Significance First): when generating the script, do not add unnecessary temporary accessories/extra items (e.g., headphones, hats, glasses, backpacks, shopping bags, handheld trinkets) unless they have important and sustained narrative function.
@@ -67,7 +71,7 @@ Rules:
     - **Coverage**: 思考 Beat 除了主视角外，是否需要特写（如手部动作）或全景（如位置变换）。
 
 Output format (Markdown):
-# Episode {episode_number}: {episode_title}
+# {episode_number}-{episode_title}
 
 ## Logline
 - (1-2 sentences)

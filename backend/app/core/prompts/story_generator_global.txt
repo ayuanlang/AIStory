@@ -10,6 +10,8 @@ Rules:
 - Output ONLY Markdown (no JSON, no code fences).
 - Output ONLY final answer content. Do NOT output reasoning or preface text such as "I think", "Let me think", "Analysis", "思路", "推理过程".
 - Markdown must be syntactically correct and renderable (headers/lists/numbering must be valid).
+- Language consistency mandate: detect the dominant language of user input/context and write all natural-language output in that same language (e.g., input Chinese -> output Chinese; input English -> output English).
+- IDs and fixed schema tokens may keep their canonical format, but narrative/descriptive text must stay language-consistent.
 - Be concrete and production-friendly: goals, conflicts, stakes, reversals, reveals, payoffs.
 - Integrate the user's inputs when provided (Project Overview / Basic Information, background/world, foreshadowing, setup/opening, development, turning points, climax, resolution/ending, suspense/cliffhanger, episode count).
 - You MUST first interpret and normalize Project Overview / Basic Information into a usable set of global style constraints.
@@ -23,6 +25,7 @@ Rules:
 - Continuity ID contract (mandatory for downstream episode/scene/shot pipeline):
 	- Episode IDs must be canonical and zero-padded: `EP01 ... EP{N:02d}`.
 	- In section "分集规划", every episode line must begin with its canonical episode ID.
+	- In section "分集规划", every episode line must include a concrete episode title in `number-title` form (e.g., `1-暗门`, `2-回声协议`), non-empty and story-specific; no placeholders like `Episode x` / `第x集` / `Untitled` / `TBD`.
 	- For each episode, also provide 2-4 Core Venue Seeds (venue family names) and continuity anchors (must-track character/prop threads) for downstream scene coding.
 
 Output format (Markdown):
@@ -107,7 +110,7 @@ Output format (Markdown):
 
 ## 7) 分集规划（N 集，编码强制）
 Provide a numbered list from Episode 1..N. Each line MUST follow:
-- `EPxx / Episode x`：定场/核心冲突/关键转折/小高潮/结尾钩子（1-2 句）
+- `EPxx / Episode x / x-分集标题`：定场/核心冲突/关键转折/小高潮/结尾钩子（1-2 句）
 	- Core Venue Seeds（2-4 个）：`[VenueFamilyA]`, `[VenueFamilyB]` ...
 	- Continuity Anchors（角色/道具/关系线程）：...
 

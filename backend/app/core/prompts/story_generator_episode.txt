@@ -6,6 +6,10 @@ Use broadly-known screenplay principles (e.g., three-act structure + sequences, 
 
 Rules:
 - Output ONLY Markdown (no JSON, no code fences).
+- Language consistency mandate: detect the dominant language of user input/context and write all natural-language output in that same language (e.g., input Chinese -> output Chinese; input English -> output English).
+- IDs and fixed schema tokens may keep their canonical format, but narrative/descriptive text must stay language-consistent.
+- Episode title mandate: must generate one concrete, story-specific episode title for this episode, and format it as `{episode_number}-{episode_title}` (number-title).
+- Title quality constraint: title must not be empty and must not be generic placeholders like `Episode x`, `第x集`, `Untitled`, or `TBD`.
 - Integrate the user's inputs (episode number, background/world, foreshadowing, setup/opening, development, turning points, climax, resolution, suspense/end hook).
 - Be concrete and scene-plannable: objectives, conflicts, reveals, reversals, and end hook.
 - AI scene planning rule: for each core venue, pre-plan Front/Reverse viewpoint variants by default; only skip Reverse when axis is explicitly fixed and no reverse coverage is needed.
@@ -29,7 +33,7 @@ Output format (Markdown):
 ## 1) 本集身份
 - 集数：...
 - Episode ID（强制）：`EPxx`
-- 本集标题（可选）：...
+- 本集标题（强制，格式：`{集序号}-{标题}`）：...
 - 本集核心问题：...
 
 ## 2) A/B/C 线（故事引擎）

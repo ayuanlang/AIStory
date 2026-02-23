@@ -7065,6 +7065,9 @@ async def analyze_entity_image(
         raise HTTPException(status_code=404, detail="Entity not found")
         
     project = db.query(Project).filter(Project.id == entity.project_id).first()
+    if not project:
+        logger.warning(f"Project not found for entity {entity.id} (project_id={entity.project_id})")
+        raise HTTPException(status_code=404, detail="Project not found for this entity")
     if project.owner_id != current_user.id:
          raise HTTPException(status_code=403, detail="Not authorized")
 
@@ -7422,6 +7425,14 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
         db.refresh(entity)
         return entity
 
+    except HTTPException as e:
+        logger.error(f"Entity Analysis failed with HTTPException: {str(e.detail)}", exc_info=True)
+        try:
+            if reservation_tx:
+                billing_service.cancel_reservation(db, reservation_tx.id, str(e.detail))
+        except:
+            pass
+        raise
     except Exception as e:
         logger.error(f"Entity Analysis failed: {str(e)}", exc_info=True)
         try:
@@ -7429,7 +7440,7 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
                 billing_service.cancel_reservation(db, reservation_tx.id, str(e))
         except:
             pass
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"Analysis failed: {str(e)}")
 
 @router.get("/entities/{entity_id}/latest_analysis")
 def get_entity_latest_analysis(
@@ -7445,6 +7456,8 @@ def get_entity_latest_analysis(
         raise HTTPException(status_code=404, detail="Entity not found")
         
     project = db.query(Project).filter(Project.id == entity.project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found for this entity")
     if project.owner_id != current_user.id:
          raise HTTPException(status_code=403, detail="Not authorized")
          
@@ -7472,6 +7485,8 @@ def update_entity_latest_analysis(
         raise HTTPException(status_code=404, detail="Entity not found")
         
     project = db.query(Project).filter(Project.id == entity.project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found for this entity")
     if project.owner_id != current_user.id:
          raise HTTPException(status_code=403, detail="Not authorized")
          
@@ -7508,6 +7523,8 @@ def apply_entity_analysis(
         raise HTTPException(status_code=404, detail="Entity not found")
     
     project = db.query(Project).filter(Project.id == entity.project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found for this entity")
     if project.owner_id != current_user.id:
          raise HTTPException(status_code=403, detail="Not authorized")
     

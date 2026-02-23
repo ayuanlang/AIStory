@@ -315,7 +315,7 @@ const UserAdmin = () => {
             alert("Payment configuration saved successfully!");
         } catch (e) {
             console.error("Failed to save payment config", e);
-            alert("Failed to save payment configuration.");
+            alert(`Failed to save payment configuration: ${e?.message || 'Unknown error'}`);
         }
     };
 

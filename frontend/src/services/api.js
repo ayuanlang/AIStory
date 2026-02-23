@@ -9,6 +9,58 @@ export const api = axios.create({
   timeout: 300000, // 5 minutes timeout for long generation tasks
 });
 
+const buildApiErrorMessage = (error) => {
+    const responseData = error?.response?.data;
+    const detail = responseData?.detail;
+
+    if (Array.isArray(detail)) {
+        const joined = detail
+            .map((item) => {
+                if (!item) return '';
+                if (typeof item === 'string') return item;
+                const loc = Array.isArray(item.loc) ? item.loc.join('.') : '';
+                const msg = item.msg || item.message || '';
+                return loc ? `${loc}: ${msg}` : msg;
+            })
+            .filter(Boolean)
+            .join('; ');
+        if (joined) return joined;
+    }
+
+    if (typeof detail === 'string' && detail.trim()) {
+        return detail.trim();
+    }
+
+    if (detail && typeof detail === 'object') {
+        const fallback = detail.message || detail.error || detail.reason;
+        if (typeof fallback === 'string' && fallback.trim()) return fallback.trim();
+        try {
+            return JSON.stringify(detail);
+        } catch {
+            // no-op
+        }
+    }
+
+    if (typeof responseData === 'string' && responseData.trim()) {
+        return responseData.trim();
+    }
+
+    if (responseData && typeof responseData === 'object') {
+        const fallback = responseData.message || responseData.error || responseData.reason;
+        if (typeof fallback === 'string' && fallback.trim()) return fallback.trim();
+    }
+
+    if (error?.code === 'ECONNABORTED') {
+        return 'Request timeout. Please try again.';
+    }
+
+    if (!error?.response) {
+        return 'Network error. Please check your connection and backend service.';
+    }
+
+    return error?.message || 'Request failed';
+};
+
 // Add a request interceptor to include the token
 api.interceptors.request.use(
     (config) => {
@@ -27,6 +79,13 @@ api.interceptors.request.use(
 api.interceptors.response.use(
     (response) => response,
     (error) => {
+        const normalizedMessage = buildApiErrorMessage(error);
+        if (normalizedMessage) {
+            error.message = normalizedMessage;
+            error.userMessage = normalizedMessage;
+            error.detail = normalizedMessage;
+        }
+
         if (error.response) {
             if (error.response.status === 401) {
                 localStorage.removeItem('token');
