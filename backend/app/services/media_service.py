@@ -81,6 +81,24 @@ class MediaGenerationService:
         )
         return f"{new_w}x{new_h}"
 
+    def _normalize_doubao_video_tasks_endpoint(self, endpoint: Optional[str]) -> str:
+        raw = (endpoint or "").strip()
+        if not raw:
+            return "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks"
+
+        normalized = raw.rstrip("/")
+        if normalized.endswith("/contents/generations/tasks"):
+            return normalized
+        if normalized.endswith("/api/v3"):
+            return f"{normalized}/contents/generations/tasks"
+        if normalized.endswith("/api/v3/contents/generations"):
+            return f"{normalized}/tasks"
+        if normalized.endswith("/contents/generations"):
+            return f"{normalized}/tasks"
+        if "/api/v3" in normalized and "contents/generations/tasks" not in normalized:
+            return f"{normalized}/contents/generations/tasks"
+        return normalized
+
     def _repair_invalid_user_config_rows(self, session, user_id: int, category: Optional[str] = None) -> None:
         q = session.query(
             APISetting.id,
@@ -443,7 +461,7 @@ class MediaGenerationService:
         # Video Generation
         elif gen_type == "video":
             raw_endpoint = tool_conf.get("endpoint") or "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks"
-            endpoint = raw_endpoint.strip()
+            endpoint = self._normalize_doubao_video_tasks_endpoint(raw_endpoint)
             
             # Auto-correct model if user passed an Image model for a Video task
             if model and "seedream" in model:
@@ -535,7 +553,31 @@ class MediaGenerationService:
             if payload["model"] and "1-5-pro" in payload["model"]:
                 payload["generate_audio"] = True
 
-            return await self._submit_and_poll_video(endpoint, payload, api_key, "doubao_video", extra_metadata=base_metadata)
+            poll_timeout_seconds = 600
+            poll_interval_seconds = 2
+            try:
+                if tool_conf.get("poll_timeout_seconds") is not None:
+                    poll_timeout_seconds = max(60, int(tool_conf.get("poll_timeout_seconds")))
+                elif tool_conf.get("timeout") is not None:
+                    poll_timeout_seconds = max(60, int(tool_conf.get("timeout")))
+            except Exception:
+                poll_timeout_seconds = 600
+
+            try:
+                if tool_conf.get("poll_interval_seconds") is not None:
+                    poll_interval_seconds = max(1, int(tool_conf.get("poll_interval_seconds")))
+            except Exception:
+                poll_interval_seconds = 2
+
+            return await self._submit_and_poll_video(
+                endpoint,
+                payload,
+                api_key,
+                "doubao_video",
+                extra_metadata=base_metadata,
+                poll_timeout_seconds=poll_timeout_seconds,
+                poll_interval_seconds=poll_interval_seconds,
+            )
 
         return {"error": "Unknown Type"}
 
@@ -1381,7 +1423,7 @@ class MediaGenerationService:
              print(f"[{log_tag}] Exception: {e}")
              return {"error": str(e)}
 
-    async def _submit_and_poll_video(self, url, payload, api_key, log_tag, extra_metadata=None):
+    async def _submit_and_poll_video(self, url, payload, api_key, log_tag, extra_metadata=None, poll_timeout_seconds: int = 600, poll_interval_seconds: int = 2):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         
         def _post(): return requests.post(url, json=payload, headers=headers, timeout=60, verify=False)
@@ -1390,35 +1432,42 @@ class MediaGenerationService:
             print(f"[{log_tag}] POST Payload Length: {len(json.dumps(payload))}") 
             resp = await asyncio.to_thread(_post)
             print(f"[{log_tag}] Submission Response: {resp.text[:500]}...") # DEBUG USER REQUEST
-            if resp.status_code != 200: 
+            if resp.status_code not in [200, 201]: 
                 print(f"[{log_tag}] Error {resp.status_code}: {resp.text}")
                 return {"error": f"Submission Failed {resp.status_code}", "details": resp.text}
             
             data = resp.json()
-            task_id = data.get("id")
+            task_id = data.get("id") or data.get("task_id")
+            if not task_id and isinstance(data.get("data"), dict):
+                task_id = data.get("data", {}).get("id") or data.get("data", {}).get("task_id")
             if not task_id: return {"error": "No Task ID"}
             
-            print(f"[{log_tag}] Task {task_id} submitted. Polling...")
+            print(f"[{log_tag}] Task {task_id} submitted. Polling... timeout={poll_timeout_seconds}s interval={poll_interval_seconds}s")
             
             # Poll
-            for _ in range(60):
-                await asyncio.sleep(2)
+            max_attempts = max(1, int(poll_timeout_seconds / max(1, poll_interval_seconds)))
+            for _ in range(max_attempts):
+                await asyncio.sleep(poll_interval_seconds)
                 def _poll(): return requests.get(f"{url}/{task_id}", headers=headers, timeout=30, verify=False)
                 p_resp = await asyncio.to_thread(_poll)
                 if p_resp.status_code == 200:
                     p_data = p_resp.json()
                     print(f"[{log_tag}] Poll Response: {p_data}") # DEBUG USER REQUEST
-                    status = p_data.get("status")
-                    if status in ["Succeeded", "succeeded"]:
+                    status = str(p_data.get("status") or p_data.get("state") or "").strip()
+                    status_l = status.lower()
+                    if status_l in ["succeeded", "success", "completed", "done"]:
                         content = p_data.get("content", {})
                         video_url = content.get("video_url") or content.get("url")
+                        if not video_url and isinstance(p_data.get("data"), dict):
+                            data_content = p_data.get("data", {}).get("content", {}) or {}
+                            video_url = data_content.get("video_url") or data_content.get("url")
                         metadata = {"raw": p_data}
                         if extra_metadata:
                             metadata.update(extra_metadata)
                         return {"url": video_url, "metadata": metadata}
-                    elif status in ["Failed", "failed"]:
+                    elif status_l in ["failed", "error", "canceled", "cancelled"]:
                         return {"error": "Generation Failed", "details": p_data.get("error")}
-            return {"error": "Timeout"}
+            return {"error": f"Timeout after {poll_timeout_seconds}s"}
         except Exception as e:
             return {"error": str(e)}
 
