@@ -615,32 +615,54 @@ export const fetchMe = async () => {
 
 // Prompt Helper Export
 export const injectEntityFeatures = (prompt, entities = []) => {
-    let modified = false;
-    let text = prompt;
-    
-    // Regular expression to find {Name} pattern
-    const regex = /\{([^}]+)\}/g;
-    
-    text = text.replace(regex, (match, name) => {
-        const entity = entities.find(e => 
-            (e.name && e.name.toLowerCase() === name.toLowerCase()) || 
-            (e.name_en && e.name_en.toLowerCase() === name.toLowerCase())
-        );
+    let text = prompt || '';
 
-        if (entity && entity.description) {
-            modified = true;
-            // Return format: {Name}(description)
-            // Or just inject description? 
-            // Usually we want to keep the name for reference but add description.
-            // Let's use standard round bracket injection: {Name}(visual description)
-            
-            // Clean description to avoid nested brackets issues or newlines
-            const cleanDesc = entity.description.replace(/[\r\n]+/g, ' ').substring(0, 300); // Limit length
-            return `{${name}}(${cleanDesc})`;
-        }
-        return match; // No change if not found
+    const normalizeEntityToken = (value) => {
+        return String(value || '')
+            .replace(/[（【〔［]/g, '(')
+            .replace(/[）】〕］]/g, ')')
+            .replace(/[“”"'‘’]/g, '')
+            .replace(/^[\[\{【｛\(\s]+|[\]\}】｝\)\s]+$/g, '')
+            .replace(/^(CHAR|ENV|PROP)\s*:\s*/i, '')
+            .replace(/^@+/, '')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .toLowerCase();
+    };
+
+    const regex = /[\[【\{｛]([\s\S]*?)[\]】\}｝]/g;
+
+    text = text.replace(regex, (match, name, offset, source) => {
+        const cleanKey = normalizeEntityToken(name);
+        if (!cleanKey) return match;
+
+        const tail = source.slice(offset + match.length);
+        if (/^['’]s\b/i.test(tail)) return match;
+        if (/^\s*[\(（]/.test(tail)) return match;
+
+        const safeEntities = Array.isArray(entities) ? entities : [];
+        const entity = safeEntities.find(e => {
+            const cn = normalizeEntityToken(e?.name || '');
+            const en = normalizeEntityToken(e?.name_en || '');
+
+            let fallbackEn = '';
+            if (!en && e?.description) {
+                const enMatch = e.description.match(/Name \(EN\):\s*([^\n\r]+)/i);
+                if (enMatch && enMatch[1]) {
+                    fallbackEn = normalizeEntityToken(enMatch[1].trim().split(/(?:\s+role:|\n|,)/)[0]);
+                }
+            }
+
+            return cn === cleanKey || en === cleanKey || fallbackEn === cleanKey;
+        });
+
+        if (!entity) return match;
+
+        const rawDesc = entity.anchor_description || entity.description || '';
+        const cleanDesc = String(rawDesc).replace(/[\r\n]+/g, ' ').trim().substring(0, 300);
+        return cleanDesc ? `${match}(${cleanDesc})` : match;
     });
-    
+
     return text;
 };
 

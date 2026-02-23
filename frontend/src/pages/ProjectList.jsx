@@ -31,6 +31,8 @@ import {
 } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
+import { confirmUiMessage } from '../lib/uiMessage';
+import { getUiLang, tUI } from '../lib/uiLang';
 
 const cinematicImages = [
     "https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=500&q=80", // Movie theater
@@ -94,6 +96,8 @@ const THEMES = {
 };
 
 const ProjectList = () => {
+    const uiLang = getUiLang();
+    const t = (zh, en) => tUI(uiLang, zh, en);
     const [projects, setProjects] = useState([]);
     const [isCreating, setIsCreating] = useState(false);
     const [newTitle, setNewTitle] = useState('');
@@ -137,7 +141,7 @@ const ProjectList = () => {
         });
         localStorage.setItem('theme', key);
         if (showToast) {
-            setToast({ type: 'success', message: `${theme.name} Activated` });
+            setToast({ type: 'success', message: t(`${theme.name} 已启用`, `${theme.name} Activated`) });
             setTimeout(() => setToast(null), 2000);
         }
     };
@@ -172,16 +176,16 @@ const ProjectList = () => {
 
     const handleDeleteProject = async (e, projectId) => {
         e.stopPropagation(); // Prevent opening the project
-        if (!confirm("Are you sure you want to delete this project?")) return;
+        if (!await confirmUiMessage(t('确定要删除这个项目吗？', 'Are you sure you want to delete this project?'))) return;
         
         try {
             await deleteProject(projectId);
-            setToast({ type: 'success', message: 'Project deleted successfully' });
+            setToast({ type: 'success', message: t('项目删除成功', 'Project deleted successfully') });
             setTimeout(() => setToast(null), 3000);
             loadProjects(); // Refresh list
         } catch (error) {
             console.error("Failed to delete project", error);
-            setToast({ type: 'error', message: 'Failed to delete project' });
+            setToast({ type: 'error', message: t('项目删除失败', 'Failed to delete project') });
             setTimeout(() => setToast(null), 3000);
         }
     };
@@ -226,8 +230,8 @@ const ProjectList = () => {
                 </div>
 
                 <div className="space-y-2 flex-1">
-                    <SidebarItem id="projects" icon={Folder} label="My Projects" />
-                    <SidebarItem id="assets" icon={Image} label="Assets Library" />
+                    <SidebarItem id="projects" icon={Folder} label={t('我的项目', 'My Projects')} />
+                    <SidebarItem id="assets" icon={Image} label={t('素材库', 'Assets Library')} />
                     
                     {currentUser?.is_superuser && (
                         <>
@@ -236,18 +240,18 @@ const ProjectList = () => {
                                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-muted-foreground hover:bg-secondary/50 hover:text-foreground`}
                             >
                                 <Activity className="w-5 h-5" />
-                                System Logs
+                                {t('系统日志', 'System Logs')}
                             </button>
                             <button 
                                 onClick={() => navigate('/admin/users')}
                                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-muted-foreground hover:bg-secondary/50 hover:text-foreground`}
                             >
                                 <Shield className="w-5 h-5 text-red-500" />
-                                Admin Panel
+                                {t('管理面板', 'Admin Panel')}
                             </button>
                         </>
                     )}
-                    <SidebarItem id="settings" icon={Settings} label="Settings" />
+                    <SidebarItem id="settings" icon={Settings} label={t('设置', 'Settings')} />
                 </div>
 
                 <div className="mt-auto border-t pt-6">
@@ -256,15 +260,15 @@ const ProjectList = () => {
                             <User className="w-5 h-5 text-muted-foreground" />
                         </div>
                         <div className="flex-1 overflow-hidden">
-                            <p className="text-sm font-medium truncate">{currentUser?.full_name || currentUser?.username || "Guest User"}</p>
-                            <p className="text-xs text-muted-foreground truncate" title={currentUser?.email}>{currentUser?.email || "No Account"}</p>
+                            <p className="text-sm font-medium truncate">{currentUser?.full_name || currentUser?.username || t('访客用户', 'Guest User')}</p>
+                            <p className="text-xs text-muted-foreground truncate" title={currentUser?.email}>{currentUser?.email || t('无账号', 'No Account')}</p>
                         </div>
                     </div>
                     <button 
                         onClick={handleLogout}
                         className="w-full flex items-center gap-2 px-2 text-sm text-muted-foreground hover:text-destructive transition-colors"
                     >
-                        <LogOut className="w-4 h-4" /> Sign Out
+                        <LogOut className="w-4 h-4" /> {t('退出登录', 'Sign Out')}
                     </button>
                 </div>
             </aside>
@@ -276,12 +280,12 @@ const ProjectList = () => {
                     <header className="flex justify-between items-center">
                         <div>
                             <h1 className="text-3xl font-bold tracking-tight capitalize">
-                                {activeTab === 'projects' ? 'My Projects' : activeTab}
+                                {activeTab === 'projects' ? t('我的项目', 'My Projects') : activeTab}
                             </h1>
                             <p className="text-muted-foreground mt-1">
-                                {activeTab === 'projects' && 'Manage and edit your storyboard scripts.'}
-                                {activeTab === 'assets' && 'Manage your generated characters and scenes.'}
-                                {activeTab === 'settings' && 'Manage your account preferences.'}
+                                {activeTab === 'projects' && t('管理和编辑你的分镜脚本。', 'Manage and edit your storyboard scripts.')}
+                                {activeTab === 'assets' && t('管理你生成的角色和场景素材。', 'Manage your generated characters and scenes.')}
+                                {activeTab === 'settings' && t('管理你的账户偏好设置。', 'Manage your account preferences.')}
                             </p>
                         </div>
                         {activeTab === 'projects' && (
@@ -291,7 +295,7 @@ const ProjectList = () => {
                                         onClick={() => setSelectedProjectId(null)}
                                         className="flex items-center gap-2 px-5 py-2.5 bg-secondary text-secondary-foreground rounded-full hover:bg-secondary/80 transition-all font-medium"
                                     >
-                                        <ArrowLeft className="w-4 h-4" /> Back to Projects
+                                        <ArrowLeft className="w-4 h-4" /> {t('返回项目列表', 'Back to Projects')}
                                     </button>
                                 ) : (
                                     <>
@@ -299,7 +303,7 @@ const ProjectList = () => {
                                             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                                             <input 
                                                 type="text" 
-                                                placeholder="Search projects..." 
+                                                placeholder={t('搜索项目...', 'Search projects...')} 
                                                 className="pl-9 pr-4 py-2 bg-secondary/50 border-none rounded-full text-sm focus:ring-1 focus:ring-primary w-64"
                                             />
                                         </div>
@@ -307,7 +311,7 @@ const ProjectList = () => {
                                             onClick={() => setIsCreating(true)}
                                             className="flex items-center gap-2 px-5 py-2.5 bg-primary text-primary-foreground rounded-full hover:bg-primary/90 shadow-lg shadow-primary/20 transition-all hover:scale-105 font-medium"
                                         >
-                                            <Plus className="w-4 h-4" /> New Project
+                                            <Plus className="w-4 h-4" /> {t('新建项目', 'New Project')}
                                         </button>
                                     </>
                                 )}
@@ -357,17 +361,17 @@ const ProjectList = () => {
                                         animate={{ opacity: 1, y: 0 }}
                                         className="mb-8 p-6 border bg-card rounded-2xl shadow-sm"
                                     >
-                                        <label className="block text-sm font-medium mb-2">Project Title</label>
+                                        <label className="block text-sm font-medium mb-2">{t('项目标题', 'Project Title')}</label>
                                         <div className="flex gap-3">
                                             <input 
                                                 className="flex-1 px-4 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/20 outline-none" 
                                                 value={newTitle} 
                                                 onChange={e => setNewTitle(e.target.value)} 
-                                                placeholder="e.g., The Last Horizon - Scene 1"
+                                                placeholder={t('例如：最后的地平线 - 场景1', 'e.g., The Last Horizon - Scene 1')}
                                                 autoFocus
                                             />
-                                            <button onClick={handleCreate} className="px-6 py-2.5 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700">Create</button>
-                                            <button onClick={() => setIsCreating(false)} className="px-6 py-2.5 bg-secondary text-secondary-foreground rounded-lg font-medium hover:bg-secondary/80">Cancel</button>
+                                            <button onClick={handleCreate} className="px-6 py-2.5 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700">{t('创建', 'Create')}</button>
+                                            <button onClick={() => setIsCreating(false)} className="px-6 py-2.5 bg-secondary text-secondary-foreground rounded-lg font-medium hover:bg-secondary/80">{t('取消', 'Cancel')}</button>
                                         </div>
                                     </motion.div>
                                 )}
@@ -378,15 +382,15 @@ const ProjectList = () => {
                                             <Folder className="w-10 h-10 text-primary blur-[1px] absolute opacity-50" />
                                             <Folder className="w-10 h-10 text-white relative z-10" />
                                         </div>
-                                        <h3 className="text-2xl font-bold mb-3 bg-clip-text text-transparent bg-gradient-to-b from-white to-white/60">Start Your Journey</h3>
+                                        <h3 className="text-2xl font-bold mb-3 bg-clip-text text-transparent bg-gradient-to-b from-white to-white/60">{t('开始你的创作之旅', 'Start Your Journey')}</h3>
                                         <p className="text-muted-foreground max-w-sm mx-auto mb-8 text-lg font-light">
-                                            Your studio is empty. Create your first screenplay to begin generating shots.
+                                            {t('你的工作室还是空的。创建第一个剧本，开始生成分镜。', 'Your studio is empty. Create your first screenplay to begin generating shots.')}
                                         </p>
                                         <button 
                                             onClick={() => setIsCreating(true)}
                                             className="px-8 py-3 rounded-full bg-primary/20 border border-primary/50 text-white font-medium hover:bg-primary/30 transition-all hover:scale-105"
                                         >
-                                            Create First Project
+                                            {t('创建第一个项目', 'Create First Project')}
                                         </button>
                                     </div>
                                 ) : (
@@ -425,7 +429,7 @@ const ProjectList = () => {
                                                        {/* Top Badge */}
                                                        <div className="absolute top-4 right-4 z-20">
                                                             <div className="text-[10px] uppercase tracking-widest font-bold px-2 py-1 rounded-sm bg-black/80 text-white/70 border border-white/10 backdrop-blur-md">
-                                                                {p.global_info?.overall_genre || "SCENE"}
+                                                                {p.global_info?.overall_genre || t('场景', 'SCENE')}
                                                             </div>
                                                        </div>
                                                     </div>
@@ -437,7 +441,7 @@ const ProjectList = () => {
                                                             <button 
                                                                 onClick={(e) => handleDeleteProject(e, p.id)}
                                                                 className="opacity-0 group-hover:opacity-100 p-1.5 text-muted-foreground hover:text-red-500 hover:bg-white/10 rounded-lg transition-all"
-                                                                title="Delete Project"
+                                                                title={t('删除项目', 'Delete Project')}
                                                             >
                                                                 <Trash2 className="w-4 h-4" />
                                                             </button>
@@ -446,12 +450,12 @@ const ProjectList = () => {
                                                         {/* Description & Footer - Reveal on Hover */}
                                                         <div className="max-h-0 opacity-0 group-hover:max-h-32 group-hover:opacity-100 overflow-hidden transition-all duration-500 ease-in-out">
                                                             <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed font-light opacity-80 mt-2 mb-4">
-                                                                {p.global_info?.notes || "No description added."}
+                                                                {p.global_info?.notes || t('暂无描述。', 'No description added.')}
                                                             </p>
                                                             
                                                             {/* Footer Meta */}
                                                             <div className="flex items-center justify-between text-[10px] text-muted-foreground/60 pt-3 border-t border-white/5 group-hover:border-white/10 transition-colors">
-                                                                <span>Edited 2m ago</span>
+                                                                <span>{t('2分钟前编辑', 'Edited 2m ago')}</span>
                                                                 <div className="flex -space-x-2">
                                                                     <div className="w-4 h-4 rounded-full bg-blue-500 border border-card"></div>
                                                                     <div className="w-4 h-4 rounded-full bg-purple-500 border border-card"></div>

@@ -1,8 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { fetchScenes, fetchShots, api } from '../services/api';
 import { Loader2, Play, Plus, Trash2, Film, Save, Clock, Scissors, ChevronRight, GripVertical, Download } from 'lucide-react';
+import { getUiLang, tUI } from '../lib/uiLang';
 
 const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
+    const uiLang = getUiLang();
+    const t = (zh, en) => tUI(uiLang, zh, en);
     const [scenes, setScenes] = useState([]);
     const [shots, setShots] = useState([]);
     const [loading, setLoading] = useState(false);
@@ -119,16 +122,16 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
             <div className="w-full md:w-1/3 flex flex-col bg-gray-900 rounded-lg border border-gray-700 overflow-hidden">
                 <div className="p-4 border-b border-gray-700 flex justify-between items-center bg-gray-800">
                     <h2 className="font-semibold flex items-center gap-2">
-                        <Film size={18} /> Library
+                        <Film size={18} /> {t('素材库', 'Library')}
                     </h2>
                     <select 
                         className="bg-gray-700 border-none rounded px-2 py-1 text-sm outline-none focus:ring-1 focus:ring-blue-500"
                         value={selectedSceneId}
                         onChange={(e) => setSelectedSceneId(e.target.value)}
                     >
-                        <option value="all">All Scenes</option>
+                        <option value="all">{t('全部场景', 'All Scenes')}</option>
                         {scenes.map(s => (
-                            <option key={s.id} value={s.id}>Scene {s.scene_number}</option>
+                            <option key={s.id} value={s.id}>{t(`场景 ${s.scene_number}`, `Scene ${s.scene_number}`)}</option>
                         ))}
                     </select>
                 </div>
@@ -137,7 +140,7 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
                     {loading ? (
                         <div className="flex justify-center p-8"><Loader2 className="animate-spin" /></div>
                     ) : filteredShots.length === 0 ? (
-                        <div className="text-gray-500 text-center p-4">No videos found. Generate some shots first!</div>
+                        <div className="text-gray-500 text-center p-4">{t('未找到视频素材，请先生成分镜视频。', 'No videos found. Generate some shots first!')}</div>
                     ) : (
                         filteredShots.map(shot => (
                             <div key={shot.id} className="group relative bg-gray-800 rounded border border-gray-700 hover:border-blue-500 transition-colors cursor-pointer overflow-hidden p-2 flex gap-3 items-center" onClick={() => addToPlaylist(shot)}>
@@ -152,7 +155,7 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
                                     </div>
                                 </div>
                                 <div className="flex-1 min-w-0">
-                                    <div className="text-sm font-medium truncate">Shot {shot.shot_number}</div>
+                                    <div className="text-sm font-medium truncate">{t(`镜头 ${shot.shot_number}`, `Shot ${shot.shot_number}`)}</div>
                                     <div className="text-xs text-gray-400 truncate">{shot.description}</div>
                                 </div>
                             </div>
@@ -165,10 +168,10 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
             <div className="flex-1 flex flex-col bg-gray-900 rounded-lg border border-gray-700 overflow-hidden">
                 <div className="p-4 border-b border-gray-700 flex justify-between items-center bg-gray-800">
                     <h2 className="font-semibold flex items-center gap-2">
-                        <Scissors size={18} /> Montage ({playlist.length} clips)
+                        <Scissors size={18} /> {t(`蒙太奇（${playlist.length} 段）`, `Montage (${playlist.length} clips)`)}
                     </h2>
                     <div className="text-sm text-gray-400 flex items-center gap-2">
-                        <Clock size={14} /> Only Est: {totalDuration.toFixed(1)}s
+                        <Clock size={14} /> {t('预计时长：', 'Estimated: ')}{totalDuration.toFixed(1)}s
                     </div>
                 </div>
 
@@ -176,7 +179,7 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
                     {playlist.length === 0 ? (
                         <div className="h-full flex flex-col items-center justify-center text-gray-500 border-2 border-dashed border-gray-800 rounded-lg">
                             <Film size={48} className="mb-4 opacity-20" />
-                            <p>Drag clips here or click + from Library</p>
+                            <p>{t('将片段拖拽到这里，或在素材库点击 + 添加', 'Drag clips here or click + from Library')}</p>
                         </div>
                     ) : (
                         playlist.map((item, index) => (
@@ -192,28 +195,28 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
                                     <div className="w-32 h-20 bg-black rounded overflow-hidden flex-shrink-0 relative">
                                         {item.thumbnail && <img src={item.thumbnail} className="w-full h-full object-cover opacity-50" />}
                                         <div className="absolute inset-0 flex items-center justify-center">
-                                            <span className="text-xs font-mono bg-black/50 px-1 rounded text-white">Shot {item.shotNumber}</span>
+                                            <span className="text-xs font-mono bg-black/50 px-1 rounded text-white">{t(`镜头 ${item.shotNumber}`, `Shot ${item.shotNumber}`)}</span>
                                         </div>
                                     </div>
 
                                     {/* Controls */}
                                     <div className="flex-1 grid grid-cols-2 lg:grid-cols-4 gap-4">
                                         <div className="flex flex-col gap-1">
-                                            <label className="text-xs text-gray-400">Speed</label>
+                                            <label className="text-xs text-gray-400">{t('速度', 'Speed')}</label>
                                             <select 
                                                 className="bg-gray-700 border-none rounded px-2 py-1 text-xs"
                                                 value={item.speed}
                                                 onChange={(e) => updatePlaylistItem(item.id, { speed: e.target.value })}
                                             >
-                                                <option value="0.5">0.5x (Slow)</option>
-                                                <option value="1.0">1.0x (Normal)</option>
-                                                <option value="1.5">1.5x (Fast)</option>
-                                                <option value="2.0">2.0x (2x Fast)</option>
+                                                <option value="0.5">{t('0.5x（慢）', '0.5x (Slow)')}</option>
+                                                <option value="1.0">{t('1.0x（正常）', '1.0x (Normal)')}</option>
+                                                <option value="1.5">{t('1.5x（快）', '1.5x (Fast)')}</option>
+                                                <option value="2.0">{t('2.0x（两倍速）', '2.0x (2x Fast)')}</option>
                                             </select>
                                         </div>
 
                                         <div className="flex flex-col gap-1">
-                                            <label className="text-xs text-gray-400">Trim Start (s)</label>
+                                            <label className="text-xs text-gray-400">{t('起始裁剪（秒）', 'Trim Start (s)')}</label>
                                             <input 
                                                 type="number" step="0.1" min="0"
                                                 className="bg-gray-700 border-none rounded px-2 py-1 text-xs w-full"
@@ -223,7 +226,7 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
                                         </div>
 
                                         <div className="flex flex-col gap-1">
-                                            <label className="text-xs text-gray-400">Trim End (s)</label>
+                                            <label className="text-xs text-gray-400">{t('结束裁剪（秒）', 'Trim End (s)')}</label>
                                             <input 
                                                 type="number" step="0.1" min="0"
                                                 className="bg-gray-700 border-none rounded px-2 py-1 text-xs w-full"
@@ -236,7 +239,7 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
                                             <button 
                                                 onClick={() => removeFromPlaylist(item.id)}
                                                 className="p-2 hover:bg-red-900/50 text-red-400 rounded transition-colors"
-                                                title="Remove from montage"
+                                                title={t('从蒙太奇中移除', 'Remove from montage')}
                                             >
                                                 <Trash2 size={16} />
                                             </button>
@@ -252,7 +255,7 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
                     <div className="flex items-center gap-4">
                         {previewUrl && (
                              <a href={previewUrl} target="_blank" download className="flex items-center gap-2 text-blue-400 hover:text-blue-300 text-sm">
-                                <Download size={16} /> Download Montage
+                                          <Download size={16} /> {t('下载蒙太奇', 'Download Montage')}
                              </a>
                         )}
                     </div>
@@ -263,7 +266,7 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
                         className="flex items-center gap-2 px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                     >
                         {isGenerating ? <Loader2 className="animate-spin" size={18} /> : <Film size={18} />}
-                        {isGenerating ? 'Rendering...' : 'Render Montage'}
+                        {isGenerating ? t('渲染中...', 'Rendering...') : t('渲染蒙太奇', 'Render Montage')}
                     </button>
                 </div>
             </div>

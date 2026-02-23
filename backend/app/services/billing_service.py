@@ -12,6 +12,26 @@ class BillingService:
     TOKEN_UNIT_TYPES = {'per_token', 'per_1k_tokens', 'per_million_tokens'}
 
     @staticmethod
+    def _task_type_candidates(task_type: str) -> List[str]:
+        """Return ordered task_type candidates for pricing lookup fallback."""
+        primary = str(task_type or "").strip()
+        if not primary:
+            return []
+
+        alias_map = {
+            # Vision/entity analysis historically billed as analysis_character,
+            # but many deployments only have analysis or llm_chat rules.
+            "analysis_character": ["analysis", "llm_chat"],
+            "analysis": ["llm_chat"],
+        }
+
+        out = [primary]
+        for candidate in alias_map.get(primary, []):
+            if candidate not in out:
+                out.append(candidate)
+        return out
+
+    @staticmethod
     def _estimate_tokens_from_text(text: str) -> int:
         if not text:
             return 0
@@ -303,43 +323,71 @@ class BillingService:
         2) Fallback on (task_type, provider, model=None) if model-specific not found
         3) Fallback on generic (task_type, provider=None, model=None) if provider-specific not found
         """
-        base = db.query(PricingRule).filter(
-            PricingRule.task_type == task_type,
-            PricingRule.is_active == True
-        )
+        for candidate_task in BillingService._task_type_candidates(task_type):
+            base = db.query(PricingRule).filter(
+                PricingRule.task_type == candidate_task,
+                PricingRule.is_active == True
+            )
 
-        # 1) Exact
-        if provider is not None:
-            q = base.filter(PricingRule.provider == provider)
-        else:
-            q = base.filter(PricingRule.provider == None)
+            # 1) Exact
+            if provider is not None:
+                q = base.filter(PricingRule.provider == provider)
+            else:
+                q = base.filter(PricingRule.provider == None)
 
-        if model is not None:
-            q = q.filter(PricingRule.model == model)
-        else:
-            q = q.filter(PricingRule.model == None)
+            if model is not None:
+                q = q.filter(PricingRule.model == model)
+            else:
+                q = q.filter(PricingRule.model == None)
 
-        rule = q.first()
-        if rule:
-            return rule
-
-        # 2) Provider-level fallback (model=None)
-        if provider is not None and model is not None:
-            rule = base.filter(
-                PricingRule.provider == provider,
-                PricingRule.model == None
-            ).first()
+            rule = q.first()
             if rule:
+                if candidate_task != task_type:
+                    logger.warning(
+                        "Pricing rule fallback hit: requested_task=%s fallback_task=%s provider=%s model=%s rule_id=%s",
+                        task_type,
+                        candidate_task,
+                        provider,
+                        model,
+                        rule.id,
+                    )
                 return rule
 
-        # 3) Generic fallback
-        if provider is not None or model is not None:
-            rule = base.filter(
-                PricingRule.provider == None,
-                PricingRule.model == None
-            ).first()
-            if rule:
-                return rule
+            # 2) Provider-level fallback (model=None)
+            if provider is not None and model is not None:
+                rule = base.filter(
+                    PricingRule.provider == provider,
+                    PricingRule.model == None
+                ).first()
+                if rule:
+                    if candidate_task != task_type:
+                        logger.warning(
+                            "Pricing rule fallback hit (provider-level): requested_task=%s fallback_task=%s provider=%s model=%s rule_id=%s",
+                            task_type,
+                            candidate_task,
+                            provider,
+                            model,
+                            rule.id,
+                        )
+                    return rule
+
+            # 3) Generic fallback
+            if provider is not None or model is not None:
+                rule = base.filter(
+                    PricingRule.provider == None,
+                    PricingRule.model == None
+                ).first()
+                if rule:
+                    if candidate_task != task_type:
+                        logger.warning(
+                            "Pricing rule fallback hit (generic): requested_task=%s fallback_task=%s provider=%s model=%s rule_id=%s",
+                            task_type,
+                            candidate_task,
+                            provider,
+                            model,
+                            rule.id,
+                        )
+                    return rule
 
         return None
 
@@ -349,7 +397,10 @@ class BillingService:
         if not rule:
             error_msg = f"No pricing rule found for task: {task_type}, provider: {provider}, model: {model}"
             logger.error(error_msg)
-            raise HTTPException(status_code=500, detail="Pricing configuration error. Please contact support.")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Pricing configuration error: missing pricing rule for task={task_type}, provider={provider}, model={model}."
+            )
 
         # Advanced Calculation Logic
         try:

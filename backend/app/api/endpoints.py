@@ -3115,28 +3115,19 @@ async def generate_project_episode_scripts_from_global_framework(
 
     if not character_canon_md:
         logger.warning(
-            f"[generate_episode_scripts] missing character canon. project_id={project_id} user_id={current_user.id}"
+            f"[generate_episode_scripts] missing character canon (allowed). project_id={project_id} user_id={current_user.id}"
         )
-        try:
-            log_action(
-                db,
-                user_id=current_user.id,
-                user_name=current_user.username,
-                action="GENERATE_EPISODE_SCRIPTS_FAILED",
-                details=f"project_id={project_id}; reason=missing_character_canon",
-            )
-        except Exception as e:
-            logger.warning(f"[generate_episode_scripts] failed to write FAILED system log: {e}")
-        logger.info(
-            f"[generate_episode_scripts] RESPONSE success=False status_code=400 project_id={project_id} detail=Character Canon is empty"
-        )
-        raise HTTPException(status_code=400, detail="Character Canon (Project) is empty. Generate characters first.")
 
     relationships = str(gi.get("character_relationships") or "").strip()
     constraints_obj = (project.global_info or {}).get("global_style_constraints")
     has_constraints = bool(constraints_obj)
     has_relationships = bool(relationships)
-    character_canon_source = "character_canon_md" if str(gi.get("character_canon_md") or "").strip() else "character_profiles_fallback"
+    if str(gi.get("character_canon_md") or "").strip():
+        character_canon_source = "character_canon_md"
+    elif character_canon_md:
+        character_canon_source = "character_profiles_fallback"
+    else:
+        character_canon_source = "empty"
 
     logger.info(
         "[generate_episode_scripts] INPUT_CONTEXT "

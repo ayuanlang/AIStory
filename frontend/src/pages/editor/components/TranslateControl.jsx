@@ -2,8 +2,11 @@ import { useState } from 'react';
 import { Languages, RefreshCw, X } from 'lucide-react';
 import { useLog } from '../../../context/LogContext';
 import { translateText } from '../../../services/api';
+import { getUiLang, tUI } from '../../../lib/uiLang';
 
 const TranslateControl = ({ text, onUpdate, onSave }) => {
+    const uiLang = getUiLang();
+    const t = (zh, en) => tUI(uiLang, zh, en);
     const { addLog } = useLog();
     const [isTranslated, setIsTranslated] = useState(false);
     const [loading, setLoading] = useState(false);
@@ -71,7 +74,7 @@ const TranslateControl = ({ text, onUpdate, onSave }) => {
                     onClick={handleTranslate}
                     disabled={loading}
                     className="text-[10px] px-2 py-0.5 rounded flex items-center gap-1 transition-colors bg-indigo-500/80 text-white hover:bg-indigo-500"
-                    title="Translate back to English & Save"
+                    title={t('翻译回英文并保存', 'Translate back to English & Save')}
                 >
                     {loading ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Languages className="w-3 h-3" />}
                     Save (EN)
@@ -80,7 +83,7 @@ const TranslateControl = ({ text, onUpdate, onSave }) => {
                     onClick={handleCancel}
                     disabled={loading}
                     className="text-[10px] px-2 py-0.5 rounded flex items-center gap-1 transition-colors bg-white/10 hover:bg-white/20 text-muted-foreground hover:text-white"
-                    title="Cancel edit and revert to original"
+                    title={t('取消编辑并恢复原文', 'Cancel edit and revert to original')}
                 >
                     <X className="w-3 h-3" />
                 </button>
@@ -93,7 +96,7 @@ const TranslateControl = ({ text, onUpdate, onSave }) => {
             onClick={handleTranslate}
             disabled={loading}
             className={`text-[10px] px-2 py-0.5 rounded flex items-center gap-1 transition-colors ${isTranslated ? 'bg-indigo-500/80 text-white hover:bg-indigo-500' : 'bg-white/10 hover:bg-white/20 text-muted-foreground hover:text-white'}`}
-            title={isTranslated ? 'Translate back to English & Save' : 'Translate to Chinese for editing'}
+            title={isTranslated ? t('翻译回英文并保存', 'Translate back to English & Save') : t('翻译为中文以便编辑', 'Translate to Chinese for editing')}
         >
             {loading ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Languages className="w-3 h-3" />}
             {isTranslated ? 'Save (EN)' : 'CN'}

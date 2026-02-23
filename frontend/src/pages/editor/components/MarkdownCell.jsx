@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import { getUiLang, tUI } from '../../../lib/uiLang';
 
 const MarkdownCell = ({ value, onChange, placeholder, className }) => {
+    const uiLang = getUiLang();
+    const t = (zh, en) => tUI(uiLang, zh, en);
     const [isEditing, setIsEditing] = useState(false);
     const [localValue, setLocalValue] = useState(value || '');
 
@@ -31,9 +34,9 @@ const MarkdownCell = ({ value, onChange, placeholder, className }) => {
         <div
             className={`w-full min-h-[3rem] p-2 hover:bg-white/10 cursor-text text-sm prose prose-invert prose-p:my-1 prose-headings:my-2 max-w-none text-gray-300 border border-transparent hover:border-white/10 rounded transition-colors ${className}`}
             onClick={() => setIsEditing(true)}
-            title="Click to edit"
+            title={t('点击编辑', 'Click to edit')}
         >
-            {value ? <ReactMarkdown>{value}</ReactMarkdown> : <span className="opacity-30 italic">{placeholder || 'Empty'}</span>}
+            {value ? <ReactMarkdown>{value}</ReactMarkdown> : <span className="opacity-30 italic">{placeholder || t('空', 'Empty')}</span>}
         </div>
     );
 };

@@ -11,6 +11,7 @@ import UserAdmin from './pages/UserAdmin';
 import SystemLogs from './pages/SystemLogs';
 import { LogProvider } from './context/LogContext';
 import LogPanel from './components/LogPanel';
+import GlobalMessageHost from './components/GlobalMessageHost';
 
 // Helper component to protect routes that require authentication
 const PrivateRoute = ({ children }) => {
@@ -58,6 +59,7 @@ function App() {
             <Route path="/admin/users" element={<PrivateRoute><UserAdmin /></PrivateRoute>} />
             <Route path="/admin/logs" element={<PrivateRoute><SystemLogs /></PrivateRoute>} />
           </Routes>
+          <GlobalMessageHost />
           <LogPanel />
         </div>
       </Router>

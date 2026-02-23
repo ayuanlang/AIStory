@@ -5,6 +5,7 @@ import { Save, Info, Upload, Download, Coins, History } from 'lucide-react';
 import { API_URL } from '@/config';
 import { updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, selectSystemSetting } from '../services/api';
 import RechargeModal from '../components/RechargeModal'; // Import RechargeModal
+import { getUiLang, tUI } from '../lib/uiLang';
 
 const DEFAULT_CHARACTER_SUPPLEMENTS = [
     "Default Aesthetic Policy (when no explicit style is provided): prioritize premium cinematic beauty and modern elegance.",
@@ -20,6 +21,8 @@ const DEFAULT_SCENE_SUPPLEMENTS = [
 ].join('\n');
 
 const Settings = () => {
+    const uiLang = getUiLang();
+    const t = (zh, en) => tUI(uiLang, zh, en);
     const location = useLocation();
     const { llmConfig, setLLMConfig, savedConfigs, saveProviderConfig, addLog, generationConfig, setGenerationConfig, savedToolConfigs, saveToolConfig } = useStore();
     
@@ -816,24 +819,24 @@ const Settings = () => {
                     <>
                         <div className="space-y-2">
                             <div className="flex justify-between">
-                                <label className="text-sm font-medium">Base URL</label>
-                                <span className="text-xs text-muted-foreground">Default: http://localhost:11434</span>
+                                <label className="text-sm font-medium">{t('基础 URL', 'Base URL')}</label>
+                                <span className="text-xs text-muted-foreground">{t('默认值：http://localhost:11434', 'Default: http://localhost:11434')}</span>
                             </div>
                             <input 
                                 type="text" 
                                 value={endpoint}
                                 onChange={(e) => setEndpoint(e.target.value)}
-                                placeholder="http://localhost:11434"
+                                placeholder={t('http://localhost:11434', 'http://localhost:11434')}
                                 className="w-full p-2 rounded-md bg-white/10 border border-white/10" 
                             />
                         </div>
                         <div className="space-y-2">
-                            <label className="text-sm font-medium">Model Name</label>
+                            <label className="text-sm font-medium">{t('模型名称', 'Model Name')}</label>
                             <input 
                                 type="text" 
                                 value={model}
                                 onChange={(e) => setModel(e.target.value)}
-                                placeholder="llama3, mistral..."
+                                placeholder={t('例如：llama3、mistral...', 'e.g. llama3, mistral...')}
                                 className="w-full p-2 rounded-md bg-white/10 border border-white/10" 
                             />
                         </div>
@@ -848,27 +851,27 @@ const Settings = () => {
                                 type="password" 
                                 value={apiKey}
                                 onChange={(e) => setApiKey(e.target.value)}
-                                placeholder="sk-..."
+                                placeholder={t('sk-...', 'sk-...')}
                                 className="w-full p-2 rounded-md bg-white/10 border border-white/10" 
                             />
                         </div>
                         <div className="space-y-2">
-                            <label className="text-sm font-medium">Model / Endpoint ID (Required)</label>
+                            <label className="text-sm font-medium">{t('模型 / 端点 ID（必填）', 'Model / Endpoint ID (Required)')}</label>
                             <input 
                                 type="text" 
                                 value={model}
                                 onChange={(e) => setModel(e.target.value)}
-                                placeholder="ep-2024... (The deployment endpoint ID)"
+                                placeholder={t('ep-2024...（部署端点 ID）', 'ep-2024... (The deployment endpoint ID)')}
                                 className="w-full p-2 rounded-md bg-white/10 border border-white/10" 
                             />
                         </div>
                         <div className="space-y-2">
-                            <label className="text-sm font-medium">Base URL (Optional)</label>
+                            <label className="text-sm font-medium">{t('基础 URL（可选）', 'Base URL (Optional)')}</label>
                             <input 
                                 type="text" 
                                 value={endpoint}
                                 onChange={(e) => setEndpoint(e.target.value)}
-                                placeholder="https://ark.cn-beijing.volces.com/api/v3"
+                                placeholder={t('https://ark.cn-beijing.volces.com/api/v3', 'https://ark.cn-beijing.volces.com/api/v3')}
                                 className="w-full p-2 rounded-md bg-white/10 border border-white/10" 
                             />
                         </div>
@@ -878,17 +881,17 @@ const Settings = () => {
                 return (
                     <>
                          <div className="space-y-2">
-                            <label className="text-sm font-medium">API Key</label>
+                                    <label className="text-sm font-medium">API Key</label>
                             <input 
                                 type="password" 
                                 value={apiKey}
                                 onChange={(e) => setApiKey(e.target.value)}
-                                placeholder="sk-..."
+                                placeholder={t('sk-...', 'sk-...')}
                                 className="w-full p-2 rounded-md bg-white/10 border border-white/10" 
                             />
                         </div>
                          <div className="space-y-2">
-                            <label className="text-sm font-medium">Model Name</label>
+                                     <label className="text-sm font-medium">{t('模型名称', 'Model Name')}</label>
                             <select 
                                 value={model} 
                                 onChange={(e) => setModel(e.target.value)}
@@ -903,12 +906,12 @@ const Settings = () => {
                             </select>
                         </div>
                         <div className="space-y-2">
-                            <label className="text-sm font-medium">Base URL</label>
+                            <label className="text-sm font-medium">{t('基础 URL', 'Base URL')}</label>
                             <input 
                                 type="text" 
                                 value={endpoint || "https://grsai.dakka.com.cn"}
                                 onChange={(e) => setEndpoint(e.target.value)}
-                                placeholder="https://grsai.dakka.com.cn"
+                                placeholder={t('https://grsai.dakka.com.cn', 'https://grsai.dakka.com.cn')}
                                 className="w-full p-2 rounded-md bg-white/10 border border-white/10" 
                             />
                         </div>
@@ -919,32 +922,32 @@ const Settings = () => {
                 return (
                     <>
                          <div className="space-y-2">
-                            <label className="text-sm font-medium">API Key</label>
+                                    <label className="text-sm font-medium">API Key</label>
                             <input 
                                 type="password" 
                                 value={apiKey}
                                 onChange={(e) => setApiKey(e.target.value)}
-                                placeholder="sk-..."
+                                placeholder={t('sk-...', 'sk-...')}
                                 className="w-full p-2 rounded-md bg-white/10 border border-white/10" 
                             />
                         </div>
                          <div className="space-y-2">
-                            <label className="text-sm font-medium">Model Name (Optional)</label>
+                                     <label className="text-sm font-medium">{t('模型名称（可选）', 'Model Name (Optional)')}</label>
                             <input 
                                 type="text" 
                                 value={model}
                                 onChange={(e) => setModel(e.target.value)}
-                                placeholder="gpt-4o, gpt-4-turbo..."
+                                placeholder={t('例如：gpt-4o、gpt-4-turbo...', 'e.g. gpt-4o, gpt-4-turbo...')}
                                 className="w-full p-2 rounded-md bg-white/10 border border-white/10" 
                             />
                         </div>
                         <div className="space-y-2">
                             <div className="flex gap-2 items-center">
-                                <label className="text-sm font-medium">Endpoint URL (Optional)</label>
+                                <label className="text-sm font-medium">{t('端点 URL（可选）', 'Endpoint URL (Optional)')}</label>
                                 <div className="group relative">
                                     <Info size={12} className="text-muted-foreground cursor-help" />
                                     <div className="absolute left-0 bottom-full mb-2 w-48 p-2 bg-black text-white text-xs rounded border border-white/10 hidden group-hover:block z-50">
-                                        Use this for compatible proxies like OneAPI
+                                        {t('可用于 OneAPI 等兼容代理。', 'Use this for compatible proxies like OneAPI')}
                                     </div>
                                 </div>
                             </div>
@@ -952,7 +955,7 @@ const Settings = () => {
                                 type="text" 
                                 value={endpoint}
                                 onChange={(e) => setEndpoint(e.target.value)}
-                                placeholder="https://api.openai.com/v1"
+                                placeholder={t('https://api.openai.com/v1', 'https://api.openai.com/v1')}
                                 className="w-full p-2 rounded-md bg-white/10 border border-white/10" 
                             />
                         </div>
@@ -985,19 +988,19 @@ const Settings = () => {
                              onClick={() => setActiveTab('prompts')}
                              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'prompts' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
                         >
-                            Prompt Optimizers
+                            {t('提示词优化器', 'Prompt Optimizers')}
                         </button>
                             <button 
                                 onClick={() => setActiveTab('system_api')}
                                 className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'system_api' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
                             >
-                               System API
+                                         {t('系统 API', 'System API')}
                             </button>
                         <button 
                              onClick={() => setActiveTab('billing')}
                              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'billing' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
                         >
-                            <span className="flex items-center gap-2"><Coins size={14}/> Usage</span>
+                            <span className="flex items-center gap-2"><Coins size={14}/> {t('用量', 'Usage')}</span>
                         </button>
                     </div>
                 </div>
@@ -1006,18 +1009,18 @@ const Settings = () => {
                     <button 
                         onClick={handleImportClick}
                         className="flex items-center space-x-2 bg-white/5 border border-white/10 px-3 py-1.5 rounded-lg hover:bg-white/10 text-xs transition-colors"
-                        title="Import Settings JSON"
+                        title={t('导入设置 JSON', 'Import Settings JSON')}
                     >
                         <Upload size={14} />
-                        <span>Import</span>
+                        <span>{t('导入', 'Import')}</span>
                     </button>
                     <button 
                         onClick={handleExportSettings}
                         className="flex items-center space-x-2 bg-white/5 border border-white/10 px-3 py-1.5 rounded-lg hover:bg-white/10 text-xs transition-colors"
-                        title="Export Settings JSON"
+                        title={t('导出设置 JSON', 'Export Settings JSON')}
                     >
                         <Download size={14} />
-                        <span>Export</span>
+                        <span>{t('导出', 'Export')}</span>
                     </button>
                     <input 
                         type="file" 
@@ -1039,41 +1042,41 @@ const Settings = () => {
                                     className="bg-green-500 hover:bg-green-600 text-white font-medium py-1.5 px-3 rounded-lg transition-colors flex items-center justify-center gap-1 text-xs shadow-lg shadow-green-500/20"
                                 >
                                     <Coins size={14} />
-                                    Top Up
+                                    {t('充值', 'Top Up')}
                                 </button>
                              </div>
                              <Coins className="w-12 h-12 text-yellow-400 mb-4 mt-2" />
-                             <h3 className="text-muted-foreground font-medium">Available Credits</h3>
+                             <h3 className="text-muted-foreground font-medium">{t('可用积分', 'Available Credits')}</h3>
                              <p className="text-4xl font-bold text-white mt-2">{userCredits}</p>
-                             <p className="text-xs text-muted-foreground mt-2 mb-4">Credits are deducted for generation tasks.</p>
+                             <p className="text-xs text-muted-foreground mt-2 mb-4">{t('生成任务会消耗积分。', 'Credits are deducted for generation tasks.')}</p>
                              <button
                                 onClick={() => setShowRecharge(true)}
                                 className="w-full bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 font-medium py-2 px-4 rounded-lg transition-colors flex items-center justify-center gap-2 text-sm"
                              >
                                 <Coins size={14} />
-                                Recharge Bundle
+                                {t('充值套餐', 'Recharge Bundle')}
                              </button>
                         </div>
                         <div className="bg-black/20 p-6 rounded-xl border border-white/10 shadow-sm">
                              <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-                                <History className="w-5 h-5" /> Recent Transactions
+                                <History className="w-5 h-5" /> {t('最近交易', 'Recent Transactions')}
                              </h3>
                              {isBillingLoading ? (
-                                <div className="text-center py-10 text-muted-foreground">Loading history...</div>
+                                <div className="text-center py-10 text-muted-foreground">{t('加载记录中...', 'Loading history...')}</div>
                              ) : (
                                 <div className="overflow-x-auto">
                                     <table className="w-full text-left border-collapse text-sm">
                                         <thead>
                                             <tr className="border-b border-white/10 text-muted-foreground">
-                                                <th className="p-3">Time</th>
-                                                <th className="p-3">Type</th>
-                                                <th className="p-3">Details</th>
-                                                <th className="p-3 text-right">Amount</th>
+                                                <th className="p-3">{t('时间', 'Time')}</th>
+                                                <th className="p-3">{t('类型', 'Type')}</th>
+                                                <th className="p-3">{t('详情', 'Details')}</th>
+                                                <th className="p-3 text-right">{t('金额', 'Amount')}</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-white/5">
                                             {transactions.length === 0 ? (
-                                                <tr><td colSpan="4" className="text-center p-8 text-muted-foreground">No transactions found</td></tr>
+                                                <tr><td colSpan="4" className="text-center p-8 text-muted-foreground">{t('暂无交易记录', 'No transactions found')}</td></tr>
                                             ) : transactions.map(t => (
                                                 <tr key={t.id} className="hover:bg-white/[0.02]">
                                                     <td className="p-3 text-muted-foreground">
@@ -1104,7 +1107,7 @@ const Settings = () => {
                             onClose={() => setShowRecharge(false)} 
                             onSuccess={() => {
                                 refreshBilling();
-                                showNotification("Recharge successful!", "success");
+                                showNotification(t('充值成功！', 'Recharge successful!'), "success");
                             }}
                         />                                
                     )}
@@ -1113,7 +1116,7 @@ const Settings = () => {
                 <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
                     <div className="space-y-4">
                         <h2 className="text-xl font-semibold flex items-center gap-2">
-                            Core LLM Configuration
+                            {t('核心 LLM 配置', 'Core LLM Configuration')}
                             <span className="text-xs bg-primary/20 text-primary px-2 py-0.5 rounded-full border border-primary/30 font-mono">Task: llm_chat</span>
                             <span className={`text-[10px] px-2 py-0.5 rounded border font-mono ${sourceBadgeClass(activeSettingSources.LLM)}`}>
                                 {sourceBadgeText(activeSettingSources.LLM)}
@@ -1121,17 +1124,17 @@ const Settings = () => {
                         </h2>
                         <div className="bg-black/20 p-6 rounded-xl border border-white/10 space-y-4 shadow-sm">
                             <div className="space-y-2">
-                                <label className="text-sm font-medium">Text Model Provider</label>
+                                <label className="text-sm font-medium">{t('文本模型提供方', 'Text Model Provider')}</label>
                                 <select 
                                     value={provider} 
                                     onChange={(e) => handleProviderChange(e.target.value)}
                                     className="w-full p-2 rounded-md bg-zinc-900 border border-white/10 text-white"
                                 >
                                     <option className="bg-zinc-900" value="openai">OpenAI / Compatible</option>
-                                    <option className="bg-zinc-900" value="doubao">Doubao (Volcengine)</option>
-                                    <option className="bg-zinc-900" value="ollama">Ollama (Local)</option>
+                                    <option className="bg-zinc-900" value="doubao">{t('豆包（火山引擎）', 'Doubao (Volcengine)')}</option>
+                                    <option className="bg-zinc-900" value="ollama">{t('Ollama（本地）', 'Ollama (Local)')}</option>
                                     <option className="bg-zinc-900" value="deepseek">DeepSeek</option>
-                                    <option className="bg-zinc-900" value="grsai">Grsai (Aggregation)</option>
+                                    <option className="bg-zinc-900" value="grsai">{t('Grsai（聚合）', 'Grsai (Aggregation)')}</option>
                                 </select>
                             </div>
                             
@@ -1144,24 +1147,24 @@ const Settings = () => {
                                 className="mt-6 w-full flex items-center justify-center space-x-2 bg-primary text-black px-4 py-3 rounded-lg hover:opacity-90 transition-opacity font-medium font-bold"
                             >
                                 <Save size={18} />
-                                <span>Save & Activate Configuration</span>
+                                <span>{t('保存并激活配置', 'Save & Activate Configuration')}</span>
                             </button>
                             
                             <p className="text-xs text-center text-muted-foreground mt-2">
-                                Parameters are saved automatically for each provider.
+                                {t('每个提供方的参数都会自动保存。', 'Parameters are saved automatically for each provider.')}
                             </p>
                         </div>
                     </div>
 
                     <div className="space-y-4">
-                        <h2 className="text-xl font-semibold">Image & Video Tools API</h2>
+                        <h2 className="text-xl font-semibold">{t('图片与视频工具 API', 'Image & Video Tools API')}</h2>
                         <div className="bg-black/20 p-6 rounded-xl border border-white/10 space-y-6 shadow-sm">
                             {/* Translation Tool Section */}
                             <div className="space-y-4 border-b border-white/10 pb-6">
                                 <h3 className="text-base font-medium flex items-center gap-2">
-                                    Translation Service (Baidu)
+                                    {t('翻译服务（百度）', 'Translation Service (Baidu)')}
                                 </h3>
-                                <p className="text-xs text-muted-foreground">Configure Baidu Translate API to enable prompt translation features.</p>
+                                <p className="text-xs text-muted-foreground">{t('配置百度翻译 API 以启用提示词翻译能力。', 'Configure Baidu Translate API to enable prompt translation features.')}</p>
 
                                 <form 
                                     onSubmit={(e) => { e.preventDefault(); handleSaveTranslation(); }}
@@ -1169,20 +1172,19 @@ const Settings = () => {
                                 >
                                     <div className="space-y-2">
                                         <label className="text-xs font-medium uppercase text-muted-foreground flex items-center justify-between">
-                                            <span>Access Token</span>
-                                            <a href="https://console.bce.baidu.com/ai/#/ai/machine_learning/overview/index" target="_blank" rel="noreferrer" className="text-[10px] text-blue-400 hover:underline">Get Token</a>
+                                            <span>{t('访问令牌', 'Access Token')}</span>
+                                            <a href="https://console.bce.baidu.com/ai/#/ai/machine_learning/overview/index" target="_blank" rel="noreferrer" className="text-[10px] text-blue-400 hover:underline">{t('获取 Token', 'Get Token')}</a>
                                         </label>
                                         <input 
                                             type="password" 
                                             value={baiduToken}
                                             onChange={(e) => setBaiduToken(e.target.value)}
-                                            placeholder="Paste Baidu AI Access Token..."
+                                            placeholder={t('粘贴百度 AI Access Token...', 'Paste Baidu AI Access Token...')}
                                             autoComplete="new-password"
                                             className="w-full p-2 text-sm rounded-md bg-white/10 border border-white/10 text-white" 
                                         />
                                         <p className="text-[10px] text-muted-foreground">
-                                            Requires 'machine_translation' or equivalent capability enabled on Baidu Cloud. 
-                                            Enter the Access Token (starts with '24.').
+                                            {t("需要在百度云启用 'machine_translation' 或同等能力。输入 Access Token（以 '24.' 开头）。", "Requires 'machine_translation' or equivalent capability enabled on Baidu Cloud. Enter the Access Token (starts with '24.').")}
                                         </p>
                                     </div>
                                     <div>
@@ -1190,7 +1192,7 @@ const Settings = () => {
                                             type="submit"
                                             className="text-xs bg-primary/10 text-primary hover:bg-primary/20 px-3 py-2 rounded transition-colors w-full"
                                         >
-                                            Save Translation Token
+                                            {t('保存翻译 Token', 'Save Translation Token')}
                                         </button>
                                     </div>
                                 </form>
@@ -1200,8 +1202,8 @@ const Settings = () => {
                             <div className="space-y-4 border-b border-white/10 pb-6">
                                 <div className="space-y-2">
                                     <label className="text-sm font-medium text-blue-400 flex items-center gap-2">
-                                        Image Generation Tool
-                                        <span className="text-[10px] bg-blue-500/20 text-blue-300 px-1.5 py-0.5 rounded border border-blue-500/30 font-mono">Task: image_gen</span>
+                                        {t('图片生成工具', 'Image Generation Tool')}
+                                        <span className="text-[10px] bg-blue-500/20 text-blue-300 px-1.5 py-0.5 rounded border border-blue-500/30 font-mono">{t('任务：image_gen', 'Task: image_gen')}</span>
                                         <span className={`text-[10px] px-2 py-0.5 rounded border font-mono ${sourceBadgeClass(activeSettingSources.Image)}`}>
                                             {sourceBadgeText(activeSettingSources.Image)}
                                         </span>
@@ -1212,14 +1214,14 @@ const Settings = () => {
                                         className="w-full p-2 rounded-md bg-zinc-900 border border-white/10 text-white"
                                     >
                                         <option className="bg-zinc-900" value="Midjourney">Midjourney</option>
-                                        <option className="bg-zinc-900" value="Doubao">Doubao (豆包 - Volcengine)</option>
-                                        <option className="bg-zinc-900" value="Grsai-Image">Grsai (Aggregation)</option>
+                                        <option className="bg-zinc-900" value="Doubao">{t('Doubao（豆包 - 火山引擎）', 'Doubao (豆包 - Volcengine)')}</option>
+                                        <option className="bg-zinc-900" value="Grsai-Image">{t('Grsai（聚合）', 'Grsai (Aggregation)')}</option>
                                         <option className="bg-zinc-900" value="DALL-E 3">DALL-E 3</option>
-                                        <option className="bg-zinc-900" value="Stable Diffusion">Stable Diffusion (SDXL/Pony)</option>
+                                        <option className="bg-zinc-900" value="Stable Diffusion">{t('Stable Diffusion（SDXL/Pony）', 'Stable Diffusion (SDXL/Pony)')}</option>
                                         <option className="bg-zinc-900" value="Flux">Flux.1</option>
                                         <option className="bg-zinc-900" value="Tencent Hunyuan">Tencent Hunyuan (腾讯混元)</option>
                                     </select>
-                                    <p className="text-xs text-muted-foreground">Select tool to configure credentials and prompt optimization.</p>
+                                    <p className="text-xs text-muted-foreground">{t('选择工具以配置凭据和提示词优化参数。', 'Select tool to configure credentials and prompt optimization.')}</p>
                                 </div>
                                 
                                 {/* Dynamic fields for Image Tool */}
@@ -1231,8 +1233,8 @@ const Settings = () => {
                                             value={imgToolKey}
                                             onChange={(e) => setImgToolKey(e.target.value)}
                                             placeholder={
-                                                imageModel === "Midjourney" ? "Not required for web use" : 
-                                                imageModel === "Tencent Hunyuan" ? "SecretId:SecretKey" :
+                                                imageModel === "Midjourney" ? t('网页版无需填写', 'Not required for web use') : 
+                                                imageModel === "Tencent Hunyuan" ? t('SecretId:SecretKey', 'SecretId:SecretKey') :
                                                 "sk-..."
                                             }
                                             disabled={imageModel === "Midjourney"}
@@ -1240,17 +1242,17 @@ const Settings = () => {
                                         />
                                     </div>
                                     <div className="space-y-2 col-span-2 md:col-span-1">
-                                        <label className="text-xs font-medium uppercase text-muted-foreground">Endpoint URL</label>
+                                        <label className="text-xs font-medium uppercase text-muted-foreground">{t('端点 URL', 'Endpoint URL')}</label>
                                         <input 
                                             type="text" 
                                             value={imgToolEndpoint}
                                             onChange={(e) => setImgToolEndpoint(e.target.value)}
-                                            placeholder="https://api..."
+                                            placeholder={t('https://api...', 'https://api...')}
                                             className="w-full p-2 text-sm rounded-md bg-white/10 border border-white/10 text-white" 
                                         />
                                     </div>
                                     <div className="space-y-2 col-span-2">
-                                        <label className="text-xs font-medium uppercase text-muted-foreground">Model ID</label>
+                                        <label className="text-xs font-medium uppercase text-muted-foreground">{t('模型 ID', 'Model ID')}</label>
                                         {imageModel === "Grsai-Image" ? (
                                             <select 
                                                 value={imgToolModel}
@@ -1274,38 +1276,38 @@ const Settings = () => {
                                                 type="text" 
                                                 value={imgToolModel}
                                                 onChange={(e) => setImgToolModel(e.target.value)}
-                                                placeholder="e.g. doubao-seedream-4-5-251128"
+                                                placeholder={t('例如：doubao-seedream-4-5-251128', 'e.g. doubao-seedream-4-5-251128')}
                                                 className="w-full p-2 text-sm rounded-md bg-white/10 border border-white/10 text-white" 
                                             />
                                         )}
                                     </div>
                                     <div className="space-y-2 col-span-2 md:col-span-1">
-                                        <label className="text-xs font-medium uppercase text-muted-foreground">Width (px)</label>
+                                        <label className="text-xs font-medium uppercase text-muted-foreground">{t('宽度（px）', 'Width (px)')}</label>
                                         <input 
                                             type="number" 
                                             value={imgToolWidth}
                                             onChange={(e) => setImgToolWidth(e.target.value)}
-                                            placeholder="1024"
+                                            placeholder={t('1024', '1024')}
                                             className="w-full p-2 text-sm rounded-md bg-white/10 border border-white/10 text-white" 
                                         />
                                     </div>
                                     <div className="space-y-2 col-span-2 md:col-span-1">
-                                        <label className="text-xs font-medium uppercase text-muted-foreground">Height (px)</label>
+                                        <label className="text-xs font-medium uppercase text-muted-foreground">{t('高度（px）', 'Height (px)')}</label>
                                         <input 
                                             type="number" 
                                             value={imgToolHeight}
                                             onChange={(e) => setImgToolHeight(e.target.value)}
-                                            placeholder="1024"
+                                            placeholder={t('1024', '1024')}
                                             className="w-full p-2 text-sm rounded-md bg-white/10 border border-white/10 text-white" 
                                         />
                                     </div>
                                     <div className="space-y-2 col-span-2">
-                                        <label className="text-xs font-medium uppercase text-muted-foreground">WebHook URL</label>
+                                        <label className="text-xs font-medium uppercase text-muted-foreground">{t('WebHook URL', 'WebHook URL')}</label>
                                         <input 
                                             type="text" 
                                             value={imgToolWebHook}
                                             onChange={(e) => setImgToolWebHook(e.target.value)}
-                                            placeholder="https://your-callback.com/..."
+                                            placeholder={t('例如：https://your-callback.com/...', 'e.g. https://your-callback.com/...')}
                                             className="w-full p-2 text-sm rounded-md bg-white/10 border border-white/10 text-white" 
                                         />
                                     </div>
@@ -1316,8 +1318,8 @@ const Settings = () => {
                             <div className="space-y-4">
                                 <div className="space-y-2">
                                     <label className="text-sm font-medium text-orange-400 flex items-center gap-2">
-                                        Video Generation Tool
-                                        <span className="text-[10px] bg-orange-500/20 text-orange-300 px-1.5 py-0.5 rounded border border-orange-500/30 font-mono">Task: video_gen</span>
+                                        {t('视频生成工具', 'Video Generation Tool')}
+                                        <span className="text-[10px] bg-orange-500/20 text-orange-300 px-1.5 py-0.5 rounded border border-orange-500/30 font-mono">{t('任务：video_gen', 'Task: video_gen')}</span>
                                         <span className={`text-[10px] px-2 py-0.5 rounded border font-mono ${sourceBadgeClass(activeSettingSources.Video)}`}>
                                             {sourceBadgeText(activeSettingSources.Video)}
                                         </span>
@@ -1328,15 +1330,15 @@ const Settings = () => {
                                         className="w-full p-2 rounded-md bg-zinc-900 border border-white/10 text-white"
                                     >
                                         <option className="bg-zinc-900" value="Runway">Runway Gen-2/Gen-3</option>
-                                        <option className="bg-zinc-900" value="Luma">Luma Dream Machine</option>
-                                        <option className="bg-zinc-900" value="Kling">Kling AI (可灵)</option>
+                                        <option className="bg-zinc-900" value="Luma">{t('Luma 梦境引擎', 'Luma Dream Machine')}</option>
+                                        <option className="bg-zinc-900" value="Kling">{t('Kling AI（可灵）', 'Kling AI (可灵)')}</option>
                                         <option className="bg-zinc-900" value="Sora">Sora (OpenAI)</option>
-                                        <option className="bg-zinc-900" value="Grsai-Video">Grsai (Standard)</option>
-                                        <option className="bg-zinc-900" value="Grsai-Video (Upload)">Grsai (File Upload)</option>
+                                        <option className="bg-zinc-900" value="Grsai-Video">{t('Grsai（标准）', 'Grsai (Standard)')}</option>
+                                        <option className="bg-zinc-900" value="Grsai-Video (Upload)">{t('Grsai（文件上传）', 'Grsai (File Upload)')}</option>
                                         <option className="bg-zinc-900" value="Stable Video">Stable Video Component</option>
-                                        <option className="bg-zinc-900" value="Doubao Video">Doubao (豆包 - Volcengine)</option>
-                                        <option className="bg-zinc-900" value="Wanxiang">Wanxiang (通义万相 - Aliyun)</option>
-                                        <option className="bg-zinc-900" value="Vidu (Video)">Vidu (Shengshu)</option>
+                                        <option className="bg-zinc-900" value="Doubao Video">{t('Doubao（豆包 - 火山引擎）', 'Doubao (豆包 - Volcengine)')}</option>
+                                        <option className="bg-zinc-900" value="Wanxiang">{t('Wanxiang（通义万相 - 阿里云）', 'Wanxiang (通义万相 - Aliyun)')}</option>
+                                        <option className="bg-zinc-900" value="Vidu (Video)">{t('Vidu（生数）', 'Vidu (Shengshu)')}</option>
                                     </select>
                                 </div>
 
@@ -1347,22 +1349,22 @@ const Settings = () => {
                                             type="password" 
                                             value={vidToolKey}
                                             onChange={(e) => setVidToolKey(e.target.value)}
-                                            placeholder="Key..."
+                                            placeholder={t('密钥...', 'Key...')}
                                             className="w-full p-2 text-sm rounded-md bg-white/10 border border-white/10 text-white" 
                                         />
                                     </div>
                                     <div className="space-y-2 col-span-2 md:col-span-1">
-                                        <label className="text-xs font-medium uppercase text-muted-foreground">Endpoint</label>
+                                        <label className="text-xs font-medium uppercase text-muted-foreground">{t('端点', 'Endpoint')}</label>
                                         <input 
                                             type="text" 
                                             value={vidToolEndpoint}
                                             onChange={(e) => handleVidEndpointChange(e.target.value)}
-                                            placeholder="Optional"
+                                            placeholder={t('可选', 'Optional')}
                                             className="w-full p-2 text-sm rounded-md bg-white/10 border border-white/10 text-white" 
                                         />
                                     </div>
                                     <div className="space-y-2 col-span-2">
-                                        <label className="text-xs font-medium uppercase text-muted-foreground">Model ID</label>
+                                        <label className="text-xs font-medium uppercase text-muted-foreground">{t('模型 ID', 'Model ID')}</label>
                                         {(videoModel === "Grsai-Video" || videoModel === "Grsai-Video (Upload)") ? (
                                             <select 
                                                 value={vidToolModel}
@@ -1392,7 +1394,7 @@ const Settings = () => {
                                                     type="text" 
                                                     value={vidToolModel}
                                                     onChange={(e) => handleVidSubModelChange(e.target.value)}
-                                                    placeholder="e.g. vidu2.0 or select from list"
+                                                    placeholder={t('例如：vidu2.0，或从列表选择', 'e.g. vidu2.0 or select from list')}
                                                     className="w-full p-2 text-sm rounded-md bg-white/10 border border-white/10 text-white" 
                                                 />
                                                 <datalist id="vidu-models">
@@ -1403,14 +1405,14 @@ const Settings = () => {
                                                     <option value="viduq1" />
                                                     <option value="viduq1-classic" />
                                                 </datalist>
-                                                <p className="text-[10px] text-muted-foreground mt-1">Select or type custom model ID</p>
+                                                <p className="text-[10px] text-muted-foreground mt-1">{t('可从列表选择或手动输入模型 ID', 'Select or type custom model ID')}</p>
                                             </>
                                         ) : (
                                             <input 
                                                 type="text" 
                                                 value={vidToolModel}
                                                 onChange={(e) => handleVidSubModelChange(e.target.value)}
-                                                placeholder="e.g. doubao-seedance-1-5-pro-251215"
+                                                placeholder={t('例如：doubao-seedance-1-5-pro-251215', 'e.g. doubao-seedance-1-5-pro-251215')}
                                                 className="w-full p-2 text-sm rounded-md bg-white/10 border border-white/10 text-white" 
                                             />
                                         )}
@@ -1421,7 +1423,7 @@ const Settings = () => {
                                             type="text" 
                                             value={vidToolWebHook}
                                             onChange={(e) => setVidToolWebHook(e.target.value)}
-                                            placeholder="https://your-callback.com/..."
+                                            placeholder={t('例如：https://your-callback.com/...', 'e.g. https://your-callback.com/...')}
                                             className="w-full p-2 text-sm rounded-md bg-white/10 border border-white/10 text-white" 
                                         />
                                     </div>
@@ -1436,12 +1438,12 @@ const Settings = () => {
                                             />
                                             <div className="flex flex-col gap-1">
                                                 <label htmlFor="draftMode" className="text-sm font-medium text-white cursor-pointer select-none">
-                                                    Draft Mode (Sample Mode)
+                                                    {t('草稿模式（样片模式）', 'Draft Mode (Sample Mode)')}
                                                 </label>
                                                 <span className="text-[10px] text-muted-foreground leading-tight">
-                                                    Only Seedance 1.5 pro supports controlling whether to enable sample mode.<br/>
-                                                    True: Indicates that the sample mode is turned on, allowing for the generation of a highly consistent 5s video.<br/>
-                                                    False: Normal generation mode.
+                                                    {t('仅 Seedance 1.5 pro 支持控制是否开启样片模式。', 'Only Seedance 1.5 pro supports controlling whether to enable sample mode.')}<br/>
+                                                    {t('True：开启样片模式，可生成高度一致的 5 秒视频。', 'True: Indicates that the sample mode is turned on, allowing for the generation of a highly consistent 5s video.')}<br/>
+                                                    {t('False：普通生成模式。', 'False: Normal generation mode.')}
                                                 </span>
                                             </div>
                                         </div>
@@ -1453,8 +1455,8 @@ const Settings = () => {
                             <div className="space-y-4">
                                 <div className="space-y-2">
                                     <label className="text-sm font-medium text-pink-400 flex items-center gap-2">
-                                        Vision / Image Recognition Tool
-                                        <span className="text-[10px] bg-pink-500/20 text-pink-300 px-1.5 py-0.5 rounded border border-pink-500/30 font-mono">Task: analysis</span>
+                                        {t('视觉 / 图像识别工具', 'Vision / Image Recognition Tool')}
+                                        <span className="text-[10px] bg-pink-500/20 text-pink-300 px-1.5 py-0.5 rounded border border-pink-500/30 font-mono">{t('任务：analysis', 'Task: analysis')}</span>
                                         <span className={`text-[10px] px-2 py-0.5 rounded border font-mono ${sourceBadgeClass(activeSettingSources.Vision)}`}>
                                             {sourceBadgeText(activeSettingSources.Vision)}
                                         </span>
@@ -1464,10 +1466,10 @@ const Settings = () => {
                                         onChange={(e) => setVisionModel(e.target.value)}
                                         className="w-full p-2 rounded-md bg-zinc-900 border border-white/10 text-white"
                                     >
-                                        <option className="bg-zinc-900" value="Grsai-Vision">Grsai (Vision Capability)</option>
+                                        <option className="bg-zinc-900" value="Grsai-Vision">{t('Grsai（视觉能力）', 'Grsai (Vision Capability)')}</option>
                                     </select>
                                     <p className="text-xs text-muted-foreground">
-                                        Used for Scene Analysis from Image, Image to Text, etc. Compatible with OpenAI Vision API format.
+                                        {t('用于图像场景分析、图像转文本等，兼容 OpenAI Vision API 格式。', 'Used for Scene Analysis from Image, Image to Text, etc. Compatible with OpenAI Vision API format.')}
                                     </p>
                                 </div>
                                 
@@ -1479,27 +1481,27 @@ const Settings = () => {
                                                 type="password" 
                                                 value={visToolKey}
                                                 onChange={(e) => setVisToolKey(e.target.value)}
-                                                placeholder="sk-..."
+                                                placeholder={t('sk-...', 'sk-...')}
                                                 className="w-full p-2 rounded-md bg-zinc-900 border border-white/10 text-white text-sm"
                                             />
                                         </div>
                                         <div className="space-y-1">
-                                            <label className="text-xs font-medium text-muted-foreground">Endpoint URL</label>
+                                            <label className="text-xs font-medium text-muted-foreground">{t('端点 URL', 'Endpoint URL')}</label>
                                             <input 
                                                 type="text" 
                                                 value={visToolEndpoint}
                                                 onChange={(e) => setVisToolEndpoint(e.target.value)}
-                                                placeholder="https://grsaiapi.com/v1/chat/completions"
+                                                placeholder={t('https://grsaiapi.com/v1/chat/completions', 'https://grsaiapi.com/v1/chat/completions')}
                                                 className="w-full p-2 rounded-md bg-zinc-900 border border-white/10 text-white text-sm"
                                             />
                                         </div>
                                         <div className="space-y-1">
-                                            <label className="text-xs font-medium text-muted-foreground">Model Name (ID)</label>
+                                            <label className="text-xs font-medium text-muted-foreground">{t('模型名称（ID）', 'Model Name (ID)')}</label>
                                             <input 
                                                 type="text" 
                                                 value={visToolModel}
                                                 onChange={(e) => setVisToolModel(e.target.value)}
-                                                placeholder="gemini-3-pro, gemini-2.5-pro, etc."
+                                                placeholder={t('例如：gemini-3-pro、gemini-2.5-pro 等', 'e.g. gemini-3-pro, gemini-2.5-pro, etc.')}
                                                 className="w-full p-2 rounded-md bg-zinc-900 border border-white/10 text-white text-sm"
                                             />
                                         </div>
@@ -1512,7 +1514,7 @@ const Settings = () => {
                                 className="w-full flex items-center justify-center space-x-2 bg-white/10 text-white border border-white/10 px-4 py-3 rounded-lg hover:bg-white/20 transition-colors font-medium font-bold"
                             >
                                 <Save size={18} />
-                                <span>Save Tool Credentials</span>
+                                <span>{t('保存工具凭据', 'Save Tool Credentials')}</span>
 
                             </button>
                         </div>
@@ -1521,16 +1523,16 @@ const Settings = () => {
             ) : activeTab === 'system_api' ? (
                 <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
                     <div className="space-y-4">
-                        <h2 className="text-xl font-semibold">System API Settings</h2>
+                        <h2 className="text-xl font-semibold">{t('系统 API 设置', 'System API Settings')}</h2>
                         <div className="bg-black/20 p-6 rounded-xl border border-white/10 space-y-4 shadow-sm">
                             <div className="flex items-center justify-between gap-3">
-                                <h3 className="text-base font-medium">Select Shared Provider Configuration</h3>
+                                <h3 className="text-base font-medium">{t('选择共享提供方配置', 'Select Shared Provider Configuration')}</h3>
                                 <span className={`text-xs px-2 py-0.5 rounded border ${userCredits > 0 ? 'text-green-300 border-green-500/40 bg-green-500/10' : 'text-yellow-300 border-yellow-500/40 bg-yellow-500/10'}`}>
-                                    Credits: {userCredits}
+                                    {t('积分', 'Credits')}: {userCredits}
                                 </span>
                             </div>
                             <p className="text-xs text-muted-foreground">
-                                System keys are shared by provider. Choose one model config in each category as your active setting. Credits are checked at call time for billable actions.
+                                {t('系统密钥按提供方共享。你可以在每个类别中选择一个模型配置作为当前激活项；可计费动作会在调用时校验积分。', 'System keys are shared by provider. Choose one model config in each category as your active setting. Credits are checked at call time for billable actions.')}
                             </p>
 
                             {!isSystemSettingsLoading && categorizedSystemSettings.length > 0 && (
@@ -1539,7 +1541,7 @@ const Settings = () => {
                                         onClick={() => setSelectedSystemCategory('All')}
                                         className={`text-xs px-2.5 py-1 rounded border transition-colors ${selectedSystemCategory === 'All' ? 'bg-primary/20 text-primary border-primary/40' : 'bg-white/5 text-muted-foreground border-white/10 hover:text-white hover:bg-white/10'}`}
                                     >
-                                        All
+                                        {t('全部', 'All')}
                                     </button>
                                     {categorizedSystemSettings.map((block) => (
                                         <button
@@ -1554,11 +1556,11 @@ const Settings = () => {
                             )}
 
                             {isSystemSettingsLoading ? (
-                                <div className="text-sm text-muted-foreground">Loading system settings...</div>
+                                <div className="text-sm text-muted-foreground">{t('加载系统设置中...', 'Loading system settings...')}</div>
                             ) : systemSettings.length === 0 ? (
-                                <div className="text-sm text-muted-foreground">No system API settings available.</div>
+                                <div className="text-sm text-muted-foreground">{t('暂无系统 API 设置。', 'No system API settings available.')}</div>
                             ) : visibleSystemSettings.length === 0 ? (
-                                <div className="text-sm text-muted-foreground">No settings in selected category.</div>
+                                <div className="text-sm text-muted-foreground">{t('所选类别下暂无设置。', 'No settings in selected category.')}</div>
                             ) : (
                                 <div className="space-y-4">
                                     {visibleSystemSettings.map((categoryBlock) => (
@@ -1566,7 +1568,7 @@ const Settings = () => {
                                             <div className="flex items-center gap-2">
                                                 <span className="text-sm font-semibold">{categoryBlock.label}</span>
                                                 <span className="text-[10px] px-2 py-0.5 rounded border border-white/20 text-muted-foreground">
-                                                    {categoryBlock.groups.length} Provider{categoryBlock.groups.length > 1 ? 's' : ''}
+                                                    {categoryBlock.groups.length} {t(categoryBlock.groups.length > 1 ? '个提供方' : '个提供方', categoryBlock.groups.length > 1 ? 'Providers' : 'Provider')}
                                                 </span>
                                             </div>
 
@@ -1576,9 +1578,9 @@ const Settings = () => {
                                                         <div className="flex flex-wrap items-center gap-2">
                                                             <span className="text-sm font-semibold">{group.provider}</span>
                                                             {group.shared_key_configured ? (
-                                                                <span className="text-[10px] px-2 py-0.5 rounded border border-green-500/30 text-green-300 bg-green-500/10">Shared Key Ready</span>
+                                                                <span className="text-[10px] px-2 py-0.5 rounded border border-green-500/30 text-green-300 bg-green-500/10">{t('共享密钥已就绪', 'Shared Key Ready')}</span>
                                                             ) : (
-                                                                <span className="text-[10px] px-2 py-0.5 rounded border border-yellow-500/30 text-yellow-300 bg-yellow-500/10">No Shared Key</span>
+                                                                <span className="text-[10px] px-2 py-0.5 rounded border border-yellow-500/30 text-yellow-300 bg-yellow-500/10">{t('无共享密钥', 'No Shared Key')}</span>
                                                             )}
                                                         </div>
 
@@ -1589,15 +1591,15 @@ const Settings = () => {
                                                                     className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center p-2 rounded border border-white/10 bg-black/20"
                                                                 >
                                                                     <div className="md:col-span-3 text-xs">
-                                                                        <div className="text-muted-foreground">Model</div>
+                                                                        <div className="text-muted-foreground">{t('模型', 'Model')}</div>
                                                                         <div className="font-mono break-all">{row.model || '-'}</div>
                                                                     </div>
                                                                     <div className="md:col-span-5 text-xs">
-                                                                        <div className="text-muted-foreground">Endpoint</div>
+                                                                        <div className="text-muted-foreground">{t('端点', 'Endpoint')}</div>
                                                                         <div className="font-mono break-all">{row.base_url || '-'}</div>
                                                                     </div>
                                                                     <div className="md:col-span-2 text-xs">
-                                                                        <div className="text-muted-foreground">WebHook</div>
+                                                                        <div className="text-muted-foreground">{t('回调 WebHook', 'WebHook')}</div>
                                                                         <div className="font-mono break-all">{row.webhook_url || '-'}</div>
                                                                     </div>
                                                                     <div className="md:col-span-2 flex md:justify-end">
@@ -1609,7 +1611,7 @@ const Settings = () => {
                                                                             disabled={!group.shared_key_configured || selectingSystemId === row.id}
                                                                             className="w-full md:w-auto text-xs px-3 py-1.5 rounded border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50 disabled:cursor-not-allowed"
                                                                         >
-                                                                            {selectingSystemId === row.id ? 'Activating...' : (row.is_active ? 'Active' : 'Use This')}
+                                                                            {selectingSystemId === row.id ? t('激活中...', 'Activating...') : (row.is_active ? t('已激活', 'Active') : t('使用此配置', 'Use This'))}
                                                                         </button>
                                                                     </div>
                                                                 </div>
@@ -1627,42 +1629,42 @@ const Settings = () => {
                 </div>
             ) : (
                 <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                    <h2 className="text-xl font-semibold">Generation Prompt Settings</h2>
+                    <h2 className="text-xl font-semibold">{t('生成提示词设置', 'Generation Prompt Settings')}</h2>
                     <div className="bg-black/20 p-6 rounded-xl border border-white/10 space-y-4 shadow-sm">
                         
                         <div className="space-y-2">
-                            <label className="text-sm font-medium">Language Strategy</label>
+                            <label className="text-sm font-medium">{t('语言策略', 'Language Strategy')}</label>
                             <select 
                                 value={promptLanguage} 
                                 onChange={(e) => setPromptLanguage(e.target.value)}
                                 className="w-full p-2 rounded-md bg-zinc-900 border border-white/10 text-white"
                             >
-                                <option className="bg-zinc-900" value="mixed">Mixed (Chinese Names/Dialogue + English Descriptions)</option>
-                                <option className="bg-zinc-900" value="en">Pure English (Force Translate All)</option>
+                                <option className="bg-zinc-900" value="mixed">{t('混合（中文人名/对白 + 英文描述）', 'Mixed (Chinese Names/Dialogue + English Descriptions)')}</option>
+                                <option className="bg-zinc-900" value="en">{t('纯英文（强制全部翻译）', 'Pure English (Force Translate All)')}</option>
                             </select>
                             <p className="text-xs text-muted-foreground">
-                                Controls how Chinese elements (Names, Dialogues) are handled in the generated English prompts.
+                                {t('控制生成英文提示词时如何处理中文元素（人名、对白）。', 'Controls how Chinese elements (Names, Dialogues) are handled in the generated English prompts.')}
                             </p>
                         </div>
 
                         <div className="space-y-2">
-                            <label className="text-sm font-medium">Character Generation Supplementary Prompts</label>
-                            <p className="text-xs text-muted-foreground">Additional instructions appended when generating character descriptions.</p>
+                            <label className="text-sm font-medium">{t('角色生成补充提示词', 'Character Generation Supplementary Prompts')}</label>
+                            <p className="text-xs text-muted-foreground">{t('在生成角色描述时附加的额外指令。', 'Additional instructions appended when generating character descriptions.')}</p>
                             <textarea 
                                 value={charSupplements} 
                                 onChange={(e) => setCharSupplements(e.target.value)}
-                                placeholder="e.g. Always emphasize eastern features..."
+                                placeholder={t('例如：始终强调东方特征...', 'e.g. Always emphasize eastern features...')}
                                 className="w-full p-4 h-32 rounded-md bg-white/10 border border-white/10 resize-none text-white"
                             />
                         </div>
                         
                         <div className="space-y-2">
-                            <label className="text-sm font-medium">Scene Generation Supplementary Prompts</label>
-                            <p className="text-xs text-muted-foreground">Additional instructions appended when generating scene visuals/beats.</p>
+                            <label className="text-sm font-medium">{t('场景生成补充提示词', 'Scene Generation Supplementary Prompts')}</label>
+                            <p className="text-xs text-muted-foreground">{t('在生成场景画面/节奏时附加的额外指令。', 'Additional instructions appended when generating scene visuals/beats.')}</p>
                             <textarea 
                                 value={sceneSupplements} 
                                 onChange={(e) => setSceneSupplements(e.target.value)}
-                                placeholder="e.g. Maintain a dark, cinematic tone..."
+                                placeholder={t('例如：保持黑暗电影感基调...', 'e.g. Maintain a dark, cinematic tone...')}
                                 className="w-full p-4 h-32 rounded-md bg-white/10 border border-white/10 resize-none text-white"
                             />
                         </div>
@@ -1672,7 +1674,7 @@ const Settings = () => {
                             className="mt-6 w-full flex items-center justify-center space-x-2 bg-primary text-black border border-primary px-4 py-3 rounded-lg hover:opacity-90 transition-opacity font-medium font-bold"
                         >
                             <Save size={18} />
-                            <span>Save Prompt Settings</span>
+                            <span>{t('保存提示词设置', 'Save Prompt Settings')}</span>
                         </button>
                     </div>
                 </div>

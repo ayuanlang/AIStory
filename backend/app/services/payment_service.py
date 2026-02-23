@@ -88,7 +88,12 @@ class PaymentService:
         if not cert_serial_no: missing_fields.append('cert_serial_no')
         
         if missing_fields:
-            logger.warning(f"WeChat Pay config incomplete. Missing: {', '.join(missing_fields)}. Real payments will fail.")
+            logger.warning(
+                "WeChat Pay config incomplete. Missing: %s. Real payments will fail. "
+                "Set env vars WECHAT_MCHID, WECHAT_APPID, WECHAT_API_V3_KEY, WECHAT_PRIVATE_KEY_PATH (or provide private_key in dynamic config), "
+                "WECHAT_CERT_SERIAL_NO. For local/dev, enable use_mock=true.",
+                ", ".join(missing_fields),
+            )
             # Ensure we don't leave a stale instance if config became invalid
             self.wxpay = None
             return

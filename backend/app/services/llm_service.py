@@ -190,6 +190,58 @@ class LLMService:
 
         return ""
 
+    def _is_prohibited_marker(self, text: str) -> bool:
+        if not isinstance(text, str):
+            return False
+        normalized = text.strip().upper().lstrip("=").strip()
+        return normalized == "PROHIBITED_CONTENT"
+
+    def _has_content_filter_block(self, content_filter_results: Any) -> bool:
+        if not isinstance(content_filter_results, dict):
+            return False
+        for value in content_filter_results.values():
+            if not isinstance(value, dict):
+                continue
+            if value.get("filtered") is True:
+                return True
+        return False
+
+    def _is_blocked_response(self, full_response: Dict[str, Any]) -> bool:
+        if not isinstance(full_response, dict):
+            return False
+
+        choices = full_response.get("choices") or []
+        if not isinstance(choices, list):
+            return False
+
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+
+            finish_reason = str(choice.get("finish_reason") or "").strip().lower()
+            if finish_reason in {"content_filter", "safety", "blocked"}:
+                return True
+
+            if self._has_content_filter_block(choice.get("content_filter_results")):
+                return True
+
+            message = choice.get("message")
+            if isinstance(message, dict):
+                content_text = self._extract_text_from_content(message.get("content"))
+                if self._is_prohibited_marker(content_text):
+                    return True
+
+                refusal_text = message.get("refusal")
+                if self._is_prohibited_marker(refusal_text):
+                    return True
+
+            choice_text = choice.get("text")
+            if self._is_prohibited_marker(choice_text):
+                return True
+
+        extracted_text = self._extract_text_from_response(full_response)
+        return self._is_prohibited_marker(extracted_text)
+
     async def analyze_multimodal(self, prompt: str, image_url: str, config: Dict[str, Any]) -> Dict[str, Any]:
         """
         Analyzes an image with a prompt using multimodal LLM capabilities.
@@ -731,6 +783,16 @@ class LLMService:
         if os.getenv("LLM_DEBUG_LOG_CONTENT") == "1":
             logging.getLogger("app").debug("LLM Payload (debug): %s", json.dumps(payload, ensure_ascii=False))
             logging.getLogger("app").debug("LLM Response (debug): %s", json.dumps(data, ensure_ascii=False))
+
+        if self._is_blocked_response(data):
+            logger.warning(
+                "LLM blocked by provider moderation: provider=%s model=%s url=%s finish_reason=%s",
+                provider,
+                model,
+                url,
+                ((data.get("choices") or [{}])[0] or {}).get("finish_reason"),
+            )
+            raise RuntimeError("LLM content blocked by provider (PROHIBITED_CONTENT)")
         
         if "choices" in data and len(data["choices"]) > 0:
             return data

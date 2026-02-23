@@ -1,4 +1,6 @@
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -19,7 +21,13 @@ check_and_migrate_tables()
 create_default_superuser()
 init_initial_data()
 
-app = FastAPI(title=settings.PROJECT_NAME)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    configure_uvicorn_logging_noise_reduction()
+    yield
+
+
+app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)
 
 app.add_middleware(LoggingMiddleware)
 
@@ -27,11 +35,6 @@ app.add_middleware(LoggingMiddleware)
 import os
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads")
-
-
-@app.on_event("startup")
-async def _startup_logging_noise_reduction():
-    configure_uvicorn_logging_noise_reduction()
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):

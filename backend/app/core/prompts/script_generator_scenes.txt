@@ -8,6 +8,8 @@ IMPORTANT OUTPUT RULES:
 - Return ONLY a raw JSON object. No markdown. No code fences.
 - Do NOT include commentary or reasoning.
 - The JSON must be parseable by Python json.loads.
+- Language consistency mandate: infer the dominant language of user input/context and write all natural-language field values in that same language (e.g., Chinese input -> Chinese output values; English input -> English output values).
+- IDs and fixed schema tokens keep canonical format, but descriptive text must remain language-consistent.
 
 Safety:
 - Avoid explicit sexual content. If "sexy" is requested, express it as non-explicit cinematic styling.
@@ -50,13 +52,32 @@ Constraints:
   - `scene_no` must be the numeric index of `scene_id` (e.g., `EP01_SC03` -> `scene_no: "3"`).
   - Never mix multiple episode prefixes in one output.
 - Environment-asset relation mandate:
-  - `environment_name` must follow `[Venue]_[DirectionTag]_[ShotScale]_[LightingTagOptional]`.
+  - `environment_name` must follow `{Venue}_{DirectionTag}_{ShotScale}_{LightingTagOptional}`.
   - `environment_relation` is mandatory for every scene and must be one of `NEW`, `REUSE:<ExistingEnvName>`, `VARIANT_OF:<ExistingEnvName>`.
+  - Same-venue environments must share one `Base Environment Reference` (unified reference image/mother board).
+  - For `VARIANT_OF/REUSE`, describe only `Environment Delta` (ordered as `Camera Position/Direction -> Axis Side -> Background Set Change -> Lighting Direction Change -> Framing Change -> Dynamic Parts State`), not full environment rewrite.
+  - For `REUSE`, delta must be explicitly `None` / `No visual delta`.
+  - Delta whitelist ordering is mandatory. Always output in this exact order:
+    1) `Camera Position/Direction`
+    2) `Axis Side`
+    3) `Background Set Change`
+    4) `Lighting Direction Change`
+    5) `Framing Change`
+    6) `Dynamic Parts State`
+    Template: `Environment Delta = {Camera Position/Direction: ..., Axis Side: ..., Background Set Change: ..., Lighting Direction Change: ..., Framing Change: ..., Dynamic Parts State: ...}` (use `None` when unchanged).
+    Shorthand anchor: `CPD -> AS -> BG -> LD -> FR -> DP`.
+  - DP reason mandatory: whenever `Dynamic Parts State` is non-`None`, it MUST include `Before -> After + reason`.
+    - Recommended expression: `Dynamic Parts State: <PartName>(<Before> -> <After>, reason: <trigger/action>)`.
+    - Result-only text is invalid (e.g., `Door: Closed` without trigger/reason).
+  - REUSE minimal template (mandatory):
+    `Environment Delta = {Camera Position/Direction: None, Axis Side: None, Background Set Change: None, Lighting Direction Change: None, Framing Change: None, Dynamic Parts State: None}`.
+    Only `Dynamic Parts State` may be non-`None` when doors/windows/lights/screens state truly changes; other five keys must stay `None`.
   - If axis/camera direction/background set changes, use `VARIANT_OF` and a new `environment_name`.
   - `Front/Reverse` are the minimum baseline variants, not the upper limit.
   - Under the 2D-background-consistency-first principle, generate all environment variants required by story blocking (axis flip, observation-direction switch, background-set change, dominant-light-direction change, visible-structure regrouping).
   - If any potentially needed variant is not generated, provide an explicit exemption reason in scene rationale.
-  - Label mapping consistency: `environment_relation` ↔ `Environment Relation`, `entry_state` ↔ `Entry State`, `exit_state` ↔ `Exit State`.
+  - Label mapping consistency (canonical): `environment_relation` ↔ `Environment Relation`, `environment_delta` ↔ `Environment Delta`, `observer_view` ↔ `Observer View`, `entry_state` ↔ `Entry State`, `exit_state` ↔ `Exit State`.
+  - In `core_scene_info`, include concise base-reference continuity note for each scene (base ref id/name + delta summary); if `DP` is non-`None`, the summary must include `Before -> After + reason`.
 
 - Scene/Beat supplement (copied requirements; keep wording as-is):
   - **AI创作优先 (AI-First Scene Partitioning)**：本任务不是传统影视场记，而是为 AI 生成稳定画面。由于 AI 背景通常按“单张二维参考”稳定生成，凡是机位/轴线变化导致背景构图显著变化，必须拆分为新的 Scene + 新的 Environment。
@@ -67,18 +88,33 @@ Constraints:
     4) 主要光源方向变化（逆光主导 -> 侧光主导）导致背景读感变化；
     5) 景别/镜高变化引起可见背景结构发生重组（例如俯拍暴露地面构图，平视以墙面为主）。
   - **Axis Trigger Rule**：当 Axis 相对上一段发生“跨线、反向、观察方向切换”时，视为新 Scene 起点，不得继续沿用上一 Scene 的 Environment。
-  - **[Beats] (节拍流)**：按时间顺序排列的动作单元。
+  - **观察者视角绑定 (Observer View Binding, Mandatory)**：Axis 不仅描述角色路径，还必须给出“观察者（镜头）相对轴线”的站位与看向（轴线左侧/右侧、沿轴/逆轴），用于统一后续 Beat 的左右/前后判定。
+  - **{Beats} (节拍流)**：按时间顺序排列的动作单元。
     - **临时配饰克制 (Temporary Accessory Restraint)**：非必要不得新增临时配饰/额外物件（如书包、耳机、帽子、手持小物）；仅当其对剧情有重要且持续作用时才可引入。
     - **持续性要求 (Persistence Requirement)**：一旦引入上述物件，后续 Beats/Scenes 必须维护其存在与状态（佩戴/持有/放置/转移），禁止“出现一次后无说明消失”。
     - **服装一致性约束 (Wardrobe Consistency)**：由于角色资产已预生成，Beats 中禁止出现穿衣/脱衣/换装/试衣/更衣及其同义动作；需要表达情绪推进时，改用表情、手部动作、道具互动或机位变化替代。
     - **Spatial Activation (空间激活)**：Beats 动作必须**主动发生在该物理空间中**，并与环境产生交互（如倚靠、穿越、拿起）。严禁“真空表演”。
+    - **镜头观察者视角强制 (Camera-Observer POV Mandate)**：每个 Beat 必须从“观察者镜头”描述，显式写出：
+      1) **镜头位置**（camera position：机位在场景中的物理落点）；
+      2) **镜头朝向**（shooting direction：镜头看向对象与方向）；
+      3) **角色-镜头关系**（subject-camera relation：角色位于前景/中景/后景、镜头左/右、朝镜头/背镜头/侧对镜头、接近/远离镜头）；
+      4) **镜头画面参数**（camera framing：至少给出景别与镜高/俯仰之一）。
+      若机位或朝向改变，必须在 Beat 内写明“机位变化触发原因 + 变化后新视角”。
     - **空间关系强制 (Spatial Relation Mandate)**：每个 Beat 必须明确角色与物理空间关系（如在床上/床边/地面/门口/桌旁/窗前/墙边），并说明相对 `Stage` 或 `Environment` 的落位。
+    - **左右判定基准强制 (Left/Right Reference Lock)**：Beat 中“左/右/前/后”默认以当前镜头观察方向为基准，不得混用角色自身体向；如需使用角色自身体向，必须显式标注“角色视角”。
     - **主体关系强制 (Subject-to-Subject Mandate)**：每个 Beat 必须明确角色之间的相对关系，至少覆盖：位置关系、朝向关系、视线关系、接触关系。
     - **状态过渡强制 (Transition-to-New-State Mandate)**：凡位置/朝向/视线/接触任一项发生变化，必须描述从旧状态到新状态的过渡过程（动作路径、顺序与触发原因），禁止只给结果态。
     - **统一格式（强制）**：每个 Beat 必须按以下模板书写，不得简写：
-      `1. [空间关系] + [主体关系(位置/朝向/视线/接触)] + [动作变化过程] -> [新状态]`。
+      `1. {镜头:位置/朝向/轴线侧} + {空间关系} + {角色-镜头关系(景别层/左右/朝向镜头)} + {主体关系(位置/朝向/视线/接触)} + {动作变化过程} -> {新状态}`。
+    - **Beat 单行最小模板（可直接复制）**：
+      `1. {镜头:机位在{ }旁/朝向{ }/轴线{左侧|右侧}} + {空间:CHAR:[@角色A]在{ }相对{Stage}位于{ }} + {角色-镜头关系:CHAR:[@角色A]处于{前景|中景|后景}偏{左|右}、{正对|侧对|背对}镜头、景别{远景|全景|中景|近景|特写}、镜高/俯仰{平视|俯拍|仰拍}} + {主体关系:CHAR:[@角色A]与CHAR:[@角色B]位置{ }/朝向{ }/视线{ }/接触{ }} + {动作变化:因{触发原因}执行{动作路径与顺序}，对白/字幕/音效:{ }} -> {新状态:{位置|朝向|视线|接触|道具状态}}`。
+    - **硬校验（缺槽位即无效）**：上述最小模板任一槽位缺失、留空或被抽象概述替代（如“关系紧张了”），该 Beat 视为无效，必须按同一模板补全后重写该行。
+    - **输出前自检（强制）**：提交结果前必须逐 Beat、逐槽位自检一次；任一槽位未填满或语义不具体，必须先修正，再输出。
       - 必须包含具体的对白/字幕/屏幕文字/音效内容（若该 Beat 存在）。
-      - **实体引用**：Beat 描述中涉及的所有**角色**、**道具**、**环境**均须用 `[]` 包裹（例如：`[Alice] walks to [Window] holding [Cup]`）。
+      - **实体引用**：Beat 描述中涉及的所有**角色**、**道具**、**环境**均须用 `[]` 包裹（例如：`CHAR:[@Alice] walks to ENV:[Window] holding PROP:[Cup]`）。
+      - **@Subject 强制**：角色/主体名必须写为 `CHAR:[@Name]`；若角色名缺少 `@`，该 Beat 视为无效并重写。
+      - **环境道具禁 @**：环境与道具保持 `[Name]`（无 `@`），如 `[Window]`、`[Cup]`；误写 `[@Window]` 判定无效。
+      - **实体类型前缀强制**：角色/环境/道具引用需具备 `CHAR:[@Name]`、`ENV:[Name]`、`PROP:[Name]` 类型语义；类型错配视为无效并重写。
     - **剧本到 Beats 生成要求 (Script-to-Beats Generation Mandate, 强制)**：
       1) **顺序一致**：Beats 的顺序必须严格跟随原始剧本事件顺序，禁止打乱因果先后。
       2) **逐项覆盖**：剧本中的每一项信息（动作、台词、情绪反应、字幕、屏幕文字、音效）必须落到至少一个 Beat，禁止“概述式跳过”。

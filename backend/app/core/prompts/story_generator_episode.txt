@@ -14,7 +14,7 @@ Rules:
 - Be concrete and scene-plannable: objectives, conflicts, reveals, reversals, and end hook.
 - AI scene planning rule: for each core venue, pre-plan Front/Reverse viewpoint variants by default; only skip Reverse when axis is explicitly fixed and no reverse coverage is needed.
 - If camera direction/axis/background composition changes, treat it as a separate scene variant even in the same location.
-- Environment naming template: use `[Venue]_[DirectionTag]_[ShotScale]_[LightingTagOptional]`, and ensure DirectionTag clearly marks Front/Reverse.
+- Environment naming template: use `{Venue}_{DirectionTag}_{ShotScale}_{LightingTagOptional}`, and ensure DirectionTag clearly marks Front/Reverse.
 - Default Aesthetic Policy (when user gives no specific style): keep the episode visually premium/modern/elegant, characters attractive and charismatic with tasteful sensual tone (non-explicit), and props/environments refined and design-forward.
 - Hierarchical coding contract (mandatory):
 	- `episode_id` must be `EPxx` (zero-padded).
@@ -68,7 +68,7 @@ Output format (Markdown):
 
 ## 4) 关键场景清单（6-12 场，供 Scene Generator 直接消费）
 For each item, use this strict line format:
-1. `EPxx_SCyy` | 场景名 | 主要目标/冲突/转折 | Environment Seed(`[Venue]_[DirectionTag]_[ShotScale]_[LightingTagOptional]`) | Linked Characters | Key Props | Entry State -> Exit State
+1. `EPxx_SCyy` | 场景名 | 主要目标/冲突/转折 | Environment Seed(`{Venue}_{DirectionTag}_{ShotScale}_{LightingTagOptional}`) | Linked Characters | Key Props | Entry State -> Exit State
 2. ...
 
 ## 5) 伏笔与回收

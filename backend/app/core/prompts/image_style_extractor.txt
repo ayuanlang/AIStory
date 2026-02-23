@@ -8,4 +8,5 @@ Focus on:
 5. Key Elements & Mood.
 
 Output the result as a concise paragraph suitable for an image generation prompt.
+Language policy: output description must be English only, because the result is used directly as image-generation prompt text.
 Start directly with the description. Do not add introductory filler.

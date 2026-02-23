@@ -6,6 +6,7 @@ If any element is missing or weak in the provided text, creatively fill in the g
 
 Rules:
 - Output ONLY a valid JSON object. No markdown formatting, no code fences, no explanations.
+- Language consistency mandate: infer the dominant language of the input text and write every JSON value in that same language (e.g., Chinese input -> Chinese values; English input -> English values).
 - The JSON object MUST contain exactly these keys:
   - "background": World rules, era, location, backstory that drives conflict.
   - "setup": Opening hook, inciting incident, point-of-no-return decision.

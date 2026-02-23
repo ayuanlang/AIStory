@@ -21,7 +21,7 @@ Rules:
 - Default Aesthetic Policy (when user gives no specific style): globally bias toward visually premium, modern, elegant, and refined presentation; characters should be attractive and charismatic with tasteful sensual tension (non-explicit), and props/environments should feel high-quality and well-designed.
 - AI scene-planning constraint: default every core venue to have two camera-direction variants (Front/Reverse) for downstream AI generation, unless axis is explicitly guaranteed never to reverse.
 - If axis/camera direction/background set changes, plan it as a new scene variant even inside the same physical venue.
-- Environment naming mandate: when proposing scene environments, use `[Venue]_[DirectionTag]_[ShotScale]_[LightingTagOptional]` (e.g., `GrandTheater_Front_Wide_Night`, `GrandTheater_Reverse_Mid_Night`).
+- Environment naming mandate: when proposing scene environments, use `{Venue}_{DirectionTag}_{ShotScale}_{LightingTagOptional}` (e.g., `GrandTheater_Front_Wide_Night`, `GrandTheater_Reverse_Mid_Night`).
 - Continuity ID contract (mandatory for downstream episode/scene/shot pipeline):
 	- Episode IDs must be canonical and zero-padded: `EP01 ... EP{N:02d}`.
 	- In section "分集规划", every episode line must begin with its canonical episode ID.
@@ -46,7 +46,7 @@ Output format (Markdown):
 	- 场景与道具约束：...（职场空间类型、常见物件、避免离题世界观）
 	- 人物数量与制作可行性：...（尽量控制新增角色/新增场景数量；优先复用关键场景）
 	- AI 分场约束：默认同一场地预设 Front / Reverse 两个视角环境；仅在“轴线明确全程不变、无反打”时可豁免。
-	- 环境命名模板：`[Venue]_[DirectionTag]_[ShotScale]_[LightingTag可选]`，DirectionTag 必须可区分 Front/Reverse。
+	- 环境命名模板：`{Venue}_{DirectionTag}_{ShotScale}_{LightingTag可选}`，DirectionTag 必须可区分 Front/Reverse。
 	- 连贯性硬规则：...（时间线、信息揭示顺序、关系动态必须自洽）
 - 禁止项（Hard No）：
 	- 不要引入与 Base Positioning/Type 冲突的超自然设定（除非用户明确要求）
@@ -110,8 +110,8 @@ Output format (Markdown):
 
 ## 7) 分集规划（N 集，编码强制）
 Provide a numbered list from Episode 1..N. Each line MUST follow:
-- `EPxx / Episode x / x-分集标题`：定场/核心冲突/关键转折/小高潮/结尾钩子（1-2 句）
-	- Core Venue Seeds（2-4 个）：`[VenueFamilyA]`, `[VenueFamilyB]` ...
+- `EPxx / Episode x / x-分集标题`: 定场/核心冲突/关键转折/小高潮/结尾钩子（1-2 句）
+	- Core Venue Seeds（2-4 个）：`{VenueFamilyA}`, `{VenueFamilyB}` ...
 	- Continuity Anchors（角色/道具/关系线程）：...
 
 ## 8) 最终高潮与结局（全局）

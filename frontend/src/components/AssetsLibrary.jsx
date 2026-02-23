@@ -10,6 +10,8 @@ import { fetchAssets, createAsset, uploadAsset, deleteAsset, deleteAssetsBatch, 
 import { useLog } from '../context/LogContext';
 import { API_URL, BASE_URL } from '../config';
 import RefineControl from './RefineControl.jsx';
+import { confirmUiMessage } from '../lib/uiMessage';
+import { getUiLang, tUI } from '../lib/uiLang';
 
 // Helper to construct full URL if relative
 const getFullUrl = (url) => {
@@ -146,6 +148,8 @@ const AssetItem = React.memo(({ asset, onClick, onDelete, isManageMode, isSelect
 });
 
 const AssetsLibrary = () => {
+    const uiLang = getUiLang();
+    const t = (zh, en) => tUI(uiLang, zh, en);
     const { addLog } = useLog();
     const [assets, setAssets] = useState([]);
     const [filter, setFilter] = useState('all'); // all, image, video
@@ -203,7 +207,7 @@ const AssetsLibrary = () => {
 
     const handleDelete = async (id, e) => {
         e.stopPropagation();
-        if (!confirm("Are you sure you want to delete this asset?")) return;
+        if (!await confirmUiMessage("Are you sure you want to delete this asset?")) return;
         try {
             await deleteAsset(id);
             setAssets(prev => prev.filter(a => a.id !== id));
@@ -241,14 +245,14 @@ const AssetsLibrary = () => {
 
     const handleDeleteSelected = async () => {
         if (selectedIds.size === 0) return;
-        if (!confirm(`Delete ${selectedIds.size} selected assets? Files will be removed.`)) return;
+        if (!await confirmUiMessage(`Delete ${selectedIds.size} selected assets? Files will be removed.`)) return;
         await runBatchDelete(selectedIds);
     };
 
     const handleDeleteFiltered = async () => {
         const ids = filteredAssets.map(a => a.id);
         if (ids.length === 0) return;
-        if (!confirm(`Delete ALL ${ids.length} currently filtered assets?`)) return;
+        if (!await confirmUiMessage(`Delete ALL ${ids.length} currently filtered assets?`)) return;
         await runBatchDelete(ids);
     };
 
@@ -400,36 +404,36 @@ const AssetsLibrary = () => {
                     <div className="flex items-center gap-2">
                         <div className="flex space-x-2 bg-card/50 p-1 rounded-lg border border-white/5">
                             <button onClick={() => setFilter('all')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${filter === 'all' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}>All</button>
-                            <button onClick={() => setFilter('image')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${filter === 'image' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}><Image size={16} /> Images</button>
-                            <button onClick={() => setFilter('video')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${filter === 'video' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}><Video size={16} /> Videos</button>
+                            <button onClick={() => setFilter('image')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${filter === 'image' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}><Image size={16} /> {t('图片', 'Images')}</button>
+                            <button onClick={() => setFilter('video')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${filter === 'video' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}><Video size={16} /> {t('视频', 'Videos')}</button>
                         </div>
                         <button 
                             onClick={() => setSortOrder(prev => prev === 'desc' ? 'asc' : 'desc')}
                             className="p-2.5 rounded-lg bg-card/50 border border-white/5 text-muted-foreground hover:text-white hover:bg-white/10 transition-colors"
-                            title={`Sort: ${sortOrder === 'desc' ? 'Newest First' : 'Oldest First'}`}
+                            title={sortOrder === 'desc' ? t('排序：最新优先', 'Sort: Newest First') : t('排序：最旧优先', 'Sort: Oldest First')}
                         >
                             {sortOrder === 'desc' ? <ArrowDown size={18} /> : <ArrowUp size={18} />}
                         </button>
                     </div>
                     
                     <div className="flex items-center gap-3">
-                        <button onClick={() => setIsManageMode(true)} className="flex items-center gap-2 px-4 py-2 bg-card border border-white/10 text-white rounded-lg hover:bg-white/5 transition-colors"><Settings size={18} /> Manage</button>
-                        <button onClick={() => setIsUploadOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-primary text-black rounded-lg hover:bg-primary/90 transition-colors font-bold"><Plus size={18} /> Add Asset</button>
+                        <button onClick={() => setIsManageMode(true)} className="flex items-center gap-2 px-4 py-2 bg-card border border-white/10 text-white rounded-lg hover:bg-white/5 transition-colors"><Settings size={18} /> {t('管理', 'Manage')}</button>
+                        <button onClick={() => setIsUploadOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-primary text-black rounded-lg hover:bg-primary/90 transition-colors font-bold"><Plus size={18} /> {t('添加素材', 'Add Asset')}</button>
                     </div>
                 </div>
                 ) : (
                     <div className="flex justify-between items-center bg-red-500/10 p-2 rounded-lg border border-red-500/20 animate-in fade-in slide-in-from-top-2">
                          <div className="flex items-center gap-4">
-                             <span className="font-bold text-red-200 ml-2">Manage</span>
+                             <span className="font-bold text-red-200 ml-2">{t('管理', 'Manage')}</span>
                              <div className="h-6 w-px bg-white/10"></div>
                              <button onClick={() => {
                                  const allIds = filteredAssets.map(a => a.id);
                                  if (selectedIds.size === allIds.length) setSelectedIds(new Set());
                                  else setSelectedIds(new Set(allIds));
                              }} className="text-sm hover:text-white text-white/70">
-                                 {selectedIds.size === filteredAssets.length && filteredAssets.length > 0 ? 'Deselect All' : 'Select All'}
+                                 {selectedIds.size === filteredAssets.length && filteredAssets.length > 0 ? t('取消全选', 'Deselect All') : t('全选', 'Select All')}
                              </button>
-                             <span className="text-white/50 text-sm">{selectedIds.size} selected</span>
+                             <span className="text-white/50 text-sm">{selectedIds.size} {t('已选择', 'selected')}</span>
                          </div>
                          <div className="flex items-center gap-2">
                              {isScanning ? (
@@ -440,15 +444,15 @@ const AssetsLibrary = () => {
                                     </div>
                                 </div>
                              ) : (
-                                 <button onClick={handleScanBroken} className="px-3 py-1.5 text-xs bg-card border border-white/10 hover:bg-white/5 rounded flex items-center gap-2 transition-colors text-yellow-500/80 hover:text-yellow-400" title="Scan & Select Missing Files">
-                                     <AlertTriangle size={14} /> Scan Broken
+                                 <button onClick={handleScanBroken} className="px-3 py-1.5 text-xs bg-card border border-white/10 hover:bg-white/5 rounded flex items-center gap-2 transition-colors text-yellow-500/80 hover:text-yellow-400" title={t('扫描并选中缺失文件', 'Scan & Select Missing Files')}>
+                                     <AlertTriangle size={14} /> {t('扫描异常', 'Scan Broken')}
                                  </button>
                              )}
-                             <button onClick={handleSelectOld} className="px-3 py-1.5 text-xs bg-card border border-white/10 hover:bg-white/5 rounded flex items-center gap-2 transition-colors" title="Select files > 7 days old">
-                                 <Calendar size={14} /> Select Old
+                             <button onClick={handleSelectOld} className="px-3 py-1.5 text-xs bg-card border border-white/10 hover:bg-white/5 rounded flex items-center gap-2 transition-colors" title={t('选择 7 天前的文件', 'Select files > 7 days old')}>
+                                 <Calendar size={14} /> {t('选择旧文件', 'Select Old')}
                              </button>
-                             <button onClick={handleDeleteFiltered} className="px-3 py-1.5 text-xs bg-card border border-white/10 hover:bg-white/5 rounded flex items-center gap-2 transition-colors" title="Delete All Visible">
-                                 <Layers size={14} /> Filtered
+                             <button onClick={handleDeleteFiltered} className="px-3 py-1.5 text-xs bg-card border border-white/10 hover:bg-white/5 rounded flex items-center gap-2 transition-colors" title={t('删除当前可见项', 'Delete All Visible')}>
+                                 <Layers size={14} /> {t('筛选结果', 'Filtered')}
                              </button>
                              <button 
                                  onClick={handleDeleteSelected} 
@@ -465,12 +469,12 @@ const AssetsLibrary = () => {
 
                 {/* Group By Controls */}
                 <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-hide">
-                    <span className="text-xs font-bold text-muted-foreground uppercase mr-2">Group By:</span>
+                    <span className="text-xs font-bold text-muted-foreground uppercase mr-2">{t('分组：', 'Group By:')}</span>
                     {[
-                        { id: 'none', label: 'None', icon: Layers },
-                        { id: 'project', label: 'Project', icon: Folder },
-                        { id: 'subject', label: 'Subject', icon: User },
-                        { id: 'shot', label: 'Shot', icon: Film },
+                        { id: 'none', label: t('无', 'None'), icon: Layers },
+                        { id: 'project', label: t('项目', 'Project'), icon: Folder },
+                        { id: 'subject', label: t('主体', 'Subject'), icon: User },
+                        { id: 'shot', label: t('镜头', 'Shot'), icon: Film },
                     ].map(g => (
                          <button 
                             key={g.id}
@@ -885,6 +889,8 @@ const AssetDetailModal = ({ asset, onClose, onUpdate }) => {
 };
 
 const AnalyzeSection = ({ asset }) => {
+    const uiLang = getUiLang();
+    const t = (zh, en) => tUI(uiLang, zh, en);
     const [analyzing, setAnalyzing] = useState(false);
     const [result, setResult] = useState('');
 
@@ -895,7 +901,7 @@ const AnalyzeSection = ({ asset }) => {
             setResult(data.result);
         } catch (e) {
             console.error(e);
-            setResult(`Analysis Failed: ${e.message}`);
+            setResult(t(`分析失败：${e.message}`, `Analysis Failed: ${e.message}`));
         } finally {
             setAnalyzing(false);
         }
@@ -904,7 +910,7 @@ const AnalyzeSection = ({ asset }) => {
     const copyToClipboard = () => {
         if (!result) return;
         navigator.clipboard.writeText(result);
-        alert("Prompt copied to clipboard!"); 
+        alert(t('提示词已复制到剪贴板！', 'Prompt copied to clipboard!')); 
     };
 
     return (
@@ -912,12 +918,12 @@ const AnalyzeSection = ({ asset }) => {
             <div className="flex justify-between items-center mb-3">
                 <label className="text-xs font-bold text-muted-foreground uppercase block flex items-center gap-2">
                     <Sparkles size={12} className="text-primary" />
-                    Style Analysis
+                    {t('风格分析', 'Style Analysis')}
                 </label>
                 {result && (
-                     <button onClick={copyToClipboard} className="text-white/60 hover:text-white" title="Copy">
+                    <button onClick={copyToClipboard} className="text-white/60 hover:text-white" title={t('复制', 'Copy')}>
                         <Copy size={12} />
-                     </button>
+                    </button>
                 )}
             </div>
             
@@ -927,14 +933,14 @@ const AnalyzeSection = ({ asset }) => {
                     className="w-full py-2 bg-secondary/50 border border-white/10 rounded-lg text-xs font-medium hover:bg-secondary hover:text-white transition-colors flex items-center justify-center gap-2"
                 >
                     <Sparkles size={14} />
-                    Extract Style & Prompt
+                    {t('提取风格与提示词', 'Extract Style & Prompt')}
                 </button>
             )}
 
             {analyzing && (
                 <div className="flex items-center justify-center py-4 text-xs text-muted-foreground gap-2">
                     <Loader2 size={14} className="animate-spin text-primary" />
-                    Analyzing image...
+                    {t('正在分析图片...', 'Analyzing image...')}
                 </div>
             )}
 

@@ -3,6 +3,7 @@ import { useLog } from '../context/LogContext';
 import { Loader2, Wand2, Image as ImageIcon, Plus, X, Languages, MessageSquare } from 'lucide-react';
 import { generateImage, refinePrompt, translateText } from '../services/api';
 import { BASE_URL } from '../config';
+import { getUiLang, tUI } from '../lib/uiLang';
 
 // Helper to handle relative URLs
 const getFullUrl = (url) => {
@@ -16,6 +17,8 @@ const getFullUrl = (url) => {
 };
 
 const RefineControl = ({ originalText, onUpdate, type = 'image', currentImage = null, onImageUpdate = null, projectId = null, shotId = null, assetType = null, featureInjector = null, onPickMedia = null }) => {
+    const uiLang = getUiLang();
+    const t = (zh, en) => tUI(uiLang, zh, en);
     const { addLog } = useLog();
     const [instruction, setInstruction] = useState('');
     const [loading, setLoading] = useState(false);
@@ -156,7 +159,7 @@ const RefineControl = ({ originalText, onUpdate, type = 'image', currentImage = 
                     <button 
                         onClick={handleAddRef}
                         className="h-6 px-1.5 rounded text-[10px] flex items-center gap-1 border border-dashed border-white/20 hover:border-white/50 text-white/50 hover:text-white/80 transition-colors"
-                        title="Add Reference Images"
+                        title={t('添加参考图', 'Add Reference Images')}
                     >
                         <ImageIcon className="w-3 h-3"/>
                         <Plus className="w-2 h-2"/>
@@ -167,7 +170,7 @@ const RefineControl = ({ originalText, onUpdate, type = 'image', currentImage = 
                     onClick={handleTranslateInput}
                     disabled={!instruction.trim() || translating || loading}
                     className={`h-6 px-2 rounded text-[10px] flex items-center gap-1 border transition-colors ${translating ? 'bg-blue-500/10 text-blue-500/50 border-blue-500/10' : 'bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 border-blue-500/30'}`}
-                    title="Translate input to English"
+                    title={t('将输入翻译成英文', 'Translate input to English')}
                 >
                     {translating ? <Loader2 className="w-3 h-3 animate-spin"/> : <Languages className="w-3 h-3"/>}
                 </button>
@@ -177,7 +180,7 @@ const RefineControl = ({ originalText, onUpdate, type = 'image', currentImage = 
                         onClick={handleOptimizePrompt}
                         disabled={!instruction.trim() || optimizing || loading}
                         className={`h-6 px-2 rounded text-[10px] flex items-center gap-1 border transition-colors ${optimizing ? 'bg-indigo-500/10 text-indigo-500/50 border-indigo-500/10' : 'bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30 border-indigo-500/30'}`}
-                        title="Optimize Prompt Text (LLM)"
+                        title={t('优化提示词文本（LLM）', 'Optimize Prompt Text (LLM)')}
                     >
                         {optimizing ? <Loader2 className="w-3 h-3 animate-spin"/> : <MessageSquare className="w-3 h-3"/>}
                     </button>
@@ -187,7 +190,7 @@ const RefineControl = ({ originalText, onUpdate, type = 'image', currentImage = 
                     onClick={handleRefine}
                     disabled={!instruction.trim() || loading}
                     className={`h-6 px-2 rounded text-[10px] flex items-center gap-1 border transition-colors ${loading ? 'bg-purple-500/10 text-purple-500/50 border-purple-500/10' : 'bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 border-purple-500/30'}`}
-                    title={onImageUpdate ? "Generate Image" : "Refine Text Prompt"}
+                    title={onImageUpdate ? t('生成图片', 'Generate Image') : t('优化文本提示词', 'Refine Text Prompt')}
                 >
                     {loading ? <Loader2 className="w-3 h-3 animate-spin"/> : (onImageUpdate ? <ImageIcon className="w-3 h-3"/> : <Wand2 className="w-3 h-3"/>)}
                 </button>

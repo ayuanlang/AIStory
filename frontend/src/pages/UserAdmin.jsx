@@ -3,8 +3,12 @@ import { api, getPricingRules, createPricingRule, updatePricingRule, deletePrici
 import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
 import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download } from 'lucide-react';
+import { confirmUiMessage } from '../lib/uiMessage';
+import { getUiLang, tUI } from '../lib/uiLang';
 
 const UserAdmin = () => {
+    const uiLang = getUiLang();
+    const t = (zh, en) => tUI(uiLang, zh, en);
     const [activeTab, setActiveTab] = useState('users');
     const [users, setUsers] = useState([]);
     const [pricingRules, setPricingRules] = useState([]);
@@ -203,7 +207,7 @@ const UserAdmin = () => {
             alert('Select a setting first.');
             return;
         }
-        if (!window.confirm('Delete this system API setting?')) return;
+        if (!await confirmUiMessage('Delete this system API setting?')) return;
         try {
             await deleteSystemSettingManage(Number(selectedSystemApiId));
             await fetchSystemApiManageRows();
@@ -256,7 +260,11 @@ const UserAdmin = () => {
                 return;
             }
 
-            const replaceAll = window.confirm('Replace all existing system API settings before import? Click Cancel for merge/update mode.');
+            const replaceAll = await confirmUiMessage('Replace all existing system API settings before import? Click Cancel for merge/update mode.', {
+                title: 'Import Mode',
+                confirmText: 'Replace All',
+                cancelText: 'Merge/Update',
+            });
             setIsSystemApiImporting(true);
             const result = await importSystemSettingsManage({ items, replace_all: replaceAll });
             await fetchSystemApiManageRows();
@@ -473,7 +481,7 @@ const UserAdmin = () => {
     };
 
     const handleDeleteRule = async (id) => {
-        if (!window.confirm("Delete this pricing rule?")) return;
+        if (!await confirmUiMessage("Delete this pricing rule?")) return;
         try {
             await deletePricingRule(id);
             fetchAllData();
@@ -533,7 +541,7 @@ const UserAdmin = () => {
             setUsers(users.map(u => u.id === userId ? { ...u, ...response.data } : u));
             if (data.is_system) fetchAllData();
         } catch (e) {
-            alert(e.message || "Update failed");
+            alert(e.message || t('更新失败', 'Update failed'));
         }
     };
 
@@ -544,7 +552,7 @@ const UserAdmin = () => {
                 <div className="flex-1 flex items-center justify-center">
                     <div className="bg-red-500/10 border border-red-500/50 p-8 rounded-xl text-center">
                         <Shield className="w-12 h-12 text-red-500 mx-auto mb-4" />
-                        <h2 className="text-xl font-bold mb-2">Access Resticted</h2>
+                        <h2 className="text-xl font-bold mb-2">{t('访问受限', 'Access Restricted')}</h2>
                         <p className="text-red-200">{error}</p>
                     </div>
                 </div>
@@ -562,18 +570,18 @@ const UserAdmin = () => {
                     <div>
                         <h1 className="text-2xl font-bold flex items-center gap-2">
                             <Shield className="w-8 h-8 text-primary" />
-                            Admin Console
+                            {t('管理控制台', 'Admin Console')}
                         </h1>
-                        <p className="text-gray-400 mt-1">Manage users, permissions, and billing.</p>
+                        <p className="text-gray-400 mt-1">{t('管理用户、权限与计费。', 'Manage users, permissions, and billing.')}</p>
                     </div>
                     
                     <div className="flex gap-2">
-                        <TabButton id="users" label="Users" icon={User} />
-                        <TabButton id="pricing" label="Pricing" icon={DollarSign} />
-                        <TabButton id="transactions" label="History" icon={Activity} />
-                        <TabButton id="system_api" label="System API" icon={Key} />
-                        <TabButton id="llm_logs" label="LLM Logs" icon={List} />
-                        <TabButton id="payment" label="Payment" icon={CreditCard} />
+                        <TabButton id="users" label={t('用户', 'Users')} icon={User} />
+                        <TabButton id="pricing" label={t('定价', 'Pricing')} icon={DollarSign} />
+                        <TabButton id="transactions" label={t('记录', 'History')} icon={Activity} />
+                        <TabButton id="system_api" label={t('系统 API', 'System API')} icon={Key} />
+                        <TabButton id="llm_logs" label={t('LLM 日志', 'LLM Logs')} icon={List} />
+                        <TabButton id="payment" label={t('支付', 'Payment')} icon={CreditCard} />
                     </div>
                 </div>
 
@@ -584,13 +592,13 @@ const UserAdmin = () => {
                     {activeTab === 'payment' && (
                         <div className="bg-white/5 border border-white/10 rounded-xl p-6">
                             <h2 className="text-xl font-bold mb-6 flex items-center gap-2 text-white">
-                                <CreditCard className="text-primary"/> WeChat Pay Configuration
+                                <CreditCard className="text-primary"/> {t('微信支付配置', 'WeChat Pay Configuration')}
                             </h2>
 
                             <div className="space-y-6 max-w-4xl">
                                 {/* Mode Selection */}
                                 <div className="bg-black/20 p-4 rounded-lg border border-white/10">
-                                    <label className="block text-sm font-medium mb-3 text-primary">Payment Environment</label>
+                                    <label className="block text-sm font-medium mb-3 text-primary">{t('支付环境', 'Payment Environment')}</label>
                                     <div className="flex items-center gap-6">
                                         <label className={`flex items-center gap-2 cursor-pointer p-3 rounded-lg border transition-all ${paymentConfig.use_mock ? 'bg-primary/20 border-primary' : 'border-gray-700 hover:bg-white/5'}`}>
                                             <input 
@@ -602,7 +610,7 @@ const UserAdmin = () => {
                                             <div className="w-4 h-4 rounded-full border border-gray-400 flex items-center justify-center">
                                                 {paymentConfig.use_mock && <div className="w-2 h-2 rounded-full bg-primary" />}
                                             </div>
-                                            <span className="font-bold text-yellow-400">Mock / Sandbox</span>
+                                            <span className="font-bold text-yellow-400">{t('模拟 / 沙箱', 'Mock / Sandbox')}</span>
                                         </label>
                                         <label className={`flex items-center gap-2 cursor-pointer p-3 rounded-lg border transition-all ${!paymentConfig.use_mock ? 'bg-primary/20 border-primary' : 'border-gray-700 hover:bg-white/5'}`}>
                                             <input 
@@ -614,75 +622,75 @@ const UserAdmin = () => {
                                             <div className="w-4 h-4 rounded-full border border-gray-400 flex items-center justify-center">
                                                 {!paymentConfig.use_mock && <div className="w-2 h-2 rounded-full bg-primary" />}
                                             </div>
-                                            <span className="font-bold text-green-400">Live Production</span>
+                                            <span className="font-bold text-green-400">{t('正式环境', 'Live Production')}</span>
                                         </label>
                                     </div>
                                     <p className="text-xs text-gray-500 mt-2">
-                                        Mock mode simulates payment success immediately. Live mode connects to WeChat Pay API.
+                                        {t('模拟模式会立即返回支付成功；正式模式会连接微信支付 API。', 'Mock mode simulates payment success immediately. Live mode connects to WeChat Pay API.')}
                                     </p>
                                 </div>
 
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                     <div className="space-y-4">
                                         <div>
-                                            <label className="block text-xs uppercase font-bold text-gray-500 mb-1">App ID (WeChat AppID)</label>
+                                            <label className="block text-xs uppercase font-bold text-gray-500 mb-1">{t('App ID（微信 AppID）', 'App ID (WeChat AppID)')}</label>
                                             <input 
                                                 type="text" 
                                                 value={paymentConfig.appid}
                                                 onChange={(e) => setPaymentConfig({...paymentConfig, appid: e.target.value})}
                                                 className="w-full bg-black/40 border border-gray-700 rounded p-2.5 text-sm focus:border-primary outline-none focus:ring-1 focus:ring-primary"
-                                                placeholder="wx8888888888888888"
+                                                placeholder={t('例如：wx8888888888888888', 'e.g. wx8888888888888888')}
                                             />
                                         </div>
                                         <div>
-                                            <label className="block text-xs uppercase font-bold text-gray-500 mb-1">Merchant ID (MchID)</label>
+                                            <label className="block text-xs uppercase font-bold text-gray-500 mb-1">{t('商户号（MchID）', 'Merchant ID (MchID)')}</label>
                                             <input 
                                                 type="text" 
                                                 value={paymentConfig.mchid}
                                                 onChange={(e) => setPaymentConfig({...paymentConfig, mchid: e.target.value})}
                                                 className="w-full bg-black/40 border border-gray-700 rounded p-2.5 text-sm focus:border-primary outline-none focus:ring-1 focus:ring-primary"
-                                                placeholder="1600000000"
+                                                placeholder={t('例如：1600000000', 'e.g. 1600000000')}
                                             />
                                         </div>
                                         <div>
-                                            <label className="block text-xs uppercase font-bold text-gray-500 mb-1">API V3 Key</label>
+                                            <label className="block text-xs uppercase font-bold text-gray-500 mb-1">{t('API V3 密钥', 'API V3 Key')}</label>
                                             <input 
                                                 type="password" 
                                                 value={paymentConfig.api_v3_key}
                                                 onChange={(e) => setPaymentConfig({...paymentConfig, api_v3_key: e.target.value})}
                                                 className="w-full bg-black/40 border border-gray-700 rounded p-2.5 text-sm focus:border-primary outline-none focus:ring-1 focus:ring-primary"
-                                                placeholder="32 characters API Key"
+                                                placeholder={t('32 位 API Key', '32 characters API Key')}
                                             />
                                         </div>
                                         <div>
-                                            <label className="block text-xs uppercase font-bold text-gray-500 mb-1">Notify URL</label>
+                                            <label className="block text-xs uppercase font-bold text-gray-500 mb-1">{t('回调通知 URL', 'Notify URL')}</label>
                                             <input 
                                                 type="text" 
                                                 value={paymentConfig.notify_url}
                                                 onChange={(e) => setPaymentConfig({...paymentConfig, notify_url: e.target.value})}
                                                 className="w-full bg-black/40 border border-gray-700 rounded p-2.5 text-sm focus:border-primary outline-none focus:ring-1 focus:ring-primary"
-                                                placeholder="https://api.yourdomain.com/billing/recharge/notify"
+                                                placeholder={t('例如：https://api.yourdomain.com/billing/recharge/notify', 'e.g. https://api.yourdomain.com/billing/recharge/notify')}
                                             />
                                         </div>
                                     </div>
                                     <div className="space-y-4">
                                         <div>
-                                            <label className="block text-xs uppercase font-bold text-gray-500 mb-1">Certificate Serial No.</label>
+                                            <label className="block text-xs uppercase font-bold text-gray-500 mb-1">{t('证书序列号', 'Certificate Serial No.')}</label>
                                             <input 
                                                 type="text" 
                                                 value={paymentConfig.cert_serial_no}
                                                 onChange={(e) => setPaymentConfig({...paymentConfig, cert_serial_no: e.target.value})}
                                                 className="w-full bg-black/40 border border-gray-700 rounded p-2.5 text-sm focus:border-primary outline-none focus:ring-1 focus:ring-primary"
-                                                placeholder="XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+                                                placeholder={t('证书序列号', 'Certificate serial number')}
                                             />
                                         </div>
                                         <div>
-                                            <label className="block text-xs uppercase font-bold text-gray-500 mb-1">Private Key (PEM Content)</label>
+                                            <label className="block text-xs uppercase font-bold text-gray-500 mb-1">{t('私钥（PEM 内容）', 'Private Key (PEM Content)')}</label>
                                             <textarea 
                                                 value={paymentConfig.private_key}
                                                 onChange={(e) => setPaymentConfig({...paymentConfig, private_key: e.target.value})}
                                                 className="w-full h-48 bg-black/40 border border-gray-700 rounded p-2.5 text-xs font-mono focus:border-primary outline-none resize-none focus:ring-1 focus:ring-primary"
-                                                placeholder="-----BEGIN PRIVATE KEY-----&#10;...&#10;-----END PRIVATE KEY-----"
+                                                placeholder={t('-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----', '-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----')}
                                             />
                                         </div>
                                     </div>
@@ -695,7 +703,7 @@ const UserAdmin = () => {
                                         className="bg-primary text-black px-6 py-2.5 rounded-lg font-bold hover:opacity-90 disabled:opacity-50 flex items-center gap-2 transform active:scale-95 transition-all"
                                     >
                                         {isPaymentConfigLoading ? <RefreshCw className="animate-spin" size={18}/> : <Check size={18}/>}
-                                        Save Configuration
+                                        {t('保存配置', 'Save Configuration')}
                                     </button>
                                 </div>
                             </div>
@@ -708,13 +716,13 @@ const UserAdmin = () => {
                             <table className="w-full text-left border-collapse">
                                 <thead>
                                     <tr className="border-b border-gray-800 text-gray-400 text-sm">
-                                        <th className="p-3">User</th>
-                                        <th className="p-3">Credits</th>
-                                        <th className="p-3 text-center">Active</th>
-                                        <th className="p-3 text-center">Authorized</th>
-                                        <th className="p-3 text-center">System Key Provider</th>
-                                        <th className="p-3 text-center">Superuser</th>
-                                        <th className="p-3">Actions</th>
+                                        <th className="p-3">{t('用户', 'User')}</th>
+                                        <th className="p-3">{t('积分', 'Credits')}</th>
+                                        <th className="p-3 text-center">{t('启用', 'Active')}</th>
+                                        <th className="p-3 text-center">{t('授权', 'Authorized')}</th>
+                                        <th className="p-3 text-center">{t('系统密钥提供方', 'System Key Provider')}</th>
+                                        <th className="p-3 text-center">{t('超级管理员', 'Superuser')}</th>
+                                        <th className="p-3">{t('操作', 'Actions')}</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -774,14 +782,14 @@ const UserAdmin = () => {
                     {activeTab === 'pricing' && (
                         <div>
                             <div className="flex justify-between mb-4">
-                                <h3 className="text-lg font-bold">Pricing Rules</h3>
+                                <h3 className="text-lg font-bold">{t('定价规则', 'Pricing Rules')}</h3>
                                 <div className="flex gap-2">
                                     <button
                                         onClick={handleSyncRules}
                                         className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded flex items-center gap-2"
-                                        title="Import system API settings"
+                                        title={t('导入系统 API 设置', 'Import system API settings')}
                                     >
-                                        <RefreshCw size={16} /> Sync Settings
+                                        <RefreshCw size={16} /> {t('同步设置', 'Sync Settings')}
                                     </button>
                                     <button 
                                         onClick={() => { 
@@ -796,7 +804,7 @@ const UserAdmin = () => {
                                         }}
                                         className="bg-primary hover:bg-primary/90 text-white px-3 py-1 rounded flex items-center gap-2"
                                     >
-                                    <Plus size={16} /> Add Rule
+                                    <Plus size={16} /> {t('新增规则', 'Add Rule')}
                                 </button>
                                 </div>
                             </div>
@@ -804,25 +812,25 @@ const UserAdmin = () => {
                                 <table className="w-full text-left border-collapse">
                                     <thead>
                                         <tr className="border-b border-gray-800 text-gray-400 text-sm">
-                                            <th className="p-3">Provider</th>
-                                            <th className="p-3">Model</th>
-                                            <th className="p-3">Task</th>
-                                            <th className="p-3">Cost (Credits)</th>
-                                            <th className="p-3">Status</th>
-                                            <th className="p-3 text-right">Actions</th>
+                                            <th className="p-3">{t('提供方', 'Provider')}</th>
+                                            <th className="p-3">{t('模型', 'Model')}</th>
+                                            <th className="p-3">{t('任务', 'Task')}</th>
+                                            <th className="p-3">{t('成本（积分）', 'Cost (Credits)')}</th>
+                                            <th className="p-3">{t('状态', 'Status')}</th>
+                                            <th className="p-3 text-right">{t('操作', 'Actions')}</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         {pricingRules.map(rule => (
                                             <tr key={rule.id} className="border-b border-gray-800/50 hover:bg-gray-800/50">
-                                                <td className="p-3">{rule.provider || '* (All)'}</td>
-                                                <td className="p-3">{rule.model || '* (All)'}</td>
+                                                <td className="p-3">{rule.provider || t('*（全部）', '* (All)')}</td>
+                                                <td className="p-3">{rule.model || t('*（全部）', '* (All)')}</td>
                                                 <td className="p-3"><span className="bg-gray-700 px-2 py-0.5 rounded text-xs">{rule.task_type}</span></td>
                                                 <td className="p-3">
                                                     {isTokenUnitType(rule.unit_type) ? (
                                                         <div className="flex flex-col text-xs font-mono">
-                                                            <span className="text-blue-300" title="Input Tokens">In: {rule.cost_input} <span className="text-gray-600">/ {tokenUnitLabel(rule.unit_type)}</span></span>
-                                                            <span className="text-green-300" title="Output Tokens">Out: {rule.cost_output} <span className="text-gray-600">/ {tokenUnitLabel(rule.unit_type)}</span></span>
+                                                            <span className="text-blue-300" title={t('输入 Tokens', 'Input Tokens')}>In: {rule.cost_input} <span className="text-gray-600">/ {tokenUnitLabel(rule.unit_type)}</span></span>
+                                                            <span className="text-green-300" title={t('输出 Tokens', 'Output Tokens')}>Out: {rule.cost_output} <span className="text-gray-600">/ {tokenUnitLabel(rule.unit_type)}</span></span>
                                                         </div>
                                                     ) : (
                                                         <span className="font-bold text-yellow-400">
@@ -832,7 +840,7 @@ const UserAdmin = () => {
                                                 </td>
                                                 <td className="p-3">
                                                     <span className={`w-2 h-2 rounded-full inline-block mr-2 ${rule.is_active ? 'bg-green-500' : 'bg-red-500'}`}></span>
-                                                    {rule.is_active ? 'Active' : 'Inactive'}
+                                                    {rule.is_active ? t('启用', 'Active') : t('停用', 'Inactive')}
                                                 </td>
                                                 <td className="p-3 text-right flex justify-end gap-2">
                                                     <button onClick={() => { 
@@ -869,25 +877,25 @@ const UserAdmin = () => {
                     {activeTab === 'transactions' && (
                         <div>
                              <div className="flex justify-between items-center mb-4">
-                                <h3 className="text-lg font-bold">Recent Transactions (Last 50)</h3>
+                                <h3 className="text-lg font-bold">{t('最近交易（最近 50 条）', 'Recent Transactions (Last 50)')}</h3>
                                 <div className="flex items-center gap-2">
-                                    <span className="text-sm text-gray-400">Filter by User:</span>
+                                    <span className="text-sm text-gray-400">{t('按用户筛选：', 'Filter by User:')}</span>
                                     <select 
                                         className="bg-gray-800 border border-gray-700 text-sm rounded p-2 text-gray-300 focus:outline-none focus:border-primary min-w-[200px]"
                                         value={transactionFilterUser}
                                         onChange={(e) => setTransactionFilterUser(e.target.value)}
                                     >
-                                        <option value="">All Users</option>
+                                        <option value="">{t('全部用户', 'All Users')}</option>
                                         {users.map(u => (
                                             <option key={u.id} value={u.id}>
-                                                {u.username} (ID: {u.id}) - {u.credits} credits
+                                                {u.username} (ID: {u.id}) - {u.credits} {t('积分', 'credits')}
                                             </option>
                                         ))}
                                     </select>
                                     <button 
                                         onClick={fetchTransactionsOnly}
                                         className="p-2 bg-gray-700 hover:bg-gray-600 rounded text-gray-300"
-                                        title="Refresh"
+                                        title={t('刷新', 'Refresh')}
                                     >
                                         <RefreshCw size={16} />
                                     </button>
@@ -897,12 +905,12 @@ const UserAdmin = () => {
                                 <table className="w-full text-left border-collapse text-sm">
                                     <thead>
                                         <tr className="border-b border-gray-800 text-gray-400">
-                                            <th className="p-3">Time</th>
-                                            <th className="p-3">User ID</th>
-                                            <th className="p-3">Type</th>
-                                            <th className="p-3">Details</th>
-                                            <th className="p-3 text-right">Amount</th>
-                                            <th className="p-3 text-right">Balance</th>
+                                            <th className="p-3">{t('时间', 'Time')}</th>
+                                            <th className="p-3">{t('用户 ID', 'User ID')}</th>
+                                            <th className="p-3">{t('类型', 'Type')}</th>
+                                            <th className="p-3">{t('详情', 'Details')}</th>
+                                            <th className="p-3 text-right">{t('金额', 'Amount')}</th>
+                                            <th className="p-3 text-right">{t('余额', 'Balance')}</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -934,7 +942,7 @@ const UserAdmin = () => {
                     {activeTab === 'system_api' && (
                         <div className="space-y-4">
                             <div className="flex items-center justify-between gap-2">
-                                <h3 className="text-lg font-bold">System API Settings (Superuser CRUD)</h3>
+                                <h3 className="text-lg font-bold">{t('系统 API 设置（超级管理员 CRUD）', 'System API Settings (Superuser CRUD)')}</h3>
                                 <div className="flex items-center gap-2">
                                     <input
                                         ref={systemApiImportInputRef}
@@ -948,36 +956,36 @@ const UserAdmin = () => {
                                         disabled={isSystemApiImporting || isSystemApiLoading}
                                         className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded flex items-center gap-2 disabled:opacity-50"
                                     >
-                                        <Upload size={16} /> {isSystemApiImporting ? 'Importing...' : 'Import'}
+                                        <Upload size={16} /> {isSystemApiImporting ? t('导入中...', 'Importing...') : t('导入', 'Import')}
                                     </button>
                                     <button
                                         onClick={handleExportSystemApiSettings}
                                         disabled={isSystemApiExporting || isSystemApiLoading}
                                         className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded flex items-center gap-2 disabled:opacity-50"
                                     >
-                                        <Download size={16} /> {isSystemApiExporting ? 'Exporting...' : 'Export'}
+                                        <Download size={16} /> {isSystemApiExporting ? t('导出中...', 'Exporting...') : t('导出', 'Export')}
                                     </button>
                                     <button
                                         onClick={fetchSystemApiManageRows}
                                         className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded flex items-center gap-2"
                                     >
-                                        <RefreshCw size={16} /> Refresh
+                                        <RefreshCw size={16} /> {t('刷新', 'Refresh')}
                                     </button>
                                 </div>
                             </div>
 
                             {isSystemApiLoading ? (
-                                <div className="text-sm text-gray-400">Loading...</div>
+                                <div className="text-sm text-gray-400">{t('加载中...', 'Loading...')}</div>
                             ) : (
                                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                                     <div className="border border-white/10 rounded-lg p-4 bg-black/20 space-y-3">
-                                        <label className="text-xs uppercase text-gray-400">Select Existing Setting</label>
+                                        <label className="text-xs uppercase text-gray-400">{t('选择已有设置', 'Select Existing Setting')}</label>
                                         <select
                                             value={selectedSystemApiId}
                                             onChange={(e) => setSelectedSystemApiId(e.target.value)}
                                             className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
                                         >
-                                            <option value="">Select...</option>
+                                            <option value="">{t('请选择...', 'Select...')}</option>
                                             {systemApiRows.map((row) => (
                                                 <option key={row.id} value={row.id}>
                                                     [{row.category}] {row.provider} / {row.model || '-'} (ID:{row.id})
@@ -990,10 +998,10 @@ const UserAdmin = () => {
                                                 <thead className="bg-white/5 text-gray-400 sticky top-0">
                                                     <tr>
                                                         <th className="text-left p-2">ID</th>
-                                                        <th className="text-left p-2">Category</th>
-                                                        <th className="text-left p-2">Provider</th>
-                                                        <th className="text-left p-2">Model</th>
-                                                        <th className="text-left p-2">Active</th>
+                                                        <th className="text-left p-2">{t('类别', 'Category')}</th>
+                                                        <th className="text-left p-2">{t('提供方', 'Provider')}</th>
+                                                        <th className="text-left p-2">{t('模型', 'Model')}</th>
+                                                        <th className="text-left p-2">{t('启用', 'Active')}</th>
                                                     </tr>
                                                 </thead>
                                                 <tbody>
@@ -1007,7 +1015,7 @@ const UserAdmin = () => {
                                                             <td className="p-2">{row.category}</td>
                                                             <td className="p-2">{row.provider}</td>
                                                             <td className="p-2">{row.model || '-'}</td>
-                                                            <td className="p-2">{row.is_active ? 'Yes' : 'No'}</td>
+                                                            <td className="p-2">{row.is_active ? t('是', 'Yes') : t('否', 'No')}</td>
                                                         </tr>
                                                     ))}
                                                 </tbody>
@@ -1018,7 +1026,7 @@ const UserAdmin = () => {
                                     <div className="border border-white/10 rounded-lg p-4 bg-black/20 space-y-3">
                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                             <div>
-                                                <label className="block text-xs uppercase text-gray-400 mb-1">Name</label>
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('名称', 'Name')}</label>
                                                 <input
                                                     value={systemApiForm.name}
                                                     onChange={(e) => setSystemApiForm((prev) => ({ ...prev, name: e.target.value }))}
@@ -1026,21 +1034,21 @@ const UserAdmin = () => {
                                                 />
                                             </div>
                                             <div>
-                                                <label className="block text-xs uppercase text-gray-400 mb-1">Category</label>
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('类别', 'Category')}</label>
                                                 <select
                                                     value={systemApiForm.category}
                                                     onChange={(e) => setSystemApiForm((prev) => ({ ...prev, category: e.target.value }))}
                                                     className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
                                                 >
                                                     <option value="LLM">LLM</option>
-                                                    <option value="Image">Image</option>
-                                                    <option value="Video">Video</option>
-                                                    <option value="Vision">Vision</option>
-                                                    <option value="Tools">Tools</option>
+                                                    <option value="Image">{t('图片', 'Image')}</option>
+                                                    <option value="Video">{t('视频', 'Video')}</option>
+                                                    <option value="Vision">{t('视觉', 'Vision')}</option>
+                                                    <option value="Tools">{t('工具', 'Tools')}</option>
                                                 </select>
                                             </div>
                                             <div>
-                                                <label className="block text-xs uppercase text-gray-400 mb-1">Provider *</label>
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('提供方 *', 'Provider *')}</label>
                                                 <input
                                                     value={systemApiForm.provider}
                                                     onChange={(e) => setSystemApiForm((prev) => ({ ...prev, provider: e.target.value }))}
@@ -1048,7 +1056,7 @@ const UserAdmin = () => {
                                                 />
                                             </div>
                                             <div>
-                                                <label className="block text-xs uppercase text-gray-400 mb-1">Model</label>
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('模型', 'Model')}</label>
                                                 <input
                                                     value={systemApiForm.model}
                                                     onChange={(e) => setSystemApiForm((prev) => ({ ...prev, model: e.target.value }))}
@@ -1056,7 +1064,7 @@ const UserAdmin = () => {
                                                 />
                                             </div>
                                             <div className="md:col-span-2">
-                                                <label className="block text-xs uppercase text-gray-400 mb-1">Endpoint</label>
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('端点', 'Endpoint')}</label>
                                                 <input
                                                     value={systemApiForm.base_url}
                                                     onChange={(e) => setSystemApiForm((prev) => ({ ...prev, base_url: e.target.value }))}
@@ -1064,7 +1072,7 @@ const UserAdmin = () => {
                                                 />
                                             </div>
                                             <div className="md:col-span-2">
-                                                <label className="block text-xs uppercase text-gray-400 mb-1">WebHook</label>
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('回调 WebHook', 'WebHook')}</label>
                                                 <input
                                                     value={systemApiForm.webHook}
                                                     onChange={(e) => setSystemApiForm((prev) => ({ ...prev, webHook: e.target.value }))}
@@ -1072,7 +1080,7 @@ const UserAdmin = () => {
                                                 />
                                             </div>
                                             <div className="md:col-span-2">
-                                                <label className="block text-xs uppercase text-gray-400 mb-1">API Key (leave blank to keep current shared key)</label>
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('API Key（留空则保留当前共享密钥）', 'API Key (leave blank to keep current shared key)')}</label>
                                                 <input
                                                     type="password"
                                                     value={systemApiForm.api_key}
@@ -1088,7 +1096,7 @@ const UserAdmin = () => {
                                                 checked={!!systemApiForm.is_active}
                                                 onChange={(e) => setSystemApiForm((prev) => ({ ...prev, is_active: e.target.checked }))}
                                             />
-                                            Set active for this category
+                                            {t('将该项设为此类别的激活配置', 'Set active for this category')}
                                         </label>
 
                                         <div className="flex flex-wrap gap-2 pt-2 border-t border-white/10">
@@ -1096,21 +1104,21 @@ const UserAdmin = () => {
                                                 onClick={handleCreateSystemApiSetting}
                                                 className="px-3 py-2 bg-primary hover:bg-primary/90 text-black font-bold rounded"
                                             >
-                                                Create
+                                                {t('创建', 'Create')}
                                             </button>
                                             <button
                                                 onClick={handleUpdateSystemApiSetting}
                                                 disabled={!selectedSystemApiId}
                                                 className="px-3 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold rounded"
                                             >
-                                                Update
+                                                {t('更新', 'Update')}
                                             </button>
                                             <button
                                                 onClick={handleDeleteSystemApiSetting}
                                                 disabled={!selectedSystemApiId}
                                                 className="px-3 py-2 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white font-bold rounded"
                                             >
-                                                Delete
+                                                {t('删除', 'Delete')}
                                             </button>
                                         </div>
                                     </div>
@@ -1123,7 +1131,7 @@ const UserAdmin = () => {
                     {activeTab === 'llm_logs' && (
                         <div className="space-y-4">
                             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                                <h3 className="text-lg font-bold">LLM Call Logs</h3>
+                                <h3 className="text-lg font-bold">{t('LLM 调用日志', 'LLM Call Logs')}</h3>
                                 <div className="flex flex-wrap items-center gap-2">
                                     <select
                                         value={selectedLlmLogFile}
@@ -1147,7 +1155,7 @@ const UserAdmin = () => {
                                         value={llmLogTailLines}
                                         onChange={(e) => setLlmLogTailLines(e.target.value)}
                                         className="w-24 bg-black/40 border border-gray-700 rounded p-2 text-sm"
-                                        title="Tail lines"
+                                        title={t('尾部行数', 'Tail lines')}
                                     />
                                     <button
                                         onClick={() => fetchLlmLogs(selectedLlmLogFile)}
@@ -1182,10 +1190,10 @@ const UserAdmin = () => {
             {isRuleModalOpen && (
                 <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
                     <div className="bg-gray-900 border border-gray-700 p-6 rounded-xl w-full max-w-md">
-                        <h3 className="text-xl font-bold mb-4">{editingRule ? 'Edit Rule' : 'New Pricing Rule'}</h3>
+                        <h3 className="text-xl font-bold mb-4">{editingRule ? t('编辑规则', 'Edit Rule') : t('新建定价规则', 'New Pricing Rule')}</h3>
                         <div className="space-y-4">
                             <div>
-                                <label className="block text-sm text-gray-400 mb-1">Task Type</label>
+                                <label className="block text-sm text-gray-400 mb-1">{t('任务类型', 'Task Type')}</label>
                                 <select 
                                     className="w-full bg-gray-800 border border-gray-700 rounded p-2"
                                     value={ruleForm.task_type}
@@ -1196,35 +1204,35 @@ const UserAdmin = () => {
                                         model: ''
                                     })}
                                 >
-                                    <option value="llm_chat">Chat (LLM)</option>
-                                    <option value="image_gen">Image Generation</option>
-                                    <option value="video_gen">Video Generation</option>
-                                    <option value="analysis">Analysis (Text)</option>
-                                    <option value="analysis_character">Character Analysis</option>
+                                    <option value="llm_chat">{t('聊天（LLM）', 'Chat (LLM)')}</option>
+                                    <option value="image_gen">{t('图片生成', 'Image Generation')}</option>
+                                    <option value="video_gen">{t('视频生成', 'Video Generation')}</option>
+                                    <option value="analysis">{t('文本分析', 'Analysis (Text)')}</option>
+                                    <option value="analysis_character">{t('角色分析', 'Character Analysis')}</option>
                                 </select>
                             </div>
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
-                                    <label className="block text-sm text-gray-400 mb-1">Provider (Optional)</label>
+                                    <label className="block text-sm text-gray-400 mb-1">{t('提供方（可选）', 'Provider (Optional)')}</label>
                                     <select 
                                         className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-sm"
                                         value={ruleForm.provider || ''}
                                         onChange={e => setRuleForm({...ruleForm, provider: e.target.value || null, model: ''})}
                                     >
-                                        <option value="">Any (*)</option>
+                                        <option value="">{t('任意（*）', 'Any (*)')}</option>
                                         {providerOptionsForTask(ruleForm.task_type).map(opt => (
                                             <option key={opt.value} value={opt.value}>{opt.label}</option>
                                         ))}
                                     </select>
                                 </div>
                                 <div>
-                                    <label className="block text-sm text-gray-400 mb-1">Model (Optional)</label>
+                                    <label className="block text-sm text-gray-400 mb-1">{t('模型（可选）', 'Model (Optional)')}</label>
                                     <select 
                                         className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-sm"
                                         value={ruleForm.model || ''}
                                         onChange={e => setRuleForm({...ruleForm, model: e.target.value || null})}
                                     >
-                                       <option value="">Any (*)</option>
+                                       <option value="">{t('任意（*）', 'Any (*)')}</option>
                                        {modelOptionsForProvider(ruleForm.provider).map(m => (
                                            <option key={m} value={m}>{m}</option>
                                        ))}
@@ -1232,44 +1240,44 @@ const UserAdmin = () => {
                                 </div>
                             </div>
                             <div>
-                                <label className="block text-sm text-gray-400 mb-1">Unit Type</label>
+                                <label className="block text-sm text-gray-400 mb-1">{t('计费单位', 'Unit Type')}</label>
                                 <select 
                                     className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-sm"
                                     value={ruleForm.unit_type || 'per_call'}
                                     onChange={e => setRuleForm({...ruleForm, unit_type: e.target.value})}
                                 >
-                                    <option value="per_call">Per API Call (Request)</option>
-                                    <option value="per_1k_tokens">Per 1k Tokens</option>
-                                    <option value="per_million_tokens">Per 1M Tokens</option>
-                                    <option value="per_image">Per Image</option>
-                                    <option value="per_second">Per Second (Video)</option>
-                                    <option value="per_minute">Per Minute</option>
+                                    <option value="per_call">{t('按 API 调用（请求）', 'Per API Call (Request)')}</option>
+                                    <option value="per_1k_tokens">{t('每 1k Tokens', 'Per 1k Tokens')}</option>
+                                    <option value="per_million_tokens">{t('每 1M Tokens', 'Per 1M Tokens')}</option>
+                                    <option value="per_image">{t('每张图片', 'Per Image')}</option>
+                                    <option value="per_second">{t('每秒（视频）', 'Per Second (Video)')}</option>
+                                    <option value="per_minute">{t('每分钟', 'Per Minute')}</option>
                                 </select>
                             </div>
 
                             <div className="bg-black/40 p-3 rounded border border-white/5 space-y-3">
-                                <label className="block text-xs font-medium text-blue-400 uppercase">Auto-Calculate Cost (CNY)</label>
+                                <label className="block text-xs font-medium text-blue-400 uppercase">{t('自动计算成本（人民币）', 'Auto-Calculate Cost (CNY)')}</label>
                                 
                                 {isTokenUnitType(ruleForm.unit_type) ? (
                                     /* LLM Dual Pricing Calculator */
                                     <div className="grid grid-cols-2 gap-3 mb-2">
                                         <div>
-                                            <label className="block text-[10px] text-gray-400 mb-1">Input Price (Per {tokenUnitLabel(ruleForm.unit_type)} Tokens)</label>
+                                            <label className="block text-[10px] text-gray-400 mb-1">{t(`输入价格（每 ${tokenUnitLabel(ruleForm.unit_type)} Tokens）`, `Input Price (Per ${tokenUnitLabel(ruleForm.unit_type)} Tokens)`)}</label>
                                             <input 
                                                 type="number" 
                                                 step="0.0001"
-                                                placeholder={ruleForm.unit_type === 'per_1k_tokens' ? "e.g. 0.002" : "e.g. 1.00"}
+                                                placeholder={ruleForm.unit_type === 'per_1k_tokens' ? t('例如：0.002', 'e.g. 0.002') : t('例如：1.00', 'e.g. 1.00')}
                                                 className="w-full bg-gray-900 border border-gray-700 rounded p-1.5 text-sm"
                                                 value={calcPriceInput}
                                                 onChange={(e) => setCalcPriceInput(e.target.value)}
                                             />
                                         </div>
                                         <div>
-                                            <label className="block text-[10px] text-gray-400 mb-1">Output Price (Per {tokenUnitLabel(ruleForm.unit_type)} Tokens)</label>
+                                            <label className="block text-[10px] text-gray-400 mb-1">{t(`输出价格（每 ${tokenUnitLabel(ruleForm.unit_type)} Tokens）`, `Output Price (Per ${tokenUnitLabel(ruleForm.unit_type)} Tokens)`)}</label>
                                             <input 
                                                 type="number" 
                                                 step="0.0001"
-                                                placeholder={ruleForm.unit_type === 'per_1k_tokens' ? "e.g. 0.006" : "e.g. 6.00"}
+                                                placeholder={ruleForm.unit_type === 'per_1k_tokens' ? t('例如：0.006', 'e.g. 0.006') : t('例如：6.00', 'e.g. 6.00')}
                                                 className="w-full bg-gray-900 border border-gray-700 rounded p-1.5 text-sm"
                                                 value={calcPriceOutput}
                                                 onChange={(e) => setCalcPriceOutput(e.target.value)}
@@ -1280,12 +1288,12 @@ const UserAdmin = () => {
                                     /* Standard Single Pricing Calculator */
                                     <div className="mb-2">
                                         <label className="block text-[10px] text-gray-400 mb-1">
-                                            {ruleForm.unit_type === 'per_million_tokens' ? 'Price per 1M Tokens (Yuan)' :
-                                            ruleForm.unit_type === 'per_1k_tokens' ? 'Price per 1K Tokens (Yuan)' :
-                                            ruleForm.unit_type === 'per_image' ? 'Price per Image (Yuan)' :
-                                            ruleForm.unit_type === 'per_second' ? 'Price per Second (Yuan)' :
-                                            ruleForm.unit_type === 'per_minute' ? 'Price per Minute (Yuan)' :
-                                            'Price per Request (Yuan)'}
+                                            {ruleForm.unit_type === 'per_million_tokens' ? t('每 1M Tokens 价格（元）', 'Price per 1M Tokens (Yuan)') :
+                                            ruleForm.unit_type === 'per_1k_tokens' ? t('每 1K Tokens 价格（元）', 'Price per 1K Tokens (Yuan)') :
+                                            ruleForm.unit_type === 'per_image' ? t('每张图片价格（元）', 'Price per Image (Yuan)') :
+                                            ruleForm.unit_type === 'per_second' ? t('每秒价格（元）', 'Price per Second (Yuan)') :
+                                            ruleForm.unit_type === 'per_minute' ? t('每分钟价格（元）', 'Price per Minute (Yuan)') :
+                                            t('每次请求价格（元）', 'Price per Request (Yuan)')}
                                         </label>
                                         <input 
                                             type="number" 
@@ -1300,17 +1308,17 @@ const UserAdmin = () => {
                                             onChange={(e) => setCalcPriceUSD(e.target.value)}
                                         />
                                         <p className="text-[9px] text-gray-600 mt-1">
-                                            {ruleForm.unit_type === 'per_million_tokens' ? 'e.g. GPT-4o Input: ~￥36.00' :
-                                             ruleForm.unit_type === 'per_image' ? 'e.g. DALL-E 3: ~￥0.30' :
-                                             ruleForm.unit_type === 'per_second' ? 'e.g. Runway: ~￥0.35/sec' :
-                                             'Base provider cost in Yuan'}
+                                            ruleForm.unit_type === 'per_million_tokens' ? t('例如：GPT-4o 输入：约￥36.00', 'e.g. GPT-4o Input: ~￥36.00') :
+                                            ruleForm.unit_type === 'per_image' ? t('例如：DALL-E 3：约￥0.30', 'e.g. DALL-E 3: ~￥0.30') :
+                                            ruleForm.unit_type === 'per_second' ? t('例如：Runway：约￥0.35/秒', 'e.g. Runway: ~￥0.35/sec') :
+                                            t('供应商基础成本（元）', 'Base provider cost in Yuan')}
                                         </p>
                                     </div>
                                 )}
 
                                 <div className="grid grid-cols-2 gap-3 border-t border-white/10 pt-2">
                                     <div>
-                                        <label className="block text-[10px] text-gray-400 mb-1">Multiplier (Markup)</label>
+                                        <label className="block text-[10px] text-gray-400 mb-1">{t('倍率（加价）', 'Multiplier (Markup)')}</label>
                                         <input 
                                             type="number"
                                             step="0.1" 
@@ -1318,10 +1326,10 @@ const UserAdmin = () => {
                                             className="w-full bg-gray-900 border border-gray-700 rounded p-1.5 text-sm"
                                             onChange={(e) => setMarkup(e.target.value)}
                                         />
-                                        <p className="text-[9px] text-gray-600 mt-1">e.g. 2.0 = 2x Cost</p>
+                                        <p className="text-[9px] text-gray-600 mt-1">{t('例如：2.0 = 2倍成本', 'e.g. 2.0 = 2x Cost')}</p>
                                     </div>
                                     <div>
-                                        <label className="block text-[10px] text-gray-400 mb-1">Exchange (￥1=Credits)</label>
+                                        <label className="block text-[10px] text-gray-400 mb-1">{t('汇率（￥1=积分）', 'Exchange (￥1=Credits)')}</label>
                                         <input 
                                             type="number" 
                                             value={exchangeRate}
@@ -1332,13 +1340,13 @@ const UserAdmin = () => {
                                 </div>
                                 <div className="text-[10px] text-gray-500 bg-white/5 p-2 rounded">
                                     <div className="flex justify-between items-center mb-1">
-                                        <span>Calculation:</span>
+                                        <span>{t('计算公式：', 'Calculation:')}</span>
                                         <span className="font-mono text-xs text-white">
                                            Price × {exchangeRate} × {markup}x
                                         </span>
                                     </div>
                                     <div className="flex justify-between items-center border-t border-white/10 pt-1">
-                                        <span className="text-yellow-500 font-bold">Final Cost:</span>
+                                        <span className="text-yellow-500 font-bold">{t('最终成本：', 'Final Cost:')}</span>
                                         <span className="font-mono text-yellow-400 font-bold text-sm">
                                             {isTokenUnitType(ruleForm.unit_type) ? (
                                                 <span>
@@ -1346,7 +1354,7 @@ const UserAdmin = () => {
                                                     Out: {Math.ceil((parseFloat(calcPriceOutput)||0) * exchangeRate * markup)}
                                                 </span>
                                             ) : (
-                                                <span>{Math.ceil((parseFloat(calcPriceUSD) || 0) * exchangeRate * markup)} Credits</span>
+                                                <span>{Math.ceil((parseFloat(calcPriceUSD) || 0) * exchangeRate * markup)} {t('积分', 'Credits')}</span>
                                             )}
                                         </span>
                                     </div>
@@ -1358,12 +1366,12 @@ const UserAdmin = () => {
 
                             <div>
                                 <label className="block text-sm text-gray-400 mb-1">
-                                    {isTokenUnitType(ruleForm.unit_type) ? 'Cost (Credits: Input / Output)' : 'Cost (Credits)'}
+                                    {isTokenUnitType(ruleForm.unit_type) ? t('成本（积分：输入 / 输出）', 'Cost (Credits: Input / Output)') : t('成本（积分）', 'Cost (Credits)')}
                                 </label>
                                 {isTokenUnitType(ruleForm.unit_type) ? (
                                      <div className="grid grid-cols-2 gap-2">
                                         <div>
-                                            <span className="text-[10px] text-gray-500">Input (per {tokenUnitLabel(ruleForm.unit_type)})</span>
+                                            <span className="text-[10px] text-gray-500">{t(`输入（每 ${tokenUnitLabel(ruleForm.unit_type)}）`, `Input (per ${tokenUnitLabel(ruleForm.unit_type)})`)}</span>
                                             <input 
                                                 type="number" 
                                                 className="w-full bg-gray-800 border border-gray-700 rounded p-2 font-mono text-yellow-400 font-bold"
@@ -1372,7 +1380,7 @@ const UserAdmin = () => {
                                             />
                                         </div>
                                         <div>
-                                            <span className="text-[10px] text-gray-500">Output (per {tokenUnitLabel(ruleForm.unit_type)})</span>
+                                            <span className="text-[10px] text-gray-500">{t(`输出（每 ${tokenUnitLabel(ruleForm.unit_type)}）`, `Output (per ${tokenUnitLabel(ruleForm.unit_type)})`)}</span>
                                             <input 
                                                 type="number" 
                                                 className="w-full bg-gray-800 border border-gray-700 rounded p-2 font-mono text-yellow-400 font-bold"
@@ -1391,8 +1399,8 @@ const UserAdmin = () => {
                                 )}
                             </div>
                             <div className="flex justify-end gap-2 mt-6">
-                                <button onClick={() => setIsRuleModalOpen(false)} className="px-4 py-2 hover:bg-gray-800 rounded">Cancel</button>
-                                <button onClick={handleSaveRule} className="px-4 py-2 bg-primary hover:bg-primary/90 text-black font-bold rounded">Save</button>
+                                <button onClick={() => setIsRuleModalOpen(false)} className="px-4 py-2 hover:bg-gray-800 rounded">{t('取消', 'Cancel')}</button>
+                                <button onClick={handleSaveRule} className="px-4 py-2 bg-primary hover:bg-primary/90 text-black font-bold rounded">{t('保存', 'Save')}</button>
                             </div>
                         </div>
                     </div>
@@ -1403,8 +1411,8 @@ const UserAdmin = () => {
             {creditEditUser && (
                 <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
                     <div className="bg-gray-900 border border-gray-700 p-6 rounded-xl w-full max-w-sm">
-                        <h3 className="text-xl font-bold mb-4">Edit Credits for {creditEditUser.username}</h3>
-                        <p className="text-gray-400 text-sm mb-4">Set the absolute credit balance for this user.</p>
+                        <h3 className="text-xl font-bold mb-4">{t('编辑用户积分', 'Edit Credits for')} {creditEditUser.username}</h3>
+                        <p className="text-gray-400 text-sm mb-4">{t('设置该用户的绝对积分余额。', 'Set the absolute credit balance for this user.')}</p>
                         <input 
                             type="number" 
                             className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-2xl font-mono text-center text-green-400 mb-6"
@@ -1412,8 +1420,8 @@ const UserAdmin = () => {
                             onChange={e => setCreditAmount(e.target.value)}
                         />
                         <div className="flex justify-end gap-2">
-                             <button onClick={() => setCreditEditUser(null)} className="px-4 py-2 hover:bg-gray-800 rounded">Cancel</button>
-                             <button onClick={handleUpdateCredits} className="px-4 py-2 bg-green-600 hover:bg-green-500 text-white font-bold rounded">Update Balance</button>
+                                <button onClick={() => setCreditEditUser(null)} className="px-4 py-2 hover:bg-gray-800 rounded">{t('取消', 'Cancel')}</button>
+                                <button onClick={handleUpdateCredits} className="px-4 py-2 bg-green-600 hover:bg-green-500 text-white font-bold rounded">{t('更新余额', 'Update Balance')}</button>
                         </div>
                     </div>
                 </div>
