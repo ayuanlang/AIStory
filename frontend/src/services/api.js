@@ -416,7 +416,6 @@ export const registerUser = async (data) => {
 }
 
 export const apiLogin = async (username, password) => {
-    console.log("Logging in via JSON endpoint (apiLogin)...");
     const response = await api.post('/login', {
         username,
         password

@@ -30,24 +30,19 @@ const Auth = () => {
         setError('');
         setLoading(true);
 
-        console.log("Submitting form (v2):", isLogin ? "Login" : "Register", formData);
-
         try {
             if (isLogin) {
                 // Use the JSON login endpoint
                 const response = await apiLogin(formData.username, formData.password);
-                console.log("Login Success (JSON):", response);
                 localStorage.setItem('token', response.access_token);
                 await refreshSettings();
                 navigate('/projects');
             } else {
                 const response = await registerUser(formData);
-                console.log("Registration Success:", response);
                 setIsLogin(true); // Switch to login after registration
                 setError(t('注册成功，请登录。', 'Registration successful! Please login.'));
             }
         } catch (err) {
-            console.error("Auth Error:", err);
             const detail = err.response?.data?.detail;
             let errorMessage = t('认证失败，请检查账号信息。', 'Authentication failed. Please check your credentials.');
             
