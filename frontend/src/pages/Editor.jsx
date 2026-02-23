@@ -3716,7 +3716,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             mainContent = mainContent.trim();
             const lines = mainContent.split('\n').filter(l => l.trim().length > 0);
             
-            const title = (lines.length > 0 && lines[0].length < 50) ? lines[0] : t('未命名片段', 'Untitled Segment');
+            const title = (lines.length > 0 && lines[0].length < 50) ? lines[0] : "Untitled Segment";
             const textBody = (lines.length > 0 && lines[0].length < 50) ? lines.slice(1).join('\n') : lines.join('\n');
 
             parsed.push({ 
