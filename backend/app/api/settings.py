@@ -51,11 +51,50 @@ def _safe_json_dict(value) -> Dict:
 
 
 def _can_use_system_settings(user: User) -> bool:
-    return bool(user and user.is_active)
+    return bool(user and user.is_active and (user.credits or 0) > 0)
 
 
 def _can_manage_system_settings(user: User) -> bool:
     return bool(user.is_superuser)
+
+
+def _ensure_default_system_selection_for_user(db: Session, user_id: int) -> None:
+    existing_count = db.query(APISetting).filter(APISetting.user_id == user_id).count()
+    if existing_count > 0:
+        return
+
+    active_system_rows = db.query(SystemAPISetting).filter(
+        SystemAPISetting.is_active == True,
+        SystemAPISetting.category != "System_Payment",
+    ).order_by(SystemAPISetting.category.asc(), SystemAPISetting.id.desc()).all()
+
+    if not active_system_rows:
+        return
+
+    selected_by_category: Dict[str, SystemAPISetting] = {}
+    for row in active_system_rows:
+        category = str(row.category or "").strip()
+        if not category or category in selected_by_category:
+            continue
+        selected_by_category[category] = row
+
+    for _, system_setting in selected_by_category.items():
+        marker_config = dict(system_setting.config or {})
+        marker_config["selection_source"] = "system"
+
+        db.add(APISetting(
+            user_id=user_id,
+            name=f"Use System {system_setting.provider}",
+            category=system_setting.category,
+            provider=system_setting.provider,
+            api_key="",
+            base_url=system_setting.base_url,
+            model=system_setting.model,
+            config=marker_config,
+            is_active=True,
+        ))
+
+    db.flush()
 
 
 def _sync_provider_shared_key(db: Session, user_id: int, provider: str, current_setting_id: int, incoming_api_key: str = None) -> str:
@@ -192,6 +231,8 @@ def get_settings(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    _ensure_default_system_selection_for_user(db, current_user.id)
+    db.commit()
     settings = db.query(APISetting).filter(APISetting.user_id == current_user.id).all()
     return settings
 
@@ -280,6 +321,9 @@ def get_system_settings(
 ):
     if not _can_use_system_settings(current_user):
         return []
+
+    _ensure_default_system_selection_for_user(db, current_user.id)
+    db.commit()
 
     system_settings = db.query(
         SystemAPISetting.id,
@@ -427,6 +471,9 @@ def select_system_setting(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    if not _can_use_system_settings(current_user):
+        raise HTTPException(status_code=402, detail="Insufficient credits. Please top up.")
+
     system_setting = db.query(SystemAPISetting).filter(
         SystemAPISetting.id == selection.setting_id,
     ).first()

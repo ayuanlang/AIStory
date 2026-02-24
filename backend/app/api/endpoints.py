@@ -177,6 +177,69 @@ def get_effective_api_setting(db: Session, user: User, provider: str = None, cat
     return resolved_setting
 
 
+def _seed_default_system_settings_for_user(db: Session, user_id: int) -> None:
+    existing_count = db.query(APISetting).filter(APISetting.user_id == user_id).count()
+    if existing_count > 0:
+        return
+
+    active_system_rows = db.query(SystemAPISetting).filter(
+        SystemAPISetting.is_active == True,
+        SystemAPISetting.category != "System_Payment",
+    ).order_by(SystemAPISetting.category.asc(), SystemAPISetting.id.desc()).all()
+
+    if not active_system_rows:
+        return
+
+    chosen_by_category: Dict[str, SystemAPISetting] = {}
+    for row in active_system_rows:
+        category = str(row.category or "").strip()
+        if not category or category in chosen_by_category:
+            continue
+        chosen_by_category[category] = row
+
+    for category, system_setting in chosen_by_category.items():
+        marker_config = dict(system_setting.config or {})
+        marker_config["selection_source"] = "system"
+        selected_setting_id: Optional[int] = None
+
+        user_setting = db.query(APISetting).filter(
+            APISetting.user_id == user_id,
+            APISetting.category == category,
+        ).order_by(APISetting.id.desc()).first()
+
+        if user_setting:
+            user_setting.name = user_setting.name or f"Use System {system_setting.provider}"
+            user_setting.provider = system_setting.provider
+            user_setting.base_url = system_setting.base_url
+            user_setting.model = system_setting.model
+            user_setting.config = marker_config
+            user_setting.api_key = ""
+            user_setting.is_active = True
+            selected_setting_id = user_setting.id
+        else:
+            new_setting = APISetting(
+                user_id=user_id,
+                name=f"Use System {system_setting.provider}",
+                category=system_setting.category,
+                provider=system_setting.provider,
+                api_key="",
+                base_url=system_setting.base_url,
+                model=system_setting.model,
+                config=marker_config,
+                is_active=True,
+            )
+            db.add(new_setting)
+            db.flush()
+            selected_setting_id = new_setting.id
+
+        db.query(APISetting).filter(
+            APISetting.user_id == user_id,
+            APISetting.category == category,
+            APISetting.id != selected_setting_id,
+            APISetting.is_active == True,
+        ).update({"is_active": False}, synchronize_session=False)
+
+
 @router.get("/settings/effective")
 def get_effective_setting_snapshot(
     category: str = "LLM",
@@ -5197,6 +5260,8 @@ def create_user(user: UserCreate, db: Session = Depends(get_db)):
         hashed_password=hashed_password
     )
     db.add(db_user)
+    db.flush()
+    _seed_default_system_settings_for_user(db, db_user.id)
     db.commit()
     db.refresh(db_user)
     return db_user
@@ -5243,6 +5308,13 @@ def login_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Ses
     user = authenticate_user(db, form_data.username, form_data.password)
     if not user:
         raise HTTPException(status_code=400, detail="Incorrect email or password")
+
+    try:
+        _seed_default_system_settings_for_user(db, user.id)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.warning("Failed to seed default API settings on login | user_id=%s error=%s", user.id, e)
     
     # Log Successful Login
     log_action(db, user_id=user.id, user_name=user.username, action="LOGIN", details="User logged in via OAuth2 Form")
@@ -5264,6 +5336,13 @@ def login_json(login_data: LoginRequest, db: Session = Depends(get_db)):
         # Optional: Log failed login attempts?
         # log_action(db, user_id=None, user_name=login_data.username, action="LOGIN_FAILED", details="Incorrect password")
         raise HTTPException(status_code=400, detail="Incorrect email or password")
+
+    try:
+        _seed_default_system_settings_for_user(db, user.id)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.warning("Failed to seed default API settings on login | user_id=%s error=%s", user.id, e)
     
     # Log Successful Login
     log_action(db, user_id=user.id, user_name=user.username, action="LOGIN", details="User logged in via API")
