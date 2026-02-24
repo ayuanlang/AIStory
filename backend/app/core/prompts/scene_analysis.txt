@@ -22,6 +22,7 @@
 12. **语言一致性 (Input-Language Consistency, Mandatory)**：输出内容必须跟随输入主语言（例如输入中文则输出中文，输入英文则输出英文）。
   - 仅 `Episode/Scene/Shot ID`、固定结构键名、约定标签可保持既定格式；其余自然语言描述必须保持同一语言，禁止中英混杂漂移。
   - **英文提示词例外 (English Prompt Exception, 强制)**：所有用于生图/生视频的提示词字段必须统一使用英文，包括但不限于 `generation_prompt_en`（Environment / Character / Prop）。
+  - **Anchor Description 英文强制 (Mandatory)**：`anchor_description`（Environment / Character / Prop）必须统一使用英文短语，不得输出中文或中英混写。
 13. **基准环境参考图统一机制 (Base Environment Reference Unification, Mandatory)**：同一地理场地的所有 Environment 变体必须依托同一“基准环境参考图（Base Environment Reference）”。
   - 变体提示词必须以“相对基准变化（Delta）”为核心，只描述变化项（机位方向/轴线侧、可见背景集合、主光方向、景别/镜高、可变部件状态），不得重写未变化项。
   - 若为 `REUSE`，Delta 必须显式写为 `None` / `No visual delta`。
@@ -279,7 +280,7 @@
       "clothing": "Clothing Desc",
       "action_characteristics": "Action Traits",
       "generation_prompt_en": "[Global Style] ...",
-      "anchor_description": "visual tags",
+      "anchor_description": "English visual tags only",
       "visual_dependencies": [],
       "dependency_strategy": {
         "type": "Original/Type A/Type B",
@@ -300,7 +301,7 @@
       "type": "held/static",
       "description_cn": "Chinese Desc",
       "generation_prompt_en": "[Global Style] ...",
-      "anchor_description": "visual tags",
+      "anchor_description": "English visual tags only",
       "visual_dependencies": [],
       "dependency_strategy": {
         "type": "Original/Type A/Type B",
@@ -322,7 +323,7 @@
       "visual_params": "Wide/Interior/Day",
       "description_cn": "Chinese Desc",
       "generation_prompt_en": "[Global Style] Camera ...",
-      "anchor_description": "visual tags",
+      "anchor_description": "English visual tags only",
       "visual_dependencies": [],
       "dependency_strategy": {
         "type": "Original/Type A/Type B",
@@ -357,5 +358,6 @@
 21. **@Subject Tag Check**: 所有角色/主体引用是否统一为 `CHAR:[@Name]`，且不存在漏加 `@` 的角色名？
 22. **Env/Prop No-@ Check**: 所有环境/道具引用是否保持 `[Name]`（无 `@`），且未被误标为主体？
 23. **Entity Typing Check**: 所有实体引用是否满足 `CHAR/ENV/PROP` 类型前缀语义，且不存在类型错配？
+24. **Anchor Description Language Check**: 所有 `anchor_description` 是否为英文短语（无中文、无中英混写）？
 21. **Delta Order Check**: `Environment Delta` 是否严格按白名单顺序输出（Camera Position/Direction → Axis Side → Background Set Change → Lighting Direction Change → Framing Change → Dynamic Parts State）？
 22. **REUSE Minimal Check**: `REUSE` 行是否使用极简模板（默认六项全 `None`），且仅在可变部件状态变化时允许 `Dynamic Parts State` 非 `None`？

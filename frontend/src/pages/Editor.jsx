@@ -32,7 +32,7 @@ const parseEpisodeNumberFromText = (value) => {
         /^episode\s*0*(\d+)\b/i,
         /^ep\s*0*(\d+)\b/i,
         /^第\s*0*(\d+)\s*集/i,
-        /^0*(\d+)\s*[-:：]/,
+        /^0*(\d+)\s*(?:-|:|：)/,
     ];
 
     for (const pattern of patterns) {
@@ -51,10 +51,10 @@ const normalizeEpisodeTitleForDisplay = (rawTitle) => {
     if (!text) return '';
 
     return text
-        .replace(/^episode\s*\d+\s*[-:：]?\s*/i, '')
-        .replace(/^ep\s*\d+\s*[-:：]?\s*/i, '')
-        .replace(/^第\s*\d+\s*集\s*[-:：]?\s*/i, '')
-        .replace(/^\d+\s*[-:：]\s*/, '')
+        .replace(/^episode\s*\d+\s*(?:-|:|：)?\s*/i, '')
+        .replace(/^ep\s*\d+\s*(?:-|:|：)?\s*/i, '')
+        .replace(/^第\s*\d+\s*集\s*(?:-|:|：)?\s*/i, '')
+        .replace(/^\d+\s*(?:-|:|：)\s*/, '')
         .trim();
 };
 
@@ -9361,10 +9361,27 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     // Media Handling
     const [viewMedia, setViewMedia] = useState(null);
     const [pickerConfig, setPickerConfig] = useState({ isOpen: false, callback: null });
-    const [generatingState, setGeneratingState] = useState({ start: false, end: false, video: false });
+    const [generatingStateByShot, setGeneratingStateByShot] = useState({});
     const [isBatchGenerating, setIsBatchGenerating] = useState(false);
     const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0, status: '' }); // Progress tracking
     const [activeSources, setActiveSources] = useState({ Image: 'unset', Video: 'unset' });
+
+    const setShotGeneratingState = useCallback((shotId, key, value) => {
+        if (!shotId) return;
+        setGeneratingStateByShot(prev => {
+            const prevState = prev[shotId] || { start: false, end: false, video: false };
+            const nextState = { ...prevState, [key]: value };
+            if (!nextState.start && !nextState.end && !nextState.video) {
+                const { [shotId]: _, ...rest } = prev;
+                return rest;
+            }
+            return { ...prev, [shotId]: nextState };
+        });
+    }, []);
+
+    const currentGeneratingState = editingShot?.id
+        ? (generatingStateByShot[editingShot.id] || { start: false, end: false, video: false })
+        : { start: false, end: false, video: false };
 
     const shotFilterStorageKey = useMemo(() => {
         if (!activeEpisode?.id) return '';
@@ -10412,6 +10429,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     // --- Generation Handlers ---
     const handleGenerateStartFrame = async () => {
         if (!editingShot) return;
+        const targetShotId = editingShot.id;
 
         // Check inherit logic - Inherit from previous End Frame
         const currentPrompt = (editingShot.start_frame || "").trim();
@@ -10422,8 +10440,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 try {
                     onLog?.('Inheriting Start Frame from previous shot...', 'info');
                     const newData = { image_url: prevEndUrl };
-                    await onUpdateShot(editingShot.id, newData);
-                    setEditingShot(prev => ({...prev, ...newData}));
+                    await onUpdateShot(targetShotId, newData);
+                    setEditingShot(prev => (prev && prev.id === targetShotId ? { ...prev, ...newData } : prev));
                     onLog?.('Start Frame inherited successfully', 'success');
                     showNotification('Start Frame inherited from previous shot', 'success');
                     return; // Exit, do not generate
@@ -10440,7 +10458,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             }
         }
 
-        setGeneratingState(prev => ({ ...prev, start: true }));
+        setShotGeneratingState(targetShotId, 'start', true);
         abortGenerationRef.current = false; 
 
         // 1. Feature Injection
@@ -10450,7 +10468,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         const { text: injectedPrompt, modified } = injectEntityFeatures(prompt);
         if (modified) {
             // Update local State & use new prompt
-            setEditingShot(prev => ({ ...prev, start_frame: injectedPrompt }));
+            setEditingShot(prev => (prev && prev.id === targetShotId ? { ...prev, start_frame: injectedPrompt } : prev));
             prompt = injectedPrompt; // Use for generation
         }
 
@@ -10525,7 +10543,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
                 const res = await generateImage(finalPrompt, null, refs.length > 0 ? refs : null, {
                     project_id: projectId,
-                    shot_id: editingShot.id,
+                    shot_id: targetShotId,
                     shot_number: editingShot.shot_id,
                     shot_name: editingShot.shot_name,
                     asset_type: 'start_frame',
@@ -10533,8 +10551,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 if (res && res.url) {
                     // Save original prompt to DB (user view), but image was generated with context
                     const newData = { image_url: res.url, start_frame: prompt };
-                    await onUpdateShot(editingShot.id, newData);
-                    setEditingShot(prev => ({...prev, ...newData})); 
+                    await onUpdateShot(targetShotId, newData);
+                    setEditingShot(prev => (prev && prev.id === targetShotId ? { ...prev, ...newData } : prev)); 
                     onLog?.('Start Frame Generated', 'success');
                     showNotification('Start Frame Generated', 'success');
                     success = true;
@@ -10549,19 +10567,20 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 }
             }
         }
-        setGeneratingState(prev => ({ ...prev, start: false }));
+        setShotGeneratingState(targetShotId, 'start', false);
     };
 
     const handleGenerateEndFrame = async () => {
         if (!editingShot) return;
-        setGeneratingState(prev => ({ ...prev, end: true }));
+        const targetShotId = editingShot.id;
+        setShotGeneratingState(targetShotId, 'end', true);
         abortGenerationRef.current = false;
 
         // 1. Feature Injection for End Frame
         let prompt = editingShot.end_frame || "End frame";
         const { text: injectedPrompt, modified } = injectEntityFeatures(prompt);
         if (modified) {
-            setEditingShot(prev => ({ ...prev, end_frame: injectedPrompt }));
+            setEditingShot(prev => (prev && prev.id === targetShotId ? { ...prev, end_frame: injectedPrompt } : prev));
             prompt = injectedPrompt;
         }
 
@@ -10613,7 +10632,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
                 const res = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
                     project_id: projectId,
-                    shot_id: editingShot.id,
+                    shot_id: targetShotId,
                     shot_number: editingShot.shot_id,
                     shot_name: editingShot.shot_name,
                     asset_type: 'end_frame',
@@ -10622,8 +10641,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     tech.end_frame_url = res.url;
                     tech.video_gen_mode = 'start_end'; // Auto-switch to Start+End
                     const newData = { technical_notes: JSON.stringify(tech), end_frame: prompt };
-                    await onUpdateShot(editingShot.id, newData);
-                    setEditingShot(prev => ({...prev, ...newData}));
+                    await onUpdateShot(targetShotId, newData);
+                    setEditingShot(prev => (prev && prev.id === targetShotId ? { ...prev, ...newData } : prev));
                     onLog?.('End Frame Generated', 'success');
                     showNotification('End Frame Generated', 'success');
                     success = true;
@@ -10638,22 +10657,24 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 }
             }
         }
-        setGeneratingState(prev => ({ ...prev, end: false }));
+        setShotGeneratingState(targetShotId, 'end', false);
     };
 
     const handleGenerateVideo = async () => {
         if (!editingShot) return;
-        if (generatingState.video) {
+        const targetShotId = editingShot.id;
+        const targetGeneratingState = generatingStateByShot[targetShotId] || { start: false, end: false, video: false };
+        if (targetGeneratingState.video) {
              return; 
         }
 
-        setGeneratingState(prev => ({ ...prev, video: true }));
+        setShotGeneratingState(targetShotId, 'video', true);
 
         // 1. Feature Injection for Video Prompt
         let prompt = editingShot.prompt || editingShot.video_content || "Video motion";
         const { text: injectedPrompt, modified } = injectEntityFeatures(prompt);
         if (modified) {
-            setEditingShot(prev => ({ ...prev, prompt: injectedPrompt }));
+            setEditingShot(prev => (prev && prev.id === targetShotId ? { ...prev, prompt: injectedPrompt } : prev));
             prompt = injectedPrompt;
         }
 
@@ -10749,7 +10770,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
             const res = await generateVideo(finalPrompt, null, finalStartRef, finalEndRef, durParam, {
                 project_id: projectId,
-                shot_id: editingShot.id,
+                shot_id: targetShotId,
                 shot_number: editingShot.shot_id,
                 shot_name: editingShot.shot_name,
                 asset_type: 'video',
@@ -10759,7 +10780,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 
                 // 1. Force Local State Update IMMEDIATELY (Optimistic/Local)
                 setEditingShot(prev => {
-                   if (!prev) return null;
+                         if (!prev || prev.id !== targetShotId) return prev;
                    return { ...prev, ...newData };
                 });
                 
@@ -10768,7 +10789,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
                 // 2. Update Server & Master List (Async persistence)
                 try {
-                    await onUpdateShot(editingShot.id, newData);
+                    await onUpdateShot(targetShotId, newData);
                 } catch (updateErr) {
                     console.error("Failed to save shot update to backend:", updateErr);
                     // We don't block the UI - the video is here.
@@ -10778,7 +10799,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
              onLog?.(`Generation failed: ${e.message}`, 'error');
              showNotification(`Generation failed: ${e.message}`, 'error');
         } finally {
-            setGeneratingState(prev => ({ ...prev, video: false }));
+            setShotGeneratingState(targetShotId, 'video', false);
         }
     };
 
@@ -11476,7 +11497,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 >
                                                     <ImageIcon className="w-3 h-3"/> {t('设置', 'Set')}
                                                 </button>
-                                                {generatingState.start ? (
+                                                {currentGeneratingState.start ? (
                                                     <button 
                                                         onClick={() => abortGenerationRef.current = true}
                                                         className="text-[10px] px-2 py-0.5 rounded flex items-center gap-1 bg-red-500/20 text-red-400 hover:bg-red-500/30 border border-red-500/30"
@@ -11497,7 +11518,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                             </div>
                                         </div>
                                         <div className="aspect-video bg-black/40 rounded border border-white/10 relative group overflow-hidden">
-                                            {generatingState.start && (
+                                            {currentGeneratingState.start && (
                                                 <div className="absolute inset-0 bg-black/60 z-10 flex items-center justify-center flex-col gap-2">
                                                     <Loader2 className="w-6 h-6 animate-spin text-primary"/>
                                                     <span className="text-[10px] text-white/70 animate-pulse">{t('正在生成图片...', 'Generating Image...')}</span>
@@ -11627,7 +11648,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 >
                                                     <ImageIcon className="w-3 h-3"/> {t('设置', 'Set')}
                                                 </button>
-                                                {generatingState.end ? (
+                                                {currentGeneratingState.end ? (
                                                     <button 
                                                         onClick={() => abortGenerationRef.current = true}
                                                         className="text-[10px] px-2 py-0.5 rounded flex items-center gap-1 bg-red-500/20 text-red-400 hover:bg-red-500/30 border border-red-500/30"
@@ -11648,7 +11669,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                             </div>
                                         </div>
                                         <div className="aspect-video bg-black/40 rounded border border-white/10 relative group overflow-hidden">
-                                            {generatingState.end && (
+                                            {currentGeneratingState.end && (
                                                 <div className="absolute inset-0 bg-black/60 z-10 flex items-center justify-center flex-col gap-2">
                                                     <Loader2 className="w-6 h-6 animate-spin text-primary"/>
                                                     <span className="text-[10px] text-white/70 animate-pulse">{t('正在生成结束帧...', 'Generating End Frame...')}</span>
@@ -11818,11 +11839,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
                                                 <button 
                                                     onClick={handleGenerateVideo} 
-                                                    disabled={generatingState.video}
-                                                    className={`text-[10px] font-bold px-3 py-0.5 rounded flex items-center gap-1 ${generatingState.video ? 'bg-primary/50 text-black/50 cursor-wait' : 'bg-primary text-black hover:opacity-90' }`}
+                                                    disabled={currentGeneratingState.video}
+                                                    className={`text-[10px] font-bold px-3 py-0.5 rounded flex items-center gap-1 ${currentGeneratingState.video ? 'bg-primary/50 text-black/50 cursor-wait' : 'bg-primary text-black hover:opacity-90' }`}
                                                 >
-                                                    {generatingState.video ? <Loader2 className="w-3 h-3 animate-spin"/> : <Film className="w-3 h-3"/>} 
-                                                    {generatingState.video ? t('生成中...', 'Generating...') : t('生成', 'Generate')}
+                                                    {currentGeneratingState.video ? <Loader2 className="w-3 h-3 animate-spin"/> : <Film className="w-3 h-3"/>} 
+                                                    {currentGeneratingState.video ? t('生成中...', 'Generating...') : t('生成', 'Generate')}
                                                 </button>
                                             </div>
                                         </div>
@@ -11831,7 +11852,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                             className="aspect-video bg-black/40 rounded border border-white/10 relative group overflow-hidden cursor-pointer"
                                             onClick={() => editingShot.video_url && setViewMedia({ url: getFullUrl(editingShot.video_url), type: 'video', title: t('最终视频', 'Final Video'), prompt: editingShot.prompt })}
                                         >
-                                            {generatingState.video && (
+                                            {currentGeneratingState.video && (
                                                 <div className="absolute inset-0 bg-black/60 z-10 flex items-center justify-center flex-col gap-2">
                                                     <Loader2 className="w-6 h-6 animate-spin text-primary"/>
                                                     <span className="text-[10px] text-white/70 animate-pulse">{t('正在生成视频...', 'Generating Video...')}</span>
@@ -12069,22 +12090,27 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                             .replace(/[\[\]【】"''“”‘’]/g, '')
                                             .replace(/^(CHAR|ENV|PROP)\s*:\s*/i, '')
                                             .replace(/^@+/, '')
+                                            .trim();
+                                        const normalizeForMatch = (s) => cleanName(s)
+                                            .replace(/[_\-]+/g, ' ')
+                                            .replace(/\s+/g, ' ')
                                             .trim()
                                             .toLowerCase();
                                         const rawNames = (editingShot.associated_entities || '').split(/[,，]/);
                                         const names = rawNames.map(cleanName).filter(Boolean);
+                                        const normalizedNames = names.map(normalizeForMatch).filter(Boolean);
                                         
                                         // Match entity names (English or Chinese)
-                                        const matches = entities.filter(e => names.some(n => {
-                                            const cn = cleanName(e.name || '');
-                                            let en = cleanName(e.name_en || '');
+                                        const matches = entities.filter(e => normalizedNames.some(n => {
+                                            const cn = normalizeForMatch(e.name || '');
+                                            let en = normalizeForMatch(e.name_en || '');
 
                                             // Fallback: Try to extract English name from description if name_en is empty
                                             if (!en && e.description) {
                                                 const enMatch = e.description.match(/Name \(EN\):\s*([^\n\r]+)/i);
                                                 if (enMatch && enMatch[1]) {
                                                     const complexEn = enMatch[1].trim();
-                                                    en = cleanName(complexEn.split(/(?:\s+role:|\s+archetype:|\s+appearance:|\n|,)/)[0]); 
+                                                    en = normalizeForMatch(complexEn.split(/(?:\s+role:|\s+archetype:|\s+appearance:|\n|,)/)[0]); 
                                                 }
                                             }
 
@@ -12107,26 +12133,27 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                             if (currentScene) {
                                                 // Extract location from scene (e.g., "[废弃展区内部 (主视角)]")
                                                 // Clean brackets like [ ]
-                                                const rawLoc = (currentScene.location || currentScene.environment_name || '').replace(/[\[\]]/g, '').trim().toLowerCase();
+                                                const rawLoc = cleanName((currentScene.location || currentScene.environment_name || '').replace(/[\[\]]/g, ''));
+                                                const rawLocNorm = normalizeForMatch(rawLoc);
                                                 
-                                                if (rawLoc) {
+                                                if (rawLocNorm) {
                                                     // console.log("Matching Env:", rawLoc);
                                                     const envs = entities.filter(e => {
                                                         // Filter for Environment type entities primarily, but allow others
                                                         // if (e.type !== 'environment') return false; 
                                                         
-                                                        const cn = (e.name || '').toLowerCase();
-                                                        let en = (e.name_en || '').toLowerCase();
+                                                        const cn = normalizeForMatch(e.name || '');
+                                                        let en = normalizeForMatch(e.name_en || '');
                                                         // Fallback EN extract
                                                         if (!en && e.description) {
                                                             const enMatch = e.description.match(/Name \(EN\):\s*([^\n\r]+)/i);
-                                                            if (enMatch && enMatch[1]) en = enMatch[1].trim().split(/(?:\s+role:|\n|,)/)[0].trim().toLowerCase(); 
+                                                            if (enMatch && enMatch[1]) en = normalizeForMatch(enMatch[1].trim().split(/(?:\s+role:|\n|,)/)[0]); 
                                                         }
 
                                                         // Use looser matching for descriptions/anchors
                                                         // Is the Location string contained in Entity Name? or vice versa?
-                                                        if (cn && (cn.includes(rawLoc) || rawLoc.includes(cn))) return true;
-                                                        if (en && (en.includes(rawLoc) || rawLoc.includes(en))) return true;
+                                                        if (cn && (cn.includes(rawLocNorm) || rawLocNorm.includes(cn))) return true;
+                                                        if (en && (en.includes(rawLocNorm) || rawLocNorm.includes(en))) return true;
                                                         
                                                         return false;
                                                     });

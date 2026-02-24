@@ -88,6 +88,7 @@ Goal: keep `Episode -> Scene -> Shot` hierarchical continuity deterministic and 
 - Character/subject references use `CHAR:[@Name]` consistently; missing `@` on characters is invalid.
 - Environment/prop references remain `[Name]` without `@`; `[@Env]` / `[@Prop]` are invalid.
 - Entity typing is explicit and consistent: `CHAR:[@Name]`, `ENV:[Name]`, `PROP:[Name]`.
+- `anchor_description` is English-only for all entity types (Character/Prop/Environment); no Chinese or mixed-language output.
 - Any type mismatch (`CHAR` used for env/prop, or `ENV/PROP` used for character) is invalid and must be rewritten.
 
 ## Maintenance Rule

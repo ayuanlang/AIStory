@@ -1399,7 +1399,7 @@ const UserAdmin = () => {
                                             onChange={(e) => setCalcPriceUSD(e.target.value)}
                                         />
                                         <p className="text-[9px] text-gray-600 mt-1">
-                                            ruleForm.unit_type === 'per_million_tokens' ? t('例如：GPT-4o 输入：约￥36.00', 'e.g. GPT-4o Input: ~￥36.00') :
+                                            {ruleForm.unit_type === 'per_million_tokens' ? t('例如：GPT-4o 输入：约￥36.00', 'e.g. GPT-4o Input: ~￥36.00') :
                                             ruleForm.unit_type === 'per_image' ? t('例如：DALL-E 3：约￥0.30', 'e.g. DALL-E 3: ~￥0.30') :
                                             ruleForm.unit_type === 'per_second' ? t('例如：Runway：约￥0.35/秒', 'e.g. Runway: ~￥0.35/sec') :
                                             t('供应商基础成本（元）', 'Base provider cost in Yuan')}
