@@ -5830,6 +5830,8 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
                 .replace(/[（【〔［]/g, '(')
                 .replace(/[）】〕］]/g, ')')
                 .replace(/[“”"']/g, '') // Remove quotes
+                .replace(/^(CHAR|ENV|PROP)\s*:\s*/i, '')
+                .replace(/^@+/, '')
                 .replace(/\s+/g, ' ')   // Collapse spaces
                 .trim()
                 .toLowerCase();
