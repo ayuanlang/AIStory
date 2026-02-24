@@ -5797,14 +5797,15 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
             rawMatches.push(...shot.associated_entities.split(/[,，]/));
         }
         
-        // Source 2: Prompt Text - Extract content inside [], {}, 【】, ｛｝
+        // Source 2: Prompt Text - Extract content inside [], {}, 【】, ｛｝ and standalone @Name
         // Use [\s\S]+? to capture anything (including newlines) until the first closing bracket.
         // This is robust against strange characters and newlines.
         const regexes = [
             /\[([\s\S]+?)\]/g,    // [...]
             /\{([\s\S]+?)\}/g,    // {...}
             /【([\s\S]+?)】/g,     // 【...】
-            /｛([\s\S]+?)｝/g      // ｛...｝ (Full-width braces)
+            /｛([\s\S]+?)｝/g,      // ｛...｝ (Full-width braces)
+            /(?:^|[\s,，;；])(@[^\s,，;；\]\[\(\)（）\{\}【】]+)/g // standalone @Name
         ];
 
         if (promptText) {
@@ -10058,6 +10059,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             /\{([\s\S]+?)\}/g,    // {...}
             /【([\s\S]+?)】/g,     // 【...】
             /｛([\s\S]+?)｝/g,      // ｛...｝
+            /(?:^|[\s,，;；])(@[^\s,，;；\]\[\(\)（）\{\}【】]+)/g, // standalone @Name
             // Also keep legacy simple regex for cases without full brackets if needed? 
             // The legacy regex was: /[\[【\{]([^\]】\}\(]+)[\]】\}\(]/g; which was too restrictive.
         ];
@@ -10611,10 +10613,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 if (Array.isArray(tech.end_ref_image_urls)) {
                     refs.push(...tech.end_ref_image_urls);
                 } else {
-                    if (prompt.length > 5) {
-                        const suggested = getSuggestedRefImages(editingShot, prompt, true);
-                        refs.push(...suggested);
-                    }
+                    const suggested = getSuggestedRefImages(editingShot, prompt, true);
+                    refs.push(...suggested);
                 }
                 
                 const deletedRefs = Array.isArray(tech.deleted_ref_urls) ? tech.deleted_ref_urls : [];
@@ -10907,10 +10907,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                          refs.push(...tech.end_ref_image_urls);
                      } else {
                          // 2. Auto Entities
-                         if (injectedPrompt.length > 5) {
-                             const suggested = getSuggestedRefImages(shot, injectedPrompt, true);
-                             refs.push(...suggested);
-                         }
+                         const suggested = getSuggestedRefImages(shot, injectedPrompt, true);
+                         refs.push(...suggested);
                      }
                      
                      // UNIVERSAL INJECTION: Start Frame (Batch)
@@ -11059,12 +11057,9 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                         if (Array.isArray(tech.end_ref_image_urls)) {
                             refs.push(...tech.end_ref_image_urls);
                         } else {
-                            // Check Length Rule for Auto (Same as Manual)
-                            if (prompt.length > 5) {
-                                if (currentShot.image_url) refs.push(currentShot.image_url);
-                                const suggested = getSuggestedRefImages(currentShot, injectedPrompt, true);
-                                refs.push(...suggested);
-                            }
+                            if (currentShot.image_url) refs.push(currentShot.image_url);
+                            const suggested = getSuggestedRefImages(currentShot, injectedPrompt, true);
+                            refs.push(...suggested);
                         }
                         const uniqueRefs = [...new Set(refs)].filter(Boolean);
 
