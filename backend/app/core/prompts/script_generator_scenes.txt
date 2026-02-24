@@ -25,8 +25,7 @@ JSON schema to output:
       "original_script_text": "The actual screenplay-style text for the scene (dialogue + action).",
       "equivalent_duration": "Optional, e.g. 1:30",
       "core_scene_info": "What the scene accomplishes (goal/conflict/turning).",
-      "environment_name": "Location / environment anchor",
-      "environment_relation": "NEW | REUSE:<EnvName> | VARIANT_OF:<EnvName>",
+      "environment_name": "Story-level location only (script language, concise)",
       "linked_characters": "Comma-separated character names",
       "key_props": "Comma-separated props",
       "entry_state": "Start state of key characters/props/dynamic parts",
@@ -46,38 +45,19 @@ Constraints:
   - If introduced, it must be tracked in state handoff and continuity (who has it, where it is, whether it remains worn/held).
   - If not plot-critical and persistent, do not introduce it.
 - Anchor Clarity Mandate: ensure `environment_name`, `linked_characters`, and `key_props` are concrete and stable for downstream visual generation (avoid vague placeholders).
+- Environment Authority Handoff (Mandatory): this stage is story-only scene breakdown. `environment_name` is only a narrative location label. Canonical Environment naming/variant/base-delta design is finalized in `scene_analysis.txt`.
+- Entity Authority Handoff (Mandatory): `linked_characters` and `key_props` here are scene-list seeds. Canonical Character/Prop naming and final extraction are finalized in `scene_analysis.txt` stage.
+- Script-Language Naming (Mandatory): `environment_name` must follow the dominant script language (Chinese script -> Chinese name; English script -> English name). Keep it concise and stable, do not force English technical naming template at this stage.
+- Name Freeze (Mandatory): never auto-translate, case-normalize, or rewrite existing names from input context; preserve original spelling, case, and separators exactly (applies to Environment/Character/Prop names).
 - Hierarchical coding mandate:
   - `episode_id` must be canonical `EPxx` (zero-padded).
   - Each `scene_id` must be `EPxx_SCyy`, where `yy` is strictly increasing and unique under the same `episode_id`.
   - `scene_no` must be the numeric index of `scene_id` (e.g., `EP01_SC03` -> `scene_no: "3"`).
   - Never mix multiple episode prefixes in one output.
-- Environment-asset relation mandate:
-  - `environment_name` must follow `{Venue}_{DirectionTag}_{ShotScale}_{LightingTagOptional}`.
-  - `environment_relation` is mandatory for every scene and must be one of `NEW`, `REUSE:<ExistingEnvName>`, `VARIANT_OF:<ExistingEnvName>`.
-  - Same-venue environments must share one `Base Environment Reference` (unified reference image/mother board).
-  - For `VARIANT_OF/REUSE`, describe only `Environment Delta` (ordered as `Camera Position/Direction -> Axis Side -> Background Set Change -> Lighting Direction Change -> Framing Change -> Dynamic Parts State`), not full environment rewrite.
-  - For `REUSE`, delta must be explicitly `None` / `No visual delta`.
-  - Delta whitelist ordering is mandatory. Always output in this exact order:
-    1) `Camera Position/Direction`
-    2) `Axis Side`
-    3) `Background Set Change`
-    4) `Lighting Direction Change`
-    5) `Framing Change`
-    6) `Dynamic Parts State`
-    Template: `Environment Delta = {Camera Position/Direction: ..., Axis Side: ..., Background Set Change: ..., Lighting Direction Change: ..., Framing Change: ..., Dynamic Parts State: ...}` (use `None` when unchanged).
-    Shorthand anchor: `CPD -> AS -> BG -> LD -> FR -> DP`.
-  - DP reason mandatory: whenever `Dynamic Parts State` is non-`None`, it MUST include `Before -> After + reason`.
-    - Recommended expression: `Dynamic Parts State: <PartName>(<Before> -> <After>, reason: <trigger/action>)`.
-    - Result-only text is invalid (e.g., `Door: Closed` without trigger/reason).
-  - REUSE minimal template (mandatory):
-    `Environment Delta = {Camera Position/Direction: None, Axis Side: None, Background Set Change: None, Lighting Direction Change: None, Framing Change: None, Dynamic Parts State: None}`.
-    Only `Dynamic Parts State` may be non-`None` when doors/windows/lights/screens state truly changes; other five keys must stay `None`.
-  - If axis/camera direction/background set changes, use `VARIANT_OF` and a new `environment_name`.
-  - `Front/Reverse` are the minimum baseline variants, not the upper limit.
-  - Under the 2D-background-consistency-first principle, generate all environment variants required by story blocking (axis flip, observation-direction switch, background-set change, dominant-light-direction change, visible-structure regrouping).
-  - If any potentially needed variant is not generated, provide an explicit exemption reason in scene rationale.
-  - Label mapping consistency (canonical): `environment_relation` ↔ `Environment Relation`, `environment_delta` ↔ `Environment Delta`, `observer_view` ↔ `Observer View`, `entry_state` ↔ `Entry State`, `exit_state` ↔ `Exit State`.
-  - In `core_scene_info`, include concise base-reference continuity note for each scene (base ref id/name + delta summary); if `DP` is non-`None`, the summary must include `Before -> After + reason`.
+- Story-first boundary (Mandatory):
+  - Do NOT perform environment asset engineering in this stage.
+  - Do NOT generate Front/Reverse variants, `REUSE/VARIANT_OF`, `Base Environment Reference`, or `Environment Delta`.
+  - Only provide story-level location (`environment_name`) and dramatic progression.
 
 - Scene/Beat supplement (copied requirements; keep wording as-is):
   - **AI创作优先 (AI-First Scene Partitioning)**：本任务不是传统影视场记，而是为 AI 生成稳定画面。由于 AI 背景通常按“单张二维参考”稳定生成，凡是机位/轴线变化导致背景构图显著变化，必须拆分为新的 Scene + 新的 Environment。

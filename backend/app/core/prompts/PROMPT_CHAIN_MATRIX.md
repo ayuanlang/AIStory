@@ -22,10 +22,15 @@ Goal: keep `Episode -> Scene -> Shot` hierarchical continuity deterministic and 
 | :--- | :--- | :--- | :--- |
 | `story_generator_global.txt` | `EPxx` in episode plan lines | Episode Outline | Global only sets canonical episode coding policy and venue/continuity seeds. |
 | `story_generator_episode.txt` | `episode_id`, `scene_id`, `Entry State -> Exit State`, `Environment Seed` | Scene List + Episode Script | `entry_state` ↔ `Entry State`; `exit_state` ↔ `Exit State`; `Environment Seed` routes into `Environment Relation` decisions downstream. |
-| `script_generator_scenes.txt` | `episode_id`, `scene_id`, `scene_no`, `environment_relation`, `observer_view`, `entry_state`, `exit_state` | Scene Analysis + DB scene records | `environment_relation` values: `NEW`, `REUSE:<EnvName>`, `VARIANT_OF:<EnvName>`. |
+| `script_generator_scenes.txt` | `episode_id`, `scene_id`, `scene_no`, `scene_name`, `original_script_text`, `core_scene_info`, `environment_name`(story-level), `linked_characters`, `key_props`, `entry_state`, `exit_state` | Scene Analysis + DB scene records | Story-only scene breakdown stage. `environment_name` is narrative location seed only; do not output `Environment Relation/Base/Delta` engineering here. |
 | `script_generator_episode_script.txt` | `Scene ID`, `Environment Relation`, `Base Environment Reference`, `Environment Delta`, `Observer View`, `Entry State`, `Exit State`, beat-level structure | Scene Analysis + Shot Generation | Markdown label form mirrors snake_case JSON form from scene list stage. |
 | `scene_analysis.txt` | `Episode ID`, `Scene ID`, `Environment Relation`, `Base Environment Reference`, `Environment Delta`, `Observer View`, `Entry State`, `Exit State` + validation checks | Shot Generation + entity extraction | Includes mandatory continuity checks, base-delta inheritance checks, observer-POV checks, and state-handoff verification. |
 | `shot_generator.txt` | `Scene ID`, `Shot ID` | Final shot table | Requires `Shot ID` prefix to exactly match row `Scene ID` (`EPxx_SCyy`). |
+
+## Authority Boundary (Mandatory)
+- `script_generator_scenes.txt`: story decomposition only (what happens, where in narrative terms).
+- `scene_analysis.txt`: canonical environment engineering authority (`Environment Relation`, `Base Environment Reference`, `Environment Delta`, observer-POV constraints).
+- `shot_generator.txt`: strict downstream consumer of canonical names; no entity/environment renaming or new entity creation.
 
 ## Label Mapping (Authoritative)
 
@@ -69,7 +74,7 @@ Goal: keep `Episode -> Scene -> Shot` hierarchical continuity deterministic and 
 - One-to-many hierarchy holds (`Episode -> Scenes -> Shots`).
 - `Scene ID` prefix matches `Episode ID`.
 - `Shot ID` prefix matches `Scene ID`.
-- `Environment Relation` is present and valid in scene-bearing stages.
+- `Environment Relation` is present and valid from `scene_analysis` stage onward (not required in story-only `script_generator_scenes` output).
 - `Base Environment Reference` is present for same-venue scenes and is stable across variants.
 - `Environment Delta` only lists changed factors; `REUSE` rows explicitly declare `None` / `No visual delta`.
 - `Environment Delta` respects whitelist order with all six keys present (unchanged keys must be `None`).

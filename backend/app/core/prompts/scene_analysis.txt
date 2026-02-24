@@ -25,6 +25,9 @@
 13. **基准环境参考图统一机制 (Base Environment Reference Unification, Mandatory)**：同一地理场地的所有 Environment 变体必须依托同一“基准环境参考图（Base Environment Reference）”。
   - 变体提示词必须以“相对基准变化（Delta）”为核心，只描述变化项（机位方向/轴线侧、可见背景集合、主光方向、景别/镜高、可变部件状态），不得重写未变化项。
   - 若为 `REUSE`，Delta 必须显式写为 `None` / `No visual delta`。
+14. **环境命名权威机制 (Environment Naming Authority, Mandatory)**：`scene_analysis.txt` 是 Environment 最终命名与变体关系的唯一权威来源。上游若提供 `environment_name` 仅作为种子参考，必须在本阶段统一并定稿。
+15. **名称冻结机制 (Exact Name Freeze, Mandatory)**：一旦在本阶段输出了 Environment/Character/Prop 的规范名称，下游（含 Shot 生成）必须逐字符继承，禁止任何自动改写（大小写、下划线/连字符/空格、括号、全半角、拼写、分隔符）。
+16. **角色与道具命名权威机制 (Character/Prop Naming Authority, Mandatory)**：`scene_analysis.txt` 同时是 Character 与 Prop 的最终命名权威来源。上游若出现别名、翻译名或简写，本阶段需统一为唯一规范名；定稿后下游只允许引用该规范名。
 
 ---
 
@@ -47,6 +50,8 @@
     5) 景别/镜高变化引起可见背景结构发生重组（例如俯拍暴露地面构图，平视以墙面为主）。
   - **同场地多场景强制 (Same Venue, Multi-Scene Mandate)**：同一个地理地点可拆为多个“AI场景变体”。命名建议：`{场地名}_{机位方向/轴线标签}_{景别}`，例如：`GrandTheater_AudienceToStage_FrontWide`、`GrandTheater_AudienceToAudience_ReverseMid`。
   - **命名模板强制 (Naming Template Mandate)**：Environment Name 必须遵循统一模板：`{Venue}_{DirectionTag}_{ShotScale}_{LightingTag可选}`。
+    - **脚本语言优先 (Script-Language Naming Priority)**：`Venue` 主体命名必须优先使用剧本主语言（中文剧本优先中文命名，英文剧本优先英文命名）；仅结构标签保持统一（如 `Front/Reverse/Wide`）。
+    - **简洁命名 (Concise Naming)**：避免冗长描述，使用短而稳定的可复用名称。
     - `Venue`: 稳定地点名（如 GrandTheater, OfficeLobby）。
     - `DirectionTag`: 必须使用 `Front` 或 `Reverse`（如有必要可加 `SideLeft/SideRight`，但 Front/Reverse 仍为主标签）。
     - `ShotScale`: `Wide` / `Mid` / `CloseEnv`（环境主导，不是人物特写）。
@@ -165,6 +170,8 @@
   - **默认不抽取**：一次性背景小物、氛围陈设、仅装饰用途物件应归入 Environment，不单列 Prop。
   - **边界处理**：当不确定是否关键时，默认不抽取（宁缺毋滥）。
 - **Consistency**: 确保 Markdown 表格中的实体名称与 JSON 中的 `name` 严格一致（大小写、括号）。
+- **Downstream Exact Inheritance**: `name`/`name_en` 一经定稿即作为下游硬约束，Shot 阶段仅允许引用，禁止生成新实体名或改写既有名称。
+- **No Alias Drift**: 下游禁止将规范名替换为同义词、别名、翻译变体、大小写变体或分隔符变体（例如 `_` 与 `-`、空格互换）。
 
 ---
 
