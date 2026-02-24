@@ -46,6 +46,8 @@ const UserAdmin = () => {
     const [isSystemApiImporting, setIsSystemApiImporting] = useState(false);
     const [isSystemApiExporting, setIsSystemApiExporting] = useState(false);
     const [selectedSystemApiId, setSelectedSystemApiId] = useState('');
+    const [systemApiFilterCategory, setSystemApiFilterCategory] = useState('all');
+    const [systemApiFilterProvider, setSystemApiFilterProvider] = useState('all');
     const [systemApiForm, setSystemApiForm] = useState({
         name: '',
         category: 'LLM',
@@ -154,6 +156,45 @@ const UserAdmin = () => {
             is_active: !!row.is_active,
         });
     }, [selectedSystemApiId, systemApiRows]);
+
+    const systemApiCategoryOptions = React.useMemo(() => {
+        const set = new Set();
+        systemApiRows.forEach((row) => {
+            const category = String(row?.category || '').trim();
+            if (category) set.add(category);
+        });
+        return Array.from(set);
+    }, [systemApiRows]);
+
+    const systemApiProviderOptions = React.useMemo(() => {
+        const set = new Set();
+        systemApiRows.forEach((row) => {
+            const provider = String(row?.provider || '').trim();
+            if (!provider) return;
+            if (systemApiFilterCategory !== 'all' && String(row?.category || '') !== systemApiFilterCategory) return;
+            set.add(provider);
+        });
+        return Array.from(set);
+    }, [systemApiRows, systemApiFilterCategory]);
+
+    const filteredSystemApiRows = React.useMemo(() => {
+        return systemApiRows.filter((row) => {
+            if (systemApiFilterCategory !== 'all' && String(row?.category || '') !== systemApiFilterCategory) return false;
+            if (systemApiFilterProvider !== 'all' && String(row?.provider || '') !== systemApiFilterProvider) return false;
+            return true;
+        });
+    }, [systemApiRows, systemApiFilterCategory, systemApiFilterProvider]);
+
+    useEffect(() => {
+        if (!filteredSystemApiRows.length) {
+            setSelectedSystemApiId('');
+            return;
+        }
+        const existsInFiltered = filteredSystemApiRows.some((row) => String(row.id) === String(selectedSystemApiId));
+        if (!existsInFiltered) {
+            setSelectedSystemApiId(String(filteredSystemApiRows[0].id));
+        }
+    }, [filteredSystemApiRows, selectedSystemApiId]);
 
     const handleCreateSystemApiSetting = async () => {
         const provider = String(systemApiForm.provider || '').trim();
@@ -979,6 +1020,49 @@ const UserAdmin = () => {
                             ) : (
                                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                                     <div className="border border-white/10 rounded-lg p-4 bg-black/20 space-y-3">
+                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                                            <div>
+                                                <label className="text-xs uppercase text-gray-400">{t('模型类型筛选', 'Model Type Filter')}</label>
+                                                <select
+                                                    value={systemApiFilterCategory}
+                                                    onChange={(e) => {
+                                                        setSystemApiFilterCategory(e.target.value);
+                                                        setSystemApiFilterProvider('all');
+                                                    }}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                >
+                                                    <option value="all">{t('全部类型', 'All Types')}</option>
+                                                    {systemApiCategoryOptions.map((category) => (
+                                                        <option key={category} value={category}>{category}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="text-xs uppercase text-gray-400">{t('供应商筛选', 'Provider Filter')}</label>
+                                                <select
+                                                    value={systemApiFilterProvider}
+                                                    onChange={(e) => setSystemApiFilterProvider(e.target.value)}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                >
+                                                    <option value="all">{t('全部供应商', 'All Providers')}</option>
+                                                    {systemApiProviderOptions.map((provider) => (
+                                                        <option key={provider} value={provider}>{provider}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                            <div className="flex items-end">
+                                                <button
+                                                    onClick={() => {
+                                                        setSystemApiFilterCategory('all');
+                                                        setSystemApiFilterProvider('all');
+                                                    }}
+                                                    className="w-full bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded text-sm"
+                                                >
+                                                    {t('重置筛选', 'Reset Filters')}
+                                                </button>
+                                            </div>
+                                        </div>
+
                                         <label className="text-xs uppercase text-gray-400">{t('选择已有设置', 'Select Existing Setting')}</label>
                                         <select
                                             value={selectedSystemApiId}
@@ -986,7 +1070,7 @@ const UserAdmin = () => {
                                             className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
                                         >
                                             <option value="">{t('请选择...', 'Select...')}</option>
-                                            {systemApiRows.map((row) => (
+                                            {filteredSystemApiRows.map((row) => (
                                                 <option key={row.id} value={row.id}>
                                                     [{row.category}] {row.provider} / {row.model || '-'} (ID:{row.id})
                                                 </option>
@@ -1005,7 +1089,7 @@ const UserAdmin = () => {
                                                     </tr>
                                                 </thead>
                                                 <tbody>
-                                                    {systemApiRows.map((row) => (
+                                                    {filteredSystemApiRows.map((row) => (
                                                         <tr
                                                             key={row.id}
                                                             onClick={() => setSelectedSystemApiId(String(row.id))}
@@ -1018,6 +1102,13 @@ const UserAdmin = () => {
                                                             <td className="p-2">{row.is_active ? t('是', 'Yes') : t('否', 'No')}</td>
                                                         </tr>
                                                     ))}
+                                                    {filteredSystemApiRows.length === 0 && (
+                                                        <tr className="border-t border-white/10">
+                                                            <td className="p-3 text-gray-400" colSpan={5}>
+                                                                {t('无匹配结果，请调整筛选条件。', 'No matching settings. Adjust your filters.')}
+                                                            </td>
+                                                        </tr>
+                                                    )}
                                                 </tbody>
                                             </table>
                                         </div>
