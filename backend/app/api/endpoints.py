@@ -3946,8 +3946,12 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
     relevant_names = set()
     
     def _clean_br(s):
-        # Remove brackets and backticks, then strip
-        return s.replace('[', '').replace(']', '').replace('`', '').strip()
+        # Normalize tokens like "CHAR:[@Name]" / "[@Name]" / "[Name]" to plain name.
+        cleaned = str(s or '').replace('[', '').replace(']', '').replace('`', '').strip()
+        cleaned = re.sub(r'^(CHAR|ENV|PROP)\s*:\s*', '', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'^@+', '', cleaned)
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        return cleaned
 
     if scene.linked_characters:
         # Split by comma and handle potential variations
