@@ -3431,6 +3431,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         if (!meta || typeof meta !== 'object') return null;
         const integrity = (meta.integrity && typeof meta.integrity === 'object') ? meta.integrity : {};
         const segments = Array.isArray(meta.segments) ? meta.segments : [];
+        const providerLimitHints = Array.isArray(meta.provider_limit_hints) ? meta.provider_limit_hints : [];
         const finishReason = String(meta.finish_reason || '').trim() || '-';
         const truncated = !!(
             integrity.truncation_suspected ||
@@ -3442,6 +3443,10 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             segmentsCount: segments.length,
             truncated,
             maxSegmentsStop: !!meta.continuation_stopped_by_max_segments,
+            requestedCap: meta.requested_output_cap_tokens ?? meta.config_max_tokens_effective ?? '-',
+            completionTokens: meta.completion_tokens ?? '-',
+            capReachedSuspected: !!meta.output_cap_reached_suspected,
+            providerLimitHints,
         };
     }, []);
 
@@ -5256,6 +5261,17 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                                         <div className="text-[10px] text-white/60 mt-1">
                                             {t('结束原因', 'Finish')}: {analysisRuntimeMeta.finishReason} · seg: {analysisRuntimeMeta.segmentsCount} · {t('疑似截断', 'Truncated')}: {analysisRuntimeMeta.truncated ? t('是', 'yes') : t('否', 'no')}
                                             {analysisRuntimeMeta.maxSegmentsStop ? ` · ${t('续写达到上限', 'Continuation hit max segments')}` : ''}
+                                            {` · ${t('请求上限', 'Req cap')}: ${analysisRuntimeMeta.requestedCap}`}
+                                            {` · ${t('完成token', 'Out tok')}: ${analysisRuntimeMeta.completionTokens}`}
+                                            {analysisRuntimeMeta.capReachedSuspected ? ` · ${t('疑似触顶', 'Cap hit? yes')}` : ''}
+                                            {analysisRuntimeMeta.providerLimitHints?.length ? (
+                                                <span
+                                                    className="ml-1 underline decoration-dotted cursor-help"
+                                                    title={analysisRuntimeMeta.providerLimitHints.join('\n')}
+                                                >
+                                                    {` · ${t('供应商限制线索', 'Provider hints')}: ${analysisRuntimeMeta.providerLimitHints[0]}${analysisRuntimeMeta.providerLimitHints.length > 1 ? ` (+${analysisRuntimeMeta.providerLimitHints.length - 1})` : ''}`}
+                                                </span>
+                                            ) : ''}
                                         </div>
                                     )}
                                 </div>

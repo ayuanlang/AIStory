@@ -340,9 +340,9 @@ class MediaGenerationService:
         
         # Download 
         if result and "url" in result and result["url"]:
-             result["url"] = self._download_and_save(result["url"], filename_base=filename_base, user_id=user_id)
-           if result and result.get("error"):
-               result["error"] = self._vendor_failed_message(provider, result.get("error"))
+            result["url"] = self._download_and_save(result["url"], filename_base=filename_base, user_id=user_id)
+        if result and result.get("error"):
+            result["error"] = self._vendor_failed_message(provider, result.get("error"))
         return result
 
     async def generate_video(self, prompt: str, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, last_frame_url: Optional[str] = None, duration: int = 5, aspect_ratio: Optional[str] = None, keyframes: Optional[List[str]] = None, user_id: int = 1, user_credits: int = 0, filename_base: Optional[str] = None):
@@ -406,9 +406,9 @@ class MediaGenerationService:
 
         # Download 
         if result and "url" in result and result["url"]:
-               result["url"] = self._download_and_save(result["url"], filename_base=filename_base, user_id=user_id)
-           if result and result.get("error"):
-               result["error"] = self._vendor_failed_message(provider, result.get("error"))
+            result["url"] = self._download_and_save(result["url"], filename_base=filename_base, user_id=user_id)
+        if result and result.get("error"):
+            result["error"] = self._vendor_failed_message(provider, result.get("error"))
         
         return result
     

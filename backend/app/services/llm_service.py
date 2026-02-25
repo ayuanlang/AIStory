@@ -212,6 +212,43 @@ class LLMService:
             "token_limit",
         }
 
+    def _extract_provider_limit_hints(self, response_data: Dict[str, Any], response_headers: Any) -> List[str]:
+        hints: List[str] = []
+        data = response_data if isinstance(response_data, dict) else {}
+
+        # Body-level common fields from various OpenAI-compatible gateways
+        for key in ["max_output_tokens", "max_tokens", "max_completion_tokens", "context_window", "context_length"]:
+            value = data.get(key)
+            if value is not None:
+                hints.append(f"body.{key}={value}")
+
+        # Header-level hints (case-insensitive in requests headers)
+        header_keys = [
+            "x-ratelimit-limit-tokens",
+            "x-ratelimit-remaining-tokens",
+            "x-ratelimit-limit-requests",
+            "x-ratelimit-remaining-requests",
+            "x-ratelimit-limit-output-tokens",
+            "x-ratelimit-remaining-output-tokens",
+        ]
+        try:
+            for key in header_keys:
+                value = response_headers.get(key)
+                if value is not None:
+                    hints.append(f"header.{key}={value}")
+        except Exception:
+            pass
+
+        deduped: List[str] = []
+        seen = set()
+        for item in hints:
+            text = str(item or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            deduped.append(text)
+        return deduped
+
     def _is_prohibited_marker(self, text: str) -> bool:
         if not isinstance(text, str):
             return False
@@ -461,7 +498,13 @@ class LLMService:
             content = self._sanitize_response_content(content)
             finish_reason = full_response.get("choices", [{}])[0].get("finish_reason")
             usage = full_response.get("usage", {})
-            return {"content": content, "usage": usage, "finish_reason": finish_reason}
+            token_limit_hints = full_response.get("_token_limit_hints", []) if isinstance(full_response, dict) else []
+            return {
+                "content": content,
+                "usage": usage,
+                "finish_reason": finish_reason,
+                "token_limit_hints": token_limit_hints,
+            }
         except Exception as e:
             logger.error(f"LLM Raw Completion failed: {e}")
             provider = (extra_config or {}).get("__provider") or config.get("provider") or self._infer_provider(base_url, model)
@@ -748,6 +791,10 @@ class LLMService:
             raise Exception(self._vendor_failed_message(provider, raw_reason))
 
         data = response.json()
+        try:
+            data["_token_limit_hints"] = self._extract_provider_limit_hints(data, response.headers)
+        except Exception:
+            data["_token_limit_hints"] = []
         self._safe_log_json("LLM_RESPONSE", {
             "provider": provider,
             "category": resolved_category,

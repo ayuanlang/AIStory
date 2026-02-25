@@ -728,6 +728,11 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         debug_meta["config_max_tokens"] = cfg_obj.get("max_tokens")
         debug_meta["config_max_completion_tokens"] = cfg_obj.get("max_completion_tokens")
         debug_meta["config_max_tokens_effective"] = cfg_obj.get("max_tokens")
+        debug_meta["requested_output_cap_tokens"] = (
+            cfg_obj.get("max_tokens")
+            or cfg_obj.get("max_completion_tokens")
+            or cfg_obj.get("max_output_tokens")
+        )
 
         logger.info(f"Analyzing scene for user {current_user.id} with model {config.get('model')}")
         # Auto-continue if provider truncates (finish_reason=length).
@@ -747,6 +752,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         usage_total: Dict[str, Any] = {}
         finish_reason = None
         continuation_stopped_by_max_segments = False
+        provider_limit_hints: List[str] = []
 
         def _dedupe_overlap(existing: str, incoming: str) -> str:
             if not existing or not incoming:
@@ -779,6 +785,12 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             raw_part = llm_resp.get("content", "") or ""
             part_usage = llm_resp.get("usage", {}) or {}
             part_finish = llm_resp.get("finish_reason")
+            part_limit_hints = llm_resp.get("token_limit_hints", []) or []
+            if isinstance(part_limit_hints, list):
+                for hint in part_limit_hints:
+                    hint_text = str(hint or "").strip()
+                    if hint_text and hint_text not in provider_limit_hints:
+                        provider_limit_hints.append(hint_text)
 
             usage_total = _merge_usage(usage_total, part_usage)
             finish_reason = part_finish
@@ -793,6 +805,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "output_tokens_est": _estimate_tokens(raw_part),
                 "deduped_chars": len(part_content),
                 "usage": part_usage,
+                "token_limit_hints": part_limit_hints,
             })
 
             # Stop if not truncated.
@@ -820,15 +833,31 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         result_content = "".join(result_parts)
         usage = usage_total
         integrity_meta = _detect_output_integrity(result_content, segments_meta, finish_reason)
+
+        completion_tokens_val = usage.get("completion_tokens")
+        if completion_tokens_val is None:
+            completion_tokens_val = usage.get("output_tokens")
+        output_cap_reached_suspected = False
+        try:
+            req_cap = int(debug_meta.get("requested_output_cap_tokens") or 0)
+            comp_val = int(completion_tokens_val or 0)
+            if req_cap > 0 and comp_val > 0 and comp_val >= int(req_cap * 0.98):
+                output_cap_reached_suspected = True
+        except Exception:
+            output_cap_reached_suspected = False
+
         debug_meta.update({
             "stage": "post_llm",
             "finish_reason": finish_reason,
             "output_chars": len(result_content or ""),
             "output_tokens_est": _estimate_tokens(result_content or ""),
+            "completion_tokens": completion_tokens_val,
+            "output_cap_reached_suspected": output_cap_reached_suspected,
             "usage": usage,
             "segments": segments_meta,
             "max_segments": max_segments,
             "continuation_stopped_by_max_segments": continuation_stopped_by_max_segments,
+            "provider_limit_hints": provider_limit_hints,
             "integrity": integrity_meta,
         })
 
