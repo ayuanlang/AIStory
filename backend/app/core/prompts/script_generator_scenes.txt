@@ -46,6 +46,7 @@ Constraints:
   - If not plot-critical and persistent, do not introduce it.
 - Anchor Clarity Mandate: ensure `environment_name`, `linked_characters`, and `key_props` are concrete and stable for downstream visual generation (avoid vague placeholders).
 - Environment Authority Handoff (Mandatory): this stage is story-only scene breakdown. `environment_name` is only a narrative location label. Canonical Environment naming/variant/base-delta design is finalized in `scene_analysis.txt`.
+- Environment Description Boundary (Mandatory): do NOT describe environment visual details/layout/decor/lighting style in this stage; `environment_name` must stay as minimal story location label only.
 - Entity Authority Handoff (Mandatory): `linked_characters` and `key_props` here are scene-list seeds. Canonical Character/Prop naming and final extraction are finalized in `scene_analysis.txt` stage.
 - Script-Language Naming (Mandatory): `environment_name` must follow the dominant script language (Chinese script -> Chinese name; English script -> English name). Keep it concise and stable, do not force English technical naming template at this stage.
 - Name Freeze (Mandatory): never auto-translate, case-normalize, or rewrite existing names from input context; preserve original spelling, case, and separators exactly (applies to Environment/Character/Prop names).
@@ -60,34 +61,23 @@ Constraints:
   - Only provide story-level location (`environment_name`) and dramatic progression.
 
 - Scene/Beat supplement (copied requirements; keep wording as-is):
-  - **AI创作优先 (AI-First Scene Partitioning)**：本任务不是传统影视场记，而是为 AI 生成稳定画面。由于 AI 背景通常按“单张二维参考”稳定生成，凡是机位/轴线变化导致背景构图显著变化，必须拆分为新的 Scene + 新的 Environment。
-  - **二维背景一致性优先 (2D Background Consistency First)**：即使现实拍摄可在同一场地切镜头，AI 生成时若出现以下任一情况，必须拆分成新的 Scene 与 Environment：
-    1) 轴线反转（180°跨线）导致前后景关系翻转；
-    2) 观察方向变化（台下拍台上 vs 台下拍台下 / 门内看门外 vs 门外看门内）；
-    3) 背景主物体集合变化（主背景从“舞台幕布+观众席”变为“座椅排布+过道”）；
-    4) 主要光源方向变化（逆光主导 -> 侧光主导）导致背景读感变化；
-    5) 景别/镜高变化引起可见背景结构发生重组（例如俯拍暴露地面构图，平视以墙面为主）。
-  - **Axis Trigger Rule**：当 Axis 相对上一段发生“跨线、反向、观察方向切换”时，视为新 Scene 起点，不得继续沿用上一 Scene 的 Environment。
-  - **观察者视角绑定 (Observer View Binding, Mandatory)**：Axis 不仅描述角色路径，还必须给出“观察者（镜头）相对轴线”的站位与看向（轴线左侧/右侧、沿轴/逆轴），用于统一后续 Beat 的左右/前后判定。
   - **{Beats} (节拍流)**：按时间顺序排列的动作单元。
     - **临时配饰克制 (Temporary Accessory Restraint)**：非必要不得新增临时配饰/额外物件（如书包、耳机、帽子、手持小物）；仅当其对剧情有重要且持续作用时才可引入。
     - **持续性要求 (Persistence Requirement)**：一旦引入上述物件，后续 Beats/Scenes 必须维护其存在与状态（佩戴/持有/放置/转移），禁止“出现一次后无说明消失”。
     - **服装一致性约束 (Wardrobe Consistency)**：由于角色资产已预生成，Beats 中禁止出现穿衣/脱衣/换装/试衣/更衣及其同义动作；需要表达情绪推进时，改用表情、手部动作、道具互动或机位变化替代。
-    - **Spatial Activation (空间激活)**：Beats 动作必须**主动发生在该物理空间中**，并与环境产生交互（如倚靠、穿越、拿起）。严禁“真空表演”。
     - **镜头观察者视角强制 (Camera-Observer POV Mandate)**：每个 Beat 必须从“观察者镜头”描述，显式写出：
       1) **镜头位置**（camera position：机位在场景中的物理落点）；
       2) **镜头朝向**（shooting direction：镜头看向对象与方向）；
       3) **角色-镜头关系**（subject-camera relation：角色位于前景/中景/后景、镜头左/右、朝镜头/背镜头/侧对镜头、接近/远离镜头）；
       4) **镜头画面参数**（camera framing：至少给出景别与镜高/俯仰之一）。
       若机位或朝向改变，必须在 Beat 内写明“机位变化触发原因 + 变化后新视角”。
-    - **空间关系强制 (Spatial Relation Mandate)**：每个 Beat 必须明确角色与物理空间关系（如在床上/床边/地面/门口/桌旁/窗前/墙边），并说明相对 `Stage` 或 `Environment` 的落位。
     - **左右判定基准强制 (Left/Right Reference Lock)**：Beat 中“左/右/前/后”默认以当前镜头观察方向为基准，不得混用角色自身体向；如需使用角色自身体向，必须显式标注“角色视角”。
     - **主体关系强制 (Subject-to-Subject Mandate)**：每个 Beat 必须明确角色之间的相对关系，至少覆盖：位置关系、朝向关系、视线关系、接触关系。
     - **状态过渡强制 (Transition-to-New-State Mandate)**：凡位置/朝向/视线/接触任一项发生变化，必须描述从旧状态到新状态的过渡过程（动作路径、顺序与触发原因），禁止只给结果态。
     - **统一格式（强制）**：每个 Beat 必须按以下模板书写，不得简写：
-      `1. {镜头:位置/朝向/轴线侧} + {空间关系} + {角色-镜头关系(景别层/左右/朝向镜头)} + {主体关系(位置/朝向/视线/接触)} + {动作变化过程} -> {新状态}`。
+      `1. {镜头:位置/朝向/轴线侧} + {角色-镜头关系(景别层/左右/朝向镜头)} + {主体关系(位置/朝向/视线/接触)} + {动作变化过程} -> {新状态}`。
     - **Beat 单行最小模板（可直接复制）**：
-      `1. {镜头:机位在{ }旁/朝向{ }/轴线{左侧|右侧}} + {空间:CHAR:[@角色A]在{ }相对{Stage}位于{ }} + {角色-镜头关系:CHAR:[@角色A]处于{前景|中景|后景}偏{左|右}、{正对|侧对|背对}镜头、景别{远景|全景|中景|近景|特写}、镜高/俯仰{平视|俯拍|仰拍}} + {主体关系:CHAR:[@角色A]与CHAR:[@角色B]位置{ }/朝向{ }/视线{ }/接触{ }} + {动作变化:因{触发原因}执行{动作路径与顺序}，对白/字幕/音效:{ }} -> {新状态:{位置|朝向|视线|接触|道具状态}}`。
+      `1. {镜头:机位在{ }旁/朝向{ }/轴线{左侧|右侧}} + {角色-镜头关系:CHAR:[@角色A]处于{前景|中景|后景}偏{左|右}、{正对|侧对|背对}镜头、景别{远景|全景|中景|近景|特写}、镜高/俯仰{平视|俯拍|仰拍}} + {主体关系:CHAR:[@角色A]与CHAR:[@角色B]位置{ }/朝向{ }/视线{ }/接触{ }} + {动作变化:因{触发原因}执行{动作路径与顺序}，对白/字幕/音效:{ }} -> {新状态:{位置|朝向|视线|接触|道具状态}}`。
     - **硬校验（缺槽位即无效）**：上述最小模板任一槽位缺失、留空或被抽象概述替代（如“关系紧张了”），该 Beat 视为无效，必须按同一模板补全后重写该行。
     - **输出前自检（强制）**：提交结果前必须逐 Beat、逐槽位自检一次；任一槽位未填满或语义不具体，必须先修正，再输出。
       - 必须包含具体的对白/字幕/屏幕文字/音效内容（若该 Beat 存在）。

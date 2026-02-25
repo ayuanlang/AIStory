@@ -57,6 +57,16 @@ const getAvatarUrl = (url) => {
 
 const USER_PROFILE_UPDATED_EVENT = 'aistory.user.profile.updated';
 
+const sortProjectsNewestFirst = (items = []) => {
+    const safeList = Array.isArray(items) ? [...items] : [];
+    return safeList.sort((a, b) => {
+        const aTs = Date.parse(a?.created_at || '') || 0;
+        const bTs = Date.parse(b?.created_at || '') || 0;
+        if (bTs !== aTs) return bTs - aTs;
+        return (Number(b?.id) || 0) - (Number(a?.id) || 0);
+    });
+};
+
 const THEMES = {
     default: {
         name: {
@@ -222,7 +232,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const loadProjects = async () => {
         try {
             const data = await fetchProjects();
-            setProjects(data);
+            setProjects(sortProjectsNewestFirst(data));
         } catch (error) {
             console.error("Failed to load projects", error);
         }

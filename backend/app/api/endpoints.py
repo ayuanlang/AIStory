@@ -355,6 +355,76 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     total[k] = v
             return total
 
+        def _detect_output_integrity(output_text: str, segments: List[Dict[str, Any]], final_finish_reason: Optional[str]) -> Dict[str, Any]:
+            text = (output_text or "").strip()
+            segment_list = segments or []
+            had_length_finish = any(str(seg.get("finish_reason") or "").lower() == "length" for seg in segment_list)
+            ended_with_length = str(final_finish_reason or "").lower() == "length"
+
+            json_candidate = ""
+            json_expected = False
+
+            if text.startswith("```"):
+                lowered = text.lower()
+                if "```json" in lowered or ("```" in lowered and ("{" in text or "[" in text)):
+                    json_expected = True
+                    fence_start = text.find("\n")
+                    fence_end = text.rfind("```")
+                    if fence_start != -1 and fence_end != -1 and fence_end > fence_start:
+                        json_candidate = text[fence_start + 1:fence_end].strip()
+
+            if not json_candidate:
+                if text.startswith("{") or text.startswith("["):
+                    json_expected = True
+                    json_candidate = text
+                else:
+                    first_obj = text.find("{")
+                    last_obj = text.rfind("}")
+                    first_arr = text.find("[")
+                    last_arr = text.rfind("]")
+                    if first_obj != -1 and last_obj > first_obj:
+                        json_expected = True
+                        json_candidate = text[first_obj:last_obj + 1].strip()
+                    elif first_arr != -1 and last_arr > first_arr:
+                        json_expected = True
+                        json_candidate = text[first_arr:last_arr + 1].strip()
+
+            json_valid = None
+            json_error = None
+            if json_expected:
+                try:
+                    json.loads(json_candidate)
+                    json_valid = True
+                except Exception as parse_error:
+                    json_valid = False
+                    json_error = str(parse_error)
+
+            truncation_suspected = bool(ended_with_length or (had_length_finish and json_expected and json_valid is False))
+
+            warning_codes: List[str] = []
+            warnings: List[str] = []
+            if ended_with_length:
+                warning_codes.append("ANALYSIS_OUTPUT_TRUNCATED")
+                warnings.append("Analysis output may be incomplete because the response hit a length limit.")
+            elif had_length_finish:
+                warning_codes.append("ANALYSIS_OUTPUT_CONTINUED")
+                warnings.append("Analysis response was split by length limits and auto-continuation was applied.")
+
+            if json_expected and json_valid is False:
+                warning_codes.append("ANALYSIS_JSON_INVALID")
+                warnings.append("Analysis returned invalid or incomplete JSON. Please review before applying.")
+
+            return {
+                "truncation_detected": had_length_finish,
+                "truncation_suspected": truncation_suspected,
+                "ended_with_length": ended_with_length,
+                "json_expected": json_expected,
+                "json_valid": json_valid,
+                "json_error": json_error,
+                "warning_codes": warning_codes,
+                "warnings": warnings,
+            }
+
         # Load the prompt template or use provided system_prompt
         system_instruction = ""
         
@@ -724,6 +794,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
 
         result_content = "".join(result_parts)
         usage = usage_total
+        integrity_meta = _detect_output_integrity(result_content, segments_meta, finish_reason)
         debug_meta.update({
             "stage": "post_llm",
             "finish_reason": finish_reason,
@@ -731,6 +802,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             "output_tokens_est": _estimate_tokens(result_content or ""),
             "usage": usage,
             "segments": segments_meta,
+            "integrity": integrity_meta,
         })
 
         # Persist result to DB if caller provided episode_id.
@@ -794,7 +866,22 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 db.rollback()
                 raise
         
-        return {"result": result_content, "meta": debug_meta}
+        response_payload: Dict[str, Any] = {"result": result_content, "meta": debug_meta}
+        if integrity_meta.get("warnings"):
+            response_payload["warnings"] = integrity_meta.get("warnings")
+        if integrity_meta.get("warning_codes"):
+            response_payload["warning_codes"] = integrity_meta.get("warning_codes")
+        if integrity_meta.get("warning_codes") or integrity_meta.get("warnings"):
+            try:
+                logger.warning(
+                    "[analyze_scene] integrity warning episode_id=%s codes=%s warnings=%s",
+                    getattr(request, "episode_id", None),
+                    integrity_meta.get("warning_codes") or [],
+                    integrity_meta.get("warnings") or [],
+                )
+            except Exception:
+                pass
+        return response_payload
 
     except HTTPException as e:
         # Preserve original status codes (e.g., 402 insufficient credits)
@@ -2186,7 +2273,14 @@ def read_projects(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    projects = db.query(Project).filter(Project.owner_id == current_user.id).offset(skip).limit(limit).all()
+    projects = (
+        db.query(Project)
+        .filter(Project.owner_id == current_user.id)
+        .order_by(Project.created_at.desc(), Project.id.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
     for p in projects:
         p.cover_image = get_project_cover_image(db, p.id)
         # Populate alias field

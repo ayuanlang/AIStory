@@ -3377,6 +3377,55 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
     const [analysisFlowStatus, setAnalysisFlowStatus] = useState({ phase: 'idle', message: '' });
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
 
+    const showAnalysisWarningStatus = useCallback((warnings = []) => {
+        const uniqueWarnings = [...new Set((warnings || []).map(w => String(w || '').trim()).filter(Boolean))];
+        if (uniqueWarnings.length === 0) return;
+        const warningSummary = uniqueWarnings[0];
+        const hasMore = uniqueWarnings.length > 1;
+        setAnalysisFlowStatus({
+            phase: 'warning',
+            message: hasMore
+                ? `${t('分析返回告警：', 'Analysis warning: ')}${warningSummary} (+${uniqueWarnings.length - 1})`
+                : `${t('分析返回告警：', 'Analysis warning: ')}${warningSummary}`,
+        });
+        setTimeout(() => {
+            setAnalysisFlowStatus(prev => (prev?.phase === 'warning' ? { phase: 'idle', message: '' } : prev));
+        }, 8000);
+    }, [t]);
+
+    const localizeAnalysisWarningCode = useCallback((code) => {
+        const normalized = String(code || '').trim();
+        if (!normalized) return '';
+        if (normalized === 'ANALYSIS_OUTPUT_TRUNCATED') {
+            return t('AI Scene Analysis 输出可能已被截断（达到长度上限）。', 'AI Scene Analysis output may be truncated (length limit reached).');
+        }
+        if (normalized === 'ANALYSIS_OUTPUT_CONTINUED') {
+            return t('AI Scene Analysis 发生过截断，系统已尝试自动续写。', 'AI Scene Analysis was truncated and auto-continuation was attempted.');
+        }
+        if (normalized === 'ANALYSIS_JSON_INVALID') {
+            return t('AI Scene Analysis 的 JSON 完整性校验失败（可能不完整或格式无效）。', 'AI Scene Analysis JSON integrity check failed (possibly incomplete or invalid).');
+        }
+        return '';
+    }, [t]);
+
+    const collectAnalysisWarnings = useCallback((result) => {
+        const warningCodes = [
+            ...(Array.isArray(result?.warning_codes) ? result.warning_codes : []),
+            ...(Array.isArray(result?.meta?.integrity?.warning_codes) ? result.meta.integrity.warning_codes : []),
+        ];
+        const localizedByCode = warningCodes
+            .map(localizeAnalysisWarningCode)
+            .map(msg => String(msg || '').trim())
+            .filter(Boolean);
+
+        const fallbackRawWarnings = [
+            ...(Array.isArray(result?.warnings) ? result.warnings : []),
+            ...(Array.isArray(result?.meta?.integrity?.warnings) ? result.meta.integrity.warnings : []),
+        ].map(w => String(w || '').trim()).filter(Boolean);
+
+        return [...new Set([...localizedByCode, ...fallbackRawWarnings])];
+    }, [localizeAnalysisWarningCode]);
+
     const isEpisodeOnePage = useMemo(() => {
         const title = String(activeEpisode?.title || '').trim().toLowerCase();
         if (!title) return false;
@@ -4776,6 +4825,16 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 }
             }
 
+            const integrityWarnings = collectAnalysisWarnings(result);
+            if (integrityWarnings.length > 0) {
+                const uniqueWarnings = [...new Set(integrityWarnings.map(w => String(w || '').trim()).filter(Boolean))];
+                if (uniqueWarnings.length > 0) {
+                    const warningText = uniqueWarnings.join('\n- ');
+                    if (onLog) onLog(`AI Scene Analysis warning:\n- ${warningText}`, 'warning');
+                    showAnalysisWarningStatus(uniqueWarnings);
+                }
+            }
+
             // Store the raw LLM output separately for viewing/editing (JSON or Markdown table)
             setLlmResultContent(analyzedText);
             lastLoadedAnalysisRef.current = analyzedText;
@@ -4871,6 +4930,16 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 }
             }
 
+            const integrityWarnings = collectAnalysisWarnings(result);
+            if (integrityWarnings.length > 0) {
+                const uniqueWarnings = [...new Set(integrityWarnings.map(w => String(w || '').trim()).filter(Boolean))];
+                if (uniqueWarnings.length > 0) {
+                    const warningText = uniqueWarnings.join('\n- ');
+                    if (onLog) onLog(`AI Scene Analysis warning:\n- ${warningText}`, 'warning');
+                    showAnalysisWarningStatus(uniqueWarnings);
+                }
+            }
+
             // Fill Script tab's "LLM 返回结果" immediately
             setLlmResultContent(analyzedText || "");
             lastLoadedAnalysisRef.current = analyzedText || "";
@@ -4960,12 +5029,16 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 <div className={`mb-4 rounded-lg border px-4 py-2.5 flex items-center gap-2 text-sm ${
                     analysisFlowStatus.phase === 'failed'
                         ? 'border-red-500/30 bg-red-500/10 text-red-200'
+                        : analysisFlowStatus.phase === 'warning'
+                            ? 'border-amber-500/30 bg-amber-500/10 text-amber-100'
                         : analysisFlowStatus.phase === 'completed'
                             ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100'
                             : 'border-purple-500/30 bg-purple-500/10 text-purple-100'
                 }`}>
                     {analysisFlowStatus.phase === 'completed' ? (
                         <CheckCircle className="w-4 h-4" />
+                    ) : analysisFlowStatus.phase === 'warning' ? (
+                        <Info className="w-4 h-4" />
                     ) : analysisFlowStatus.phase === 'failed' ? (
                         <X className="w-4 h-4" />
                     ) : (
@@ -7986,6 +8059,8 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     const [viewingEntity, setViewingEntity] = useState(null);
     const [isBatchGeneratingEntities, setIsBatchGeneratingEntities] = useState(false);
     const [batchEntityProgress, setBatchEntityProgress] = useState(null);
+    const [isReconstructingEntity, setIsReconstructingEntity] = useState(false);
+    const [reconstructProgress, setReconstructProgress] = useState(null);
     const [pickerConfig, setPickerConfig] = useState({ isOpen: false, callback: null });
 
     const openMediaPicker = (callback, context = {}) => {
@@ -8055,6 +8130,96 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
             if (onLog) onLog("Analysis failed.", "error");
         } finally {
             setIsAnalyzingEntity(false);
+        }
+    };
+
+    const handleReconstructEntityAsset = async (entity) => {
+        if (!entity || !entity.id || !entity.image_url) {
+            alert(t('请先为主体选择一张现有图片再重构。', 'Please select an existing subject image before refactoring.'));
+            return;
+        }
+
+        if (!await confirmUiMessage(t(
+            `将基于当前图片分析并重写提示词，然后重新生成 ${entity.name || '该主体'} 的图片。是否继续？`,
+            `This will analyze the current image, rewrite prompt, and regenerate image for ${entity.name || 'this subject'}. Continue?`
+        ))) return;
+
+        setIsReconstructingEntity(true);
+        setReconstructProgress({ step: 'analyzing', label: t('正在分析当前图片...', 'Analyzing current image...'), percent: 20 });
+        if (onLog) onLog(`Refactoring subject asset: ${entity.name || entity.name_en || entity.id}`, 'process');
+
+        try {
+            const analyzed = await analyzeEntityImage(entity.id);
+            setViewingEntity(prev => (prev?.id === analyzed.id ? analyzed : prev));
+            setEntities(prev => prev.map(e => e.id === analyzed.id ? analyzed : e));
+            setAllEntities(prev => prev.map(e => e.id === analyzed.id ? analyzed : e));
+
+            setReconstructProgress({ step: 'prompt', label: t('正在整理新的提示词...', 'Refining prompt...'), percent: 55 });
+
+            const epInfo = currentEpisode?.episode_info || {};
+            let rawPrompt = analyzed.generation_prompt_en || '';
+            if (!rawPrompt && analyzed.description) {
+                const match = analyzed.description.match(/Prompt:\s*(.*)/);
+                if (match && match[1]) {
+                    rawPrompt = match[1].trim();
+                }
+            }
+
+            let finalPrompt = processPrompt(rawPrompt, epInfo, allEntities) || rawPrompt || '';
+            const infoSource = epInfo.e_global_info || epInfo;
+            const suffixes = [
+                infoSource?.type,
+                infoSource?.lighting,
+                infoSource?.tech_params?.visual_standard?.quality,
+            ].filter(Boolean);
+            if (suffixes.length > 0) {
+                finalPrompt = `${finalPrompt}${finalPrompt ? ', ' : ''}${suffixes.join(', ')}`;
+            }
+
+            const depUrls = [];
+            const deps = Array.isArray(analyzed.visual_dependencies) ? analyzed.visual_dependencies : [];
+            deps.forEach(dep => {
+                const depValue = String(dep).trim();
+                const depLower = depValue.toLowerCase();
+                const target = allEntities.find(e => {
+                    if (!e) return false;
+                    if (String(e.id) === depValue) return true;
+                    if (e.name && e.name.trim().toLowerCase() === depLower) return true;
+                    if (e.name_en && e.name_en.trim().toLowerCase() === depLower) return true;
+                    return false;
+                });
+                if (target?.image_url) depUrls.push(target.image_url);
+            });
+            const uniqueRefs = [...new Set(depUrls)];
+
+            setReconstructProgress({ step: 'generating', label: t('正在根据新提示词生成图片...', 'Generating image with new prompt...'), percent: 80 });
+
+            const asset = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
+                project_id: projectId,
+                entity_name: analyzed?.name || analyzed?.name_en,
+                subject_name: analyzed?.name || analyzed?.name_en,
+                asset_type: 'subject'
+            });
+
+            if (!asset?.url) {
+                throw new Error(t('生成结果缺少图片地址', 'Generated result missing image URL'));
+            }
+
+            await updateEntity(analyzed.id, { image_url: asset.url });
+            const updatedEntity = { ...analyzed, image_url: asset.url };
+            setViewingEntity(prev => (prev?.id === updatedEntity.id ? updatedEntity : prev));
+            setEntities(prev => prev.map(e => e.id === updatedEntity.id ? updatedEntity : e));
+            setAllEntities(prev => prev.map(e => e.id === updatedEntity.id ? updatedEntity : e));
+
+            setReconstructProgress({ step: 'done', label: t('重构完成', 'Refactor completed'), percent: 100 });
+            if (onLog) onLog(`Subject asset refactor completed: ${entity.name || entity.name_en || entity.id}`, 'success');
+        } catch (e) {
+            console.error(e);
+            alert(t('资产重构失败：', 'Asset refactor failed: ') + (e.response?.data?.detail || e.message));
+            if (onLog) onLog(`Subject asset refactor failed: ${entity.name || entity.name_en || entity.id}`, 'error');
+        } finally {
+            setIsReconstructingEntity(false);
+            setTimeout(() => setReconstructProgress(null), 1200);
         }
     };
 
@@ -8568,6 +8733,14 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                 <Wand2 size={16} />
                             </button>
                             <button 
+                                onClick={(e) => { e.stopPropagation(); handleReconstructEntityAsset(entity); }}
+                                disabled={isReconstructingEntity || !entity.image_url}
+                                className="p-2 bg-indigo-500/80 hover:bg-indigo-500 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
+                                title={t('现有资产重构（分析图片并重生成）', 'Refactor Existing Asset (analyze + regenerate)')}
+                            >
+                                {isReconstructingEntity ? <RefreshCw className="animate-spin" size={16} /> : <Sparkles size={16} />}
+                            </button>
+                            <button 
                                 onClick={(e) => handleDeleteEntity(e, entity)}
                                 className="p-2 bg-red-500/80 hover:bg-red-600 rounded-full text-white backdrop-blur-md"
                                 title={t('删除实体', 'Delete Entity')}
@@ -8617,11 +8790,19 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                          </button>
                                          <button 
                                             onClick={(e) => { e.stopPropagation(); handleAnalyzeEntity(viewingEntity); }}
-                                            disabled={isAnalyzingEntity}
+                                            disabled={isAnalyzingEntity || isReconstructingEntity}
                                             className="p-3 bg-indigo-500/80 hover:bg-indigo-500 text-white rounded-full backdrop-blur-md transition-colors disabled:opacity-50 shadow-lg border border-white/10"
                                                           title={t('分析图片并优化主体信息（生成新的提示词文件）', 'Analyze Image & Refine Subject Info (Generates new prompt file)')}
                                          >
                                              {isAnalyzingEntity ? <Loader2 size={20} className="animate-spin" /> : <Sparkles size={20} />}
+                                         </button>
+                                         <button 
+                                            onClick={(e) => { e.stopPropagation(); handleReconstructEntityAsset(viewingEntity); }}
+                                            disabled={isReconstructingEntity || isAnalyzingEntity || !viewingEntity.image_url}
+                                            className="p-3 bg-primary/90 hover:bg-primary text-black rounded-full backdrop-blur-md transition-colors disabled:opacity-50 shadow-lg border border-white/10"
+                                                          title={t('现有资产重构（分析图片并按新提示词重新生成）', 'Refactor Existing Asset (analyze + regenerate with new prompt)')}
+                                         >
+                                             {isReconstructingEntity ? <RefreshCw size={20} className="animate-spin" /> : <Wand2 size={20} />}
                                          </button>
                                     </div>
                                 )}
@@ -8656,6 +8837,21 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                         <X size={24} />
                                     </button>
                                 </div>
+
+                                {reconstructProgress && (
+                                    <div className="px-6 py-3 border-b border-white/10 bg-primary/5">
+                                        <div className="flex items-center justify-between text-xs mb-2">
+                                            <span className="font-bold text-primary flex items-center gap-2">
+                                                <RefreshCw className={`${isReconstructingEntity ? 'animate-spin' : ''}`} size={12} />
+                                                {reconstructProgress.label}
+                                            </span>
+                                            <span className="font-mono text-primary">{reconstructProgress.percent}%</span>
+                                        </div>
+                                        <div className="w-full h-1.5 rounded-full bg-black/30 overflow-hidden">
+                                            <div className="h-full bg-primary transition-all duration-300" style={{ width: `${reconstructProgress.percent}%` }} />
+                                        </div>
+                                    </div>
+                                )}
                                 
                                 <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
                                     {/* Role & Archetype Tags */}
@@ -9476,7 +9672,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             const res = await translateText(raw, from, to);
             const translated = extractTranslatedText(res);
             if (!translated) throw new Error('No translation returned');
-            onResult?.(translated);
+            await onResult?.(translated);
             showNotification(t('翻译完成', 'Translation completed'), 'success');
         } catch (e) {
             const msg = e?.response?.data?.detail || e?.message || 'Translate failed';
@@ -9641,6 +9837,57 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             onLog?.("Failed to save changes", "error");
         }
     }
+
+    const persistShotFields = async (updates = {}) => {
+        if (!editingShot?.id) return;
+        setEditingShot(prev => ({ ...(prev || {}), ...updates }));
+        await onUpdateShot(editingShot.id, updates);
+    };
+
+    const resolveVideoModeFromTech = (techObj = {}) => {
+        if (techObj?.video_mode_unified) return techObj.video_mode_unified;
+        if (techObj?.video_ref_submit_mode === 'refs_video') return 'refs_video';
+        return techObj?.video_gen_mode || 'start';
+    };
+
+    const updateShotTechnicalNotes = async (mutator) => {
+        if (!editingShot?.id || typeof mutator !== 'function') return;
+        let techObj = {};
+        try { techObj = JSON.parse(editingShot.technical_notes || '{}'); } catch (e) {}
+        mutator(techObj);
+        const serialized = JSON.stringify(techObj);
+        setEditingShot(prev => ({ ...(prev || {}), technical_notes: serialized }));
+        await onUpdateShot(editingShot.id, { technical_notes: serialized });
+    };
+
+    const applyVideoModeToShot = async (mode) => {
+        await updateShotTechnicalNotes((techObj) => {
+            techObj.video_mode_unified = mode;
+            if (mode === 'refs_video') {
+                techObj.video_ref_submit_mode = 'refs_video';
+            } else {
+                techObj.video_gen_mode = mode;
+                techObj.video_ref_submit_mode = 'auto';
+            }
+        });
+    };
+
+    const persistTechField = async (key, value) => {
+        const nextValue = String(value ?? '');
+        await updateShotTechnicalNotes((techObj) => {
+            techObj[key] = nextValue;
+        });
+    };
+
+    const persistKeyframeCnMap = async (timeKey, value) => {
+        if (!timeKey) return;
+        const nextValue = String(value ?? '');
+        await updateShotTechnicalNotes((techObj) => {
+            const nextMap = { ...(techObj.keyframe_prompt_cn_map || {}) };
+            nextMap[timeKey] = nextValue;
+            techObj.keyframe_prompt_cn_map = nextMap;
+        });
+    };
 
     const handleGenerateShots = async (sceneId) => {
         if (sceneId === 'all') {
@@ -11725,7 +11972,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 >
                                                     <ImageIcon className="w-3 h-3"/> {t('设置', 'Set')}
                                                 </button>
-                                                {currentGeneratingState.start ? (
+                                                {currentGeneratingState.start && (
                                                     <button 
                                                         onClick={() => abortGenerationRef.current = true}
                                                         className="text-[10px] px-2 py-0.5 rounded flex items-center gap-1 bg-red-500/20 text-red-400 hover:bg-red-500/30 border border-red-500/30"
@@ -11734,24 +11981,23 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                         <div className="w-2 h-2 bg-current rounded-[1px]" />
                                                         {t('停止', 'Stop')}
                                                     </button>
-                                                ) : (
-                                                    <>
-                                                        <button 
-                                                            onClick={() => generateAssetWithLang('start', 'zh')} 
-                                                            className="text-[10px] px-2 py-0.5 rounded flex items-center gap-1 bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30"
-                                                        >
-                                                            <Wand2 className="w-3 h-3"/>
-                                                            Gen(CN)
-                                                        </button>
-                                                        <button 
-                                                            onClick={() => generateAssetWithLang('start', 'en')} 
-                                                            className="text-[10px] px-2 py-0.5 rounded flex items-center gap-1 bg-sky-500/20 text-sky-300 hover:bg-sky-500/30"
-                                                        >
-                                                            <Wand2 className="w-3 h-3"/>
-                                                            Gen(EN)
-                                                        </button>
-                                                    </>
                                                 )}
+                                                <button 
+                                                    onClick={() => generateAssetWithLang('start', 'zh')} 
+                                                    disabled={currentGeneratingState.start}
+                                                    className={`text-[10px] px-2 py-0.5 rounded flex items-center gap-1 ${currentGeneratingState.start ? 'bg-emerald-500/10 text-emerald-300/50 cursor-wait' : 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'}`}
+                                                >
+                                                    {currentGeneratingState.start ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
+                                                    {currentGeneratingState.start ? t('生成中...', 'Generating...') : 'Gen(CN)'}
+                                                </button>
+                                                <button 
+                                                    onClick={() => generateAssetWithLang('start', 'en')} 
+                                                    disabled={currentGeneratingState.start}
+                                                    className={`text-[10px] px-2 py-0.5 rounded flex items-center gap-1 ${currentGeneratingState.start ? 'bg-sky-500/10 text-sky-300/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30'}`}
+                                                >
+                                                    {currentGeneratingState.start ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
+                                                    {currentGeneratingState.start ? t('生成中...', 'Generating...') : 'Gen(EN)'}
+                                                </button>
                                             </div>
                                         </div>
                                         <div className="aspect-video bg-black/40 rounded border border-white/10 relative group overflow-hidden cursor-pointer" onClick={() => openAssetDetailModal('start')}>
@@ -11874,7 +12120,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 >
                                                     <ImageIcon className="w-3 h-3"/> {t('设置', 'Set')}
                                                 </button>
-                                                {currentGeneratingState.end ? (
+                                                {currentGeneratingState.end && (
                                                     <button 
                                                         onClick={() => abortGenerationRef.current = true}
                                                         className="text-[10px] px-2 py-0.5 rounded flex items-center gap-1 bg-red-500/20 text-red-400 hover:bg-red-500/30 border border-red-500/30"
@@ -11883,24 +12129,23 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                         <div className="w-2 h-2 bg-current rounded-[1px]" />
                                                         {t('停止', 'Stop')}
                                                     </button>
-                                                ) : (
-                                                    <>
-                                                        <button 
-                                                            onClick={() => generateAssetWithLang('end', 'zh')} 
-                                                            className="text-[10px] px-2 py-0.5 rounded flex items-center gap-1 bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30"
-                                                        >
-                                                            <Wand2 className="w-3 h-3"/>
-                                                            Gen(CN)
-                                                        </button>
-                                                        <button 
-                                                            onClick={() => generateAssetWithLang('end', 'en')} 
-                                                            className="text-[10px] px-2 py-0.5 rounded flex items-center gap-1 bg-sky-500/20 text-sky-300 hover:bg-sky-500/30"
-                                                        >
-                                                            <Wand2 className="w-3 h-3"/>
-                                                            Gen(EN)
-                                                        </button>
-                                                    </>
                                                 )}
+                                                <button 
+                                                    onClick={() => generateAssetWithLang('end', 'zh')} 
+                                                    disabled={currentGeneratingState.end}
+                                                    className={`text-[10px] px-2 py-0.5 rounded flex items-center gap-1 ${currentGeneratingState.end ? 'bg-emerald-500/10 text-emerald-300/50 cursor-wait' : 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'}`}
+                                                >
+                                                    {currentGeneratingState.end ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
+                                                    {currentGeneratingState.end ? t('生成中...', 'Generating...') : 'Gen(CN)'}
+                                                </button>
+                                                <button 
+                                                    onClick={() => generateAssetWithLang('end', 'en')} 
+                                                    disabled={currentGeneratingState.end}
+                                                    className={`text-[10px] px-2 py-0.5 rounded flex items-center gap-1 ${currentGeneratingState.end ? 'bg-sky-500/10 text-sky-300/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30'}`}
+                                                >
+                                                    {currentGeneratingState.end ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
+                                                    {currentGeneratingState.end ? t('生成中...', 'Generating...') : 'Gen(EN)'}
+                                                </button>
                                             </div>
                                         </div>
                                         <div className="aspect-video bg-black/40 rounded border border-white/10 relative group overflow-hidden cursor-pointer" onClick={() => openAssetDetailModal('end')}>
@@ -12459,7 +12704,13 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                             <div className="space-y-3">
                                                                 <div className="flex items-center gap-2">
                                                                     <button onClick={() => generateAssetWithLang('start', 'zh')} className="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30">Gen(CN)</button>
-                                                                    <button onClick={() => generateAssetWithLang('start', 'en')} className="text-xs px-2 py-1 rounded bg-sky-500/20 text-sky-300 hover:bg-sky-500/30">Gen(EN)</button>
+                                                                    <button 
+                                                                        onClick={() => generateAssetWithLang('start', 'en')} 
+                                                                        disabled={currentGeneratingState.start}
+                                                                        className={`text-xs px-2 py-1 rounded ${currentGeneratingState.start ? 'bg-sky-500/10 text-sky-300/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30'}`}
+                                                                    >
+                                                                        {currentGeneratingState.start ? t('生成中...', 'Generating...') : 'Gen(EN)'}
+                                                                    </button>
                                                                 </div>
                                                                 <div className="flex items-center justify-between">
                                                                     <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('英文提示词', 'Prompt (EN)')}</div>
@@ -12469,7 +12720,9 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                             from: 'zh',
                                                                             to: 'en',
                                                                             loadingKey: 'start_cn2en',
-                                                                            onResult: (v) => overwriteShotField('start_frame', v),
+                                                                            onResult: async (v) => {
+                                                                                await persistShotFields({ start_frame: v });
+                                                                            },
                                                                         })}
                                                                         disabled={!!detailTranslateLoading.start_cn2en}
                                                                         className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/80"
@@ -12486,7 +12739,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                             from: 'en',
                                                                             to: 'zh',
                                                                             loadingKey: 'start_en2cn',
-                                                                            onResult: (v) => overwriteTechField('start_frame_cn', v),
+                                                                            onResult: (v) => persistTechField('start_frame_cn', v),
                                                                         })}
                                                                         disabled={!!detailTranslateLoading.start_en2cn}
                                                                         className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/80"
@@ -12525,7 +12778,13 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                             <div className="space-y-3">
                                                                 <div className="flex items-center gap-2">
                                                                     <button onClick={() => generateAssetWithLang('end', 'zh')} className="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30">Gen(CN)</button>
-                                                                    <button onClick={() => generateAssetWithLang('end', 'en')} className="text-xs px-2 py-1 rounded bg-sky-500/20 text-sky-300 hover:bg-sky-500/30">Gen(EN)</button>
+                                                                    <button 
+                                                                        onClick={() => generateAssetWithLang('end', 'en')} 
+                                                                        disabled={currentGeneratingState.end}
+                                                                        className={`text-xs px-2 py-1 rounded ${currentGeneratingState.end ? 'bg-sky-500/10 text-sky-300/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30'}`}
+                                                                    >
+                                                                        {currentGeneratingState.end ? t('生成中...', 'Generating...') : 'Gen(EN)'}
+                                                                    </button>
                                                                 </div>
                                                                 <div className="flex items-center justify-between">
                                                                     <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('英文提示词', 'Prompt (EN)')}</div>
@@ -12535,7 +12794,9 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                             from: 'zh',
                                                                             to: 'en',
                                                                             loadingKey: 'end_cn2en',
-                                                                            onResult: (v) => overwriteShotField('end_frame', v),
+                                                                            onResult: async (v) => {
+                                                                                await persistShotFields({ end_frame: v });
+                                                                            },
                                                                         })}
                                                                         disabled={!!detailTranslateLoading.end_cn2en}
                                                                         className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/80"
@@ -12552,7 +12813,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                             from: 'en',
                                                                             to: 'zh',
                                                                             loadingKey: 'end_en2cn',
-                                                                            onResult: (v) => overwriteTechField('end_frame_cn', v),
+                                                                            onResult: (v) => persistTechField('end_frame_cn', v),
                                                                         })}
                                                                         disabled={!!detailTranslateLoading.end_en2cn}
                                                                         className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/80"
@@ -12592,7 +12853,32 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                             <div className="space-y-3">
                                                                 <div className="flex items-center gap-2">
                                                                     <button onClick={() => generateAssetWithLang('video', 'zh')} className="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30">Gen(CN)</button>
-                                                                    <button onClick={() => generateAssetWithLang('video', 'en')} className="text-xs px-2 py-1 rounded bg-sky-500/20 text-sky-300 hover:bg-sky-500/30">Gen(EN)</button>
+                                                                    <button 
+                                                                        onClick={() => generateAssetWithLang('video', 'en')} 
+                                                                        disabled={currentGeneratingState.video}
+                                                                        className={`text-xs px-2 py-1 rounded ${currentGeneratingState.video ? 'bg-sky-500/10 text-sky-300/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30'}`}
+                                                                    >
+                                                                        {currentGeneratingState.video ? t('生成中...', 'Generating...') : 'Gen(EN)'}
+                                                                    </button>
+                                                                </div>
+                                                                <div className="flex items-center justify-between">
+                                                                    <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('生成模式', 'Generation Mode')}</div>
+                                                                    <select
+                                                                        value={resolveVideoModeFromTech(tech)}
+                                                                        onChange={(e) => {
+                                                                            const nextMode = e.target.value;
+                                                                            applyVideoModeToShot(nextMode).catch((err) => {
+                                                                                console.error(err);
+                                                                                showNotification(t('保存视频模式失败', 'Failed to save video mode'), 'error');
+                                                                            });
+                                                                        }}
+                                                                        className="bg-black/40 border border-white/20 text-[10px] rounded px-2 py-1 text-white/80 outline-none hover:bg-white/5"
+                                                                    >
+                                                                        <option value="start_end">{t('起始+结束', 'Start+End')}</option>
+                                                                        <option value="start">{t('仅起始', 'Start Only')}</option>
+                                                                        <option value="end">{t('仅结束', 'End Only')}</option>
+                                                                        <option value="refs_video">{t('视频参考图模式', 'Refs (Video) As Ref')}</option>
+                                                                    </select>
                                                                 </div>
                                                                 <div className="flex items-center justify-between">
                                                                     <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('英文提示词', 'Prompt (EN)')}</div>
@@ -12602,7 +12888,9 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                             from: 'zh',
                                                                             to: 'en',
                                                                             loadingKey: 'video_cn2en',
-                                                                            onResult: (v) => overwriteShotField('prompt', v, { video_content: '' }),
+                                                                            onResult: async (v) => {
+                                                                                await persistShotFields({ prompt: v, video_content: '' });
+                                                                            },
                                                                         })}
                                                                         disabled={!!detailTranslateLoading.video_cn2en}
                                                                         className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/80"
@@ -12619,7 +12907,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                             from: 'en',
                                                                             to: 'zh',
                                                                             loadingKey: 'video_en2cn',
-                                                                            onResult: (v) => overwriteTechField('video_prompt_cn', v),
+                                                                            onResult: (v) => persistTechField('video_prompt_cn', v),
                                                                         })}
                                                                         disabled={!!detailTranslateLoading.video_en2cn}
                                                                         className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/80"
@@ -12657,7 +12945,13 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                     setLocalKeyframes(updated);
                                                                 }} />
                                                                 <button onClick={() => generateAssetWithLang('keyframe', 'zh', assetDetailModal.keyframeIndex)} className="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30">Gen(CN)</button>
-                                                                <button onClick={() => generateAssetWithLang('keyframe', 'en', assetDetailModal.keyframeIndex)} className="text-xs px-2 py-1 rounded bg-sky-500/20 text-sky-300 hover:bg-sky-500/30">Gen(EN)</button>
+                                                                <button 
+                                                                    onClick={() => generateAssetWithLang('keyframe', 'en', assetDetailModal.keyframeIndex)} 
+                                                                    disabled={!!keyframe?.loading}
+                                                                    className={`text-xs px-2 py-1 rounded ${keyframe?.loading ? 'bg-sky-500/10 text-sky-300/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30'}`}
+                                                                >
+                                                                    {keyframe?.loading ? t('生成中...', 'Generating...') : 'Gen(EN)'}
+                                                                </button>
                                                             </div>
                                                             <div className="flex items-center justify-between">
                                                                 <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('英文提示词', 'Prompt (EN)')}</div>
@@ -12667,11 +12961,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                         from: 'zh',
                                                                         to: 'en',
                                                                         loadingKey: `kf_cn2en_${assetDetailModal.keyframeIndex}`,
-                                                                        onResult: (v) => {
+                                                                        onResult: async (v) => {
                                                                             const updated = [...localKeyframes];
                                                                             if (!updated[assetDetailModal.keyframeIndex]) return;
                                                                             updated[assetDetailModal.keyframeIndex].prompt = v;
                                                                             setLocalKeyframes(updated);
+                                                                            await reconstructKeyframes(updated);
                                                                         },
                                                                     })}
                                                                     disabled={!!detailTranslateLoading[`kf_cn2en_${assetDetailModal.keyframeIndex}`]}
@@ -12694,7 +12989,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                         from: 'en',
                                                                         to: 'zh',
                                                                         loadingKey: `kf_en2cn_${assetDetailModal.keyframeIndex}`,
-                                                                        onResult: (v) => overwriteKeyframeCnMap(keyframe?.time, v),
+                                                                        onResult: (v) => persistKeyframeCnMap(keyframe?.time, v),
                                                                     })}
                                                                     disabled={!!detailTranslateLoading[`kf_en2cn_${assetDetailModal.keyframeIndex}`]}
                                                                     className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/80"
