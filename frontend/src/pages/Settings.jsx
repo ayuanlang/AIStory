@@ -1547,7 +1547,7 @@ const Settings = () => {
                     <div className="space-y-4">
                         <h2 className="text-xl font-semibold flex items-center gap-2">
                             {t('核心 LLM 配置', 'Core LLM Configuration')}
-                            <span className="text-xs bg-primary/20 text-primary px-2 py-0.5 rounded-full border border-primary/30 font-mono">Task: llm_chat</span>
+                            <span className="text-xs bg-primary/20 text-primary px-2 py-0.5 rounded-full border border-primary/30 font-mono">{t('任务：llm_chat', 'Task: llm_chat')}</span>
                             <span className={`text-[10px] px-2 py-0.5 rounded border font-mono ${sourceBadgeClass(activeSettingSources.LLM)}`}>
                                 {sourceBadgeText(activeSettingSources.LLM)}
                             </span>

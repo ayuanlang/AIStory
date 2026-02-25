@@ -34,7 +34,7 @@ const getAssetCategory = (type) => {
 };
 
 
-const AssetItem = React.memo(({ asset, onClick, onDelete, isManageMode, isSelected, onToggleSelect, onReportError }) => {
+const AssetItem = React.memo(({ asset, onClick, onDelete, isManageMode, isSelected, onToggleSelect, onReportError, t }) => {
     const videoRef = React.useRef(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [isError, setIsError] = useState(false);
@@ -86,7 +86,7 @@ const AssetItem = React.memo(({ asset, onClick, onDelete, isManageMode, isSelect
             {isError ? (
                 <div className="w-full h-full flex flex-col items-center justify-center bg-white/5 text-muted-foreground gap-2">
                     <AlertTriangle size={24} className="opacity-50" />
-                    <span className="text-[10px] uppercase font-bold opacity-50">Not Found</span>
+                    <span className="text-[10px] uppercase font-bold opacity-50">{t('资源不存在', 'Not Found')}</span>
                 </div>
             ) : category === 'image' ? (
                 <img 
@@ -127,7 +127,7 @@ const AssetItem = React.memo(({ asset, onClick, onDelete, isManageMode, isSelect
             <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-4 pointer-events-none">
                 <div className="flex justify-between items-end pointer-events-auto">
                     <div>
-                        <div className="text-xs text-white/70 truncate w-24">{asset.filename || 'Untitled'}</div>
+                        <div className="text-xs text-white/70 truncate w-24">{asset.filename || t('未命名', 'Untitled')}</div>
                         <div className="text-[10px] text-white/40 uppercase flex items-center gap-2">
                              {asset.type}
                              {asset.meta_info?.resolution && <span className="bg-white/10 px-1 rounded text-white/60">{asset.meta_info.resolution}</span>}
@@ -403,7 +403,7 @@ const AssetsLibrary = () => {
                  <div className="flex justify-between items-center">
                     <div className="flex items-center gap-2">
                         <div className="flex space-x-2 bg-card/50 p-1 rounded-lg border border-white/5">
-                            <button onClick={() => setFilter('all')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${filter === 'all' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}>All</button>
+                            <button onClick={() => setFilter('all')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${filter === 'all' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}>{t('全部', 'All')}</button>
                             <button onClick={() => setFilter('image')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${filter === 'image' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}><Image size={16} /> {t('图片', 'Images')}</button>
                             <button onClick={() => setFilter('video')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${filter === 'video' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}><Video size={16} /> {t('视频', 'Videos')}</button>
                         </div>
@@ -459,7 +459,7 @@ const AssetsLibrary = () => {
                                  disabled={selectedIds.size === 0}
                                  className={`px-3 py-1.5 text-xs bg-red-500 text-white rounded flex items-center gap-2 transition-colors ${selectedIds.size===0 ? 'opacity-50 cursor-not-allowed' : 'hover:bg-red-600'}`}
                              >
-                                 <Trash2 size={14} /> Delete ({selectedIds.size})
+                                 <Trash2 size={14} /> {t('删除', 'Delete')} ({selectedIds.size})
                              </button>
                              <div className="h-6 w-px bg-white/10 mx-2"></div>
                              <button onClick={() => { setIsManageMode(false); setSelectedIds(new Set()); }} className="p-1.5 hover:bg-white/10 rounded transition-colors"><X size={18}/></button>
@@ -512,7 +512,7 @@ const AssetsLibrary = () => {
                                         }} 
                                         className="ml-2 text-[10px] bg-white/5 hover:bg-white/10 px-2 py-0.5 rounded text-white/50 hover:text-white transition-colors uppercase tracking-wide"
                                     >
-                                        {sectionAssets.every(a => selectedIds.has(a.id)) ? 'Deselect' : 'Select All'}
+                                        {sectionAssets.every(a => selectedIds.has(a.id)) ? t('取消选择', 'Deselect') : t('全选', 'Select All')}
                                     </button>
                                 )}
                                 <span className="text-xs bg-white/10 text-white/50 px-2 py-0.5 rounded-full ml-auto">{sectionAssets.length}</span>
@@ -528,6 +528,7 @@ const AssetsLibrary = () => {
                                         isSelected={selectedIds.has(asset.id)}
                                         onToggleSelect={toggleSelect}
                                         onReportError={handleReportError}
+                                        t={t}
                                     />
                                 ))}
                             </div>
@@ -539,7 +540,7 @@ const AssetsLibrary = () => {
                 {filteredAssets.length === 0 && !loading && (
                     <div className="py-20 text-center text-muted-foreground border border-dashed border-white/10 rounded-xl">
                         <Image className="w-12 h-12 mx-auto mb-3 opacity-20" />
-                        <p>No assets found. Upload some!</p>
+                        <p>{t('未找到素材，请先上传。', 'No assets found. Upload some!')}</p>
                     </div>
                 )}
             </div>
@@ -558,6 +559,8 @@ const AssetsLibrary = () => {
 };
 
 const UploadModal = ({ onClose, onUploadSuccess }) => {
+    const uiLang = getUiLang();
+    const t = (zh, en) => tUI(uiLang, zh, en);
     const { addLog } = useLog();
     const [mode, setMode] = useState('file'); // file, url
     const [url, setUrl] = useState('');
@@ -654,7 +657,7 @@ const UploadModal = ({ onClose, onUploadSuccess }) => {
                 className="bg-[#121212] border border-white/10 rounded-2xl w-full max-w-md p-6 shadow-2xl"
             >
                 <div className="flex justify-between items-center mb-6">
-                    <h3 className="text-xl font-bold">Add New Asset</h3>
+                    <h3 className="text-xl font-bold">{t('添加新素材', 'Add New Asset')}</h3>
                     <button onClick={onClose} className="p-1 hover:bg-white/10 rounded-full"><X size={20} /></button>
                 </div>
 
@@ -663,27 +666,27 @@ const UploadModal = ({ onClose, onUploadSuccess }) => {
                         onClick={() => setMode('file')}
                         className={`flex-1 py-2 text-sm font-medium rounded-md transition-all flex justify-center items-center gap-2 ${mode === 'file' ? 'bg-secondary text-white' : 'text-muted-foreground'}`}
                     >
-                        <Upload size={16} /> File Upload
+                        <Upload size={16} /> {t('文件上传', 'File Upload')}
                     </button>
                     <button 
                         onClick={() => setMode('url')}
                         className={`flex-1 py-2 text-sm font-medium rounded-md transition-all flex justify-center items-center gap-2 ${mode === 'url' ? 'bg-secondary text-white' : 'text-muted-foreground'}`}
                     >
-                        <LinkIcon size={16} /> External URL
+                        <LinkIcon size={16} /> {t('外部链接', 'External URL')}
                     </button>
                 </div>
 
                 <form onSubmit={handleSubmit} className="space-y-4">
                     <div>
-                        <label className="block text-sm font-medium mb-2 text-muted-foreground">Asset Type</label>
+                        <label className="block text-sm font-medium mb-2 text-muted-foreground">{t('素材类型', 'Asset Type')}</label>
                         <div className="flex gap-4">
                             <label className="flex items-center gap-2 cursor-pointer">
                                 <input type="radio" checked={type === 'image'} onChange={() => setType('image')} className="accent-primary" />
-                                <span>Image</span>
+                                <span>{t('图片', 'Image')}</span>
                             </label>
                             <label className="flex items-center gap-2 cursor-pointer">
                                 <input type="radio" checked={type === 'video'} onChange={() => setType('video')} className="accent-primary" />
-                                <span>Video</span>
+                                <span>{t('视频', 'Video')}</span>
                             </label>
                         </div>
                     </div>
@@ -700,7 +703,7 @@ const UploadModal = ({ onClose, onUploadSuccess }) => {
                         </div>
                     ) : (
                         <div>
-                             <label className="block text-sm font-medium mb-2 text-muted-foreground">File</label>
+                             <label className="block text-sm font-medium mb-2 text-muted-foreground">{t('文件', 'File')}</label>
                              <div className="border-2 border-dashed border-white/10 rounded-xl p-4 text-center hover:border-white/30 transition-colors relative min-h-[160px] flex flex-col items-center justify-center bg-black/20 overflow-hidden group">
                                 <input 
                                     type="file" 
@@ -729,13 +732,13 @@ const UploadModal = ({ onClose, onUploadSuccess }) => {
                                             </div>
                                         )}
                                         
-                                        <div className="text-[10px] text-muted-foreground mt-1 group-hover:text-white transition-colors">Click to replace</div>
+                                        <div className="text-[10px] text-muted-foreground mt-1 group-hover:text-white transition-colors">{t('点击替换', 'Click to replace')}</div>
                                     </div>
                                 ) : (
                                     <>
                                         <Upload className="w-8 h-8 text-muted-foreground mb-2 opacity-50" />
                                         <div className="text-muted-foreground text-sm">
-                                            Click or drop to select {type}
+                                            {t('点击或拖拽选择', 'Click or drop to select')} {type === 'image' ? t('图片', 'image') : t('视频', 'video')}
                                         </div>
                                     </>
                                 )}
@@ -744,11 +747,11 @@ const UploadModal = ({ onClose, onUploadSuccess }) => {
                     )}
 
                     <div>
-                        <label className="block text-sm font-medium mb-2 text-muted-foreground">Remark (Optional)</label>
+                        <label className="block text-sm font-medium mb-2 text-muted-foreground">{t('备注（可选）', 'Remark (Optional)')}</label>
                         <textarea 
                             value={remark} onChange={e => setRemark(e.target.value)}
                             className="w-full bg-black/40 border border-white/10 rounded-lg p-3 text-sm focus:border-primary outline-none resize-none h-20"
-                            placeholder="Add notes..."
+                            placeholder={t('添加备注...', 'Add notes...')}
                         />
                     </div>
 
@@ -757,7 +760,7 @@ const UploadModal = ({ onClose, onUploadSuccess }) => {
                         disabled={uploading}
                         className="w-full py-3 bg-primary text-black font-bold rounded-lg hover:bg-primary/90 transition-all disabled:opacity-50 mt-4"
                     >
-                        {uploading ? 'Processing...' : 'Add to Library'}
+                        {uploading ? t('处理中...', 'Processing...') : t('添加到素材库', 'Add to Library')}
                     </button>
                 </form>
             </motion.div>
@@ -766,6 +769,8 @@ const UploadModal = ({ onClose, onUploadSuccess }) => {
 };
 
 const AssetDetailModal = ({ asset, onClose, onUpdate }) => {
+    const uiLang = getUiLang();
+    const t = (zh, en) => tUI(uiLang, zh, en);
     const [remark, setRemark] = useState(asset.remark || '');
     const [isEditing, setIsEditing] = useState(false);
 
@@ -803,19 +808,19 @@ const AssetDetailModal = ({ asset, onClose, onUpdate }) => {
                 {/* Sidebar Info */}
                 <div className="w-80 bg-card border-l border-white/10 p-6 flex flex-col">
                     <div className="flex justify-between items-start mb-6">
-                        <h3 className="font-bold text-lg leading-tight break-all">{asset.filename || 'Untitled Asset'}</h3>
+                        <h3 className="font-bold text-lg leading-tight break-all">{asset.filename || t('未命名素材', 'Untitled Asset')}</h3>
                         <button onClick={onClose} className="p-1 hover:bg-white/10 rounded-full ml-2"><X size={20} /></button>
                     </div>
 
                     <div className="space-y-6 flex-1 overflow-y-auto">
                         <div>
-                            <label className="text-xs font-bold text-muted-foreground uppercase mb-2 block">Create Date</label>
+                            <label className="text-xs font-bold text-muted-foreground uppercase mb-2 block">{t('创建时间', 'Create Date')}</label>
                             <p className="text-sm font-mono text-white/80">{new Date(asset.created_at).toLocaleString()}</p>
                         </div>
                         
                         {asset.meta_info && Object.keys(asset.meta_info).length > 0 && (
                              <div>
-                                <label className="text-xs font-bold text-muted-foreground uppercase mb-2 block">Metadata</label>
+                                <label className="text-xs font-bold text-muted-foreground uppercase mb-2 block">{t('元数据', 'Metadata')}</label>
                                 <div className="bg-black/30 rounded-lg p-3 space-y-1">
                                     {Object.entries(asset.meta_info).map(([k, v]) => (
                                         <div key={k} className="flex justify-between text-xs">
@@ -829,7 +834,7 @@ const AssetDetailModal = ({ asset, onClose, onUpdate }) => {
 
                         <div>
                             <div className="flex justify-between items-center mb-2">
-                                <label className="text-xs font-bold text-muted-foreground uppercase block">Usage Remark</label>
+                                <label className="text-xs font-bold text-muted-foreground uppercase block">{t('用途备注', 'Usage Remark')}</label>
                                 {!isEditing && (
                                     <button onClick={() => setIsEditing(true)} className="text-primary hover:text-primary/80"><Edit2 size={12} /></button>
                                 )}
@@ -843,21 +848,21 @@ const AssetDetailModal = ({ asset, onClose, onUpdate }) => {
                                         rows={4}
                                     />
                                     <div className="flex gap-2 justify-end">
-                                        <button onClick={() => setIsEditing(false)} className="text-xs px-2 py-1 bg-secondary rounded">Cancel</button>
-                                        <button onClick={handleSave} className="text-xs px-2 py-1 bg-primary text-black rounded font-bold">Save</button>
+                                        <button onClick={() => setIsEditing(false)} className="text-xs px-2 py-1 bg-secondary rounded">{t('取消', 'Cancel')}</button>
+                                        <button onClick={handleSave} className="text-xs px-2 py-1 bg-primary text-black rounded font-bold">{t('保存', 'Save')}</button>
                                     </div>
                                 </div>
                             ) : (
                                 <p className="text-sm text-white/70 italic bg-white/5 p-3 rounded-lg min-h-[4rem]">
-                                    {asset.remark || "No remarks added."}
+                                    {asset.remark || t('暂无备注。', 'No remarks added.')}
                                 </p>
                             )}
                         </div>
 
                         {asset.type === 'image' && (
                             <div className="pt-6 border-t border-white/10">
-                                <label className="text-xs font-bold text-muted-foreground uppercase mb-2 block">AI Modify</label>
-                                <div className="text-[10px] text-white/40 mb-2">Original image will be used as reference. Result will be saved as new asset.</div>
+                                <label className="text-xs font-bold text-muted-foreground uppercase mb-2 block">{t('AI 修改', 'AI Modify')}</label>
+                                <div className="text-[10px] text-white/40 mb-2">{t('将使用原图作为参考，结果会保存为新素材。', 'Original image will be used as reference. Result will be saved as new asset.')}</div>
                                 <RefineControl 
                                     originalText="" 
                                     onUpdate={() => {}} 

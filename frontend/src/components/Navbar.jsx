@@ -3,8 +3,11 @@ import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Clapperboard, Menu, X } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { getUiLang, tUI } from '../lib/uiLang';
 
 const Navbar = ({ forceSolid = false, hideMenu = false, className = '' }) => {
+    const uiLang = getUiLang();
+    const t = (zh, en) => tUI(uiLang, zh, en);
     const [scrolled, setScrolled] = useState(false);
     const [isOpen, setIsOpen] = useState(false);
     const navigate = useNavigate();
@@ -34,9 +37,9 @@ const Navbar = ({ forceSolid = false, hideMenu = false, className = '' }) => {
                     <div className="hidden md:flex items-center space-x-8">
                         {!hideMenu && (
                             <>
-                                <Link to="/" className="text-foreground/80 hover:text-primary transition-colors">Features</Link>
-                                <Link to="/" className="text-foreground/80 hover:text-primary transition-colors">Showcase</Link>
-                                <Link to="/" className="text-foreground/80 hover:text-primary transition-colors">Pricing</Link>
+                                <Link to="/" className="text-foreground/80 hover:text-primary transition-colors">{t('功能', 'Features')}</Link>
+                                <Link to="/" className="text-foreground/80 hover:text-primary transition-colors">{t('案例', 'Showcase')}</Link>
+                                <Link to="/" className="text-foreground/80 hover:text-primary transition-colors">{t('价格', 'Pricing')}</Link>
                             </>
                         )}
                         
@@ -45,20 +48,20 @@ const Navbar = ({ forceSolid = false, hideMenu = false, className = '' }) => {
                                 <div className="flex items-center space-x-4">
                                     <Link to="/projects">
                                         <button className="px-4 py-2 rounded-full bg-primary/10 text-primary hover:bg-primary/20 transition-colors font-medium">
-                                            Dashboard
+                                            {t('控制台', 'Dashboard')}
                                         </button>
                                     </Link>
                                     <button onClick={handleLogout} className="text-sm text-foreground/60 hover:text-destructive transition-colors">
-                                        Sign Out
+                                        {t('退出登录', 'Sign Out')}
                                     </button>
                                 </div>
                             )
                         ) : (
                             <div className="flex items-center space-x-4">
-                                <Link to="/auth" className="text-foreground/80 hover:text-primary transition-colors">Log in</Link>
+                                <Link to="/auth" className="text-foreground/80 hover:text-primary transition-colors">{t('登录', 'Log in')}</Link>
                                 <Link to="/auth">
                                     <button className="px-6 py-2 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 transition-all shadow-lg hover:shadow-primary/25 font-medium">
-                                        Get Started
+                                        {t('立即开始', 'Get Started')}
                                     </button>
                                 </Link>
                             </div>
@@ -84,20 +87,20 @@ const Navbar = ({ forceSolid = false, hideMenu = false, className = '' }) => {
                     <div className="px-4 pt-2 pb-6 space-y-2">
                         {!hideMenu && (
                             <>
-                                <Link to="/" className="block py-2 text-foreground/80">Features</Link>
-                                <Link to="/" className="block py-2 text-foreground/80">Pricing</Link>
+                                <Link to="/" className="block py-2 text-foreground/80">{t('功能', 'Features')}</Link>
+                                <Link to="/" className="block py-2 text-foreground/80">{t('价格', 'Pricing')}</Link>
                                 <hr className="border-border my-2"/>
                             </>
                         )}
                         
                         {isLoggedIn ? (
                              !hideMenu && (
-                                <Link to="/projects" className="block py-2 text-primary font-semibold">Go to Dashboard</Link>
+                                <Link to="/projects" className="block py-2 text-primary font-semibold">{t('前往控制台', 'Go to Dashboard')}</Link>
                              )
                         ) : (
                             <>
-                                <Link to="/auth" className="block py-2 text-foreground/80">Log in</Link>
-                                <Link to="/auth" className="block mt-2 w-full text-center px-4 py-3 bg-primary text-primary-foreground rounded-lg">Get Started</Link>
+                                <Link to="/auth" className="block py-2 text-foreground/80">{t('登录', 'Log in')}</Link>
+                                <Link to="/auth" className="block mt-2 w-full text-center px-4 py-3 bg-primary text-primary-foreground rounded-lg">{t('立即开始', 'Get Started')}</Link>
                             </>
                         )}
                     </div>

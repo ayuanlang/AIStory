@@ -1,8 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
 import { X, Check, Loader2, DollarSign, Wallet } from 'lucide-react';
+import { getUiLang, tUI } from '../lib/uiLang';
 
 const RechargeModal = ({ onClose, onSuccess }) => {
+    const uiLang = getUiLang();
+    const t = (zh, en) => tUI(uiLang, zh, en);
     const [step, setStep] = useState('select'); // select, pay, success
     const [amount, setAmount] = useState(10);
     const [customAmount, setCustomAmount] = useState('');
@@ -96,8 +99,8 @@ const RechargeModal = ({ onClose, onSuccess }) => {
                             <div className="w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-3">
                                 <Wallet className="w-6 h-6 text-primary" />
                             </div>
-                            <h3 className="text-xl font-bold">Top Up Credits</h3>
-                            <p className="text-sm text-zinc-400 mt-1">Select an amount to recharge</p>
+                            <h3 className="text-xl font-bold">{t('充值点数', 'Top Up Credits')}</h3>
+                            <p className="text-sm text-zinc-400 mt-1">{t('选择充值金额', 'Select an amount to recharge')}</p>
                         </div>
 
                         <div className="grid grid-cols-3 gap-3">
@@ -117,7 +120,7 @@ const RechargeModal = ({ onClose, onSuccess }) => {
                             <div className="relative">
                                 <input 
                                     type="number" 
-                                    placeholder="Custom"
+                                    placeholder={t('自定义', 'Custom')}
                                     className={`w-full h-full bg-zinc-800 border rounded-lg p-3 text-center text-sm outline-none transition-all ${
                                         customAmount ? 'border-primary ring-1 ring-primary' : 'border-zinc-700 focus:border-zinc-500'
                                     }`}
@@ -130,13 +133,13 @@ const RechargeModal = ({ onClose, onSuccess }) => {
 
                         <div className="bg-zinc-800/50 p-4 rounded-lg border border-white/5 space-y-2">
                             <div className="flex justify-between text-sm">
-                                <span className="text-zinc-400">Rate for ￥{selectedAmount || 0}</span>
-                                <span className="font-mono text-zinc-300">{rate} credits / ￥1</span>
+                                <span className="text-zinc-400">{t(`￥${selectedAmount || 0} 对应汇率`, `Rate for ￥${selectedAmount || 0}`)}</span>
+                                <span className="font-mono text-zinc-300">{rate} {t('点数', 'credits')} / ￥1</span>
                             </div>
                             <div className="flex justify-between items-center pt-2 border-t border-white/5">
-                                <span className="font-medium">You Receive</span>
+                                <span className="font-medium">{t('可获得', 'You Receive')}</span>
                                 <span className="text-xl font-bold text-primary font-mono flex items-center gap-1">
-                                    {expectedCredits.toLocaleString()} <span className="text-xs font-normal opacity-70">credits</span>
+                                    {expectedCredits.toLocaleString()} <span className="text-xs font-normal opacity-70">{t('点数', 'credits')}</span>
                                 </span>
                             </div>
                         </div>
@@ -147,19 +150,19 @@ const RechargeModal = ({ onClose, onSuccess }) => {
                             className="w-full py-3 bg-primary hover:bg-primary/90 text-black font-bold rounded-lg transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             {loading ? <Loader2 className="animate-spin" /> : <DollarSign size={18} />}
-                            Pay via WeChat
+                            {t('微信支付', 'Pay via WeChat')}
                         </button>
                     </div>
                 )}
 
                 {step === 'pay' && order && (
                     <div className="text-center space-y-6">
-                        <h3 className="text-xl font-bold">Scan to Pay</h3>
+                        <h3 className="text-xl font-bold">{t('扫码支付', 'Scan to Pay')}</h3>
                         <div className="bg-white p-4 rounded-xl inline-block relative">
                              {/* Mock QR Code Overlay */}
                              {order.pay_url && order.pay_url.includes("mock") && (
                                 <div className="absolute inset-0 bg-black/60 flex items-center justify-center rounded-xl z-10 m-4">
-                                    <p className="text-white text-xs font-bold text-center px-2">Mock Mode<br/>Use Button Below</p>
+                                    <p className="text-white text-xs font-bold text-center px-2">{t('模拟模式', 'Mock Mode')}<br/>{t('请点击下方按钮', 'Use Button Below')}</p>
                                 </div>
                              )}
                              <div className="w-48 h-48 bg-zinc-100 flex items-center justify-center relative overflow-hidden">
@@ -167,7 +170,7 @@ const RechargeModal = ({ onClose, onSuccess }) => {
                                     <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(order.pay_url)}`} alt="QR Code" className="w-full h-full opacity-80" />
                                 ) : (
                                     <div className="text-black text-xs p-4 break-all">
-                                        <p className="font-bold mb-2">Simulated QR Code</p>
+                                        <p className="font-bold mb-2">{t('模拟二维码', 'Simulated QR Code')}</p>
                                         {order.pay_url}
                                     </div>
                                 )}
@@ -175,23 +178,23 @@ const RechargeModal = ({ onClose, onSuccess }) => {
                         </div>
                         <div className="space-y-2">
                             <p className="font-mono text-2xl font-bold text-primary">￥{order.amount}</p>
-                            <p className="text-sm text-zinc-500">Order: {order.order_no}</p>
+                            <p className="text-sm text-zinc-500">{t('订单号', 'Order')}: {order.order_no}</p>
                         </div>
                         
                         <div className="pt-4 border-t border-white/10">
                              {order.pay_url && order.pay_url.includes("mock") ? (
                                 <>
-                                    <p className="text-xs text-orange-400 mb-3">Development Mode: Click below to simulate successful payment.</p>
+                                    <p className="text-xs text-orange-400 mb-3">{t('开发模式：点击下方按钮模拟支付成功。', 'Development Mode: Click below to simulate successful payment.')}</p>
                                     <button 
                                         onClick={handleMockPay}
                                         className="w-full py-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-sm text-zinc-300 transition-colors"
                                     >
-                                        Simulate Scan & Pay Success
+                                        {t('模拟扫码支付成功', 'Simulate Scan & Pay Success')}
                                     </button>
                                 </>
                              ) : (
                                 <p className="text-xs text-zinc-500">
-                                    Please verify payment on your phone.
+                                    {t('请在手机上完成支付确认。', 'Please verify payment on your phone.')}
                                 </p>
                              )}
                         </div>
@@ -203,13 +206,13 @@ const RechargeModal = ({ onClose, onSuccess }) => {
                         <div className="w-16 h-16 bg-green-500/20 text-green-500 rounded-full flex items-center justify-center mx-auto mb-4">
                             <Check size={32} />
                         </div>
-                        <h3 className="text-2xl font-bold text-white">Payment Successful!</h3>
-                        <p className="text-zinc-400">Your credits have been added to your account.</p>
+                        <h3 className="text-2xl font-bold text-white">{t('支付成功！', 'Payment Successful!')}</h3>
+                        <p className="text-zinc-400">{t('点数已添加到你的账户。', 'Your credits have been added to your account.')}</p>
                         <button 
                             onClick={onClose}
                             className="w-full py-3 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-white font-medium mt-4 transition-colors"
                         >
-                            Return to App
+                            {t('返回应用', 'Return to App')}
                         </button>
                     </div>
                 )}

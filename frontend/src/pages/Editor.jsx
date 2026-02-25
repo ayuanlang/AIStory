@@ -5167,12 +5167,12 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                             <table className="w-full text-left border-collapse text-sm">
                                 <thead className="bg-white/5 sticky top-0 z-10 backdrop-blur-md">
                                     <tr>
-                                        <th className="p-4 border-b border-white/10 font-medium text-muted-foreground w-16">ID</th>
-                                        <th className="p-4 border-b border-white/10 font-medium text-muted-foreground w-48">Title</th>
-                                        <th className="p-4 border-b border-white/10 font-medium text-muted-foreground min-w-[300px]">Content (Revised)</th>
-                                        <th className="p-4 border-b border-white/10 font-medium text-muted-foreground min-w-[300px]">Content (Original)</th>
-                                        <th className="p-4 border-b border-white/10 font-medium text-muted-foreground w-48">Narrative Function</th>
-                                        <th className="p-4 border-b border-white/10 font-medium text-muted-foreground w-64">Analysis & Adaptation Notes</th>
+                                        <th className="p-4 border-b border-white/10 font-medium text-muted-foreground w-16">{t('编号', 'ID')}</th>
+                                        <th className="p-4 border-b border-white/10 font-medium text-muted-foreground w-48">{t('标题', 'Title')}</th>
+                                        <th className="p-4 border-b border-white/10 font-medium text-muted-foreground min-w-[300px]">{t('内容（修订）', 'Content (Revised)')}</th>
+                                        <th className="p-4 border-b border-white/10 font-medium text-muted-foreground min-w-[300px]">{t('内容（原始）', 'Content (Original)')}</th>
+                                        <th className="p-4 border-b border-white/10 font-medium text-muted-foreground w-48">{t('叙事功能', 'Narrative Function')}</th>
+                                        <th className="p-4 border-b border-white/10 font-medium text-muted-foreground w-64">{t('分析与改编备注', 'Analysis & Adaptation Notes')}</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-white/5">
@@ -5305,7 +5305,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                             <div className="flex flex-col h-full">
                                 <label className="text-sm font-bold text-muted-foreground mb-2 flex items-center justify-between">
                                     System Prompt
-                                    <span className="text-xs font-normal opacity-70">Define the AI persona & rules</span>
+                                    <span className="text-xs font-normal opacity-70">{t('定义 AI 角色与规则', 'Define the AI persona & rules')}</span>
                                 </label>
                                 <textarea
                                     className="flex-1 w-full bg-black/30 border border-white/10 text-white/90 p-3 font-mono text-xs leading-relaxed rounded-lg focus:outline-none focus:border-purple-500/50 resize-none custom-scrollbar"
@@ -5317,7 +5317,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                             <div className="flex flex-col h-full">
                                 <label className="text-sm font-bold text-muted-foreground mb-2 flex items-center justify-between">
                                     User Input (Script)
-                                    <span className="text-xs font-normal opacity-70">The content to act upon</span>
+                                    <span className="text-xs font-normal opacity-70">{t('需要处理的内容', 'The content to act upon')}</span>
                                 </label>
                                 <textarea
                                     className="flex-1 w-full bg-black/30 border border-white/10 text-white/90 p-3 font-mono text-sm leading-relaxed rounded-lg focus:outline-none focus:border-purple-500/50 resize-none custom-scrollbar"
@@ -5429,7 +5429,7 @@ const MediaDetailModal = ({ media, onClose }) => {
                     <div className="space-y-4">
                         {media.prompt && (
                              <div className="bg-white/5 p-3 rounded-lg border border-white/5">
-                                <span className="text-[10px] uppercase font-bold text-primary/70 block mb-1">Prompt / Description</span>
+                                <span className="text-[10px] uppercase font-bold text-primary/70 block mb-1">{t('提示词 / 描述', 'Prompt / Description')}</span>
                                 <p className="text-xs text-gray-300 leading-relaxed font-mono">
                                     {media.prompt}
                                 </p>
@@ -5438,11 +5438,11 @@ const MediaDetailModal = ({ media, onClose }) => {
                         
                         <div className="grid grid-cols-2 gap-2">
                              <div className="bg-white/5 p-2 rounded border border-white/5">
-                                <span className="text-[10px] uppercase text-gray-500 block">Resolution</span>
+                                <span className="text-[10px] uppercase text-gray-500 block">{t('分辨率', 'Resolution')}</span>
                                 <span className="text-xs text-gray-300">{media.resolution || 'Unknown'}</span>
                             </div>
                              <div className="bg-white/5 p-2 rounded border border-white/5">
-                                <span className="text-[10px] uppercase text-gray-500 block">Source</span>
+                                <span className="text-[10px] uppercase text-gray-500 block">{t('来源', 'Source')}</span>
                                 <span className="text-xs text-gray-300">{media.source || 'Generated'}</span>
                             </div>
                         </div>
@@ -5450,7 +5450,7 @@ const MediaDetailModal = ({ media, onClose }) => {
                          {/* JSON Metadata */}
                          {media.metadata && (
                             <div className="space-y-1">
-                                <h4 className="text-[10px] font-bold uppercase text-muted-foreground">Technical Metadata</h4>
+                                <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('技术元数据', 'Technical Metadata')}</h4>
                                 <div className="p-2 bg-black/40 rounded border border-white/5 text-[10px] font-mono text-gray-400 overflow-x-auto whitespace-pre-wrap">
                                     {typeof media.metadata === 'string' ? media.metadata : JSON.stringify(media.metadata, null, 2)}
                                 </div>
@@ -5586,18 +5586,18 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
         <div className="fixed inset-0 z-[110] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
              <div className="bg-[#1e1e1e] border border-white/10 rounded-xl w-full max-w-2xl h-[600px] flex flex-col shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
                 <div className="flex justify-between items-center p-4 border-b border-white/10 bg-black/20">
-                    <h3 className="font-bold text-md">Select Media</h3>
+                    <h3 className="font-bold text-md">{t('选择媒体', 'Select Media')}</h3>
                     <button onClick={onClose} className="text-white/50 hover:text-white"><X size={20} /></button>
                 </div>
 
                 <div className="flex border-b border-white/10">
-                    {['assets', 'upload', 'url'].map(t => (
+                    {['assets', 'upload', 'url'].map(tabKey => (
                         <button
-                            key={t}
-                            onClick={() => setTab(t)}
-                            className={`flex-1 py-3 text-sm font-medium border-b-2 transition-colors ${tab === t ? 'border-primary text-primary bg-primary/5' : 'border-transparent text-muted-foreground hover:text-white hover:bg-white/5'}`}
+                            key={tabKey}
+                            onClick={() => setTab(tabKey)}
+                            className={`flex-1 py-3 text-sm font-medium border-b-2 transition-colors ${tab === tabKey ? 'border-primary text-primary bg-primary/5' : 'border-transparent text-muted-foreground hover:text-white hover:bg-white/5'}`}
                         >
-                            {t.charAt(0).toUpperCase() + t.slice(1)}
+                            {tabKey === 'assets' ? t('素材', 'Assets') : tabKey === 'upload' ? t('上传', 'Upload') : 'URL'}
                         </button>
                     ))}
                 </div>
@@ -5613,10 +5613,10 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
                             }}
                             className="bg-[#151515] border border-white/10 rounded text-xs px-2 py-1 text-white outline-none focus:border-primary/50"
                         >
-                            <option value="project">All Project Assets</option>
-                            <option value="type">By Subject Type</option>
-                            <option value="subject">By Exact Subject</option>
-                            <option value="shot">By Storyboard (Shot)</option>
+                            <option value="project">{t('项目全部素材', 'All Project Assets')}</option>
+                            <option value="type">{t('按主体类型', 'By Subject Type')}</option>
+                            <option value="subject">{t('按指定主体', 'By Exact Subject')}</option>
+                            <option value="shot">{t('按分镜（Shot）', 'By Storyboard (Shot)')}</option>
                         </select>
 
                         {/* Refinement Selector */}
@@ -5626,10 +5626,10 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
                                 onChange={(e) => setFilterValue(e.target.value)}
                                 className="bg-[#151515] border border-white/10 rounded text-xs px-2 py-1 text-white outline-none focus:border-primary/50 max-w-[150px]"
                             >
-                                <option value="">Select Type...</option>
-                                <option value="character">Characters</option>
-                                <option value="prop">Props</option>
-                                <option value="environment">Environments</option>
+                                <option value="">{t('选择类型...', 'Select Type...')}</option>
+                                <option value="character">{t('角色', 'Characters')}</option>
+                                <option value="prop">{t('道具', 'Props')}</option>
+                                <option value="environment">{t('环境', 'Environments')}</option>
                             </select>
                         )}
 
@@ -5639,7 +5639,7 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
                                 onChange={(e) => setFilterValue(e.target.value)}
                                 className="bg-[#151515] border border-white/10 rounded text-xs px-2 py-1 text-white outline-none focus:border-primary/50 max-w-[150px]"
                             >
-                                <option value="">Select Subject...</option>
+                                <option value="">{t('选择主体...', 'Select Subject...')}</option>
                                 {entities.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
                             </select>
                         )}
@@ -5660,13 +5660,13 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
                             onChange={(e) => setFilterType(e.target.value)}
                             className="bg-[#151515] border border-white/10 rounded text-xs px-2 py-1 text-white outline-none focus:border-primary/50"
                         >
-                            <option value="all">All Types</option>
-                            <option value="image">Images Only</option>
-                            <option value="video">Videos Only</option>
+                            <option value="all">{t('全部类型', 'All Types')}</option>
+                            <option value="image">{t('仅图片', 'Images Only')}</option>
+                            <option value="video">{t('仅视频', 'Videos Only')}</option>
                         </select>
                         
                         <div className="ml-auto text-[10px] text-muted-foreground">
-                            {assets.length} results
+                            {assets.length} {t('条结果', 'results')}
                         </div>
                     </div>
                 )}
@@ -5719,7 +5719,7 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
                                         onClick={() => { onSelect(selectedAsset.url, selectedAsset.type); }}
                                         className="bg-primary text-black text-xs font-bold px-3 py-1.5 rounded hover:opacity-90 flex items-center gap-1"
                                      >
-                                        <Check size={14}/> Select This Asset
+                                        <Check size={14}/> {t('选择该素材', 'Select This Asset')}
                                      </button>
                                 </div>
                             </div>
@@ -5739,7 +5739,7 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
                                     
                                     {selectedAsset.meta_info?.entity_id && (
                                         <div>
-                                            <label className="text-[10px] tx-muted-foreground font-bold uppercase">Linked Entity</label>
+                                            <label className="text-[10px] tx-muted-foreground font-bold uppercase">{t('关联主体', 'Linked Entity')}</label>
                                             <div className="text-xs bg-white/5 p-2 rounded border border-white/5 mt-1">
                                                 {entities.find(e => e.id === Number(selectedAsset.meta_info.entity_id))?.name || `Entity #${selectedAsset.meta_info.entity_id}`}
                                             </div>
@@ -5748,7 +5748,7 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
                                     
                                     {selectedAsset.meta_info?.shot_id && (
                                         <div>
-                                            <label className="text-[10px] tx-muted-foreground font-bold uppercase">Source Shot</label>
+                                            <label className="text-[10px] tx-muted-foreground font-bold uppercase">{t('来源镜头', 'Source Shot')}</label>
                                             <div className="text-xs bg-white/5 p-2 rounded border border-white/5 mt-1">
                                                 {availableShots.find(s => s.id === Number(selectedAsset.meta_info.shot_id))?.shot_id || `Shot #${selectedAsset.meta_info.shot_id}`}
                                             </div>
@@ -5757,7 +5757,7 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
 
                                     {selectedAsset.meta_info?.prompt && (
                                         <div>
-                                            <label className="text-[10px] tx-muted-foreground font-bold uppercase">Prompt</label>
+                                            <label className="text-[10px] tx-muted-foreground font-bold uppercase">{t('提示词', 'Prompt')}</label>
                                             <div className="text-xs text-gray-400 bg-white/5 p-2 rounded border border-white/5 mt-1 max-h-[150px] overflow-y-auto custom-scrollbar">
                                                 {selectedAsset.meta_info.prompt}
                                             </div>
@@ -5768,25 +5768,25 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
                                     <div className="grid grid-cols-2 gap-2 pt-2 border-t border-white/5">
                                          {selectedAsset.meta_info?.resolution && (
                                             <div>
-                                                <label className="text-[10px] tx-muted-foreground font-bold uppercase">Resolution</label>
+                                                <label className="text-[10px] tx-muted-foreground font-bold uppercase">{t('分辨率', 'Resolution')}</label>
                                                 <div className="text-xs text-gray-300">{selectedAsset.meta_info.resolution}</div>
                                             </div>
                                          )}
                                          {selectedAsset.meta_info?.size && (
                                             <div>
-                                                <label className="text-[10px] tx-muted-foreground font-bold uppercase">Size</label>
+                                                <label className="text-[10px] tx-muted-foreground font-bold uppercase">{t('大小', 'Size')}</label>
                                                 <div className="text-xs text-gray-300">{selectedAsset.meta_info.size}</div>
                                             </div>
                                          )}
                                           {selectedAsset.meta_info?.format && (
                                             <div>
-                                                <label className="text-[10px] tx-muted-foreground font-bold uppercase">Format</label>
+                                                <label className="text-[10px] tx-muted-foreground font-bold uppercase">{t('格式', 'Format')}</label>
                                                 <div className="text-xs text-gray-300">{selectedAsset.meta_info.format}</div>
                                             </div>
                                          )}
                                           {selectedAsset.meta_info?.duration && (
                                             <div>
-                                                <label className="text-[10px] tx-muted-foreground font-bold uppercase">Duration</label>
+                                                <label className="text-[10px] tx-muted-foreground font-bold uppercase">{t('时长', 'Duration')}</label>
                                                 <div className="text-xs text-gray-300">{/* Normalize 5.0 to 5s */}
                                                 {String(selectedAsset.meta_info.duration).endsWith('.0') ? parseInt(selectedAsset.meta_info.duration) : selectedAsset.meta_info.duration}s
                                                 </div>
@@ -6254,7 +6254,7 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
                             {entity ? (
                                 <>
                                     <div className="bg-white/5 p-3 rounded-lg border border-white/5">
-                                        <span className="text-[10px] uppercase font-bold text-primary/70 block mb-1">Description</span>
+                                        <span className="text-[10px] uppercase font-bold text-primary/70 block mb-1">{t('描述', 'Description')}</span>
                                         <p className="text-sm text-gray-300 leading-relaxed max-h-[200px] overflow-y-auto custom-scrollbar">
                                             {entity.description || 'No description available.'}
                                         </p>
@@ -6262,7 +6262,7 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
                                     
                                     <div className="grid grid-cols-2 gap-2">
                                         <div className="bg-white/5 p-2 rounded border border-white/5">
-                                            <span className="text-[10px] uppercase text-gray-500 block">Type</span>
+                                            <span className="text-[10px] uppercase text-gray-500 block">{t('类型', 'Type')}</span>
                                             <span className="text-xs text-gray-300">{entity.type || 'Unknown'}</span>
                                         </div>
                                     </div>
@@ -6527,11 +6527,11 @@ const SceneCard = ({ scene, entities, onClick, onGenerateShots, onDelete, select
                 <div className="text-xs text-muted-foreground space-y-2">
                     {/* Core Info - handled to prevent layout chaos with Markdown */}
                     <div className="bg-white/5 p-2 rounded border border-white/5 relative group/info">
-                        <span className="font-bold text-white/50 block text-[10px] uppercase mb-1">Core Info</span>
+                        <span className="font-bold text-white/50 block text-[10px] uppercase mb-1">{t('核心信息', 'Core Info')}</span>
                         <div className="max-h-[4.5em] overflow-hidden text-white/80 leading-normal prose prose-invert prose-p:my-0 prose-p:leading-normal prose-headings:my-0 prose-ul:my-0 prose-li:my-0 text-[11px]">
                              <ReactMarkdown components={{
                                  p: ({node, ...props}) => <p className="mb-1" {...props} />
-                             }}>{scene.core_scene_info || 'No core info'}</ReactMarkdown>
+                             }}>{scene.core_scene_info || t('暂无核心信息', 'No core info')}</ReactMarkdown>
                         </div>
                          {/* Hover expand could be cool, but simplistic for now */}
                     </div>
@@ -6542,7 +6542,7 @@ const SceneCard = ({ scene, entities, onClick, onGenerateShots, onDelete, select
                             <>
                             {scene.linked_characters && (
                                 <div className="flex flex-col gap-0.5">
-                                    <span className="font-bold text-white/40 text-[9px] uppercase">Cast</span>
+                                    <span className="font-bold text-white/40 text-[9px] uppercase">{t('角色', 'Cast')}</span>
                                     <div className="flex flex-wrap gap-1">
                                         {scene.linked_characters.split(/[，,]/).filter(Boolean).map((char, i) => (
                                             <span key={i} className="inline-block bg-indigo-500/20 text-indigo-200 border border-indigo-500/30 px-1.5 py-0.5 rounded text-[10px]">
@@ -6555,7 +6555,7 @@ const SceneCard = ({ scene, entities, onClick, onGenerateShots, onDelete, select
                             
                             {scene.key_props && (
                                 <div className="flex flex-col gap-0.5">
-                                    <span className="font-bold text-white/40 text-[9px] uppercase">Props</span>
+                                    <span className="font-bold text-white/40 text-[9px] uppercase">{t('道具', 'Props')}</span>
                                     <div className="flex flex-wrap gap-1">
                                         {scene.key_props.split(/[，,]/).filter(Boolean).map((prop, i) => (
                                             <span key={i} className="inline-block bg-emerald-500/20 text-emerald-200 border border-emerald-500/30 px-1.5 py-0.5 rounded text-[10px]">
@@ -6568,7 +6568,7 @@ const SceneCard = ({ scene, entities, onClick, onGenerateShots, onDelete, select
                             </>
                         ) : (
                              <div className="line-clamp-2 opacity-50 italic">
-                                {scene.original_script_text || 'No description'}
+                                {scene.original_script_text || t('暂无描述', 'No description')}
                             </div>
                         )}
                     </div>
@@ -6576,7 +6576,7 @@ const SceneCard = ({ scene, entities, onClick, onGenerateShots, onDelete, select
                 
                 <div className="pt-2 border-t border-white/5 text-[10px] text-gray-400 mt-auto flex justify-between items-center">
                     <div className="flex items-center gap-1 max-w-[70%] truncate">
-                        <span className="opacity-50">Env:</span>
+                        <span className="opacity-50">{t('环境：', 'Env:')}</span>
                         <span className="text-white/70" title={scene.environment_name}>{scene.environment_name || '-'}</span>
                     </div>
                 </div>
@@ -7667,7 +7667,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
 
                                     <div className="pt-4 border-t border-white/5">
                                         <div className="flex items-center justify-between gap-3 mb-2">
-                                            <label className="text-xs text-muted-foreground uppercase font-bold tracking-wider block text-primary/80">AI Shots (Staging)</label>
+                                            <label className="text-xs text-muted-foreground uppercase font-bold tracking-wider block text-primary/80">{t('AI 镜头（暂存区）', 'AI Shots (Staging)')}</label>
                                             <div className="text-[10px] text-muted-foreground">双击任意行可弹窗编辑并保存更新</div>
                                             <div className="flex items-center gap-2">
                                                 <button
@@ -7929,7 +7929,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                     </div>
 
                                     <div className="flex flex-col gap-2">
-                                        <label className="text-xs font-bold text-muted-foreground uppercase">User Prompt (Scenario content)</label>
+                                        <label className="text-xs font-bold text-muted-foreground uppercase">{t('用户提示词（场景内容）', 'User Prompt (Scenario content)')}</label>
                                         <textarea 
                                             className="bg-black/30 border border-white/10 rounded-md p-3 text-sm text-white/90 font-mono h-64 focus:outline-none focus:border-primary/50 resize-y"
                                             value={shotPromptModal.data?.user_prompt || ''}
@@ -7939,8 +7939,8 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                     
                                      <div className="flex flex-col gap-2">
                                          <div className="flex items-center justify-between">
-                                              <label className="text-xs font-bold text-muted-foreground uppercase">System Prompt (Instructions)</label>
-                                              <span className="text-xs text-muted-foreground px-2 py-1 bg-white/5 rounded">Default/Template</span>
+                                              <label className="text-xs font-bold text-muted-foreground uppercase">{t('系统提示词（指令）', 'System Prompt (Instructions)')}</label>
+                                              <span className="text-xs text-muted-foreground px-2 py-1 bg-white/5 rounded">{t('默认/模板', 'Default/Template')}</span>
                                          </div>
                                         <textarea 
                                             className="bg-black/30 border border-white/10 rounded-md p-3 text-xs text-muted-foreground font-mono h-32 focus:outline-none focus:border-primary/50 resize-y"
@@ -8886,7 +8886,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                     {viewingEntity.type === 'environment' && (
                                         <div className="space-y-4 p-4 bg-white/5 rounded-lg border border-white/5">
                                              <div className="space-y-1">
-                                                <h4 className="text-[10px] font-bold uppercase text-muted-foreground">Atmosphere</h4>
+                                                <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('氛围', 'Atmosphere')}</h4>
                                                  <input 
                                                     value={viewingEntity.atmosphere || ''}
                                                     onChange={(e) => setViewingEntity(prev => ({ ...prev, atmosphere: e.target.value }))}
@@ -8896,7 +8896,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                                 />
                                             </div>
                                              <div className="space-y-1">
-                                                <h4 className="text-[10px] font-bold uppercase text-muted-foreground">Visual Params</h4>
+                                                <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('视觉参数', 'Visual Params')}</h4>
                                                 <textarea 
                                                     value={viewingEntity.visual_params || ''}
                                                     onChange={(e) => setViewingEntity(prev => ({ ...prev, visual_params: e.target.value }))}
@@ -8906,7 +8906,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                                 />
                                             </div>
                                              <div className="space-y-1">
-                                                <h4 className="text-[10px] font-bold uppercase text-muted-foreground">Narrative Description</h4>
+                                                <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('叙事描述', 'Narrative Description')}</h4>
                                                 <textarea 
                                                     value={viewingEntity.narrative_description || ''}
                                                     onChange={(e) => setViewingEntity(prev => ({ ...prev, narrative_description: e.target.value }))}
@@ -8921,7 +8921,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                     {/* Appearance Details */}
                                     <div className="grid grid-cols-2 gap-4">
                                         <div className="space-y-1">
-                                            <h4 className="text-[10px] font-bold uppercase text-muted-foreground">Appearance</h4>
+                                            <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('外观', 'Appearance')}</h4>
                                             <textarea 
                                                 value={viewingEntity.appearance_cn || ''}
                                                 onChange={(e) => setViewingEntity(prev => ({ ...prev, appearance_cn: e.target.value }))}
@@ -8931,7 +8931,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                             />
                                         </div>
                                         <div className="space-y-1">
-                                            <h4 className="text-[10px] font-bold uppercase text-muted-foreground">Clothing</h4>
+                                            <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('服装', 'Clothing')}</h4>
                                             <textarea 
                                                 value={viewingEntity.clothing || ''}
                                                 onChange={(e) => setViewingEntity(prev => ({ ...prev, clothing: e.target.value }))}
@@ -8993,13 +8993,13 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                             <div className="bg-white/5 rounded-lg border border-white/5 p-3 text-xs space-y-1">
                                                 {viewingEntity.dependency_strategy.type && (
                                                     <div className="flex gap-2">
-                                                        <span className="text-muted-foreground">Type:</span>
+                                                        <span className="text-muted-foreground">{t('类型：', 'Type:')}</span>
                                                         <span className="font-bold text-primary">{viewingEntity.dependency_strategy.type}</span>
                                                     </div>
                                                 )}
                                                 {viewingEntity.dependency_strategy.logic && (
                                                     <div className="flex gap-2 flex-col sm:flex-row sm:items-baseline">
-                                                        <span className="text-muted-foreground whitespace-nowrap">Logic:</span>
+                                                        <span className="text-muted-foreground whitespace-nowrap">{t('逻辑：', 'Logic:')}</span>
                                                         <span className="text-white/80 italic">{viewingEntity.dependency_strategy.logic}</span>
                                                     </div>
                                                 )}
@@ -9009,8 +9009,8 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
 
                                     {/* Visual Dependencies (Editable) */}
                                     <div className="space-y-2 pt-2 border-t border-white/5">
-                                         <h4 className="text-[10px] font-bold uppercase text-muted-foreground">Visual Dependencies</h4>
-                                         <p className="text-[10px] text-white/40 mb-1">Add entity names to use their images as reference when generating this entity.</p>
+                                         <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('视觉依赖', 'Visual Dependencies')}</h4>
+                                         <p className="text-[10px] text-white/40 mb-1">{t('添加主体名称后，生成该主体时会自动引用其图片。', 'Add entity names to use their images as reference when generating this entity.')}</p>
                                          <div className="bg-black/20 p-3 rounded-lg border border-white/5">
                                              <div className="flex flex-wrap gap-2 mb-2">
                                                  {(Array.isArray(viewingEntity.visual_dependencies) ? viewingEntity.visual_dependencies : []).map((dep, i) => (
@@ -9103,7 +9103,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                         return (
                                             <div className="space-y-2 pt-4 border-t border-white/5">
                                                 <div className="flex justify-between items-center">
-                                                    <h4 className="text-[10px] font-bold uppercase text-muted-foreground">Other Attributes</h4>
+                                                    <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('其他属性', 'Other Attributes')}</h4>
                                                     <button 
                                                         onClick={async () => {
                                                             const key = await promptUiMessage("Enter new attribute name:", {
@@ -9205,7 +9205,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                             className="bg-[#1e1e1e] border border-white/10 rounded-xl w-full max-w-2xl h-[650px] flex flex-col shadow-2xl overflow-hidden"
                         >
                             <div className="flex justify-between items-center p-4 border-b border-white/10 bg-black/20">
-                                <h3 className="font-bold text-lg">Select Image for {selectedEntity?.name}</h3>
+                                <h3 className="font-bold text-lg">{t('为主体选择图片', 'Select Image for')} {selectedEntity?.name}</h3>
                                 <button onClick={() => setShowImageModal(false)} className="text-white/50 hover:text-white">
                                     <X size={20} />
                                 </button>
@@ -9218,7 +9218,13 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                         onClick={() => setImageModalTab(tab)}
                                         className={`flex-1 py-3 text-sm font-medium border-b-2 transition-colors ${imageModalTab === tab ? 'border-primary text-primary bg-primary/5' : 'border-transparent text-muted-foreground hover:text-white hover:bg-white/5'}`}
                                     >
-                                        {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                                        {tab === 'library'
+                                            ? t('素材库', 'Library')
+                                            : tab === 'upload'
+                                                ? t('上传', 'Upload')
+                                                : tab === 'generate'
+                                                    ? t('生成', 'Generate')
+                                                    : t('高级', 'Advanced')}
                                     </button>
                                 ))}
                             </div>
@@ -9286,7 +9292,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                 {imageModalTab === 'advanced' && (
                                     <div className="flex flex-col h-full">
                                         <div className="mb-4">
-                                            <h4 className="text-xs font-bold uppercase text-muted-foreground mb-2">Advanced Refinement</h4>
+                                            <h4 className="text-xs font-bold uppercase text-muted-foreground mb-2">{t('高级优化', 'Advanced Refinement')}</h4>
                                             <p className="text-[10px] text-white/50 mb-4">
                                                 Use AI to refine or modify the image with step-by-step instructions.
                                             </p>
@@ -9322,7 +9328,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                         {/* Auto-detected Visual Dependencies */}
                                         {selectedEntity?.visual_dependencies && selectedEntity.visual_dependencies.length > 0 && (
                                             <div className="mb-4">
-                                                <label className="text-[10px] uppercase font-bold text-muted-foreground mb-1 block">Visual Dependencies (Auto-Used)</label>
+                                                <label className="text-[10px] uppercase font-bold text-muted-foreground mb-1 block">{t('视觉依赖（自动使用）', 'Visual Dependencies (Auto-Used)')}</label>
                                                 <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
                                                     {(Array.isArray(selectedEntity.visual_dependencies) ? selectedEntity.visual_dependencies : []).map((dep, idx) => {
                                                         const startDep = String(dep).trim();
@@ -9350,7 +9356,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                                                 <div className="text-[10px] truncate font-bold text-white px-0.5" title={dep}>
                                                                     {depEntity ? depEntity.name : dep}
                                                                 </div>
-                                                                {!depEntity && <div className="text-[8px] text-red-400 px-0.5">Not Found</div>}
+                                                                {!depEntity && <div className="text-[8px] text-red-400 px-0.5">{t('未找到', 'Not Found')}</div>}
                                                             </div>
                                                         );
                                                     })}
@@ -9373,7 +9379,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                                     onChange={e => setProvider(e.target.value)}
                                                     className="w-full bg-black/40 border border-white/10 rounded-md px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
                                                 >
-                                                    <option value="">Default (System)</option>
+                                                    <option value="">{t('默认（系统）', 'Default (System)')}</option>
                                                     {availableProviders.map(p => (
                                                         <option key={p.provider} value={p.provider}>
                                                            {p.provider ? (p.provider.charAt(0).toUpperCase() + p.provider.slice(1)) : 'Unknown'}
@@ -9384,7 +9390,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                             
                                             {/* Reference Image Select */}
                                             <div className="flex-[2] relative">
-                                                 <label className="text-[10px] uppercase font-bold text-muted-foreground mb-1 block">Ref Image (Optional)</label>
+                                                 <label className="text-[10px] uppercase font-bold text-muted-foreground mb-1 block">{t('参考图（可选）', 'Ref Image (Optional)')}</label>
                                                  
                                                  {!refImage ? (
                                                      <div className="flex gap-2 items-center">
@@ -9450,7 +9456,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                                  {refSelectionMode === 'assets' && !refImage && (
                                                      <div className="absolute top-full left-0 right-0 mt-2 z-10 bg-[#09090b] border border-white/10 rounded-xl shadow-2xl h-64 overflow-hidden flex flex-col">
                                                          <div className="p-2 border-b border-white/10 flex justify-between items-center bg-black/20">
-                                                             <span className="text-xs font-bold text-muted-foreground ml-2">Select from Assets</span>
+                                                             <span className="text-xs font-bold text-muted-foreground ml-2">{t('从素材中选择', 'Select from Assets')}</span>
                                                              <button onClick={() => setRefSelectionMode(null)}><X size={14} className="text-white/50 hover:text-white"/></button>
                                                          </div>
                                                          <div className="flex-1 overflow-y-auto p-2 custom-scrollbar">
@@ -9494,7 +9500,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                         </div>
                                         
                                         <div className="mt-6">
-                                            <h4 className="text-xs font-bold uppercase text-muted-foreground mb-3">Prompt Variables</h4>
+                                            <h4 className="text-xs font-bold uppercase text-muted-foreground mb-3">{t('提示词变量', 'Prompt Variables')}</h4>
                                             <ul className="text-xs text-white/60 space-y-2 list-disc pl-4">
                                                 <li><code className="bg-white/10 px-1 rounded text-primary">[Global Style]</code>: Injects current episode style.</li>
                                                 <li><code className="bg-white/10 px-1 rounded text-primary">CHAR:[@Name]</code> / <code className="bg-white/10 px-1 rounded text-primary">[@Name]</code>: Injects matched Entity anchor description.</li>
@@ -12703,7 +12709,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                             </div>
                                                             <div className="space-y-3">
                                                                 <div className="flex items-center gap-2">
-                                                                    <button onClick={() => generateAssetWithLang('start', 'zh')} className="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30">Gen(CN)</button>
+                                                                    <button onClick={() => generateAssetWithLang('start', 'zh')} className="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30">{t('生成(CN)', 'Gen(CN)')}</button>
                                                                     <button 
                                                                         onClick={() => generateAssetWithLang('start', 'en')} 
                                                                         disabled={currentGeneratingState.start}
@@ -12777,7 +12783,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                             </div>
                                                             <div className="space-y-3">
                                                                 <div className="flex items-center gap-2">
-                                                                    <button onClick={() => generateAssetWithLang('end', 'zh')} className="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30">Gen(CN)</button>
+                                                                    <button onClick={() => generateAssetWithLang('end', 'zh')} className="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30">{t('生成(CN)', 'Gen(CN)')}</button>
                                                                     <button 
                                                                         onClick={() => generateAssetWithLang('end', 'en')} 
                                                                         disabled={currentGeneratingState.end}
@@ -12852,7 +12858,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                             </div>
                                                             <div className="space-y-3">
                                                                 <div className="flex items-center gap-2">
-                                                                    <button onClick={() => generateAssetWithLang('video', 'zh')} className="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30">Gen(CN)</button>
+                                                                    <button onClick={() => generateAssetWithLang('video', 'zh')} className="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30">{t('生成(CN)', 'Gen(CN)')}</button>
                                                                     <button 
                                                                         onClick={() => generateAssetWithLang('video', 'en')} 
                                                                         disabled={currentGeneratingState.video}
@@ -12944,7 +12950,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                     updated[assetDetailModal.keyframeIndex].time = e.target.value;
                                                                     setLocalKeyframes(updated);
                                                                 }} />
-                                                                <button onClick={() => generateAssetWithLang('keyframe', 'zh', assetDetailModal.keyframeIndex)} className="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30">Gen(CN)</button>
+                                                                <button onClick={() => generateAssetWithLang('keyframe', 'zh', assetDetailModal.keyframeIndex)} className="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30">{t('生成(CN)', 'Gen(CN)')}</button>
                                                                 <button 
                                                                     onClick={() => generateAssetWithLang('keyframe', 'en', assetDetailModal.keyframeIndex)} 
                                                                     disabled={!!keyframe?.loading}
@@ -13074,7 +13080,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                     </div>
 
                                     <div className="flex flex-col gap-2">
-                                        <label className="text-xs font-bold text-muted-foreground uppercase">User Prompt (Scenario content)</label>
+                                        <label className="text-xs font-bold text-muted-foreground uppercase">{t('用户提示词（场景内容）', 'User Prompt (Scenario content)')}</label>
                                         <textarea 
                                             className="bg-black/30 border border-white/10 rounded-md p-3 text-sm text-white/90 font-mono h-64 focus:outline-none focus:border-primary/50 resize-y"
                                             value={shotPromptModal.data?.user_prompt || ''}
@@ -13084,8 +13090,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                     
                                      <div className="flex flex-col gap-2">
                                          <div className="flex items-center justify-between">
-                                              <label className="text-xs font-bold text-muted-foreground uppercase">System Prompt (Instructions)</label>
-                                              <span className="text-xs text-muted-foreground px-2 py-1 bg-white/5 rounded">Default/Template</span>
+                                              <label className="text-xs font-bold text-muted-foreground uppercase">{t('系统提示词（指令）', 'System Prompt (Instructions)')}</label>
+                                              <span className="text-xs text-muted-foreground px-2 py-1 bg-white/5 rounded">{t('默认/模板', 'Default/Template')}</span>
                                          </div>
                                         <textarea 
                                             className="bg-black/30 border border-white/10 rounded-md p-3 text-xs text-muted-foreground font-mono h-32 focus:outline-none focus:border-primary/50 resize-y"

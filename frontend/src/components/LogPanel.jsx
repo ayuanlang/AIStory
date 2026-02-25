@@ -20,7 +20,7 @@ const LogPanel = () => {
                     className="flex items-center gap-2 px-4 py-1.5 bg-[#09090b] border border-b-0 border-white/10 rounded-t-lg text-xs font-mono text-muted-foreground hover:text-primary hover:border-primary/50 transition-colors shadow-lg"
                 >
                     <ChevronUp size={14} />
-                    <span className="opacity-75">SysLog</span>
+                    <span className="opacity-75">{t('系统日志', 'SysLog')}</span>
                     {logs.length > 0 && <span className="ml-1 w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />}
                 </button>
             </div>
@@ -31,7 +31,7 @@ const LogPanel = () => {
             >
                 <div className="flex items-center justify-between px-4 py-2 border-b border-white/5 bg-white/5 shrink-0 h-10">
                     <span className="text-xs font-bold text-muted-foreground uppercase flex items-center gap-2">
-                        <ScrollText className="w-3 h-3" /> System Logs <span className="text-[10px] opacity-50">({logs.length})</span>
+                        <ScrollText className="w-3 h-3" /> {t('系统日志', 'System Logs')} <span className="text-[10px] opacity-50">({logs.length})</span>
                     </span>
                     <div className="flex gap-2 items-center">
                             <button onClick={clearLogs} className="p-1 hover:bg-white/10 rounded text-muted-foreground hover:text-red-400 transition-colors" title={t('清空日志', 'Clear Logs')}>

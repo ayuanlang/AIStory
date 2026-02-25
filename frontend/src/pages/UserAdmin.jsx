@@ -1081,7 +1081,7 @@ const UserAdmin = () => {
                                             <table className="w-full text-xs">
                                                 <thead className="bg-white/5 text-gray-400 sticky top-0">
                                                     <tr>
-                                                        <th className="text-left p-2">ID</th>
+                                                        <th className="text-left p-2">{t('编号', 'ID')}</th>
                                                         <th className="text-left p-2">{t('类别', 'Category')}</th>
                                                         <th className="text-left p-2">{t('提供方', 'Provider')}</th>
                                                         <th className="text-left p-2">{t('模型', 'Model')}</th>
