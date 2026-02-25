@@ -1,6 +1,8 @@
 
 from fastapi import APIRouter, Depends, HTTPException, Body, Request
 import logging
+import smtplib
+from email.message import EmailMessage
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from app.db.session import get_db
@@ -51,6 +53,14 @@ def get_password_hash(password):
 router = APIRouter()
 media_service = MediaGenerationService()
 logger = logging.getLogger("api_logger")
+
+
+def _vendor_failed_message(provider: Optional[str], reason: Any) -> str:
+    vendor = str(provider or "").strip() or "unknown"
+    detail = str(reason or "unknown error").strip()
+    if "供应商调用失败" in detail:
+        return detail
+    return f"{vendor}供应商调用失败: {detail}"
 
 
 @router.post("/fix-db-schema")
@@ -320,6 +330,17 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         logger.info("No Project Metadata received")
 
     try:
+        def _is_length_finish_reason(reason: Any) -> bool:
+            r = str(reason or "").strip().lower().replace("-", "_")
+            return r in {
+                "length",
+                "max_tokens",
+                "max_token",
+                "max_output_tokens",
+                "output_token_limit",
+                "token_limit",
+            }
+
         def _estimate_tokens(text: str) -> int:
             if not text:
                 return 0
@@ -358,8 +379,8 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         def _detect_output_integrity(output_text: str, segments: List[Dict[str, Any]], final_finish_reason: Optional[str]) -> Dict[str, Any]:
             text = (output_text or "").strip()
             segment_list = segments or []
-            had_length_finish = any(str(seg.get("finish_reason") or "").lower() == "length" for seg in segment_list)
-            ended_with_length = str(final_finish_reason or "").lower() == "length"
+            had_length_finish = any(_is_length_finish_reason(seg.get("finish_reason")) for seg in segment_list)
+            ended_with_length = _is_length_finish_reason(final_finish_reason)
 
             json_candidate = ""
             json_expected = False
@@ -725,6 +746,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         segments_meta: List[Dict[str, Any]] = []
         usage_total: Dict[str, Any] = {}
         finish_reason = None
+        continuation_stopped_by_max_segments = False
 
         def _dedupe_overlap(existing: str, incoming: str) -> str:
             if not existing or not incoming:
@@ -774,7 +796,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             })
 
             # Stop if not truncated.
-            if str(part_finish).lower() != "length":
+            if not _is_length_finish_reason(part_finish):
                 break
 
             # Stop if provider returned nothing new.
@@ -792,6 +814,9 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 {"role": "user", "content": continuation_instruction},
             ]
 
+        if finish_reason is not None and _is_length_finish_reason(finish_reason) and len(segments_meta) >= max_segments:
+            continuation_stopped_by_max_segments = True
+
         result_content = "".join(result_parts)
         usage = usage_total
         integrity_meta = _detect_output_integrity(result_content, segments_meta, finish_reason)
@@ -802,6 +827,8 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             "output_tokens_est": _estimate_tokens(result_content or ""),
             "usage": usage,
             "segments": segments_meta,
+            "max_segments": max_segments,
+            "continuation_stopped_by_max_segments": continuation_stopped_by_max_segments,
             "integrity": integrity_meta,
         })
 
@@ -885,39 +912,40 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
 
     except HTTPException as e:
         # Preserve original status codes (e.g., 402 insufficient credits)
-        logger.warning(f"Scene Analysis HTTPException: {e.detail}")
+        conf_log = locals().get("config") or {}
+        p_log = conf_log.get("provider")
+        prefixed_detail = _vendor_failed_message(p_log, e.detail)
+        logger.warning(f"Scene Analysis HTTPException: {prefixed_detail}")
         try:
             reservation_tx = locals().get("reservation_tx")
             if reservation_tx:
-                billing_service.cancel_reservation(db, reservation_tx.id, str(e.detail))
+                billing_service.cancel_reservation(db, reservation_tx.id, prefixed_detail)
         except:
             pass
         try:
-            conf_log = locals().get("config") or {}
-            p_log = conf_log.get("provider")
             m_log = conf_log.get("model")
-            billing_service.log_failed_transaction(db, current_user.id, "analysis", p_log, m_log, str(e.detail))
+            billing_service.log_failed_transaction(db, current_user.id, "analysis", p_log, m_log, prefixed_detail)
         except:
             pass
-        raise
+        raise HTTPException(status_code=e.status_code, detail=prefixed_detail)
     except Exception as e:
-        logger.error(f"Scene Analysis Failed: {e}", exc_info=True)
+        conf_log = locals().get("config") or {}
+        p_log = conf_log.get("provider")
+        prefixed_detail = _vendor_failed_message(p_log, e)
+        logger.error(f"Scene Analysis Failed: {prefixed_detail}", exc_info=True)
         try:
             reservation_tx = locals().get("reservation_tx")
             if reservation_tx:
-                billing_service.cancel_reservation(db, reservation_tx.id, str(e))
+                billing_service.cancel_reservation(db, reservation_tx.id, prefixed_detail)
         except:
             pass
         # Log failure
         try:
-             # Need to safely extract Provider/Model if config exists, else generic
-             conf_log = locals().get("config") or {}
-             p_log = conf_log.get("provider")
              m_log = conf_log.get("model")
-             billing_service.log_failed_transaction(db, current_user.id, "analysis", p_log, m_log, str(e))
+             billing_service.log_failed_transaction(db, current_user.id, "analysis", p_log, m_log, prefixed_detail)
         except:
              pass # Fail safe
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=prefixed_detail)
 
 # --- Tools ---
 class TranslateRequest(BaseModel):
@@ -5591,6 +5619,15 @@ class LoginRequest(BaseModel):
     username: str
     password: str
 
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
     if expires_delta:
@@ -5600,6 +5637,58 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt
+
+
+def create_password_reset_token(email: str) -> str:
+    expire = datetime.utcnow() + timedelta(minutes=settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES)
+    payload = {
+        "sub": email,
+        "purpose": "password_reset",
+        "exp": expire,
+    }
+    return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+
+def verify_password_reset_token(token: str) -> Optional[str]:
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        if payload.get("purpose") != "password_reset":
+            return None
+        email = payload.get("sub")
+        if not email:
+            return None
+        return str(email)
+    except Exception:
+        return None
+
+
+def send_password_reset_email(to_email: str, reset_link: str) -> None:
+    smtp_host = str(settings.SMTP_HOST or "").strip()
+    smtp_user = str(settings.SMTP_USERNAME or "").strip()
+    smtp_pass = str(settings.SMTP_PASSWORD or "").strip()
+    from_email = str(settings.SMTP_FROM_EMAIL or smtp_user or "").strip()
+
+    if not smtp_host or not from_email:
+        logger.warning("SMTP not configured. Skip sending password reset email to %s. reset_link=%s", to_email, reset_link)
+        return
+
+    message = EmailMessage()
+    message["Subject"] = "AI Story Password Reset"
+    message["From"] = from_email
+    message["To"] = to_email
+    message.set_content(
+        "You requested a password reset for AI Story.\n\n"
+        f"Please open this link to reset your password:\n{reset_link}\n\n"
+        f"This link expires in {settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES} minutes.\n"
+        "If you did not request this, you can ignore this email."
+    )
+
+    with smtplib.SMTP(smtp_host, settings.SMTP_PORT, timeout=20) as server:
+        if settings.SMTP_USE_TLS:
+            server.starttls()
+        if smtp_user and smtp_pass:
+            server.login(smtp_user, smtp_pass)
+        server.send_message(message)
 
 def authenticate_user(db: Session, username: str, password: str):
     # Try by username
@@ -5667,6 +5756,74 @@ def login_json(login_data: LoginRequest, db: Session = Depends(get_db)):
         data={"sub": user.username}, expires_delta=access_token_expires
     )
     return {"access_token": access_token, "token_type": "bearer"}
+
+
+@router.post("/password/forgot")
+def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)):
+    email = (payload.email or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required")
+
+    user = db.query(User).filter(User.email == email).first()
+    # Always return generic success to avoid account enumeration
+    success_msg = "If the email exists, a password reset link has been sent."
+
+    if not user:
+        return {"status": "ok", "message": success_msg}
+
+    token = create_password_reset_token(email)
+    frontend_base = str(settings.FRONTEND_BASE_URL or "").strip()
+    if not frontend_base:
+        frontend_base = "http://localhost:5173"
+    reset_link = f"{frontend_base.rstrip('/')}/auth?mode=reset&token={token}"
+
+    try:
+        send_password_reset_email(email, reset_link)
+        log_action(
+            db,
+            user_id=user.id,
+            user_name=user.username,
+            action="PASSWORD_RESET_REQUEST",
+            details=f"email={email}",
+        )
+    except Exception as e:
+        logger.error("Failed to send password reset email to %s: %s", email, e)
+        raise HTTPException(status_code=500, detail="Failed to send reset email")
+
+    return {"status": "ok", "message": success_msg}
+
+
+@router.post("/password/reset")
+def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db)):
+    token = (payload.token or "").strip()
+    new_password = (payload.new_password or "").strip()
+
+    if len(new_password) < 6:
+        raise HTTPException(status_code=400, detail="New password must be at least 6 characters")
+
+    email = verify_password_reset_token(token)
+    if not email:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid reset request")
+
+    user.hashed_password = get_password_hash(new_password)
+    db.commit()
+
+    try:
+        log_action(
+            db,
+            user_id=user.id,
+            user_name=user.username,
+            action="PASSWORD_RESET_SUCCESS",
+            details=f"email={email}",
+        )
+    except Exception:
+        pass
+
+    return {"status": "ok", "message": "Password has been reset successfully"}
 
 
 

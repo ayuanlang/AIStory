@@ -418,6 +418,16 @@ export const apiLogin = async (username, password) => {
     return response.data;
 }
 
+export const forgotPassword = async (email) => {
+    const response = await api.post('/password/forgot', { email });
+    return response.data;
+}
+
+export const resetPassword = async (token, new_password) => {
+    const response = await api.post('/password/reset', { token, new_password });
+    return response.data;
+}
+
 export const getSettings = async () => {
     const response = await api.get('/settings');
     return response.data;

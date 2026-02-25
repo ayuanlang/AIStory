@@ -85,6 +85,17 @@ If the user's request is not clear or does not require a tool, return an empty p
 """
 
 class LLMService:
+    def _vendor_label(self, provider: Any) -> str:
+        raw = str(provider or "").strip()
+        return raw or "unknown"
+
+    def _vendor_failed_message(self, provider: Any, reason: Any) -> str:
+        vendor = self._vendor_label(provider)
+        detail = str(reason or "unknown error").strip()
+        if "供应商调用失败" in detail:
+            return detail
+        return f"{vendor}供应商调用失败: {detail}"
+
     def _safe_log_json(self, tag: str, payload: Dict[str, Any]) -> None:
         try:
             _llm_call_logger.info("%s %s", tag, json.dumps(payload, ensure_ascii=False, default=str))
@@ -189,6 +200,17 @@ class LLMService:
                 return choice_text
 
         return ""
+
+    def _is_length_limited_finish_reason(self, reason: Any) -> bool:
+        r = str(reason or "").strip().lower().replace("-", "_")
+        return r in {
+            "length",
+            "max_tokens",
+            "max_token",
+            "max_output_tokens",
+            "output_token_limit",
+            "token_limit",
+        }
 
     def _is_prohibited_marker(self, text: str) -> bool:
         if not isinstance(text, str):
@@ -408,8 +430,10 @@ class LLMService:
             return await self._call_openai_compatible(base_url, api_key, model, messages, extra_config)
         except Exception as e:
             logger.error(f"LLM Call failed: {e}")
+            provider = (extra_config or {}).get("__provider") or config.get("provider") or self._infer_provider(base_url, model)
+            err_msg = self._vendor_failed_message(provider, e)
             return {
-                "reply": f"Sorry, I encountered an error communicating with the AI provider: {str(e)}",
+                "reply": f"Sorry, I encountered an error communicating with the AI provider: {err_msg}",
                 "plan": []
             }
 
@@ -440,7 +464,8 @@ class LLMService:
             return {"content": content, "usage": usage, "finish_reason": finish_reason}
         except Exception as e:
             logger.error(f"LLM Raw Completion failed: {e}")
-            raise e
+            provider = (extra_config or {}).get("__provider") or config.get("provider") or self._infer_provider(base_url, model)
+            raise Exception(self._vendor_failed_message(provider, e))
 
     async def _call_openai_compatible(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> Dict[str, Any]:
         full_response = await self._raw_llm_request_full(base_url, api_key, model, messages, extra_config)
@@ -568,7 +593,8 @@ class LLMService:
 
         except Exception as e:
              logger.error(f"Generate Content Error: {e}")
-             return {"content": f"Error: {e}", "usage": {}, "finish_reason": None}
+             provider = (extra_config or {}).get("__provider") or config.get("provider") or self._infer_provider(base_url, model)
+             return {"content": f"Error: {self._vendor_failed_message(provider, e)}", "usage": {}, "finish_reason": None}
 
     async def _raw_llm_request(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> str:
         data = await self._raw_llm_request_full(base_url, api_key, model, messages, extra_config)
@@ -699,7 +725,10 @@ class LLMService:
             response = await asyncio.to_thread(_request, False)
         except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError) as e:
             logger.warning(f"Connection failed ({str(e)}). Retrying without proxy...")
-            response = await asyncio.to_thread(_request, True)
+            try:
+                response = await asyncio.to_thread(_request, True)
+            except Exception as e2:
+                raise Exception(self._vendor_failed_message(provider, e2))
         
         if response.status_code != 200:
             provider = (extra_config or {}).get("__provider") or (extra_config or {}).get("provider") or self._infer_provider(base_url, model)
@@ -715,9 +744,8 @@ class LLMService:
                 "resolved_source": resolved_source,
                 "resolved_setting_id": resolved_setting_id,
             })
-            raise Exception(
-                f"API Error {response.status_code} [provider={provider}, model={model}, endpoint={url}, setting_id={resolved_setting_id}, source={resolved_source}]: {response.text}"
-            )
+            raw_reason = f"API Error {response.status_code} [provider={provider}, model={model}, endpoint={url}, setting_id={resolved_setting_id}, source={resolved_source}]: {response.text}"
+            raise Exception(self._vendor_failed_message(provider, raw_reason))
 
         data = response.json()
         self._safe_log_json("LLM_RESPONSE", {
@@ -755,7 +783,7 @@ class LLMService:
                 output_chars,
                 usage,
             )
-            if str(finish_reason).lower() == "length":
+            if self._is_length_limited_finish_reason(finish_reason):
                 logger.warning(
                     "LLM output appears truncated (finish_reason=length). prompt_chars=%s output_chars=%s max_tokens=%s prompt_tokens=%s completion_tokens=%s total_tokens=%s usage=%s",
                     prompt_chars,
@@ -792,12 +820,12 @@ class LLMService:
                 url,
                 ((data.get("choices") or [{}])[0] or {}).get("finish_reason"),
             )
-            raise RuntimeError("LLM content blocked by provider (PROHIBITED_CONTENT)")
+            raise RuntimeError(self._vendor_failed_message(provider, "LLM content blocked by provider (PROHIBITED_CONTENT)"))
         
         if "choices" in data and len(data["choices"]) > 0:
             return data
         else:
-             raise Exception(f"Invalid API Response: {data}")
+             raise Exception(self._vendor_failed_message(provider, f"Invalid API Response: {data}"))
 
     def _mock_fallback(self, query: str) -> Dict[str, Any]:
         if "analyze" in query.lower():

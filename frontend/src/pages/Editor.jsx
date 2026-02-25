@@ -3365,6 +3365,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
     const [mergedContent, setMergedContent] = useState('');
     const [rawContent, setRawContent] = useState('');
     const [llmResultContent, setLlmResultContent] = useState('');
+    const [analysisRuntimeMeta, setAnalysisRuntimeMeta] = useState(null);
     const [isRawMode, setIsRawMode] = useState(false);
     const [analysisAttentionNotes, setAnalysisAttentionNotes] = useState('');
     const [isSavingAnalysisAttentionNotes, setIsSavingAnalysisAttentionNotes] = useState(false);
@@ -3425,6 +3426,24 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
 
         return [...new Set([...localizedByCode, ...fallbackRawWarnings])];
     }, [localizeAnalysisWarningCode]);
+
+    const extractAnalysisRuntimeMeta = useCallback((meta) => {
+        if (!meta || typeof meta !== 'object') return null;
+        const integrity = (meta.integrity && typeof meta.integrity === 'object') ? meta.integrity : {};
+        const segments = Array.isArray(meta.segments) ? meta.segments : [];
+        const finishReason = String(meta.finish_reason || '').trim() || '-';
+        const truncated = !!(
+            integrity.truncation_suspected ||
+            integrity.ended_with_length ||
+            meta.continuation_stopped_by_max_segments
+        );
+        return {
+            finishReason,
+            segmentsCount: segments.length,
+            truncated,
+            maxSegmentsStop: !!meta.continuation_stopped_by_max_segments,
+        };
+    }, []);
 
     const isEpisodeOnePage = useMemo(() => {
         const title = String(activeEpisode?.title || '').trim().toLowerCase();
@@ -3964,6 +3983,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         // On episode change/remount, prefer parent-provided field; fallback to DB refresh.
         const initial = activeEpisode?.ai_scene_analysis_result || '';
         setLlmResultContent(initial);
+        setAnalysisRuntimeMeta(null);
         lastLoadedAnalysisRef.current = initial;
         if (!initial) {
             refreshAnalysisFromDB();
@@ -4823,6 +4843,9 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 } catch (e) {
                     // ignore meta logging errors
                 }
+                setAnalysisRuntimeMeta(extractAnalysisRuntimeMeta(result.meta));
+            } else {
+                setAnalysisRuntimeMeta(null);
             }
 
             const integrityWarnings = collectAnalysisWarnings(result);
@@ -4928,6 +4951,9 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 } catch (e) {
                     // ignore meta logging errors
                 }
+                setAnalysisRuntimeMeta(extractAnalysisRuntimeMeta(result.meta));
+            } else {
+                setAnalysisRuntimeMeta(null);
             }
 
             const integrityWarnings = collectAnalysisWarnings(result);
@@ -5224,7 +5250,15 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-0">
                         <div className="border-b lg:border-b-0 lg:border-r border-white/10">
                             <div className="px-6 py-3 flex items-center justify-between">
-                                <div className="text-sm text-white uppercase font-bold tracking-wide">{t('LLM 返回结果', 'LLM Result')}</div>
+                                <div>
+                                    <div className="text-sm text-white uppercase font-bold tracking-wide">{t('LLM 返回结果', 'LLM Result')}</div>
+                                    {analysisRuntimeMeta && (
+                                        <div className="text-[10px] text-white/60 mt-1">
+                                            {t('结束原因', 'Finish')}: {analysisRuntimeMeta.finishReason} · seg: {analysisRuntimeMeta.segmentsCount} · {t('疑似截断', 'Truncated')}: {analysisRuntimeMeta.truncated ? t('是', 'yes') : t('否', 'no')}
+                                            {analysisRuntimeMeta.maxSegmentsStop ? ` · ${t('续写达到上限', 'Continuation hit max segments')}` : ''}
+                                        </div>
+                                    )}
+                                </div>
                                 <button
                                     onClick={() => doImportText(llmResultContent, 'auto')}
                                     className="px-3 py-1.5 rounded-md text-[10px] font-bold bg-white/5 hover:bg-white/10 border border-white/10 text-white/80"
@@ -9585,23 +9619,135 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const [isBatchGenerating, setIsBatchGenerating] = useState(false);
     const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0, status: '' }); // Progress tracking
     const [activeSources, setActiveSources] = useState({ Image: 'unset', Video: 'unset' });
+    const generationStateStorageKey = useMemo(() => {
+        if (!activeEpisode?.id) return '';
+        return `aistory.shotGenerationState.${activeEpisode.id}`;
+    }, [activeEpisode?.id]);
+    const hasHydratedGenerationStateRef = useRef(false);
+    const GENERATION_STATE_TTL_MS = 1000 * 60 * 60;
+
+    const normalizeGeneratingState = useCallback((raw) => {
+        if (!raw || typeof raw !== 'object') return {};
+        const normalized = {};
+        Object.entries(raw).forEach(([shotId, value]) => {
+            if (!shotId || !value || typeof value !== 'object') return;
+            const start = !!value.start;
+            const end = !!value.end;
+            const video = !!value.video;
+            if (!start && !end && !video) return;
+            normalized[shotId] = {
+                start,
+                end,
+                video,
+                startAt: Number(value.startAt) || 0,
+                endAt: Number(value.endAt) || 0,
+                videoAt: Number(value.videoAt) || 0,
+            };
+        });
+        return normalized;
+    }, []);
+
+    const readGenerationStateStorage = useCallback(() => {
+        if (!generationStateStorageKey) return {};
+        try {
+            const raw = localStorage.getItem(generationStateStorageKey);
+            if (!raw) return {};
+            const parsed = JSON.parse(raw);
+            return normalizeGeneratingState(parsed);
+        } catch (e) {
+            console.warn('Failed to read shot generation state', e);
+            return {};
+        }
+    }, [generationStateStorageKey, normalizeGeneratingState]);
+
+    const writeGenerationStateStorage = useCallback((state) => {
+        if (!generationStateStorageKey) return;
+        try {
+            const normalized = normalizeGeneratingState(state);
+            if (Object.keys(normalized).length === 0) {
+                localStorage.removeItem(generationStateStorageKey);
+                return;
+            }
+            localStorage.setItem(generationStateStorageKey, JSON.stringify(normalized));
+        } catch (e) {
+            console.warn('Failed to write shot generation state', e);
+        }
+    }, [generationStateStorageKey, normalizeGeneratingState]);
+
+    const applyGeneratingStateChange = useCallback((state, shotId, key, value) => {
+        if (!shotId) return state;
+        const now = Date.now();
+        const prev = state[shotId] || { start: false, end: false, video: false, startAt: 0, endAt: 0, videoAt: 0 };
+        const next = {
+            ...prev,
+            [key]: value,
+            [`${key}At`]: value ? now : 0,
+        };
+        if (!next.start && !next.end && !next.video) {
+            const { [shotId]: _, ...rest } = state;
+            return rest;
+        }
+        return { ...state, [shotId]: next };
+    }, []);
+
+    const setStoredShotGeneratingState = useCallback((shotId, key, value) => {
+        const prev = readGenerationStateStorage();
+        const next = applyGeneratingStateChange(prev, String(shotId), key, value);
+        writeGenerationStateStorage(next);
+    }, [applyGeneratingStateChange, readGenerationStateStorage, writeGenerationStateStorage]);
 
     const setShotGeneratingState = useCallback((shotId, key, value) => {
         if (!shotId) return;
+        const stableShotId = String(shotId);
+        setStoredShotGeneratingState(stableShotId, key, value);
         setGeneratingStateByShot(prev => {
-            const prevState = prev[shotId] || { start: false, end: false, video: false };
-            const nextState = { ...prevState, [key]: value };
-            if (!nextState.start && !nextState.end && !nextState.video) {
-                const { [shotId]: _, ...rest } = prev;
-                return rest;
-            }
-            return { ...prev, [shotId]: nextState };
+            return applyGeneratingStateChange(prev, stableShotId, key, value);
         });
-    }, []);
+    }, [applyGeneratingStateChange, setStoredShotGeneratingState]);
+
+    useEffect(() => {
+        hasHydratedGenerationStateRef.current = false;
+        if (!generationStateStorageKey) {
+            setGeneratingStateByShot({});
+            hasHydratedGenerationStateRef.current = true;
+            return;
+        }
+        const restored = readGenerationStateStorage();
+        const now = Date.now();
+        const cleaned = {};
+        Object.entries(restored).forEach(([shotId, state]) => {
+            const next = { ...state };
+            if (next.start && next.startAt && now - next.startAt > GENERATION_STATE_TTL_MS) {
+                next.start = false;
+                next.startAt = 0;
+            }
+            if (next.end && next.endAt && now - next.endAt > GENERATION_STATE_TTL_MS) {
+                next.end = false;
+                next.endAt = 0;
+            }
+            if (next.video && next.videoAt && now - next.videoAt > GENERATION_STATE_TTL_MS) {
+                next.video = false;
+                next.videoAt = 0;
+            }
+            if (next.start || next.end || next.video) cleaned[shotId] = next;
+        });
+        setGeneratingStateByShot(cleaned);
+        writeGenerationStateStorage(cleaned);
+        hasHydratedGenerationStateRef.current = true;
+    }, [generationStateStorageKey, readGenerationStateStorage, writeGenerationStateStorage]);
+
+    useEffect(() => {
+        if (!hasHydratedGenerationStateRef.current) return;
+        writeGenerationStateStorage(generatingStateByShot);
+    }, [generatingStateByShot, writeGenerationStateStorage]);
 
     const currentGeneratingState = editingShot?.id
-        ? (generatingStateByShot[editingShot.id] || { start: false, end: false, video: false })
+        ? (generatingStateByShot[String(editingShot.id)] || { start: false, end: false, video: false, startAt: 0, endAt: 0, videoAt: 0 })
         : { start: false, end: false, video: false };
+    const hasActiveGeneration = useMemo(
+        () => Object.values(generatingStateByShot || {}).some(s => !!(s?.start || s?.end || s?.video)),
+        [generatingStateByShot]
+    );
 
     const [assetDetailModal, setAssetDetailModal] = useState({ open: false, type: 'start', keyframeIndex: -1 });
     const [detailTranslateLoading, setDetailTranslateLoading] = useState({});
@@ -9869,6 +10015,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         await onUpdateShot(editingShot.id, updates);
     };
 
+    const persistEditingShotUpdates = async (updates = {}) => {
+        if (!editingShot?.id) return;
+        setEditingShot(prev => ({ ...(prev || {}), ...updates }));
+        await onUpdateShot(editingShot.id, updates);
+    };
+
     const resolveVideoModeFromTech = (techObj = {}) => {
         if (techObj?.video_mode_unified) return techObj.video_mode_unified;
         if (techObj?.video_ref_submit_mode === 'refs_video') return 'refs_video';
@@ -10073,6 +10225,103 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     useEffect(() => {
         refreshShots();
     }, [refreshShots]);
+
+    useEffect(() => {
+        if (!hasActiveGeneration || !activeEpisode?.id) return;
+        const timer = setInterval(() => {
+            refreshShots();
+        }, 5000);
+        return () => clearInterval(timer);
+    }, [hasActiveGeneration, activeEpisode?.id, refreshShots]);
+
+    useEffect(() => {
+        if (!hasActiveGeneration || (shots || []).length === 0) return;
+        setGeneratingStateByShot((prev) => {
+            let changed = false;
+            const next = { ...prev };
+
+            const hasEndFrameUrl = (shot) => {
+                try {
+                    const tech = JSON.parse(shot?.technical_notes || '{}');
+                    return !!tech?.end_frame_url;
+                } catch (e) {
+                    return false;
+                }
+            };
+
+            Object.entries(prev || {}).forEach(([shotId, state]) => {
+                const shot = (shots || []).find((item) => String(item?.id) === String(shotId));
+                if (!shot) return;
+                let updated = { ...state };
+                if (updated.start && shot?.image_url) {
+                    updated.start = false;
+                    updated.startAt = 0;
+                }
+                if (updated.end && hasEndFrameUrl(shot)) {
+                    updated.end = false;
+                    updated.endAt = 0;
+                }
+                if (updated.video && shot?.video_url) {
+                    updated.video = false;
+                    updated.videoAt = 0;
+                }
+                if (!updated.start && !updated.end && !updated.video) {
+                    delete next[shotId];
+                    changed = true;
+                    return;
+                }
+                if (
+                    updated.start !== state.start ||
+                    updated.end !== state.end ||
+                    updated.video !== state.video ||
+                    updated.startAt !== state.startAt ||
+                    updated.endAt !== state.endAt ||
+                    updated.videoAt !== state.videoAt
+                ) {
+                    next[shotId] = updated;
+                    changed = true;
+                }
+            });
+
+            if (!changed) return prev;
+            writeGenerationStateStorage(next);
+            return next;
+        });
+    }, [shots, hasActiveGeneration, writeGenerationStateStorage]);
+
+    useEffect(() => {
+        if (!editingShot?.id || (shots || []).length === 0) return;
+        const latest = (shots || []).find((item) => String(item?.id) === String(editingShot.id));
+        if (!latest) return;
+
+        setEditingShot((prev) => {
+            if (!prev || String(prev.id) !== String(latest.id)) return prev;
+
+            let prevEndFrameUrl = '';
+            let latestEndFrameUrl = '';
+            try {
+                prevEndFrameUrl = JSON.parse(prev.technical_notes || '{}')?.end_frame_url || '';
+            } catch (e) {}
+            try {
+                latestEndFrameUrl = JSON.parse(latest.technical_notes || '{}')?.end_frame_url || '';
+            } catch (e) {}
+
+            const mediaChanged =
+                String(prev.image_url || '') !== String(latest.image_url || '') ||
+                String(prev.video_url || '') !== String(latest.video_url || '') ||
+                String(prevEndFrameUrl || '') !== String(latestEndFrameUrl || '') ||
+                String(prev.technical_notes || '') !== String(latest.technical_notes || '');
+
+            if (!mediaChanged) return prev;
+
+            return {
+                ...prev,
+                image_url: latest.image_url || '',
+                video_url: latest.video_url || '',
+                technical_notes: latest.technical_notes || prev.technical_notes || '{}',
+            };
+        });
+    }, [shots, editingShot?.id, setEditingShot]);
 
 
     const handleDeleteAllShots = async () => {
@@ -11660,6 +11909,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     <h2 className="text-2xl font-bold flex items-center gap-2">
                         {t('镜头管理', 'Shot Manager')}
                         <span className="text-sm font-normal text-muted-foreground ml-2">({shots.length})</span>
+                        {hasActiveGeneration && (
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-primary/20 text-primary border border-primary/30 flex items-center gap-1">
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                                {t('生成中', 'Generating')}
+                            </span>
+                        )}
                     </h2>
                     <div className="relative">
                          <select 
@@ -11746,7 +12001,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
              <div className="flex-1 overflow-auto custom-scrollbar">
                  {selectedSceneId ? (
                      <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-6 pb-20">
-                        {shots.map((shot, idx) => (
+                        {shots.map((shot, idx) => {
+                            const shotState = generatingStateByShot[String(shot.id)] || { start: false, end: false, video: false };
+                            const isGeneratingThisShot = !!(shotState.start || shotState.end || shotState.video);
+                            return (
                             <div 
                                 key={shot.id} 
                                 className="bg-card/80 backdrop-blur-sm rounded-xl border border-white/10 overflow-hidden group hover:border-primary/50 transition-all cursor-pointer relative"
@@ -11785,6 +12043,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                     <div className="absolute bottom-2 right-2 bg-primary text-black px-2 py-0.5 rounded text-[10px] font-bold pointer-events-none">
                                         {shot.duration || '0s'}
                                     </div>
+                                    {isGeneratingThisShot && (
+                                        <div className="absolute bottom-2 left-2 bg-primary/20 text-primary border border-primary/30 px-2 py-0.5 rounded text-[10px] font-bold pointer-events-none flex items-center gap-1">
+                                            <Loader2 className="w-3 h-3 animate-spin" />
+                                            {t('生成中', 'Generating')}
+                                        </div>
+                                    )}
                                 </div>
                                 
                                 {/* Info - Simplified */}
@@ -11810,7 +12074,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                     )}
                                 </div>
                             </div>
-                        ))}
+                            );
+                        })}
                         {shots.length === 0 && (
                             <div className="col-span-full h-64 flex flex-col items-center justify-center text-muted-foreground border-2 border-dashed border-white/10 rounded-xl">
                                 <Film className="w-12 h-12 mb-4 opacity-20" />
@@ -12012,7 +12277,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                         <ReferenceManager 
                                             shot={editingShot} 
                                             entities={entities} 
-                                            onUpdate={(updates) => setEditingShot({...editingShot, ...updates})} 
+                                            onUpdate={(updates) => { persistEditingShotUpdates(updates); }} 
                                             title={t('参考图（起始帧）', 'Refs (Start)')}
                                             promptText={editingShot.start_frame || ''}
                                             uiLang={uiLang}
@@ -12077,10 +12342,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                     {t('详情', 'Detail')}
                                                 </button>
                                                 <button 
-                                                    onClick={() => openMediaPicker((url) => {
+                                                    onClick={() => openMediaPicker(async (url) => {
                                                         const tech = JSON.parse(editingShot.technical_notes || '{}');
                                                         tech.end_frame_url = url;
-                                                        setEditingShot({...editingShot, technical_notes: JSON.stringify(tech)});
+                                                        const updates = { technical_notes: JSON.stringify(tech) };
+                                                        await persistEditingShotUpdates(updates);
                                                     }, { shotId: editingShot.id })}
                                                     className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-0.5 rounded flex items-center gap-1"
                                                 >
@@ -12197,7 +12463,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                         <ReferenceManager 
                                             shot={editingShot} 
                                             entities={entities} 
-                                            onUpdate={(updates) => setEditingShot({...editingShot, ...updates})} 
+                                            onUpdate={(updates) => { persistEditingShotUpdates(updates); }} 
                                             title={t('参考图（结束帧）', 'Refs (End)')}
                                             promptText={editingShot.end_frame || ''}
                                             uiLang={uiLang}
@@ -12325,7 +12591,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                         <ReferenceManager 
                                             shot={editingShot} 
                                             entities={entities} 
-                                            onUpdate={(updates) => setEditingShot({...editingShot, ...updates})} 
+                                            onUpdate={(updates) => { persistEditingShotUpdates(updates); }} 
                                             title={t('参考图（视频）', 'Refs (Video)')}
                                             promptText={editingShot.prompt || editingShot.video_content || ''}
                                             uiLang={uiLang}
@@ -12724,7 +12990,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                     await onUpdateShot(editingShot.id, newData);
                                                                     setEditingShot(prev => ({...prev, ...newData}));
                                                                 }} projectId={projectId} shotId={editingShot.id} assetType="start_frame" featureInjector={injectEntityFeatures} onPickMedia={openMediaPicker} />
-                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => setEditingShot({...editingShot, ...updates})} title={t('参考图（起始帧）', 'Refs (Start)')} promptText={editingShot.start_frame || ''} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="ref_image_urls" strictPromptOnly={true} />
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（起始帧）', 'Refs (Start)')} promptText={editingShot.start_frame || ''} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="ref_image_urls" strictPromptOnly={true} />
                                                             </div>
                                                         </div>
                                                     );
@@ -12799,7 +13065,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                     await onUpdateShot(editingShot.id, newData);
                                                                     setEditingShot(prev => ({...prev, ...newData}));
                                                                 }} projectId={projectId} shotId={editingShot.id} assetType="end_frame" featureInjector={injectEntityFeatures} onPickMedia={openMediaPicker} />
-                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => setEditingShot({...editingShot, ...updates})} title={t('参考图（结束帧）', 'Refs (End)')} promptText={editingShot.end_frame || ''} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="end_ref_image_urls" strictPromptOnly={true} />
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（结束帧）', 'Refs (End)')} promptText={editingShot.end_frame || ''} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="end_ref_image_urls" strictPromptOnly={true} />
                                                             </div>
                                                         </div>
                                                     );
@@ -12888,7 +13154,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                     placeholder={t('填写视频中文对照提示词...', 'Add Chinese counterpart prompt for video...')}
                                                                 />
                                                                 <RefineControl originalText={editingShot.prompt || editingShot.video_content || ''} onUpdate={(v) => setEditingShot({...editingShot, prompt: v})} type="video" />
-                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => setEditingShot({...editingShot, ...updates})} title={t('参考图（视频）', 'Refs (Video)')} promptText={editingShot.prompt || editingShot.video_content || ''} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="video_ref_image_urls" strictPromptOnly={true} />
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（视频）', 'Refs (Video)')} promptText={editingShot.prompt || editingShot.video_content || ''} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="video_ref_image_urls" strictPromptOnly={true} />
                                                             </div>
                                                         </div>
                                                     );

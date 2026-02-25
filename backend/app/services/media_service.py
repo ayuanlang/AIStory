@@ -34,6 +34,17 @@ class MediaGenerationService:
 # ...
     DOUBAO_MIN_IMAGE_PIXELS = 3_686_400
 
+    def _vendor_label(self, provider: Any) -> str:
+        raw = str(provider or "").strip()
+        return raw or "unknown"
+
+    def _vendor_failed_message(self, provider: Any, reason: Any) -> str:
+        vendor = self._vendor_label(provider)
+        detail = str(reason or "unknown error").strip()
+        if "供应商调用失败" in detail:
+            return detail
+        return f"{vendor}供应商调用失败: {detail}"
+
     def _safe_json_dict(self, value: Any) -> Dict[str, Any]:
         if value is None:
             return {}
@@ -330,6 +341,8 @@ class MediaGenerationService:
         # Download 
         if result and "url" in result and result["url"]:
              result["url"] = self._download_and_save(result["url"], filename_base=filename_base, user_id=user_id)
+           if result and result.get("error"):
+               result["error"] = self._vendor_failed_message(provider, result.get("error"))
         return result
 
     async def generate_video(self, prompt: str, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, last_frame_url: Optional[str] = None, duration: int = 5, aspect_ratio: Optional[str] = None, keyframes: Optional[List[str]] = None, user_id: int = 1, user_credits: int = 0, filename_base: Optional[str] = None):
@@ -394,6 +407,8 @@ class MediaGenerationService:
         # Download 
         if result and "url" in result and result["url"]:
                result["url"] = self._download_and_save(result["url"], filename_base=filename_base, user_id=user_id)
+           if result and result.get("error"):
+               result["error"] = self._vendor_failed_message(provider, result.get("error"))
         
         return result
     
