@@ -20,6 +20,7 @@ npm-debug.log
 *.webm
 backend/uploads/
 backend/data/uploads/
+backend/logs/
 frontend/dist/
 
 # Editor
