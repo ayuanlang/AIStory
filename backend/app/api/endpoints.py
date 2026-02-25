@@ -6238,6 +6238,10 @@ async def upload_asset(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    max_upload_bytes = max(int(settings.MAX_ASSET_UPLOAD_MB or 100), 1) * 1024 * 1024
+    allowed_image_ext = {'.jpg', '.jpeg', '.png', '.gif', '.webp'}
+    allowed_video_ext = {'.mp4', '.mov', '.avi', '.webm'}
+
     # Ensure upload directory
     upload_dir = settings.UPLOAD_DIR
     
@@ -6247,18 +6251,49 @@ async def upload_asset(
         os.makedirs(user_upload_dir)
     
     # Generate unique filename
-    ext = os.path.splitext(file.filename)[1]
+    ext = (os.path.splitext(file.filename or "")[1] or "").lower()
+    if ext not in (allowed_image_ext | allowed_video_ext):
+        raise HTTPException(status_code=400, detail="Unsupported file extension")
+
+    content_type = (file.content_type or "").lower()
+    if ext in allowed_video_ext and not content_type.startswith('video/'):
+        raise HTTPException(status_code=400, detail="File content type does not match video extension")
+    if ext in allowed_image_ext and not content_type.startswith('image/'):
+        raise HTTPException(status_code=400, detail="File content type does not match image extension")
+
     filename = f"{uuid.uuid4()}{ext}"
     file_path = os.path.join(user_upload_dir, filename)
 
     # Auto-detect type
-    if file.content_type.startswith('video/') or ext.lower() in ['.mp4', '.mov', '.avi', '.webm']:
+    if ext in allowed_video_ext:
         type = 'video'
-    elif file.content_type.startswith('image/') or ext.lower() in ['.jpg', '.jpeg', '.png', '.gif', '.webp']:
+    elif ext in allowed_image_ext:
         type = 'image'
-    
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+
+    bytes_written = 0
+    try:
+        with open(file_path, "wb") as buffer:
+            while True:
+                chunk = file.file.read(1024 * 1024)
+                if not chunk:
+                    break
+                bytes_written += len(chunk)
+                if bytes_written > max_upload_bytes:
+                    raise HTTPException(status_code=413, detail=f"File too large (max {settings.MAX_ASSET_UPLOAD_MB}MB)")
+                buffer.write(chunk)
+    except HTTPException:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        raise
+    except Exception:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        raise
+
+    if bytes_written <= 0:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        raise HTTPException(status_code=400, detail="Empty file")
         
     # Extract Metadata
     meta_info = {'source': 'file_upload'}
@@ -7372,6 +7407,8 @@ async def update_my_avatar(
     if ext not in {".jpg", ".jpeg", ".png", ".webp"}:
         raise HTTPException(status_code=400, detail="Avatar must be .jpg, .jpeg, .png or .webp")
 
+    max_avatar_bytes = max(int(settings.MAX_AVATAR_UPLOAD_MB or 5), 1) * 1024 * 1024
+
     upload_root = settings.UPLOAD_DIR
     avatar_dir = os.path.join(upload_root, str(current_user.id), "avatars")
     os.makedirs(avatar_dir, exist_ok=True)
@@ -7382,6 +7419,8 @@ async def update_my_avatar(
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="Empty avatar file")
+    if len(content) > max_avatar_bytes:
+        raise HTTPException(status_code=413, detail=f"Avatar file too large (max {settings.MAX_AVATAR_UPLOAD_MB}MB)")
 
     with open(save_path, "wb") as f:
         f.write(content)

@@ -39,30 +39,33 @@ app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads"
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     logger.error(f"Validation Error: {exc.errors()}")
-    logger.error(f"Body: {await request.body()}")
+    try:
+        raw_body = await request.body()
+        logger.error(f"Body (truncated): {raw_body[:2048]}")
+    except Exception:
+        logger.error("Body: <unavailable>")
     return JSONResponse(
         status_code=422,
-        content={"detail": exc.errors(), "body": str(exc.body)},
+        content={"detail": exc.errors()},
     )
 
 # CORS configuration
-origins = [
-    "http://localhost:3000",
-    "http://localhost:5173", # Vite default
-]
-
-# Add production domains from env if present
+origins = [item.strip() for item in (settings.CORS_ORIGINS or "").split(",") if item.strip()]
 if os.getenv("RENDER_EXTERNAL_URL"):
-    origins.append(os.getenv("RENDER_EXTERNAL_URL"))
+    render_origin = os.getenv("RENDER_EXTERNAL_URL").strip()
+    if render_origin and render_origin not in origins:
+        origins.append(render_origin)
+if not origins:
+    origins = ["http://localhost:3000", "http://localhost:5173"]
 
-# Allow all origins for simplicity in this demo/blueprint setup
-# In a strict production environment, you should list specific domains
-origins = ["*"]
+allow_credentials = True
+if "*" in origins:
+    allow_credentials = False
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_credentials=True,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )

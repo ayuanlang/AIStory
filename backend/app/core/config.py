@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 525600  # 1 year
     PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = 30
     UPLOAD_DIR: str = "uploads"
+    CORS_ORIGINS: str = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173")
+    MAX_ASSET_UPLOAD_MB: int = int(os.getenv("MAX_ASSET_UPLOAD_MB", "100"))
+    MAX_AVATAR_UPLOAD_MB: int = int(os.getenv("MAX_AVATAR_UPLOAD_MB", "5"))
 
     # Email (Password Reset)
     SMTP_HOST: str = os.getenv("SMTP_HOST", "")
