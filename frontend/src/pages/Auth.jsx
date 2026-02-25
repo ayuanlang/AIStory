@@ -100,11 +100,12 @@ const Auth = () => {
                     <div className="hidden border-r md:flex md:flex-col relative overflow-hidden">
                         {/* Background Image */}
                         <div 
-                            className="absolute inset-0 z-0 bg-cover bg-center"
-                            style={{ backgroundImage: "url('https://images.unsplash.com/photo-1620641788421-7a1c342ea42e?q=80&w=2564&auto=format&fit=crop')" }}
+                            className="absolute inset-0 z-0 bg-cover bg-center transition-transform duration-10000 hover:scale-105"
+                            style={{ backgroundImage: "url('https://images.unsplash.com/photo-1534447677768-be436bb09401?q=80&w=2694&auto=format&fit=crop')" }}
                         />
-                        {/* Overlay */}
-                        <div className="absolute inset-0 z-10 bg-gradient-to-t from-background/95 via-background/60 to-background/10 backdrop-blur-[1px]" />
+                        {/* Vignette & Gradient Overlay for Movie Poster Feel */}
+                        <div className="absolute inset-0 z-10 bg-[radial-gradient(circle_at_center,transparent_0%,rgba(0,0,0,0.8)_100%)]" />
+                        <div className="absolute inset-0 z-10 bg-gradient-to-t from-background/95 via-background/40 to-transparent" />
                         
                         {/* Content */}
                         <div className="relative z-20 p-10 flex flex-col h-full justify-between">
