@@ -35,8 +35,12 @@ const Auth = () => {
                 // Use the JSON login endpoint
                 const response = await apiLogin(formData.username, formData.password);
                 localStorage.setItem('token', response.access_token);
-                await refreshSettings();
-                navigate('/projects');
+                try {
+                    await refreshSettings();
+                } catch (refreshErr) {
+                    console.warn('Refresh settings failed after login, continuing to projects.', refreshErr);
+                }
+                navigate('/projects', { replace: true });
             } else {
                 const response = await registerUser(formData);
                 setIsLogin(true); // Switch to login after registration
