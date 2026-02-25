@@ -6591,8 +6591,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
     const [selectedSceneKeys, setSelectedSceneKeys] = useState([]);
     const [entities, setEntities] = useState([]);
     const [isSuperuser, setIsSuperuser] = useState(false);
-    const [sceneHierarchyFilter, setSceneHierarchyFilter] = useState('');
-    const [sceneKeywordFilter, setSceneKeywordFilter] = useState('');
+    const [sceneSelectionFilter, setSceneSelectionFilter] = useState('all');
     const [editingScene, setEditingScene] = useState(null);
     const [shotPromptModal, setShotPromptModal] = useState({ open: false, sceneId: null, data: null, loading: false });
     const [aiShotsFlowStatus, setAiShotsFlowStatus] = useState({ phase: 'idle', message: '', sceneId: null });
@@ -6635,8 +6634,8 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
             if (!raw) return;
             const parsed = JSON.parse(raw);
             if (parsed && typeof parsed === 'object') {
-                setSceneHierarchyFilter(String(parsed.sceneHierarchyFilter || ''));
-                setSceneKeywordFilter(String(parsed.sceneKeywordFilter || ''));
+                const restored = String(parsed.sceneSelectionFilter || 'all');
+                setSceneSelectionFilter(restored || 'all');
             }
         } catch (e) {
             console.warn('Failed to restore scene filters', e);
@@ -6647,13 +6646,12 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         if (!sceneFilterStorageKey) return;
         try {
             localStorage.setItem(sceneFilterStorageKey, JSON.stringify({
-                sceneHierarchyFilter,
-                sceneKeywordFilter,
+                sceneSelectionFilter,
             }));
         } catch (e) {
             console.warn('Failed to persist scene filters', e);
         }
-    }, [sceneFilterStorageKey, sceneHierarchyFilter, sceneKeywordFilter]);
+    }, [sceneFilterStorageKey, sceneSelectionFilter]);
 
     const getSceneSelectionKey = (scene) => {
         if (scene?.id) return `id:${scene.id}`;
@@ -6661,31 +6659,17 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
     };
 
     const filteredScenes = useMemo(() => {
-        const hierarchy = String(sceneHierarchyFilter || '').trim().toLowerCase();
-        const keyword = String(sceneKeywordFilter || '').trim().toLowerCase();
-        const episodeKeywordLabel = buildEpisodeDisplayLabel({
-            episodeNumber: activeEpisode?.episode_number,
-            title: activeEpisode?.title,
-        }).toLowerCase();
+        if (sceneSelectionFilter === 'all') return scenes || [];
+        return (scenes || []).filter((scene) => getSceneSelectionKey(scene) === sceneSelectionFilter);
+    }, [scenes, sceneSelectionFilter]);
 
-        return (scenes || []).filter((scene) => {
-            const sceneCode = String(scene?.scene_id || scene?.scene_no || '').trim().toLowerCase();
-            const hierarchyPass = !hierarchy || sceneCode.includes(hierarchy);
-            if (!hierarchyPass) return false;
-
-            if (!keyword) return true;
-            const text = [
-                scene?.scene_name,
-                scene?.environment_name,
-                scene?.linked_characters,
-                scene?.key_props,
-                scene?.core_scene_info,
-                activeEpisode?.title,
-                episodeKeywordLabel,
-            ].map(v => String(v || '').toLowerCase()).join(' ');
-            return text.includes(keyword);
-        });
-    }, [scenes, sceneHierarchyFilter, sceneKeywordFilter, activeEpisode?.title, activeEpisode?.episode_number]);
+    useEffect(() => {
+        if (sceneSelectionFilter === 'all') return;
+        const exists = (scenes || []).some((scene) => getSceneSelectionKey(scene) === sceneSelectionFilter);
+        if (!exists) {
+            setSceneSelectionFilter('all');
+        }
+    }, [scenes, sceneSelectionFilter]);
 
     useEffect(() => {
         const validKeys = new Set((scenes || []).map(getSceneSelectionKey));
@@ -7512,27 +7496,24 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                 </div>
             )}
 
-            <div className="mb-4 grid grid-cols-1 md:grid-cols-3 gap-2 shrink-0">
-                <input
-                    type="text"
-                    value={sceneHierarchyFilter}
-                    onChange={(e) => setSceneHierarchyFilter(e.target.value)}
-                    placeholder={t('筛选场景ID / 场次号（例如 EP01_SC03）', 'Filter Scene ID / Scene No (e.g. EP01_SC03)')}
-                    className="bg-black/40 border border-white/20 rounded px-3 py-2 text-sm text-white"
-                />
-                <input
-                    type="text"
-                    value={sceneKeywordFilter}
-                    onChange={(e) => setSceneKeywordFilter(e.target.value)}
-                    placeholder={t('按名称 / 环境 / 角色 / 道具 / 分集筛选', 'Filter by name / env / cast / props / episode')}
-                    className="bg-black/40 border border-white/20 rounded px-3 py-2 text-sm text-white"
-                />
-                <button
-                    onClick={() => { setSceneHierarchyFilter(''); setSceneKeywordFilter(''); }}
-                    className="px-3 py-2 bg-white/10 hover:bg-white/20 rounded text-xs text-white border border-white/10"
+            <div className="mb-4 shrink-0">
+                <select
+                    value={sceneSelectionFilter}
+                    onChange={(e) => setSceneSelectionFilter(e.target.value)}
+                    className="w-full md:w-[420px] bg-black/40 border border-white/20 rounded px-3 py-2 text-sm text-white"
                 >
-                    {t('清除场景筛选', 'Clear Scene Filters')}
-                </button>
+                    <option value="all">{t('全部场景', 'All Scenes')}</option>
+                    {(scenes || []).map((scene) => {
+                        const key = getSceneSelectionKey(scene);
+                        const code = scene?.scene_no || scene?.scene_id || t('未命名场景', 'Untitled Scene');
+                        const name = scene?.scene_name || t('未命名', 'Untitled');
+                        return (
+                            <option key={key} value={key}>
+                                {code} - {name}
+                            </option>
+                        );
+                    })}
+                </select>
             </div>
 
             <div className="mb-4 flex flex-wrap items-center gap-2 shrink-0">
@@ -7592,7 +7573,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                     <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
                         <Clapperboard className="w-12 h-12 mb-4 opacity-20" />
                         <p>{scenes.length === 0 ? t('未找到场景。', 'No scenes found.') : t('没有符合当前筛选的场景。', 'No scenes match current filters.')}</p>
-                        <p className="text-xs mt-2 opacity-50">{scenes.length === 0 ? t('可在导入中粘贴 Markdown 表格，或先生成内容。', 'Paste a Markdown table in Import or generate content.') : t('请调整场景ID/关键词筛选后重试。', 'Adjust Scene ID/keyword filters and try again.')}</p>
+                        <p className="text-xs mt-2 opacity-50">{scenes.length === 0 ? t('可在导入中粘贴 Markdown 表格，或先生成内容。', 'Paste a Markdown table in Import or generate content.') : t('请通过下拉列表切换场景筛选。', 'Switch scene filter from the dropdown list.')}</p>
                     </div>
                     ) : (
                     <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-6">
