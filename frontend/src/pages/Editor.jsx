@@ -9830,20 +9830,22 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
     const onUpdateShot = async (shotId, changes) => {
         try {
-            // Fix 422 Error: Backend requires 'shot_number' and 'description'
-            // We must merge with existing shot data to ensure these fields exist
             const currentShot = shots.find(s => s.id === shotId);
-            if (!currentShot) return;
+            const editingBase = (editingShot && editingShot.id === shotId) ? editingShot : null;
 
+            // Important: avoid sending full stale shot object during async generation flows.
+            // Only send required fields + explicit changes to prevent overwriting already-generated media URLs.
             const payload = {
-                ...currentShot,
-                ...changes
+                shot_number: changes?.shot_number
+                    ?? currentShot?.shot_number
+                    ?? editingBase?.shot_number
+                    ?? "1",
+                description: changes?.description
+                    ?? currentShot?.description
+                    ?? editingBase?.description
+                    ?? "",
+                ...changes,
             };
-            
-            // Explicitly ensure required keys are present if they were somehow missing in object
-            // (though spread of currentShot should handle it)
-            if (!payload.shot_number) payload.shot_number = "1"; 
-            if (!payload.description) payload.description = "";
 
             await updateShot(shotId, payload);
             setShots(prev => prev.map(s => s.id === shotId ? { ...s, ...changes } : s));
