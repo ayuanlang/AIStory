@@ -839,42 +839,259 @@ class TranslateRequest(BaseModel):
     to_lang: str = 'zh'
 
 @router.post("/tools/translate")
-def translate_text(
+async def translate_text(
     req: TranslateRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # Try specific provider first
-    setting = get_effective_api_setting(db, current_user, "baidu_translate")
-    
-    # Fallback to generic baidu
-    if not setting:
-         setting = get_effective_api_setting(db, current_user, "baidu")
+    request_id = uuid.uuid4().hex[:12]
+    started_at = datetime.utcnow()
+    text = str(req.q or "")
+    from_lang = str(req.from_lang or "en").strip() or "en"
+    to_lang = str(req.to_lang or "zh").strip() or "zh"
 
-    if not setting or not setting.api_key:
-        raise HTTPException(status_code=400, detail="Baidu Translation settings not configured. Please add 'baidu_translate' provider with Access Token in API Key field.")
+    lang_aliases = {
+        "zh-cn": "zh",
+        "zh_cn": "zh",
+        "zh-hans": "zh",
+        "zh-hant": "cht",
+        "zh-tw": "cht",
+        "zh_tw": "cht",
+        "cn": "zh",
+        "chs": "zh",
+        "cht": "cht",
+        "en-us": "en",
+        "en_us": "en",
+        "english": "en",
+        "chinese": "zh",
+    }
+    from_lang = lang_aliases.get(from_lang.lower(), from_lang.lower())
+    to_lang = lang_aliases.get(to_lang.lower(), to_lang.lower())
 
-    token = setting.api_key
-    url = f'https://aip.baidubce.com/rpc/2.0/mt/texttrans/v1?access_token={token}'
-    
-    payload = {'q': req.q, 'from': req.from_lang, 'to': req.to_lang}
-    headers = {'Content-Type': 'application/json'}
+    llm_config = agent_service.get_active_llm_config(current_user.id, category="LLM")
+    if not llm_config or not llm_config.get("api_key"):
+        raise HTTPException(status_code=400, detail="Active LLM Settings not found. Please configure and activate an LLM provider.")
+
+    provider = llm_config.get("provider") or "llm"
+    model = llm_config.get("model") or "unknown"
+
+    try:
+        log_action(
+            db,
+            user_id=current_user.id,
+            user_name=current_user.username,
+            action="TRANSLATE_START",
+            details=f"request_id={request_id}; from={from_lang}; to={to_lang}; chars={len(text)}; provider={provider}; model={model}"
+        )
+    except Exception as e:
+        logger.warning(f"[translate:{request_id}] failed to write START system log: {e}")
+
+    logger.info(
+        f"[translate:{request_id}] start user_id={current_user.id} from={from_lang} to={to_lang} chars={len(text)} provider={provider} model={model}"
+    )
+
+    if from_lang == to_lang:
+        logger.info(f"[translate:{request_id}] skip same language from={from_lang} to={to_lang}")
+        return {"translated_text": text, "request_id": request_id}
+
+    reservation_tx = None
+    try:
+        if billing_service.is_token_pricing(db, "llm_chat", provider, model):
+            est = billing_service.estimate_input_output_tokens_from_messages(
+                [{"role": "user", "content": text}],
+                output_ratio=1.0
+            )
+            reserve_details = {
+                "item": "translate",
+                "request_id": request_id,
+                "from_lang": from_lang,
+                "to_lang": to_lang,
+                "chars": len(text),
+                "estimation_method": "prompt_tokens_ratio",
+                "estimated_output_ratio": 1.0,
+                "input_tokens": est.get("input_tokens", 0),
+                "output_tokens": est.get("output_tokens", 0),
+                "total_tokens": est.get("total_tokens", 0),
+            }
+            reservation_tx = billing_service.reserve_credits(db, current_user.id, "llm_chat", provider, model, reserve_details)
+        else:
+            billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[translate:{request_id}] pre-billing failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Translation billing precheck failed. request_id={request_id}")
+
+    lang_name = {
+        "zh": "Simplified Chinese",
+        "cht": "Traditional Chinese",
+        "en": "English",
+        "ja": "Japanese",
+        "ko": "Korean",
+        "fr": "French",
+        "de": "German",
+        "es": "Spanish",
+        "ru": "Russian",
+        "pt": "Portuguese",
+    }
+    from_lang_name = lang_name.get(from_lang, from_lang)
+    to_lang_name = lang_name.get(to_lang, to_lang)
+    system_prompt = (
+        "You are a professional translation engine. "
+        "Translate the user's text accurately while preserving original meaning, tone, named entities, and formatting. "
+        "Do not explain. Return ONLY the translated text."
+    )
+    user_prompt = (
+        f"Source Language: {from_lang_name} ({from_lang})\n"
+        f"Target Language: {to_lang_name} ({to_lang})\n\n"
+        "Text to translate:\n"
+        f"{text}"
+    )
     
     try:
-        r = requests.post(url, json=payload, headers=headers)
-        result = r.json()
-        
-        if "error_code" in result:
-             raise HTTPException(status_code=400, detail=f"Baidu API Error: {result.get('error_msg')}")
-        
-        if "result" in result and "trans_result" in result["result"]:
-             dst = "\n".join([item["dst"] for item in result["result"]["trans_result"]])
-             return {"translated_text": dst}
-             
-        return result
-             
+        llm_resp = await llm_service.generate_content(user_prompt, system_prompt, llm_config)
+        dst = llm_service.sanitize_text_output(str(llm_resp.get("content") or "").strip())
+        usage = llm_resp.get("usage") or {}
+
+        if dst.lower().startswith("error:"):
+            raise HTTPException(status_code=502, detail=f"LLM translate failed: {dst[:300]} (request_id={request_id})")
+
+        if not dst:
+            raise HTTPException(status_code=502, detail=f"Translation returned empty result (request_id={request_id})")
+
+        if not usage:
+            usage = billing_service.estimate_input_output_tokens_from_messages(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                    {"role": "assistant", "content": dst},
+                ],
+                output_ratio=1.0,
+            )
+
+        prompt_tokens = int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0)
+        completion_tokens = int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0)
+        total_tokens = int(usage.get("total_tokens", prompt_tokens + completion_tokens) or 0)
+
+        if reservation_tx:
+            actual_details = {
+                "item": "translate",
+                "request_id": request_id,
+                "from_lang": from_lang,
+                "to_lang": to_lang,
+                "chars": len(text),
+                "translated_chars": len(dst),
+                "input_tokens": prompt_tokens,
+                "output_tokens": completion_tokens,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+            }
+            billing_service.settle_reservation(db, reservation_tx.id, actual_details)
+        else:
+            billing_service.deduct_credits(
+                db,
+                current_user.id,
+                "llm_chat",
+                provider,
+                model,
+                {
+                    "item": "translate",
+                    "request_id": request_id,
+                    "from_lang": from_lang,
+                    "to_lang": to_lang,
+                    "chars": len(text),
+                    "translated_chars": len(dst),
+                    "input_tokens": prompt_tokens,
+                    "output_tokens": completion_tokens,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": total_tokens,
+                }
+            )
+
+        elapsed_ms = int((datetime.utcnow() - started_at).total_seconds() * 1000)
+        logger.info(
+            f"[translate:{request_id}] success user_id={current_user.id} from={from_lang} to={to_lang} chars={len(text)} translated_chars={len(dst)} elapsed_ms={elapsed_ms}"
+        )
+        try:
+            log_action(
+                db,
+                user_id=current_user.id,
+                user_name=current_user.username,
+                action="TRANSLATE_SUCCESS",
+                details=f"request_id={request_id}; from={from_lang}; to={to_lang}; chars={len(text)}; translated_chars={len(dst)}; elapsed_ms={elapsed_ms}"
+            )
+        except Exception as e:
+            logger.warning(f"[translate:{request_id}] failed to write SUCCESS system log: {e}")
+
+        return {"translated_text": dst, "request_id": request_id}
+    except HTTPException as e:
+        if reservation_tx:
+            try:
+                billing_service.cancel_reservation(db, reservation_tx.id, str(e.detail))
+            except Exception:
+                pass
+        billing_service.log_failed_transaction(
+            db,
+            current_user.id,
+            "llm_chat",
+            provider,
+            model,
+            str(e.detail),
+            {
+                "item": "translate",
+                "request_id": request_id,
+                "from_lang": from_lang,
+                "to_lang": to_lang,
+                "chars": len(text),
+            }
+        )
+        logger.warning(f"[translate:{request_id}] HTTPException: {e.detail}")
+        try:
+            log_action(
+                db,
+                user_id=current_user.id,
+                user_name=current_user.username,
+                action="TRANSLATE_FAILED",
+                details=f"request_id={request_id}; error={str(e.detail)[:300]}"
+            )
+        except Exception as le:
+            logger.warning(f"[translate:{request_id}] failed to write FAILED system log: {le}")
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        if reservation_tx:
+            try:
+                billing_service.cancel_reservation(db, reservation_tx.id, str(e))
+            except Exception:
+                pass
+        billing_service.log_failed_transaction(
+            db,
+            current_user.id,
+            "llm_chat",
+            provider,
+            model,
+            str(e),
+            {
+                "item": "translate",
+                "request_id": request_id,
+                "from_lang": from_lang,
+                "to_lang": to_lang,
+                "chars": len(text),
+            }
+        )
+        logger.error(f"[translate:{request_id}] failed: {e}", exc_info=True)
+        try:
+            log_action(
+                db,
+                user_id=current_user.id,
+                user_name=current_user.username,
+                action="TRANSLATE_FAILED",
+                details=f"request_id={request_id}; error={str(e)[:300]}"
+            )
+        except Exception as le:
+            logger.warning(f"[translate:{request_id}] failed to write FAILED system log: {le}")
+        raise HTTPException(status_code=500, detail=f"Translation failed. request_id={request_id}; reason={str(e)}")
 
 class RefinePromptRequest(BaseModel):
     original_prompt: str

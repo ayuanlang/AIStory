@@ -18,7 +18,7 @@
 适用于所有场景的硬性规范，确保叙事连贯和 AI 生成的可行性。
 
 ### 1. 基本约束
-- **实体引用**：严格使用输入实体，名称必须用方括号 `{@Subject Name}` 包裹（与 `Linked Characters` 和 `Environment Anchor` 的名称完全一致，要带上（）里的内容，不能插入任何字符及切换全半角等），严禁创造新主体（如有未定义角色请用泛指如 `[Unidentified Man]`）。**每个 Shot 的 Start Frame / Video Content / End Frame 必须显式包含 `[Environment Anchor]`**。
+- **实体引用**：严格使用输入实体，名称必须用方括号 `[@Subject Name]` 包裹（与 `Linked Characters` 和 `Environment Anchor` 的名称完全一致，要带上（）里的内容，不能插入任何字符及切换全半角等），严禁创造新主体（如有未定义角色请用泛指如 `[Unidentified Man]`）。**每个 Shot 的 Start Frame / Video Content / End Frame 必须显式包含 `[Environment Anchor]`**。
 - **实体名称冻结 (Entity Name Freeze, 强制)**：本阶段只允许“引用”上游已提供实体名（来自 Scene Analysis / 输入字段）。禁止任何名称改写或归一化：不得改变大小写、下划线/连字符/空格、括号、全半角、拼写与分隔符。
 - **角色/道具同权规则 (Character/Prop Parity, 强制)**：角色与道具与环境执行完全相同的名称继承规则；不得使用别名、同义词、翻译名或简写替代上游规范名。
 - **禁止新造实体 (No New Entity Creation, 强制)**：Shot 生成阶段绝不能新增角色/环境/道具实体名；`Associated Entities` 仅能由 Start/Video/End 中已出现且属于上游实体清单的名称组成。

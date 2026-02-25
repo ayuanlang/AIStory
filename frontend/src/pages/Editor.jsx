@@ -108,6 +108,7 @@ import {
     createAsset,
     uploadAsset,
     getSettings,
+    translateText,
     refinePrompt,
     analyzeScene,
     fetchPrompt,
@@ -5900,12 +5901,18 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
     } else {
         // Standard entity/manual ref logic
         const isManualMode = tech[storageKey] && Array.isArray(tech[storageKey]);
+           const userEditedKey = `${storageKey}_user_edited`;
+           const isUserEdited = Boolean(tech[userEditedKey]);
+           const isLockedManual = isManualMode && isUserEdited;
         
         // User Request: Refs (Video) should NOT do entity identification (only start/end/keyframes).
         const shouldDetectEntities = storageKey !== 'video_ref_image_urls';
         const autoMatches = shouldDetectEntities ? getEntityMatches().map(e => e.image_url).filter(Boolean) : [];
 
-        if (isManualMode) {
+           if (isLockedManual) {
+               // 用户已手动调整后：完全以用户列表为准，不再自动匹配/注入
+               activeRefs = [...tech[storageKey]];
+           } else if (isManualMode) {
              // Manual Mode: Use saved list
              // User Request: "Detected in Prompt" should be directly visible in Refs even in Manual Mode
              // Logic: Merge saved refs with auto-detected matches, unless they are explicitly deleted.
@@ -5937,7 +5944,7 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
         }
         
         // 2. Special Logic for End Refs: Always include Start Frame (Global Injection to ensure Realtime Updates)
-        if (storageKey === 'end_ref_image_urls' && shot.image_url) {
+        if (!isLockedManual && storageKey === 'end_ref_image_urls' && shot.image_url) {
             // Check if explicitly deleted
             const deleted = tech.deleted_ref_urls || [];
             const isExplicitlyDeleted = deleted.includes(shot.image_url);
@@ -5955,12 +5962,12 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
              // Let's keep logic simple: If Video Mode, we assume strict structural refs.
              // But if user manually added strict refs, we keep them?
              // Reverting to previous strict logic for video mode seems safer to avoid "entity pollution".
-             if (!tech[storageKey]) {
+                 if (!tech[storageKey] && !isLockedManual) {
                 activeRefs = [];
                 if (shot.image_url) activeRefs.push(shot.image_url);
                 if (tech.keyframes && Array.isArray(tech.keyframes)) activeRefs.push(...tech.keyframes);
                 if (tech.end_frame_url) activeRefs.push(tech.end_frame_url);
-             } else if (isManualMode && shot.image_url && !activeRefs.includes(shot.image_url)) {
+                 } else if (!isLockedManual && isManualMode && shot.image_url && !activeRefs.includes(shot.image_url)) {
                 // Ensure Start Frame is visible even in Manual Mode if user didn't explicitly remove it? 
                 // Wait - logic above says inject into Auto Only. 
                 // If Manual Mode, we trust the list.
@@ -6089,7 +6096,7 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
              // Let's keep logic simple: If Video Mode, we assume strict structural refs.
              // But if user manually added strict refs, we keep them?
              // Reverting to previous strict logic for video mode seems safer to avoid "entity pollution".
-             if (!tech[storageKey]) {
+                 if (!tech[storageKey] && !isLockedManual) {
                 activeRefs = [];
                 if (shot.image_url) activeRefs.push(shot.image_url);
                 if (tech.keyframes && Array.isArray(tech.keyframes)) activeRefs.push(...tech.keyframes);
@@ -6120,7 +6127,8 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
         // So for "Refs (Video)", maybe we don't save to 'ref_image_urls' necessarily, 
         // OR we overwrite 'ref_image_urls' with this sequence so backend uses it?
         // Let's assume we update the standard field so backend picks it up easily.
-        const newTech = { ...tech, [storageKey]: newRefList };
+        const userEditedKey = `${storageKey}_user_edited`;
+        const newTech = { ...tech, [storageKey]: newRefList, [userEditedKey]: true };
         onUpdate({ technical_notes: JSON.stringify(newTech) });
     };
 
@@ -6134,7 +6142,8 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
         }
 
         const newRefs = activeRefs.filter(u => u !== url);
-        const newTech = { ...tech, [storageKey]: newRefs, deleted_ref_urls: deleted };
+        const userEditedKey = `${storageKey}_user_edited`;
+        const newTech = { ...tech, [storageKey]: newRefs, deleted_ref_urls: deleted, [userEditedKey]: true };
         onUpdate({ technical_notes: JSON.stringify(newTech) });
     };
 
@@ -9384,6 +9393,148 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         ? (generatingStateByShot[editingShot.id] || { start: false, end: false, video: false })
         : { start: false, end: false, video: false };
 
+    const [assetDetailModal, setAssetDetailModal] = useState({ open: false, type: 'start', keyframeIndex: -1 });
+    const [detailTranslateLoading, setDetailTranslateLoading] = useState({});
+    const [detailOptimizeLoading, setDetailOptimizeLoading] = useState({});
+
+    const openAssetDetailModal = (type, keyframeIndex = -1) => {
+        setAssetDetailModal({ open: true, type, keyframeIndex });
+    };
+
+    const closeAssetDetailModal = () => {
+        setAssetDetailModal({ open: false, type: 'start', keyframeIndex: -1 });
+    };
+
+    const overwriteShotField = useCallback((field, value, extra = {}) => {
+        const nextValue = String(value ?? '');
+        setEditingShot(prev => ({ ...(prev || {}), [field]: nextValue, ...extra }));
+    }, []);
+
+    const overwriteTechField = useCallback((key, value) => {
+        const nextValue = String(value ?? '');
+        setEditingShot(prev => {
+            const current = prev || {};
+            let techObj = {};
+            try { techObj = JSON.parse(current.technical_notes || '{}'); } catch (e) {}
+            techObj[key] = nextValue;
+            return { ...current, technical_notes: JSON.stringify(techObj) };
+        });
+    }, []);
+
+    const overwriteKeyframeCnMap = useCallback((timeKey, value) => {
+        if (!timeKey) return;
+        const nextValue = String(value ?? '');
+        setEditingShot(prev => {
+            const current = prev || {};
+            let techObj = {};
+            try { techObj = JSON.parse(current.technical_notes || '{}'); } catch (e) {}
+            const nextMap = { ...(techObj.keyframe_prompt_cn_map || {}) };
+            nextMap[timeKey] = nextValue;
+            techObj.keyframe_prompt_cn_map = nextMap;
+            return { ...current, technical_notes: JSON.stringify(techObj) };
+        });
+    }, []);
+
+    const extractTranslatedText = (res) => {
+        if (!res) return '';
+        if (typeof res?.translated_text === 'string' && res.translated_text.trim()) {
+            return res.translated_text.trim();
+        }
+
+        const nestedList = res?.result?.trans_result;
+        if (Array.isArray(nestedList) && nestedList.length > 0) {
+            const joined = nestedList
+                .map(item => (typeof item?.dst === 'string' ? item.dst.trim() : ''))
+                .filter(Boolean)
+                .join('\n');
+            if (joined) return joined;
+        }
+
+        const flatList = res?.trans_result;
+        if (Array.isArray(flatList) && flatList.length > 0) {
+            const joined = flatList
+                .map(item => (typeof item?.dst === 'string' ? item.dst.trim() : ''))
+                .filter(Boolean)
+                .join('\n');
+            if (joined) return joined;
+        }
+
+        if (typeof res?.data === 'string' && res.data.trim()) {
+            return res.data.trim();
+        }
+
+        return '';
+    };
+
+    const runDetailTranslate = async ({ text, from, to, onResult, loadingKey }) => {
+        const raw = String(text || '').trim();
+        if (!raw) {
+            showNotification(t('没有可翻译内容', 'No text to translate'), 'warning');
+            return;
+        }
+        setDetailTranslateLoading(prev => ({ ...prev, [loadingKey]: true }));
+        try {
+            const res = await translateText(raw, from, to);
+            const translated = extractTranslatedText(res);
+            if (!translated) throw new Error('No translation returned');
+            onResult?.(translated);
+            showNotification(t('翻译完成', 'Translation completed'), 'success');
+        } catch (e) {
+            const msg = e?.response?.data?.detail || e?.message || 'Translate failed';
+            onLog?.(`Detail translate failed: ${msg}`, 'error');
+            showNotification(t('翻译失败', 'Translation failed'), 'error');
+        } finally {
+            setDetailTranslateLoading(prev => ({ ...prev, [loadingKey]: false }));
+        }
+    };
+
+    const runBilingualOptimize = async ({
+        enText,
+        cnText,
+        optimizeType = 'image',
+        loadingKey,
+        onEnUpdate,
+        onCnUpdate,
+    }) => {
+        const baseEn = String(enText || '').trim();
+        const baseCn = String(cnText || '').trim();
+        if (!baseEn && !baseCn) {
+            showNotification(t('没有可优化内容', 'No prompt to optimize'), 'warning');
+            return;
+        }
+
+        setDetailOptimizeLoading(prev => ({ ...prev, [loadingKey]: true }));
+        try {
+            let sourceEn = baseEn;
+            if (!sourceEn && baseCn) {
+                const trans = await translateText(baseCn, 'zh', 'en');
+                sourceEn = extractTranslatedText(trans);
+            }
+            if (!sourceEn) throw new Error('No EN source for optimization');
+
+            const refined = await refinePrompt(
+                sourceEn,
+                'Polish this prompt for better visual quality while preserving original intent and entities.',
+                optimizeType
+            );
+            const nextEn = String(refined?.refined_prompt || refined?.optimized_prompt || sourceEn).trim();
+            if (!nextEn) throw new Error('No optimized prompt returned');
+            onEnUpdate?.(nextEn);
+
+            const zh = await translateText(nextEn, 'en', 'zh');
+            const nextCn = extractTranslatedText(zh);
+            if (nextCn) onCnUpdate?.(nextCn);
+
+            showNotification(t('中英提示词已同步优化', 'CN/EN prompts optimized'), 'success');
+        } catch (e) {
+            const msg = e?.response?.data?.detail || e?.message || 'Optimize failed';
+            onLog?.(`Bilingual optimize failed: ${msg}`, 'error');
+            showNotification(t('提示词优化失败', 'Prompt optimization failed'), 'error');
+        } finally {
+            setDetailOptimizeLoading(prev => ({ ...prev, [loadingKey]: false }));
+        }
+    };
+
     const shotFilterStorageKey = useMemo(() => {
         if (!activeEpisode?.id) return '';
         return `aistory.shotFilters.${activeEpisode.id}`;
@@ -10288,8 +10439,85 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
          // Or rely on the fact that we are editing 'localKeyframes' state for text, and only syncing on Blur?
     };
 
+    const translateCnPromptToEn = async (cnText, label = 'Prompt') => {
+        const raw = String(cnText || '').trim();
+        if (!raw) {
+            showNotification(`${label} CN is empty`, 'warning');
+            return null;
+        }
+        try {
+            const res = await translateText(raw, 'zh', 'en');
+            const translated = extractTranslatedText(res);
+            if (!translated) throw new Error('No translation returned');
+            return translated;
+        } catch (e) {
+            const msg = e?.response?.data?.detail || e?.message || 'Translate failed';
+            onLog?.(`Translate CN->EN failed: ${msg}`, 'error');
+            showNotification(`Translate failed: ${msg}`, 'error');
+            return null;
+        }
+    };
+
+    const generateAssetWithLang = async (assetType, lang = 'en', keyframeIndex = -1) => {
+        if (!editingShot) return;
+        const tech = JSON.parse(editingShot.technical_notes || '{}');
+
+        if (assetType === 'start') {
+            if (lang === 'zh') {
+                const translated = await translateCnPromptToEn(tech.start_frame_cn, 'Start Frame');
+                if (!translated) return;
+                setEditingShot(prev => ({ ...(prev || {}), start_frame: translated }));
+                await handleGenerateStartFrame(translated);
+                return;
+            }
+            await handleGenerateStartFrame();
+            return;
+        }
+
+        if (assetType === 'end') {
+            if (lang === 'zh') {
+                const translated = await translateCnPromptToEn(tech.end_frame_cn, 'End Frame');
+                if (!translated) return;
+                setEditingShot(prev => ({ ...(prev || {}), end_frame: translated }));
+                await handleGenerateEndFrame(translated);
+                return;
+            }
+            await handleGenerateEndFrame();
+            return;
+        }
+
+        if (assetType === 'video') {
+            if (lang === 'zh') {
+                const translated = await translateCnPromptToEn(tech.video_prompt_cn, 'Video Prompt');
+                if (!translated) return;
+                setEditingShot(prev => ({ ...(prev || {}), prompt: translated }));
+                await handleGenerateVideo(translated);
+                return;
+            }
+            await handleGenerateVideo();
+            return;
+        }
+
+        if (assetType === 'keyframe') {
+            const kf = localKeyframes[keyframeIndex];
+            if (!kf) return;
+            if (lang === 'zh') {
+                const cnMap = tech.keyframe_prompt_cn_map || {};
+                const translated = await translateCnPromptToEn(cnMap[kf.time], `Keyframe ${kf.time}`);
+                if (!translated) return;
+                const updated = [...localKeyframes];
+                if (!updated[keyframeIndex]) return;
+                updated[keyframeIndex].prompt = translated;
+                setLocalKeyframes(updated);
+                await handleGenerateKeyframe(keyframeIndex, translated);
+                return;
+            }
+            await handleGenerateKeyframe(keyframeIndex);
+        }
+    };
+
     // Helper for Generating Keyframe
-    const handleGenerateKeyframe = async (kfIndex) => {
+    const handleGenerateKeyframe = async (kfIndex, promptOverride = null) => {
         const kf = localKeyframes[kfIndex];
         if (!kf) return;
         
@@ -10303,7 +10531,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         try {
             // Prompt Construction
             const globalCtx = getGlobalContextStr();
-            const fullPrompt = kf.prompt + globalCtx;
+            const promptToUse = promptOverride || kf.prompt;
+            const fullPrompt = promptToUse + globalCtx;
             
             // Generate
             const res = await generateImage(fullPrompt, null, null, {
@@ -10316,6 +10545,9 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             
             if (res && res.url) {
                 updated[kfIndex].url = res.url;
+                if (promptOverride) {
+                    updated[kfIndex].prompt = promptOverride;
+                }
                 updated[kfIndex].loading = false;
                 
                 // Save
@@ -10429,12 +10661,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     };
 
     // --- Generation Handlers ---
-    const handleGenerateStartFrame = async () => {
+    const handleGenerateStartFrame = async (promptOverride = null) => {
         if (!editingShot) return;
         const targetShotId = editingShot.id;
 
         // Check inherit logic - Inherit from previous End Frame
-        const currentPrompt = (editingShot.start_frame || "").trim();
+        const currentPrompt = String(promptOverride || editingShot.start_frame || '').trim();
         if (isStartFrameInheritPrompt(currentPrompt)) {
             const prevEndUrl = findPrevShotEndFrameUrl(editingShot.id);
 
@@ -10464,7 +10696,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         abortGenerationRef.current = false; 
 
         // 1. Feature Injection
-        let prompt = editingShot.start_frame || editingShot.video_content || "A cinematic shot";
+        let prompt = promptOverride || editingShot.start_frame || editingShot.video_content || "A cinematic shot";
         
         // Apply injection logic
         const { text: injectedPrompt, modified } = injectEntityFeatures(prompt);
@@ -10572,14 +10804,14 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         setShotGeneratingState(targetShotId, 'start', false);
     };
 
-    const handleGenerateEndFrame = async () => {
+    const handleGenerateEndFrame = async (promptOverride = null) => {
         if (!editingShot) return;
         const targetShotId = editingShot.id;
         setShotGeneratingState(targetShotId, 'end', true);
         abortGenerationRef.current = false;
 
         // 1. Feature Injection for End Frame
-        let prompt = editingShot.end_frame || "End frame";
+        let prompt = promptOverride || editingShot.end_frame || "End frame";
         const { text: injectedPrompt, modified } = injectEntityFeatures(prompt);
         if (modified) {
             setEditingShot(prev => (prev && prev.id === targetShotId ? { ...prev, end_frame: injectedPrompt } : prev));
@@ -10660,7 +10892,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         setShotGeneratingState(targetShotId, 'end', false);
     };
 
-    const handleGenerateVideo = async () => {
+    const handleGenerateVideo = async (promptOverride = null) => {
         if (!editingShot) return;
         const targetShotId = editingShot.id;
         const targetGeneratingState = generatingStateByShot[targetShotId] || { start: false, end: false, video: false };
@@ -10671,7 +10903,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         setShotGeneratingState(targetShotId, 'video', true);
 
         // 1. Feature Injection for Video Prompt
-        let prompt = editingShot.prompt || editingShot.video_content || "Video motion";
+        let prompt = promptOverride || editingShot.prompt || editingShot.video_content || "Video motion";
         const { text: injectedPrompt, modified } = injectEntityFeatures(prompt);
         if (modified) {
             setEditingShot(prev => (prev && prev.id === targetShotId ? { ...prev, prompt: injectedPrompt } : prev));
@@ -11472,12 +11704,14 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 <span className={`text-[9px] px-1.5 py-0.5 rounded border font-mono normal-case ${sourceBadgeClass(activeSources.Image)}`}>
                                                     {t('来源', 'Source')}: {sourceBadgeText(activeSources.Image)}
                                                 </span>
-                                                <TranslateControl 
-                                                    text={editingShot.start_frame || ''} 
-                                                    onUpdate={(v) => setEditingShot({...editingShot, start_frame: v})} 
-                                                />
                                             </div>
                                             <div className="flex gap-1">
+                                                <button
+                                                    onClick={() => openAssetDetailModal('start')}
+                                                    className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-0.5 rounded"
+                                                >
+                                                    {t('详情', 'Detail')}
+                                                </button>
                                                 <button 
                                                     onClick={async () => {
                                                         openMediaPicker(async (url) => {
@@ -11502,17 +11736,26 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                         {t('停止', 'Stop')}
                                                     </button>
                                                 ) : (
-                                                    <button 
-                                                        onClick={handleGenerateStartFrame} 
-                                                        className="text-[10px] px-2 py-0.5 rounded flex items-center gap-1 bg-primary/20 text-primary hover:bg-primary/30"
-                                                    >
-                                                        <Wand2 className="w-3 h-3"/>
-                                                        {t('生成', 'Gen')}
-                                                    </button>
+                                                    <>
+                                                        <button 
+                                                            onClick={() => generateAssetWithLang('start', 'zh')} 
+                                                            className="text-[10px] px-2 py-0.5 rounded flex items-center gap-1 bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30"
+                                                        >
+                                                            <Wand2 className="w-3 h-3"/>
+                                                            Gen(CN)
+                                                        </button>
+                                                        <button 
+                                                            onClick={() => generateAssetWithLang('start', 'en')} 
+                                                            className="text-[10px] px-2 py-0.5 rounded flex items-center gap-1 bg-sky-500/20 text-sky-300 hover:bg-sky-500/30"
+                                                        >
+                                                            <Wand2 className="w-3 h-3"/>
+                                                            Gen(EN)
+                                                        </button>
+                                                    </>
                                                 )}
                                             </div>
                                         </div>
-                                        <div className="aspect-video bg-black/40 rounded border border-white/10 relative group overflow-hidden">
+                                        <div className="aspect-video bg-black/40 rounded border border-white/10 relative group overflow-hidden cursor-pointer" onClick={() => openAssetDetailModal('start')}>
                                             {currentGeneratingState.start && (
                                                 <div className="absolute inset-0 bg-black/60 z-10 flex items-center justify-center flex-col gap-2">
                                                     <Loader2 className="w-6 h-6 animate-spin text-primary"/>
@@ -11524,7 +11767,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                     <img 
                                                         src={getFullUrl(editingShot.image_url)} 
                                                         className="w-full h-full object-cover cursor-pointer hover:opacity-90 transition-opacity" 
-                                                        onClick={() => setViewMedia({ url: editingShot.image_url, type: 'image', title: t('起始帧', 'Start Frame'), prompt: editingShot.start_frame })}
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            openAssetDetailModal('start');
+                                                        }}
                                                         alt={t('起始帧', 'Start Frame')}
                                                     />
                                                     <button 
@@ -11551,22 +11797,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                             placeholder={t('起始帧提示词...', 'Start Frame Prompt...')}
                                             value={editingShot.start_frame || ''} 
                                             onChange={(e) => setEditingShot({...editingShot, start_frame: e.target.value})}
-                                        />
-                                        <RefineControl 
-                                            originalText={editingShot.start_frame || ''}
-                                            onUpdate={(v) => setEditingShot({...editingShot, start_frame: v})}
-                                            type="image"
-                                            currentImage={editingShot.image_url}
-                                            onImageUpdate={async (url) => {
-                                                const newData = { image_url: url };
-                                                await onUpdateShot(editingShot.id, newData);
-                                                setEditingShot(prev => ({...prev, ...newData}));
-                                            }}
-                                            projectId={projectId}
-                                            shotId={editingShot.id}
-                                            assetType="start_frame"
-                                            featureInjector={injectEntityFeatures}
-                                            onPickMedia={openMediaPicker}
                                         />
                                         <ReferenceManager 
                                             shot={editingShot} 
@@ -11627,12 +11857,14 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 <span className={`text-[9px] px-1.5 py-0.5 rounded border font-mono normal-case ${sourceBadgeClass(activeSources.Image)}`}>
                                                     {t('来源', 'Source')}: {sourceBadgeText(activeSources.Image)}
                                                 </span>
-                                                <TranslateControl 
-                                                    text={editingShot.end_frame || ''} 
-                                                    onUpdate={(v) => setEditingShot({...editingShot, end_frame: v})} 
-                                                />
                                             </div>
                                             <div className="flex gap-1">
+                                                <button
+                                                    onClick={() => openAssetDetailModal('end')}
+                                                    className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-0.5 rounded"
+                                                >
+                                                    {t('详情', 'Detail')}
+                                                </button>
                                                 <button 
                                                     onClick={() => openMediaPicker((url) => {
                                                         const tech = JSON.parse(editingShot.technical_notes || '{}');
@@ -11653,17 +11885,26 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                         {t('停止', 'Stop')}
                                                     </button>
                                                 ) : (
-                                                    <button 
-                                                        onClick={handleGenerateEndFrame} 
-                                                        className="text-[10px] px-2 py-0.5 rounded flex items-center gap-1 bg-primary/20 text-primary hover:bg-primary/30"
-                                                    >
-                                                        <Wand2 className="w-3 h-3"/>
-                                                        {t('生成', 'Gen')}
-                                                    </button>
+                                                    <>
+                                                        <button 
+                                                            onClick={() => generateAssetWithLang('end', 'zh')} 
+                                                            className="text-[10px] px-2 py-0.5 rounded flex items-center gap-1 bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30"
+                                                        >
+                                                            <Wand2 className="w-3 h-3"/>
+                                                            Gen(CN)
+                                                        </button>
+                                                        <button 
+                                                            onClick={() => generateAssetWithLang('end', 'en')} 
+                                                            className="text-[10px] px-2 py-0.5 rounded flex items-center gap-1 bg-sky-500/20 text-sky-300 hover:bg-sky-500/30"
+                                                        >
+                                                            <Wand2 className="w-3 h-3"/>
+                                                            Gen(EN)
+                                                        </button>
+                                                    </>
                                                 )}
                                             </div>
                                         </div>
-                                        <div className="aspect-video bg-black/40 rounded border border-white/10 relative group overflow-hidden">
+                                        <div className="aspect-video bg-black/40 rounded border border-white/10 relative group overflow-hidden cursor-pointer" onClick={() => openAssetDetailModal('end')}>
                                             {currentGeneratingState.end && (
                                                 <div className="absolute inset-0 bg-black/60 z-10 flex items-center justify-center flex-col gap-2">
                                                     <Loader2 className="w-6 h-6 animate-spin text-primary"/>
@@ -11686,7 +11927,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                 src={getFullUrl(editingShot.image_url)} 
                                                                 className="w-full h-full object-cover opacity-60 group-hover/mirror:opacity-100 transition-opacity cursor-pointer"
                                                                 title={t('与起始帧相同（提示词少于 5 个词）', 'Same as Start Frame (Prompt < 5 words)')}
-                                                                onClick={() => setViewMedia({ url: editingShot.image_url, type: 'image', title: t('起始帧（镜像）', 'Start Frame (Mirrored)'), prompt: editingShot.start_frame })}
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    openAssetDetailModal('end');
+                                                                }}
                                                             />
                                                             <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-30 group-hover/mirror:opacity-0 transition-opacity">
                                                                 <span className="bg-black/50 text-white text-[9px] px-2 py-1 rounded">{t('与起始帧相同', 'SAME AS START')}</span>
@@ -11701,7 +11945,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                             <img 
                                                                 src={getFullUrl(endUrl)} 
                                                                 className="w-full h-full object-cover cursor-pointer hover:opacity-90 transition-opacity"
-                                                                onClick={() => setViewMedia({ url: endUrl, type: 'image', title: t('结束帧', 'End Frame'), prompt: editingShot.end_frame })}
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    openAssetDetailModal('end');
+                                                                }}
                                                             />
                                                             <button 
                                                                 onClick={async (e) => {
@@ -11737,27 +11984,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                             value={editingShot.end_frame || ''} 
                                             onChange={(e) => setEditingShot({...editingShot, end_frame: e.target.value})}
                                         />
-                                        <RefineControl 
-                                            originalText={editingShot.end_frame || ''}
-                                            onUpdate={(v) => setEditingShot({...editingShot, end_frame: v})}
-                                            type="image"
-                                            currentImage={(() => {
-                                                try { return JSON.parse(editingShot.technical_notes || '{}').end_frame_url; } catch(e){ return null; }
-                                            })()}
-                                            onImageUpdate={async (url) => {
-                                                const tech = JSON.parse(editingShot.technical_notes || '{}');
-                                                tech.end_frame_url = url;
-                                                tech.video_gen_mode = 'start_end';
-                                                const newData = { technical_notes: JSON.stringify(tech) };
-                                                await onUpdateShot(editingShot.id, newData);
-                                                setEditingShot(prev => ({...prev, ...newData}));
-                                            }}
-                                            projectId={projectId}
-                                            shotId={editingShot.id}
-                                            assetType="end_frame"
-                                            featureInjector={injectEntityFeatures}
-                                            onPickMedia={openMediaPicker}
-                                        />
                                         <ReferenceManager 
                                             shot={editingShot} 
                                             entities={entities} 
@@ -11779,13 +12005,15 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 <span className={`text-[9px] px-1.5 py-0.5 rounded border font-mono normal-case ${sourceBadgeClass(activeSources.Video)}`}>
                                                     {t('来源', 'Source')}: {sourceBadgeText(activeSources.Video)}
                                                 </span>
-                                                <TranslateControl 
-                                                    text={editingShot.prompt || editingShot.video_content || ''}
-                                                    onUpdate={(v) => setEditingShot({...editingShot, prompt: v})}
-                                                />
                                             </div>
                                             
                                             <div className="flex items-center gap-2">
+                                                <button
+                                                    onClick={() => openAssetDetailModal('video')}
+                                                    className="bg-white/10 hover:bg-white/20 text-[10px] px-2 py-0.5 rounded flex items-center gap-1 transition-colors"
+                                                >
+                                                    {t('详情', 'Detail')}
+                                                </button>
                                                 <button 
                                                     onClick={() => openMediaPicker((url) => {
                                                         const changes = { video_url: url };
@@ -11833,19 +12061,27 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 </select>
 
                                                 <button 
-                                                    onClick={handleGenerateVideo} 
+                                                    onClick={() => generateAssetWithLang('video', 'zh')} 
                                                     disabled={currentGeneratingState.video}
-                                                    className={`text-[10px] font-bold px-3 py-0.5 rounded flex items-center gap-1 ${currentGeneratingState.video ? 'bg-primary/50 text-black/50 cursor-wait' : 'bg-primary text-black hover:opacity-90' }`}
+                                                    className={`text-[10px] font-bold px-3 py-0.5 rounded flex items-center gap-1 ${currentGeneratingState.video ? 'bg-primary/50 text-black/50 cursor-wait' : 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30' }`}
                                                 >
                                                     {currentGeneratingState.video ? <Loader2 className="w-3 h-3 animate-spin"/> : <Film className="w-3 h-3"/>} 
-                                                    {currentGeneratingState.video ? t('生成中...', 'Generating...') : t('生成', 'Generate')}
+                                                    {currentGeneratingState.video ? t('生成中...', 'Generating...') : 'Gen(CN)'}
+                                                </button>
+                                                <button 
+                                                    onClick={() => generateAssetWithLang('video', 'en')} 
+                                                    disabled={currentGeneratingState.video}
+                                                    className={`text-[10px] font-bold px-3 py-0.5 rounded flex items-center gap-1 ${currentGeneratingState.video ? 'bg-primary/50 text-black/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30' }`}
+                                                >
+                                                    {currentGeneratingState.video ? <Loader2 className="w-3 h-3 animate-spin"/> : <Film className="w-3 h-3"/>} 
+                                                    {currentGeneratingState.video ? t('生成中...', 'Generating...') : 'Gen(EN)'}
                                                 </button>
                                             </div>
                                         </div>
                                         
                                         <div 
                                             className="aspect-video bg-black/40 rounded border border-white/10 relative group overflow-hidden cursor-pointer"
-                                            onClick={() => editingShot.video_url && setViewMedia({ url: getFullUrl(editingShot.video_url), type: 'video', title: t('最终视频', 'Final Video'), prompt: editingShot.prompt })}
+                                            onClick={() => openAssetDetailModal('video')}
                                         >
                                             {currentGeneratingState.video && (
                                                 <div className="absolute inset-0 bg-black/60 z-10 flex items-center justify-center flex-col gap-2">
@@ -11875,11 +12111,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                             placeholder={t('动作 / 运动提示词...', 'Action / Motion Prompt...')}
                                             value={editingShot.prompt || editingShot.video_content || ''}
                                             onChange={(e) => setEditingShot({...editingShot, prompt: e.target.value})}
-                                        />
-                                        <RefineControl 
-                                            originalText={editingShot.prompt || editingShot.video_content || ''}
-                                            onUpdate={(v) => setEditingShot({...editingShot, prompt: v})}
-                                            type="video"
                                         />
                                         <ReferenceManager 
                                             shot={editingShot} 
@@ -11948,24 +12179,29 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                             }}
                                                             onBlur={() => reconstructKeyframes(localKeyframes)}
                                                         />
-                                                        <TranslateControl 
-                                                            text={kf.prompt} 
-                                                            onUpdate={(v) => {
-                                                                const updated = [...localKeyframes];
-                                                                updated[idx].prompt = v;
-                                                                setLocalKeyframes(updated);
-                                                                reconstructKeyframes(updated);
-                                                            }} 
-                                                        />
                                                     </div>
                                                     <div className="flex gap-1">
+                                                        <button
+                                                            onClick={() => openAssetDetailModal('keyframe', idx)}
+                                                            className="px-1.5 py-0.5 bg-white/10 hover:bg-white/20 text-white rounded"
+                                                        >
+                                                            {t('详情', 'Detail')}
+                                                        </button>
                                                         <button 
-                                                            onClick={() => handleGenerateKeyframe(idx)} 
-                                                            className="px-1.5 py-0.5 bg-primary/20 hover:bg-primary/30 text-primary rounded flex items-center gap-1"
+                                                            onClick={() => generateAssetWithLang('keyframe', 'zh', idx)} 
+                                                            className="px-1.5 py-0.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 rounded flex items-center gap-1"
                                                             disabled={kf.loading}
                                                         >
                                                             {kf.loading ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
-                                                            {t('生成', 'Gen')}
+                                                            Gen(CN)
+                                                        </button>
+                                                        <button 
+                                                            onClick={() => generateAssetWithLang('keyframe', 'en', idx)} 
+                                                            className="px-1.5 py-0.5 bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 rounded flex items-center gap-1"
+                                                            disabled={kf.loading}
+                                                        >
+                                                            {kf.loading ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
+                                                            Gen(EN)
                                                         </button>
                                                         <button 
                                                             onClick={() => {
@@ -11982,13 +12218,16 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 </div>
 
                                                 {/* Image Area */}
-                                                <div className="aspect-video bg-black/40 rounded border border-white/10 relative overflow-hidden group/image">
+                                                <div className="aspect-video bg-black/40 rounded border border-white/10 relative overflow-hidden group/image cursor-pointer" onClick={() => openAssetDetailModal('keyframe', idx)}>
                                                     {kf.url ? (
                                                         <>
                                                             <img 
                                                                 src={getFullUrl(kf.url)} 
                                                                 className="w-full h-full object-cover cursor-pointer hover:opacity-90"
-                                                                onClick={() => setViewMedia({ url: kf.url, type: 'image', title: `Keyframe T=${kf.time}`, prompt: kf.prompt })}
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    openAssetDetailModal('keyframe', idx);
+                                                                }}
                                                             />
                                                             <button 
                                                                 onClick={async (e) => {
@@ -12043,28 +12282,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                         setLocalKeyframes(updated);
                                                     }}
                                                     onBlur={() => reconstructKeyframes(localKeyframes)}
-                                                />
-                                                <RefineControl 
-                                                    originalText={kf.prompt}
-                                                    onUpdate={(v) => {
-                                                        const updated = [...localKeyframes];
-                                                        updated[idx].prompt = v;
-                                                        setLocalKeyframes(updated);
-                                                        reconstructKeyframes(updated);
-                                                    }}
-                                                    type="image"
-                                                    currentImage={kf.url}
-                                                    onImageUpdate={(url) => {
-                                                        const updated = [...localKeyframes];
-                                                        updated[idx].url = url;
-                                                        setLocalKeyframes(updated);
-                                                        reconstructKeyframes(updated);
-                                                    }}
-                                                    projectId={projectId}
-                                                    shotId={editingShot.id}
-                                                    assetType={`keyframe_${idx}`} // fallback to index
-                                                    featureInjector={injectEntityFeatures}
-                                                    onPickMedia={openMediaPicker}
                                                 />
                                             </div>
                                         ))}
@@ -12204,6 +12421,350 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                             >
                                 Save Changes
                             </button>
+
+                            {assetDetailModal.open && (
+                                <div className="fixed inset-0 z-[120] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+                                    <div className="w-full max-w-7xl h-[94vh] bg-[#09090b] border border-white/10 rounded-xl shadow-2xl flex flex-col overflow-hidden">
+                                        <div className="p-4 border-b border-white/10 flex items-center justify-between">
+                                            <h4 className="font-bold text-white flex items-center gap-2">
+                                                <Info className="w-4 h-4 text-primary" />
+                                                {assetDetailModal.type === 'start' && t('起始帧详情', 'Start Frame Detail')}
+                                                {assetDetailModal.type === 'end' && t('结束帧详情', 'End Frame Detail')}
+                                                {assetDetailModal.type === 'video' && t('视频详情', 'Video Detail')}
+                                                {assetDetailModal.type === 'keyframe' && t('关键帧详情', 'Keyframe Detail')}
+                                            </h4>
+                                            <button onClick={closeAssetDetailModal} className="p-2 hover:bg-white/10 rounded-full"><X className="w-4 h-4"/></button>
+                                        </div>
+
+                                        <div className="flex-1 overflow-auto p-4">
+                                            {(() => {
+                                                let tech = {};
+                                                try { tech = JSON.parse(editingShot.technical_notes || '{}'); } catch (e) {}
+                                                const updateTechField = (key, value) => {
+                                                    const nextTech = { ...tech, [key]: value };
+                                                    setEditingShot(prev => ({ ...(prev || {}), technical_notes: JSON.stringify(nextTech) }));
+                                                };
+                                                const modalType = assetDetailModal.type;
+                                                const keyframe = modalType === 'keyframe' ? localKeyframes[assetDetailModal.keyframeIndex] : null;
+
+                                                if (modalType === 'start') {
+                                                    return (
+                                                        <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_1fr] gap-4">
+                                                            <div className="space-y-3">
+                                                                <div className="h-[46vh] xl:h-[58vh] bg-black/40 rounded border border-white/10 overflow-hidden flex items-center justify-center">
+                                                                    {editingShot.image_url ? <img src={getFullUrl(editingShot.image_url)} className="w-full h-full object-cover"/> : <ImageIcon className="w-8 h-8 opacity-30" />}
+                                                                </div>
+                                                                <div className="text-xs text-muted-foreground break-all">{t('图片 URL', 'Image URL')}: {editingShot.image_url || '-'}</div>
+                                                                <div className="text-xs text-muted-foreground">{t('参考图数量', 'Ref Count')}: {(Array.isArray(tech.ref_image_urls) ? tech.ref_image_urls.length : 0)}</div>
+                                                            </div>
+                                                            <div className="space-y-3">
+                                                                <div className="flex items-center gap-2">
+                                                                    <TranslateControl text={editingShot.start_frame || ''} onUpdate={(v) => setEditingShot({...editingShot, start_frame: v})} />
+                                                                    <button onClick={() => generateAssetWithLang('start', 'zh')} className="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30">Gen(CN)</button>
+                                                                    <button onClick={() => generateAssetWithLang('start', 'en')} className="text-xs px-2 py-1 rounded bg-sky-500/20 text-sky-300 hover:bg-sky-500/30">Gen(EN)</button>
+                                                                </div>
+                                                                <div className="flex items-center justify-between">
+                                                                    <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('英文提示词', 'Prompt (EN)')}</div>
+                                                                    <button
+                                                                        onClick={() => runDetailTranslate({
+                                                                            text: tech.start_frame_cn || '',
+                                                                            from: 'zh',
+                                                                            to: 'en',
+                                                                            loadingKey: 'start_cn2en',
+                                                                            onResult: (v) => overwriteShotField('start_frame', v),
+                                                                        })}
+                                                                        disabled={!!detailTranslateLoading.start_cn2en}
+                                                                        className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/80"
+                                                                    >
+                                                                        {detailTranslateLoading.start_cn2en ? t('翻译中...', 'Translating...') : t('中→英', 'CN→EN')}
+                                                                    </button>
+                                                                </div>
+                                                                <textarea className="w-full h-48 bg-black/30 border border-white/10 rounded p-2 text-sm" value={editingShot.start_frame || ''} onChange={(e) => setEditingShot({...editingShot, start_frame: e.target.value})} />
+                                                                <div className="flex items-center justify-between">
+                                                                    <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('中文对照提示词', 'Prompt (CN)')}</div>
+                                                                    <button
+                                                                        onClick={() => runDetailTranslate({
+                                                                            text: editingShot.start_frame || '',
+                                                                            from: 'en',
+                                                                            to: 'zh',
+                                                                            loadingKey: 'start_en2cn',
+                                                                            onResult: (v) => overwriteTechField('start_frame_cn', v),
+                                                                        })}
+                                                                        disabled={!!detailTranslateLoading.start_en2cn}
+                                                                        className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/80"
+                                                                    >
+                                                                        {detailTranslateLoading.start_en2cn ? t('翻译中...', 'Translating...') : t('英→中', 'EN→CN')}
+                                                                    </button>
+                                                                </div>
+                                                                <textarea
+                                                                    className="w-full h-40 bg-black/30 border border-white/10 rounded p-2 text-sm"
+                                                                    value={tech.start_frame_cn || ''}
+                                                                    onChange={(e) => updateTechField('start_frame_cn', e.target.value)}
+                                                                    placeholder={t('填写起始帧中文对照提示词...', 'Add Chinese counterpart prompt for start frame...')}
+                                                                />
+                                                                <RefineControl originalText={editingShot.start_frame || ''} onUpdate={(v) => setEditingShot({...editingShot, start_frame: v})} type="image" currentImage={editingShot.image_url} onImageUpdate={async (url) => {
+                                                                    const newData = { image_url: url };
+                                                                    await onUpdateShot(editingShot.id, newData);
+                                                                    setEditingShot(prev => ({...prev, ...newData}));
+                                                                }} projectId={projectId} shotId={editingShot.id} assetType="start_frame" featureInjector={injectEntityFeatures} onPickMedia={openMediaPicker} />
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => setEditingShot({...editingShot, ...updates})} title={t('参考图（起始帧）', 'Refs (Start)')} promptText={editingShot.start_frame || ''} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="ref_image_urls" strictPromptOnly={true} />
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                }
+
+                                                if (modalType === 'end') {
+                                                    const endFrameUrl = tech.end_frame_url || '';
+                                                    return (
+                                                        <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_1fr] gap-4">
+                                                            <div className="space-y-3">
+                                                                <div className="h-[46vh] xl:h-[58vh] bg-black/40 rounded border border-white/10 overflow-hidden flex items-center justify-center">
+                                                                    {endFrameUrl ? <img src={getFullUrl(endFrameUrl)} className="w-full h-full object-cover"/> : <ImageIcon className="w-8 h-8 opacity-30" />}
+                                                                </div>
+                                                                <div className="text-xs text-muted-foreground break-all">{t('结束帧 URL', 'End Frame URL')}: {endFrameUrl || '-'}</div>
+                                                                <div className="text-xs text-muted-foreground">{t('参考图数量', 'Ref Count')}: {(Array.isArray(tech.end_ref_image_urls) ? tech.end_ref_image_urls.length : 0)}</div>
+                                                            </div>
+                                                            <div className="space-y-3">
+                                                                <div className="flex items-center gap-2">
+                                                                    <TranslateControl text={editingShot.end_frame || ''} onUpdate={(v) => setEditingShot({...editingShot, end_frame: v})} />
+                                                                    <button onClick={() => generateAssetWithLang('end', 'zh')} className="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30">Gen(CN)</button>
+                                                                    <button onClick={() => generateAssetWithLang('end', 'en')} className="text-xs px-2 py-1 rounded bg-sky-500/20 text-sky-300 hover:bg-sky-500/30">Gen(EN)</button>
+                                                                </div>
+                                                                <div className="flex items-center justify-between">
+                                                                    <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('英文提示词', 'Prompt (EN)')}</div>
+                                                                    <button
+                                                                        onClick={() => runDetailTranslate({
+                                                                            text: tech.end_frame_cn || '',
+                                                                            from: 'zh',
+                                                                            to: 'en',
+                                                                            loadingKey: 'end_cn2en',
+                                                                            onResult: (v) => overwriteShotField('end_frame', v),
+                                                                        })}
+                                                                        disabled={!!detailTranslateLoading.end_cn2en}
+                                                                        className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/80"
+                                                                    >
+                                                                        {detailTranslateLoading.end_cn2en ? t('翻译中...', 'Translating...') : t('中→英', 'CN→EN')}
+                                                                    </button>
+                                                                </div>
+                                                                <textarea className="w-full h-48 bg-black/30 border border-white/10 rounded p-2 text-sm" value={editingShot.end_frame || ''} onChange={(e) => setEditingShot({...editingShot, end_frame: e.target.value})} />
+                                                                <div className="flex items-center justify-between">
+                                                                    <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('中文对照提示词', 'Prompt (CN)')}</div>
+                                                                    <button
+                                                                        onClick={() => runDetailTranslate({
+                                                                            text: editingShot.end_frame || '',
+                                                                            from: 'en',
+                                                                            to: 'zh',
+                                                                            loadingKey: 'end_en2cn',
+                                                                            onResult: (v) => overwriteTechField('end_frame_cn', v),
+                                                                        })}
+                                                                        disabled={!!detailTranslateLoading.end_en2cn}
+                                                                        className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/80"
+                                                                    >
+                                                                        {detailTranslateLoading.end_en2cn ? t('翻译中...', 'Translating...') : t('英→中', 'EN→CN')}
+                                                                    </button>
+                                                                </div>
+                                                                <textarea
+                                                                    className="w-full h-40 bg-black/30 border border-white/10 rounded p-2 text-sm"
+                                                                    value={tech.end_frame_cn || ''}
+                                                                    onChange={(e) => updateTechField('end_frame_cn', e.target.value)}
+                                                                    placeholder={t('填写结束帧中文对照提示词...', 'Add Chinese counterpart prompt for end frame...')}
+                                                                />
+                                                                <RefineControl originalText={editingShot.end_frame || ''} onUpdate={(v) => setEditingShot({...editingShot, end_frame: v})} type="image" currentImage={endFrameUrl} onImageUpdate={async (url) => {
+                                                                    const nextTech = { ...tech, end_frame_url: url, video_gen_mode: 'start_end' };
+                                                                    const newData = { technical_notes: JSON.stringify(nextTech) };
+                                                                    await onUpdateShot(editingShot.id, newData);
+                                                                    setEditingShot(prev => ({...prev, ...newData}));
+                                                                }} projectId={projectId} shotId={editingShot.id} assetType="end_frame" featureInjector={injectEntityFeatures} onPickMedia={openMediaPicker} />
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => setEditingShot({...editingShot, ...updates})} title={t('参考图（结束帧）', 'Refs (End)')} promptText={editingShot.end_frame || ''} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="end_ref_image_urls" strictPromptOnly={true} />
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                }
+
+                                                if (modalType === 'video') {
+                                                    return (
+                                                        <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_1fr] gap-4">
+                                                            <div className="space-y-3">
+                                                                <div className="h-[46vh] xl:h-[58vh] bg-black/40 rounded border border-white/10 overflow-hidden flex items-center justify-center">
+                                                                    {editingShot.video_url ? <video src={getFullUrl(editingShot.video_url)} controls className="w-full h-full object-cover" /> : <Video className="w-8 h-8 opacity-30" />}
+                                                                </div>
+                                                                <div className="text-xs text-muted-foreground break-all">{t('视频 URL', 'Video URL')}: {editingShot.video_url || '-'}</div>
+                                                                <div className="text-xs text-muted-foreground">{t('时长', 'Duration')}: {editingShot.duration || '5'}</div>
+                                                                <div className="text-xs text-muted-foreground">{t('模式', 'Mode')}: {tech.video_mode_unified || tech.video_gen_mode || 'start'}</div>
+                                                            </div>
+                                                            <div className="space-y-3">
+                                                                <div className="flex items-center gap-2">
+                                                                    <TranslateControl text={editingShot.prompt || editingShot.video_content || ''} onUpdate={(v) => setEditingShot({...editingShot, prompt: v})} />
+                                                                    <button onClick={() => generateAssetWithLang('video', 'zh')} className="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30">Gen(CN)</button>
+                                                                    <button onClick={() => generateAssetWithLang('video', 'en')} className="text-xs px-2 py-1 rounded bg-sky-500/20 text-sky-300 hover:bg-sky-500/30">Gen(EN)</button>
+                                                                </div>
+                                                                <div className="flex items-center justify-between">
+                                                                    <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('英文提示词', 'Prompt (EN)')}</div>
+                                                                    <button
+                                                                        onClick={() => runDetailTranslate({
+                                                                            text: tech.video_prompt_cn || '',
+                                                                            from: 'zh',
+                                                                            to: 'en',
+                                                                            loadingKey: 'video_cn2en',
+                                                                            onResult: (v) => overwriteShotField('prompt', v, { video_content: '' }),
+                                                                        })}
+                                                                        disabled={!!detailTranslateLoading.video_cn2en}
+                                                                        className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/80"
+                                                                    >
+                                                                        {detailTranslateLoading.video_cn2en ? t('翻译中...', 'Translating...') : t('中→英', 'CN→EN')}
+                                                                    </button>
+                                                                </div>
+                                                                <textarea className="w-full h-48 bg-black/30 border border-white/10 rounded p-2 text-sm" value={editingShot.prompt || editingShot.video_content || ''} onChange={(e) => setEditingShot({...editingShot, prompt: e.target.value})} />
+                                                                <div className="flex items-center justify-between">
+                                                                    <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('中文对照提示词', 'Prompt (CN)')}</div>
+                                                                    <button
+                                                                        onClick={() => runDetailTranslate({
+                                                                            text: editingShot.prompt || editingShot.video_content || '',
+                                                                            from: 'en',
+                                                                            to: 'zh',
+                                                                            loadingKey: 'video_en2cn',
+                                                                            onResult: (v) => overwriteTechField('video_prompt_cn', v),
+                                                                        })}
+                                                                        disabled={!!detailTranslateLoading.video_en2cn}
+                                                                        className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/80"
+                                                                    >
+                                                                        {detailTranslateLoading.video_en2cn ? t('翻译中...', 'Translating...') : t('英→中', 'EN→CN')}
+                                                                    </button>
+                                                                </div>
+                                                                <textarea
+                                                                    className="w-full h-40 bg-black/30 border border-white/10 rounded p-2 text-sm"
+                                                                    value={tech.video_prompt_cn || ''}
+                                                                    onChange={(e) => updateTechField('video_prompt_cn', e.target.value)}
+                                                                    placeholder={t('填写视频中文对照提示词...', 'Add Chinese counterpart prompt for video...')}
+                                                                />
+                                                                <RefineControl originalText={editingShot.prompt || editingShot.video_content || ''} onUpdate={(v) => setEditingShot({...editingShot, prompt: v})} type="video" />
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => setEditingShot({...editingShot, ...updates})} title={t('参考图（视频）', 'Refs (Video)')} promptText={editingShot.prompt || editingShot.video_content || ''} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="video_ref_image_urls" strictPromptOnly={true} />
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                }
+
+                                                return (
+                                                    <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_1fr] gap-4">
+                                                        <div className="space-y-3">
+                                                            <div className="h-[46vh] xl:h-[58vh] bg-black/40 rounded border border-white/10 overflow-hidden flex items-center justify-center">
+                                                                {keyframe?.url ? <img src={getFullUrl(keyframe.url)} className="w-full h-full object-cover"/> : <ImageIcon className="w-8 h-8 opacity-30" />}
+                                                            </div>
+                                                            <div className="text-xs text-muted-foreground break-all">{t('关键帧 URL', 'Keyframe URL')}: {keyframe?.url || '-'}</div>
+                                                        </div>
+                                                        <div className="space-y-3">
+                                                            <div className="flex items-center gap-2">
+                                                                <input className="bg-black/30 border border-white/10 rounded px-2 py-1 text-xs w-20" value={keyframe?.time || ''} onChange={(e) => {
+                                                                    const updated = [...localKeyframes];
+                                                                    if (!updated[assetDetailModal.keyframeIndex]) return;
+                                                                    updated[assetDetailModal.keyframeIndex].time = e.target.value;
+                                                                    setLocalKeyframes(updated);
+                                                                }} />
+                                                                <TranslateControl text={keyframe?.prompt || ''} onUpdate={(v) => {
+                                                                    const updated = [...localKeyframes];
+                                                                    if (!updated[assetDetailModal.keyframeIndex]) return;
+                                                                    updated[assetDetailModal.keyframeIndex].prompt = v;
+                                                                    setLocalKeyframes(updated);
+                                                                }} />
+                                                                <button onClick={() => generateAssetWithLang('keyframe', 'zh', assetDetailModal.keyframeIndex)} className="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30">Gen(CN)</button>
+                                                                <button onClick={() => generateAssetWithLang('keyframe', 'en', assetDetailModal.keyframeIndex)} className="text-xs px-2 py-1 rounded bg-sky-500/20 text-sky-300 hover:bg-sky-500/30">Gen(EN)</button>
+                                                            </div>
+                                                            <div className="flex items-center justify-between">
+                                                                <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('英文提示词', 'Prompt (EN)')}</div>
+                                                                <button
+                                                                    onClick={() => runDetailTranslate({
+                                                                        text: (tech.keyframe_prompt_cn_map && keyframe?.time) ? (tech.keyframe_prompt_cn_map[keyframe.time] || '') : '',
+                                                                        from: 'zh',
+                                                                        to: 'en',
+                                                                        loadingKey: `kf_cn2en_${assetDetailModal.keyframeIndex}`,
+                                                                        onResult: (v) => {
+                                                                            const updated = [...localKeyframes];
+                                                                            if (!updated[assetDetailModal.keyframeIndex]) return;
+                                                                            updated[assetDetailModal.keyframeIndex].prompt = v;
+                                                                            setLocalKeyframes(updated);
+                                                                        },
+                                                                    })}
+                                                                    disabled={!!detailTranslateLoading[`kf_cn2en_${assetDetailModal.keyframeIndex}`]}
+                                                                    className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/80"
+                                                                >
+                                                                    {detailTranslateLoading[`kf_cn2en_${assetDetailModal.keyframeIndex}`] ? t('翻译中...', 'Translating...') : t('中→英', 'CN→EN')}
+                                                                </button>
+                                                            </div>
+                                                            <textarea className="w-full h-48 bg-black/30 border border-white/10 rounded p-2 text-sm" value={keyframe?.prompt || ''} onChange={(e) => {
+                                                                const updated = [...localKeyframes];
+                                                                if (!updated[assetDetailModal.keyframeIndex]) return;
+                                                                updated[assetDetailModal.keyframeIndex].prompt = e.target.value;
+                                                                setLocalKeyframes(updated);
+                                                            }} />
+                                                            <div className="flex items-center justify-between">
+                                                                <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('中文对照提示词', 'Prompt (CN)')}</div>
+                                                                <button
+                                                                    onClick={() => runDetailTranslate({
+                                                                        text: keyframe?.prompt || '',
+                                                                        from: 'en',
+                                                                        to: 'zh',
+                                                                        loadingKey: `kf_en2cn_${assetDetailModal.keyframeIndex}`,
+                                                                        onResult: (v) => overwriteKeyframeCnMap(keyframe?.time, v),
+                                                                    })}
+                                                                    disabled={!!detailTranslateLoading[`kf_en2cn_${assetDetailModal.keyframeIndex}`]}
+                                                                    className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/80"
+                                                                >
+                                                                    {detailTranslateLoading[`kf_en2cn_${assetDetailModal.keyframeIndex}`] ? t('翻译中...', 'Translating...') : t('英→中', 'EN→CN')}
+                                                                </button>
+                                                            </div>
+                                                            <textarea
+                                                                className="w-full h-40 bg-black/30 border border-white/10 rounded p-2 text-sm"
+                                                                value={(tech.keyframe_prompt_cn_map && keyframe?.time) ? (tech.keyframe_prompt_cn_map[keyframe.time] || '') : ''}
+                                                                onChange={(e) => {
+                                                                    const nextMap = { ...(tech.keyframe_prompt_cn_map || {}) };
+                                                                    if (keyframe?.time) nextMap[keyframe.time] = e.target.value;
+                                                                    updateTechField('keyframe_prompt_cn_map', nextMap);
+                                                                }}
+                                                                placeholder={t('填写关键帧中文对照提示词...', 'Add Chinese counterpart prompt for keyframe...')}
+                                                            />
+                                                            <RefineControl originalText={keyframe?.prompt || ''} onUpdate={(v) => {
+                                                                const updated = [...localKeyframes];
+                                                                if (!updated[assetDetailModal.keyframeIndex]) return;
+                                                                updated[assetDetailModal.keyframeIndex].prompt = v;
+                                                                setLocalKeyframes(updated);
+                                                                reconstructKeyframes(updated);
+                                                            }} type="image" currentImage={keyframe?.url || ''} onImageUpdate={(url) => {
+                                                                const updated = [...localKeyframes];
+                                                                if (!updated[assetDetailModal.keyframeIndex]) return;
+                                                                updated[assetDetailModal.keyframeIndex].url = url;
+                                                                setLocalKeyframes(updated);
+                                                                reconstructKeyframes(updated);
+                                                            }} projectId={projectId} shotId={editingShot.id} assetType={`keyframe_${assetDetailModal.keyframeIndex}`} featureInjector={injectEntityFeatures} onPickMedia={openMediaPicker} />
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })()}
+                                        </div>
+
+                                        <div className="p-4 border-t border-white/10 flex items-center justify-end gap-2 bg-black/20">
+                                            <button onClick={closeAssetDetailModal} className="px-4 py-2 rounded hover:bg-white/10 text-sm">{t('关闭', 'Close')}</button>
+                                            <button
+                                                onClick={async () => {
+                                                    try {
+                                                        if (assetDetailModal.type === 'keyframe') {
+                                                            await reconstructKeyframes(localKeyframes);
+                                                        } else {
+                                                            await onUpdateShot(editingShot.id, editingShot);
+                                                        }
+                                                        onLog?.(t('详情修改已保存', 'Detail changes saved'), 'success');
+                                                        closeAssetDetailModal();
+                                                    } catch (e) {
+                                                        onLog?.(t('保存失败', 'Save failed'), 'error');
+                                                    }
+                                                }}
+                                                className="px-4 py-2 rounded bg-primary text-black font-bold hover:bg-primary/90 text-sm"
+                                            >
+                                                {t('保存', 'Save')}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </motion.div>
                 )}
