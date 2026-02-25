@@ -725,20 +725,46 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
 
         # Record max token config for diagnostics, but do not override it.
         cfg_obj = (config or {}).get("config") or {}
-        debug_meta["config_max_tokens"] = cfg_obj.get("max_tokens")
-        debug_meta["config_max_completion_tokens"] = cfg_obj.get("max_completion_tokens")
-        debug_meta["config_max_tokens_effective"] = cfg_obj.get("max_tokens")
-        debug_meta["requested_output_cap_tokens"] = (
-            cfg_obj.get("max_tokens")
-            or cfg_obj.get("max_completion_tokens")
-            or cfg_obj.get("max_output_tokens")
+        if not isinstance(cfg_obj, dict):
+            cfg_obj = {}
+
+        def _to_int(value: Any) -> int:
+            try:
+                parsed = int(value)
+                return parsed if parsed > 0 else 0
+            except Exception:
+                return 0
+
+        requested_cap = (
+            _to_int(cfg_obj.get("max_tokens"))
+            or _to_int(cfg_obj.get("max_completion_tokens"))
+            or _to_int(cfg_obj.get("max_output_tokens"))
         )
+
+        removed_local_cap_fields: List[str] = []
+        for cap_key in ("max_tokens", "max_completion_tokens", "max_output_tokens"):
+            if cap_key in cfg_obj:
+                removed_local_cap_fields.append(cap_key)
+                cfg_obj.pop(cap_key, None)
+
+        if (config or {}).get("config") is not cfg_obj:
+            config["config"] = cfg_obj
+
+        debug_meta["config_max_tokens"] = None
+        debug_meta["config_max_completion_tokens"] = None
+        debug_meta["config_max_tokens_effective"] = None
+        debug_meta["requested_output_cap_tokens"] = requested_cap
+        debug_meta["default_output_cap_applied"] = False
+        debug_meta["local_output_cap_removed"] = bool(removed_local_cap_fields)
+        if removed_local_cap_fields:
+            debug_meta["removed_local_cap_fields"] = removed_local_cap_fields
 
         logger.info(f"Analyzing scene for user {current_user.id} with model {config.get('model')}")
         # Auto-continue if provider truncates (finish_reason=length).
         # Important: keep continuation prompts small (do NOT send the entire prior output back)
         # to avoid blowing up prompt size / hitting context window.
-        max_segments = 10
+        # Token cap is controlled by provider/model config; local continuation only keeps a high safety ceiling.
+        max_segments = min(1000, max(1, _to_int(cfg_obj.get("continuation_max_segments")) or 200))
         tail_chars = 1600
         continuation_instruction_tpl = (
             "Continue exactly where you left off, immediately after the following suffix. "

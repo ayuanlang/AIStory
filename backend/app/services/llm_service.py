@@ -3,7 +3,7 @@
 import requests
 import json
 import asyncio
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import logging
 import os
 import re
@@ -689,6 +689,21 @@ class LLMService:
                 if k not in ["model", "messages", "stream"] and not str(k).startswith("__"):
                     payload[k] = v
 
+        def _to_positive_int(value: Any) -> Optional[int]:
+            try:
+                parsed = int(value)
+                return parsed if parsed > 0 else None
+            except Exception:
+                return None
+
+        resolved_output_cap = (
+            _to_positive_int(payload.get("max_tokens"))
+            or _to_positive_int(payload.get("max_completion_tokens"))
+            or _to_positive_int(payload.get("max_output_tokens"))
+        )
+        if resolved_output_cap and _to_positive_int(payload.get("max_tokens")) is None:
+            payload["max_tokens"] = resolved_output_cap
+
         def _message_chars(msg: Dict[str, Any]) -> int:
             content = msg.get("content")
             if isinstance(content, str):
@@ -722,6 +737,8 @@ class LLMService:
         effective_max_tokens = payload.get("max_tokens")
         if effective_max_tokens is None:
             effective_max_tokens = payload.get("max_completion_tokens")
+        if effective_max_tokens is None:
+            effective_max_tokens = payload.get("max_output_tokens")
 
         logger.info(
             "Calling LLM: category=%s url=%s (source=%s) model=%s messages=%s roles=%s prompt_chars=%s max_tokens=%s",
