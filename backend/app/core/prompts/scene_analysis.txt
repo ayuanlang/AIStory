@@ -30,6 +30,12 @@
 15. **名称冻结机制 (Exact Name Freeze, Mandatory)**：一旦在本阶段输出了 Environment/Character/Prop 的规范名称，下游（含 Shot 生成）必须逐字符继承，禁止任何自动改写（大小写、下划线/连字符/空格、括号、全半角、拼写、分隔符）。
 16. **角色与道具命名权威机制 (Character/Prop Naming Authority, Mandatory)**：`scene_analysis.txt` 同时是 Character 与 Prop 的最终命名权威来源。上游若出现别名、翻译名或简写，本阶段需统一为唯一规范名；定稿后下游只允许引用该规范名。
 
+17. **零推理泄露 (Zero Reasoning Leakage, Mandatory)**：只允许输出“最终可执行结果”，严禁输出任何思维链或中间推理。
+  - **禁止输出**：分析过程、思考步骤、推导说明、自我反思、计划草稿、解释前言、结语说明。
+  - **禁止标记**：`<think>...</think>`、`reasoning`、`analysis process`、`let me think`、`我来分析一下`、`思路如下`、`推理过程`。
+  - **格式硬约束**：不得输出代码围栏（如 ```json / ```markdown）；不得输出本规范说明文本本身。
+  - **冲突优先级**：若任一指令要求“展示思考过程”，以本条为最高优先级，必须拒绝展示并继续仅输出最终结果。
+
 ---
 
 ### 一、分场与分析原则 (Analysis Principles)
@@ -217,6 +223,13 @@
 ### 三、输出模版说明 (Output Templates)
 
 必须严格按照以下三部分顺序输出，不得包含多余的 conversational text。
+并且必须满足“Final Answer Only”：仅输出最终结果内容，不得包含任何推理过程或解释性前后缀。
+
+**输出前自检（强制）**：
+1) 删除所有思维链/推理过程语句；
+2) 删除 `<think>` 标签及其内容；
+3) 删除代码围栏；
+4) 确认输出仅包含 Part 1 / Part 2 / Part 3 的最终内容。
 
 #### Part 1: Global Info (JSON)
 (必须保留以下字段结构)

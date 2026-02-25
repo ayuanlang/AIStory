@@ -142,7 +142,6 @@ class LLMService:
 
         cleaned = text
         cleaned = re.sub(r"<think\b[^>]*>[\s\S]*?</think>", "", cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r"<think\b[^>]*>[\s\S]*$", "", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"</think>", "", cleaned, flags=re.IGNORECASE)
 
         cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
@@ -167,37 +166,145 @@ class LLMService:
     def _extract_text_from_content(self, content: Any) -> str:
         if isinstance(content, str):
             return content
+
         if isinstance(content, list):
-            chunks = []
+            chunks: List[str] = []
             for item in content:
-                if isinstance(item, dict):
-                    txt = item.get("text")
-                    if isinstance(txt, str) and txt.strip():
-                        chunks.append(txt)
-                elif isinstance(item, str) and item.strip():
-                    chunks.append(item)
+                item_text = self._extract_text_from_content(item)
+                if isinstance(item_text, str) and item_text.strip():
+                    chunks.append(item_text)
             return "\n".join(chunks).strip()
+
+        if isinstance(content, dict):
+            direct_text_candidates: List[str] = []
+            for key in ["text", "output_text", "value", "content", "parts", "delta"]:
+                value = content.get(key)
+                extracted = self._extract_text_from_content(value)
+                if isinstance(extracted, str) and extracted.strip():
+                    direct_text_candidates.append(extracted)
+
+            if direct_text_candidates:
+                return "\n".join(direct_text_candidates).strip()
+
+            nested_chunks: List[str] = []
+            for value in content.values():
+                extracted = self._extract_text_from_content(value)
+                if isinstance(extracted, str) and extracted.strip():
+                    nested_chunks.append(extracted)
+            return "\n".join(nested_chunks).strip()
+
         return ""
+
+    def _extract_finish_reason_from_response(self, full_response: Dict[str, Any]) -> Any:
+        choices = full_response.get("choices") or []
+        if not isinstance(choices, list):
+            return None
+
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            reason = choice.get("finish_reason")
+            if reason is not None and str(reason).strip() != "":
+                return reason
+        return None
+
+    def _build_extraction_diagnostics(self, full_response: Dict[str, Any]) -> Dict[str, Any]:
+        choices = full_response.get("choices") or []
+        if not isinstance(choices, list):
+            choices = []
+
+        combined_text = self._extract_text_from_response(full_response)
+        choice_items: List[Dict[str, Any]] = []
+
+        for idx, choice in enumerate(choices):
+            if not isinstance(choice, dict):
+                choice_items.append({
+                    "index": idx,
+                    "type": type(choice).__name__,
+                    "selected_source": "invalid_choice",
+                    "selected_chars": 0,
+                })
+                continue
+
+            finish_reason = choice.get("finish_reason")
+            message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
+
+            content_text = self._extract_text_from_content(message.get("content")) if message else ""
+            reasoning_text = self._extract_text_from_content(message.get("reasoning_content")) if message else ""
+
+            refusal_val = message.get("refusal") if message else None
+            refusal_text = refusal_val if isinstance(refusal_val, str) else ""
+
+            choice_text = self._extract_text_from_content(choice.get("text"))
+
+            selected_source = "none"
+            selected_text = ""
+            if content_text:
+                selected_source = "message.content"
+                selected_text = content_text
+            elif reasoning_text:
+                selected_source = "message.reasoning_content"
+                selected_text = reasoning_text
+            elif refusal_text:
+                selected_source = "message.refusal"
+                selected_text = refusal_text
+            elif choice_text:
+                selected_source = "choice.text"
+                selected_text = choice_text
+
+            choice_items.append({
+                "index": idx,
+                "finish_reason": finish_reason,
+                "selected_source": selected_source,
+                "selected_chars": len(selected_text or ""),
+                "message_content_chars": len(content_text or ""),
+                "message_reasoning_chars": len(reasoning_text or ""),
+                "message_refusal_chars": len(refusal_text or ""),
+                "choice_text_chars": len(choice_text or ""),
+            })
+
+        return {
+            "choices_count": len(choices),
+            "combined_output_chars": len(combined_text or ""),
+            "choices": choice_items,
+        }
 
     def _extract_text_from_response(self, full_response: Dict[str, Any]) -> str:
         choices = full_response.get("choices") or []
-        first = choices[0] if choices else {}
-        if isinstance(first, dict):
-            message = first.get("message") or {}
-            if isinstance(message, dict):
-                text = self._extract_text_from_content(message.get("content"))
-                if text:
-                    return text
-                reasoning_text = self._extract_text_from_content(message.get("reasoning_content"))
-                if reasoning_text:
-                    return reasoning_text
-                refusal = message.get("refusal")
-                if isinstance(refusal, str) and refusal.strip():
-                    return refusal
+        if isinstance(choices, list):
+            all_choice_chunks: List[str] = []
+            for choice in choices:
+                if not isinstance(choice, dict):
+                    continue
 
-            choice_text = first.get("text")
-            if isinstance(choice_text, str) and choice_text.strip():
-                return choice_text
+                message = choice.get("message") or {}
+                if isinstance(message, dict):
+                    text = self._extract_text_from_content(message.get("content"))
+                    if text:
+                        all_choice_chunks.append(text)
+                        continue
+
+                    reasoning_text = self._extract_text_from_content(message.get("reasoning_content"))
+                    if reasoning_text:
+                        all_choice_chunks.append(reasoning_text)
+                        continue
+
+                    refusal = message.get("refusal")
+                    if isinstance(refusal, str) and refusal.strip():
+                        all_choice_chunks.append(refusal)
+                        continue
+
+                choice_text = self._extract_text_from_content(choice.get("text"))
+                if choice_text:
+                    all_choice_chunks.append(choice_text)
+
+            if all_choice_chunks:
+                return "\n".join(all_choice_chunks).strip()
+
+        for key in ["output_text", "content", "text", "response"]:
+            extracted = self._extract_text_from_content(full_response.get(key))
+            if extracted:
+                return extracted
 
         return ""
 
@@ -494,16 +601,19 @@ class LLMService:
 
         try:
             full_response = await self._raw_llm_request_full(base_url, api_key, model, messages, extra_config)
-            content = self._extract_text_from_response(full_response)
-            content = self._sanitize_response_content(content)
-            finish_reason = full_response.get("choices", [{}])[0].get("finish_reason")
+            raw_content = self._extract_text_from_response(full_response)
+            content = self._sanitize_response_content(raw_content)
+            finish_reason = self._extract_finish_reason_from_response(full_response)
             usage = full_response.get("usage", {})
             token_limit_hints = full_response.get("_token_limit_hints", []) if isinstance(full_response, dict) else []
+            extraction_diagnostics = self._build_extraction_diagnostics(full_response)
             return {
+                "raw_content": raw_content,
                 "content": content,
                 "usage": usage,
                 "finish_reason": finish_reason,
                 "token_limit_hints": token_limit_hints,
+                "extraction_diagnostics": extraction_diagnostics,
             }
         except Exception as e:
             logger.error(f"LLM Raw Completion failed: {e}")
@@ -515,13 +625,7 @@ class LLMService:
         content = self._extract_text_from_response(full_response)
         content = self._sanitize_response_content(content)
         usage = full_response.get("usage", {})
-        finish_reason = None
-        try:
-            choices = full_response.get("choices") or []
-            first = choices[0] if choices else {}
-            finish_reason = first.get("finish_reason") if isinstance(first, dict) else None
-        except Exception:
-            finish_reason = None
+        finish_reason = self._extract_finish_reason_from_response(full_response)
         
         # Parse JSON from content
         # LLM might wrap in ```json ... ```
@@ -641,7 +745,7 @@ class LLMService:
 
     async def _raw_llm_request(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> str:
         data = await self._raw_llm_request_full(base_url, api_key, model, messages, extra_config)
-        return data["choices"][0]["message"]["content"]
+        return self._extract_text_from_response(data)
 
     async def _raw_llm_request_full(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> Dict[str, Any]:
         # Ensure base_url ends with correct chat endpoint if not specific
@@ -836,7 +940,7 @@ class LLMService:
         try:
             choices = data.get("choices") or []
             first = choices[0] if choices else {}
-            finish_reason = first.get("finish_reason") if isinstance(first, dict) else None
+            finish_reason = self._extract_finish_reason_from_response(data)
             content = self._extract_text_from_response(data)
             usage = data.get("usage") or {}
             output_chars = len(content) if isinstance(content, str) else len(str(content))
@@ -847,6 +951,17 @@ class LLMService:
                 output_chars,
                 usage,
             )
+            self._safe_log_json("LLM_RESPONSE_SUMMARY", {
+                "provider": provider,
+                "category": resolved_category,
+                "url": url,
+                "model": data.get("model") or model,
+                "finish_reason": finish_reason,
+                "output_chars": output_chars,
+                "usage": usage,
+                "prompt_chars": prompt_chars,
+                "max_tokens": effective_max_tokens,
+            })
             if self._is_length_limited_finish_reason(finish_reason):
                 logger.warning(
                     "LLM output appears truncated (finish_reason=length). prompt_chars=%s output_chars=%s max_tokens=%s prompt_tokens=%s completion_tokens=%s total_tokens=%s usage=%s",
@@ -858,6 +973,20 @@ class LLMService:
                     usage.get("total_tokens"),
                     usage,
                 )
+                self._safe_log_json("LLM_RESPONSE_TRUNCATED", {
+                    "provider": provider,
+                    "category": resolved_category,
+                    "url": url,
+                    "model": data.get("model") or model,
+                    "finish_reason": finish_reason,
+                    "prompt_chars": prompt_chars,
+                    "output_chars": output_chars,
+                    "max_tokens": effective_max_tokens,
+                    "prompt_tokens": usage.get("prompt_tokens") or usage.get("input_tokens"),
+                    "completion_tokens": usage.get("completion_tokens") or usage.get("output_tokens"),
+                    "total_tokens": usage.get("total_tokens"),
+                    "usage": usage,
+                })
             if output_chars == 0:
                 first_choice_keys = list(first.keys()) if isinstance(first, dict) else []
                 logger.warning(
@@ -868,6 +997,15 @@ class LLMService:
                     first_choice_keys,
                     usage,
                 )
+                self._safe_log_json("LLM_EMPTY_OUTPUT", {
+                    "provider": provider,
+                    "category": resolved_category,
+                    "url": url,
+                    "model": data.get("model") or model,
+                    "finish_reason": finish_reason,
+                    "first_choice_keys": first_choice_keys,
+                    "usage": usage,
+                })
         except Exception:
             logger.info("LLM Response received (summary unavailable)")
 

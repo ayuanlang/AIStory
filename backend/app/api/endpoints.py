@@ -808,10 +808,13 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             system_only_messages = []
         for seg_idx in range(1, max_segments + 1):
             llm_resp = await llm_service.chat_completion(current_messages, config)
-            raw_part = llm_resp.get("content", "") or ""
+            raw_part = llm_resp.get("raw_content")
+            if not isinstance(raw_part, str):
+                raw_part = llm_resp.get("content", "") or ""
             part_usage = llm_resp.get("usage", {}) or {}
             part_finish = llm_resp.get("finish_reason")
             part_limit_hints = llm_resp.get("token_limit_hints", []) or []
+            part_extraction_diag = llm_resp.get("extraction_diagnostics", {}) or {}
             if isinstance(part_limit_hints, list):
                 for hint in part_limit_hints:
                     hint_text = str(hint or "").strip()
@@ -832,6 +835,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "deduped_chars": len(part_content),
                 "usage": part_usage,
                 "token_limit_hints": part_limit_hints,
+                "extraction_diagnostics": part_extraction_diag,
             })
 
             # Stop if not truncated.
