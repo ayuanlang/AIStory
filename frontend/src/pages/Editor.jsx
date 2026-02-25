@@ -6796,6 +6796,14 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
 
     // Fetch Entities (Environment) for image matching
     useEffect(() => {
+        const normalizeOriginalScriptText = (value) => {
+            const raw = typeof value === 'string' ? value.trim() : '';
+            if (!raw) return '';
+            if (/^\{\s*Original\s+Script\s+Text\s+for\s+Scene\s*\d+\s*\}$/i.test(raw)) return '';
+            if (/^Original\s+Script\s+Text\s+for\s+Scene\s*\d+$/i.test(raw)) return '';
+            return raw;
+        };
+
         // Shared Parsing Logic
         const parseScenesFromText = (text) => {
              if (!text) return [];
@@ -6888,7 +6896,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                         scene_name: getVal('scene_name', fallback.scene_name),
                         equivalent_duration: getVal('equivalent_duration', fallback.equivalent_duration),
                         core_scene_info: getVal('core_scene_info', fallback.core_scene_info),
-                        original_script_text: getVal('original_script_text', fallback.original_script_text),
+                        original_script_text: normalizeOriginalScriptText(getVal('original_script_text', fallback.original_script_text)),
                         environment_name: getVal('environment_name', fallback.environment_name),
                         linked_characters: getVal('linked_characters', fallback.linked_characters),
                         key_props: getVal('key_props', fallback.key_props)
@@ -6912,12 +6920,15 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                      // Match by Scene Number
                                      const match = parsed.find(p => p.scene_no === dbS.scene_no);
                                      if (match) {
+                                         const dbOriginalScriptText = normalizeOriginalScriptText(dbS.original_script_text);
+                                         const matchOriginalScriptText = normalizeOriginalScriptText(match.original_script_text);
                                          return {
                                              ...dbS,
                                              linked_characters: dbS.linked_characters || match.linked_characters,
                                              key_props: dbS.key_props || match.key_props,
                                              environment_name: dbS.environment_name || match.environment_name,
-                                             core_scene_info: dbS.core_scene_info || match.core_scene_info
+                                             core_scene_info: dbS.core_scene_info || match.core_scene_info,
+                                             original_script_text: dbOriginalScriptText || matchOriginalScriptText
                                          };
                                      }
                                      return dbS;
@@ -6926,7 +6937,10 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                  return;
                              }
                          }
-                         setScenes(dbScenes);
+                         setScenes((dbScenes || []).map((scene) => ({
+                             ...scene,
+                             original_script_text: normalizeOriginalScriptText(scene?.original_script_text),
+                         })));
                      } else {
                          // Only parse if DB is empty
                          setScenes(parseScenesFromText(activeEpisode?.scene_content));
@@ -7630,6 +7644,20 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                         title={editingScene?.id ? t('为该场景生成 AI 镜头', 'Generate AI shots for this scene') : t('请先保存场景再生成 AI 镜头', 'Save scene first to generate AI shots')}
                                     >
                                         <Wand2 className="w-3 h-3"/> AI Shots
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            if (!editingScene?.id) return;
+                                            if (typeof onSwitchToShots === 'function') {
+                                                onSwitchToShots(editingScene.id);
+                                            }
+                                            setEditingScene(null);
+                                        }}
+                                        disabled={!editingScene?.id}
+                                        className="px-3 py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-200 border border-emerald-500/20 rounded text-xs flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        title={editingScene?.id ? t('跳转到 Shots 并筛选当前场景', 'Go to Shots and filter by this scene') : t('请先保存场景', 'Save scene first')}
+                                    >
+                                        <Film className="w-3 h-3"/> {t('查看本场景 Shots', 'View Scene Shots')}
                                     </button>
                                     <button onClick={() => setEditingScene(null)} className="p-2 hover:bg-white/10 rounded-full"><X className="w-5 h-5"/></button>
                                 </div>
@@ -9531,7 +9559,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     );
 };
 
-const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setEditingShot, uiLang = 'zh' }) => {
+const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setEditingShot, uiLang = 'zh', focusRequest = null }) => {
     const { generationConfig, saveToolConfig, savedToolConfigs, llmConfig } = useStore();
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
     const [scenes, setScenes] = useState([]);
@@ -9769,6 +9797,14 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             console.warn('Failed to persist shot filters', e);
         }
     }, [shotFilterStorageKey, selectedSceneId, sceneCodeFilter, shotIdFilter]);
+
+    useEffect(() => {
+        const sceneId = focusRequest?.sceneId;
+        if (!sceneId) return;
+        setSelectedSceneId(String(sceneId));
+        setSceneCodeFilter('');
+        setShotIdFilter('');
+    }, [focusRequest?.nonce]);
 
     // Helper: Construct Global Context String from Episode Info
     const getGlobalContextStr = () => {
@@ -11633,32 +11669,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         onLog?.(`Batch Video Generation Complete. Generated ${generatedCount} videos.`, "success");
         refreshShots();
     };
-
-
-    // Save to shot_content (similar to SceneManager)
-    const handleSaveList = async () => {
-        if (!activeEpisode) return;
-        
-        onLog?.('ShotsView: Saving content...', 'info');
-
-        const contextInfo = `Project: ${project?.title || 'Unknown'} | Episode: ${activeEpisode?.title || 'Unknown'}\n`;
-        const header = `| Shot No | Title | Start Frame | End Frame | Video Content | Duration | Associated Entities |\n|---|---|---|---|---|---|---|`;
-        
-        // Map current state to markdown table
-        const content = shots.map(s => {
-             const clean = (txt) => (txt || '').replace(/\n/g, '<br>').replace(/\|/g, '\\|');
-             return `| ${clean(s.shot_id)} | ${clean(s.shot_name)} | ${clean(s.start_frame)} | ${clean(s.end_frame)} | ${clean(s.video_content || s.video_content)} | ${clean(s.duration)} | ${clean(s.associated_entities)} |`;
-        }).join('\n');
-        
-        try {
-            await updateEpisode(activeEpisode.id, { shot_content: contextInfo + header + '\n' + content });
-            onLog?.(`Saved Shot List (${shots.length} items) to text content.`, 'success');
-        } catch(e) {
-            console.error(e);
-            onLog?.('Failed to save shot list.', 'error');
-        }
-    };
-
     return (
         <div className="flex flex-col h-full w-full p-6 overflow-hidden">
              {/* Header / Toolbar */}
@@ -11668,14 +11678,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                         {t('镜头管理', 'Shot Manager')}
                         <span className="text-sm font-normal text-muted-foreground ml-2">({shots.length})</span>
                     </h2>
-                    {/* Add Save Button */}
-                    <button 
-                         onClick={handleSaveList}
-                         className="px-3 py-1.5 bg-white/5 text-white hover:bg-white/10 rounded-lg text-sm font-medium flex items-center gap-2 border border-white/10"
-                        title={t('将当前列表保存到 Shot Content（文本）', 'Save current list to Shot Content (Text)')}
-                    >
-                        <Save className="w-4 h-4" /> {t('保存列表', 'Save List')}
-                    </button>
                     <div className="relative">
                          <select 
                             className="bg-black/40 border border-white/20 rounded px-3 py-1.5 text-sm min-w-[200px] text-white"
@@ -11688,22 +11690,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                 <option key={s.id} value={s.id}>{s.scene_no} - {s.scene_name || t('未命名', 'Untitled')}</option>
                             ))}
                          </select>
-                         {selectedSceneId && selectedSceneId !== 'all' && (
-                             <button
-                                 onClick={() => handleGenerateShots(selectedSceneId)}
-                                 className="ml-2 px-3 py-1.5 bg-primary/20 hover:bg-primary/30 text-primary border border-primary/20 rounded text-xs flex items-center gap-1"
-                                 title={t('根据 AI 提示生成镜头', 'Generate Shots from AI Prompt')}
-                             >
-                                 <Wand2 className="w-3 h-3"/> {t('AI 镜头', 'AI Shots')}
-                             </button>
-                         )}
-                         <button 
-                            onClick={() => handleSyncScenes()}
-                            className="ml-2 px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded text-xs text-white border border-white/10"
-                            title={t('从文本剧本同步场景与镜头', 'Sync Scenes & Shots from Text Script')}
-                        >
-                            <RefreshCw className="w-3 h-3"/>
-                        </button>
                         <button 
                             onClick={handleDeleteAllShots}
                             className="ml-2 px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded text-xs border border-red-500/20"
@@ -11771,16 +11757,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             </div>
 
             {/* Sub-header Actions */}
-            <div className="px-4 pb-2 flex justify-end">
-                {selectedSceneId && selectedSceneId !== 'all' && (
-                    <button 
-                        onClick={() => setIsImportOpen(true)}
-                        className="px-4 py-2 bg-primary text-black rounded-lg text-sm font-bold hover:bg-primary/90 flex items-center gap-2"
-                    >
-                        <Upload className="w-4 h-4"/> {t('导入镜头', 'Import Shots')}
-                    </button>
-                )}
-             </div>
+            <div className="px-4 pb-2 flex justify-end" />
              
              {/* Main Content */}
              <div className="flex-1 overflow-auto custom-scrollbar">
@@ -13439,6 +13416,7 @@ const Editor = ({ projectId, onClose }) => {
     const [isImportOpen, setIsImportOpen] = useState(false);
     const [refreshKey, setRefreshKey] = useState(0);
     const [editingShot, setEditingShot] = useState(null);
+    const [shotsFocusRequest, setShotsFocusRequest] = useState(null);
     const [uiLang, setUiLang] = useState(() => {
         try {
             const saved = localStorage.getItem('aistory.ui.lang');
@@ -14451,8 +14429,13 @@ const Editor = ({ projectId, onClose }) => {
                         {activeTab === 'ep_info' && <EpisodeInfo episode={activeEpisode} onUpdate={handleUpdateEpisodeInfo} project={project} projectId={id} uiLang={uiLang} />}
                         {activeTab === 'script' && <ScriptEditor activeEpisode={activeEpisode} projectId={id} project={project} onUpdateScript={handleUpdateScript} onUpdateEpisodeInfo={handleUpdateEpisodeInfo} onLog={addLog} onImportText={handleImport} onSwitchToScenes={() => setActiveTab('scenes')} uiLang={uiLang} />}
                         {activeTab === 'subjects' && <SubjectLibrary projectId={id} currentEpisode={activeEpisode} uiLang={uiLang} />}
-                        {activeTab === 'scenes' && <SceneManager activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} onSwitchToShots={() => setActiveTab('shots')} uiLang={uiLang} />}
-                        {activeTab === 'shots' && <ShotsView activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} editingShot={editingShot} setEditingShot={setEditingShot} uiLang={uiLang} />}
+                        {activeTab === 'scenes' && <SceneManager activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} onSwitchToShots={(sceneId) => {
+                            if (sceneId) {
+                                setShotsFocusRequest({ sceneId: String(sceneId), nonce: Date.now() });
+                            }
+                            setActiveTab('shots');
+                        }} uiLang={uiLang} />}
+                        {activeTab === 'shots' && <ShotsView activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} editingShot={editingShot} setEditingShot={setEditingShot} uiLang={uiLang} focusRequest={shotsFocusRequest} />}
                         {activeTab === 'montage' && <VideoStudio activeEpisode={activeEpisode} projectId={id} onLog={addLog} />}
                     </div>
                 </div>
