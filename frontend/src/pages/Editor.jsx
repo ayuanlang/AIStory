@@ -136,7 +136,6 @@ import RefineControl from '../components/RefineControl.jsx';
 import VideoStudio from '../components/VideoStudio';
 import InputGroup from './editor/components/InputGroup';
 import MarkdownCell from './editor/components/MarkdownCell';
-import TranslateControl from './editor/components/TranslateControl';
 import {
     PROVIDER_LABELS,
     MODEL_OPTIONS,
@@ -12459,7 +12458,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                             </div>
                                                             <div className="space-y-3">
                                                                 <div className="flex items-center gap-2">
-                                                                    <TranslateControl text={editingShot.start_frame || ''} onUpdate={(v) => setEditingShot({...editingShot, start_frame: v})} />
                                                                     <button onClick={() => generateAssetWithLang('start', 'zh')} className="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30">Gen(CN)</button>
                                                                     <button onClick={() => generateAssetWithLang('start', 'en')} className="text-xs px-2 py-1 rounded bg-sky-500/20 text-sky-300 hover:bg-sky-500/30">Gen(EN)</button>
                                                                 </div>
@@ -12526,7 +12524,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                             </div>
                                                             <div className="space-y-3">
                                                                 <div className="flex items-center gap-2">
-                                                                    <TranslateControl text={editingShot.end_frame || ''} onUpdate={(v) => setEditingShot({...editingShot, end_frame: v})} />
                                                                     <button onClick={() => generateAssetWithLang('end', 'zh')} className="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30">Gen(CN)</button>
                                                                     <button onClick={() => generateAssetWithLang('end', 'en')} className="text-xs px-2 py-1 rounded bg-sky-500/20 text-sky-300 hover:bg-sky-500/30">Gen(EN)</button>
                                                                 </div>
@@ -12594,7 +12591,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                             </div>
                                                             <div className="space-y-3">
                                                                 <div className="flex items-center gap-2">
-                                                                    <TranslateControl text={editingShot.prompt || editingShot.video_content || ''} onUpdate={(v) => setEditingShot({...editingShot, prompt: v})} />
                                                                     <button onClick={() => generateAssetWithLang('video', 'zh')} className="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30">Gen(CN)</button>
                                                                     <button onClick={() => generateAssetWithLang('video', 'en')} className="text-xs px-2 py-1 rounded bg-sky-500/20 text-sky-300 hover:bg-sky-500/30">Gen(EN)</button>
                                                                 </div>
@@ -12658,12 +12654,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                     const updated = [...localKeyframes];
                                                                     if (!updated[assetDetailModal.keyframeIndex]) return;
                                                                     updated[assetDetailModal.keyframeIndex].time = e.target.value;
-                                                                    setLocalKeyframes(updated);
-                                                                }} />
-                                                                <TranslateControl text={keyframe?.prompt || ''} onUpdate={(v) => {
-                                                                    const updated = [...localKeyframes];
-                                                                    if (!updated[assetDetailModal.keyframeIndex]) return;
-                                                                    updated[assetDetailModal.keyframeIndex].prompt = v;
                                                                     setLocalKeyframes(updated);
                                                                 }} />
                                                                 <button onClick={() => generateAssetWithLang('keyframe', 'zh', assetDetailModal.keyframeIndex)} className="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30">Gen(CN)</button>
