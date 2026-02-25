@@ -58,13 +58,23 @@ if os.getenv("RENDER_EXTERNAL_URL"):
 if not origins:
     origins = ["http://localhost:3000", "http://localhost:5173"]
 
+origin_regex = (settings.CORS_ALLOW_ORIGIN_REGEX or "").strip() or None
+
 allow_credentials = True
 if "*" in origins:
     allow_credentials = False
 
+logger.info(
+    "CORS initialized | allow_origins=%s allow_origin_regex=%s allow_credentials=%s",
+    origins,
+    origin_regex,
+    allow_credentials,
+)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
+    allow_origin_regex=origin_regex,
     allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
