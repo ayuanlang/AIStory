@@ -340,7 +340,12 @@ class MediaGenerationService:
         
         # Download 
         if result and "url" in result and result["url"]:
-            result["url"] = self._download_and_save(result["url"], filename_base=filename_base, user_id=user_id)
+            result["url"] = await asyncio.to_thread(
+                self._download_and_save,
+                result["url"],
+                filename_base,
+                user_id,
+            )
         if result and result.get("error"):
             result["error"] = self._vendor_failed_message(provider, result.get("error"))
         return result
@@ -406,7 +411,12 @@ class MediaGenerationService:
 
         # Download 
         if result and "url" in result and result["url"]:
-            result["url"] = self._download_and_save(result["url"], filename_base=filename_base, user_id=user_id)
+            result["url"] = await asyncio.to_thread(
+                self._download_and_save,
+                result["url"],
+                filename_base,
+                user_id,
+            )
         if result and result.get("error"):
             result["error"] = self._vendor_failed_message(provider, result.get("error"))
         

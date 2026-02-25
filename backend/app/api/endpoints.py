@@ -4004,6 +4004,8 @@ def read_scenes(
     episode_id: int,
     scene_code: Optional[str] = None,
     keyword: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 300,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -4030,7 +4032,9 @@ def read_scenes(
                 Scene.key_props.ilike(token),
             )
         )
-    return query.order_by(Scene.id).all()
+    safe_skip = max(int(skip or 0), 0)
+    safe_limit = max(1, min(int(limit or 300), 500))
+    return query.order_by(Scene.id).offset(safe_skip).limit(safe_limit).all()
 
 @router.post("/episodes/{episode_id}/scenes", response_model=SceneOut)
 def create_scene(
@@ -4165,6 +4169,8 @@ def read_episode_shots(
     scene_code: Optional[str] = None,
     shot_id: Optional[str] = None,
     keyword: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 300,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -4206,7 +4212,9 @@ def read_episode_shots(
             )
         )
 
-    return query.order_by(Shot.id).all()
+    safe_skip = max(int(skip or 0), 0)
+    safe_limit = max(1, min(int(limit or 300), 500))
+    return query.order_by(Shot.id).offset(safe_skip).limit(safe_limit).all()
 
 class AIShotGenRequest(BaseModel):
     user_prompt: Optional[str] = None
@@ -6022,9 +6030,13 @@ def get_assets(
     entity_id: Optional[str] = None,
     shot_id: Optional[str] = None,
     scene_id: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 300,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    safe_skip = max(int(skip or 0), 0)
+    safe_limit = max(1, min(int(limit or 300), 500))
     query = db.query(Asset).filter(Asset.user_id == current_user.id)
     if type:
         query = query.filter(Asset.type == type)
@@ -6034,39 +6046,70 @@ def get_assets(
     # SQLite supports json_extract but SQLAlchemy syntax depends on dialect.
     # For fail-safe prototype, we'll fetch then filter in Python if specific meta filters are requested.
     
-    assets = query.order_by(Asset.created_at.desc()).all()
-    
-    filtered_assets = []
-    for a in assets:
-        meta = a.meta_info or {}
-        
-        # Check Project Filter
+    def _meta_dict(raw_meta: Any) -> Dict[str, Any]:
+        if isinstance(raw_meta, dict):
+            return raw_meta
+        if isinstance(raw_meta, str):
+            try:
+                parsed = json.loads(raw_meta)
+                return parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                return {}
+        return {}
+
+    def _matches_meta_filters(meta: Dict[str, Any]) -> bool:
         if project_id:
-             # If filtering by project, asset must match project_id OR be global (no project, but user's) - 
-             # Actually user probably wants to see assets FOR this project.
-             # Let's say: if asset has project_id, it must match. 
-             # If asset has NO project_id, does it show? "Narrow down scope" implies showing only relevant.
-             # Let's show assets that match the project_id OR have no project_id (global assets).
-             # Wait, strict filtering "Narrow down" usually means strict match.
-             # User requested: "Project, subject, shot etc to filter".
-             # Strict match is safer.
-             p_id = meta.get('project_id')
-             if p_id and str(p_id) != str(project_id):
-                 continue
-                 
-        # Check Entity/Subject Filter
+            p_id = meta.get('project_id')
+            if p_id and str(p_id) != str(project_id):
+                return False
+
         if entity_id:
-             e_id = meta.get('entity_id')
-             if e_id and str(e_id) != str(entity_id):
-                 continue
-                 
-        # Check Shot Filter
+            e_id = meta.get('entity_id')
+            if e_id and str(e_id) != str(entity_id):
+                return False
+
         if shot_id:
             s_id = meta.get('shot_id')
             if s_id and str(s_id) != str(shot_id):
-                continue
+                return False
 
-        filtered_assets.append(a)
+        if scene_id:
+            sc_id = meta.get('scene_id')
+            if sc_id and str(sc_id) != str(scene_id):
+                return False
+
+        return True
+
+    has_meta_filters = bool(project_id or entity_id or shot_id or scene_id)
+    ordered_query = query.order_by(Asset.created_at.desc())
+
+    if not has_meta_filters:
+        filtered_assets = ordered_query.offset(safe_skip).limit(safe_limit).all()
+    else:
+        filtered_assets: List[Asset] = []
+        scan_offset = 0
+        matched_skipped = 0
+        batch_size = min(1000, max(200, safe_limit * 3))
+
+        while len(filtered_assets) < safe_limit:
+            batch = ordered_query.offset(scan_offset).limit(batch_size).all()
+            if not batch:
+                break
+
+            for asset_row in batch:
+                meta = _meta_dict(asset_row.meta_info)
+                if not _matches_meta_filters(meta):
+                    continue
+
+                if matched_skipped < safe_skip:
+                    matched_skipped += 1
+                    continue
+
+                filtered_assets.append(asset_row)
+                if len(filtered_assets) >= safe_limit:
+                    break
+
+            scan_offset += len(batch)
 
     # Enrichment Logic for Grouping
     project_ids = set()
@@ -6076,14 +6119,7 @@ def get_assets(
 
     for a in filtered_assets:
         # Ensure meta is a dict
-        meta = a.meta_info
-        if isinstance(meta, str):
-            try:
-                meta = json.loads(meta)
-            except:
-                meta = {}
-        elif not isinstance(meta, dict):
-            meta = {}
+        meta = _meta_dict(a.meta_info)
             
         p_id = meta.get('project_id')
         if p_id: 
@@ -6120,14 +6156,7 @@ def get_assets(
 
     results = []
     for a in filtered_assets:
-        meta = a.meta_info
-        if isinstance(meta, str):
-            try:
-                meta = json.loads(meta)
-            except:
-                meta = {}
-        elif not isinstance(meta, dict):
-            meta = {}
+        meta = _meta_dict(a.meta_info)
         
         # Make a copy to avoid mutating SQLAlchemy object if it was a dict
         meta = dict(meta)
