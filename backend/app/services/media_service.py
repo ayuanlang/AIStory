@@ -62,6 +62,36 @@ class MediaGenerationService:
             return parsed if isinstance(parsed, dict) else {}
         return {}
 
+    def _flatten_text(self, value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, dict):
+            parts = []
+            for key in ["message", "msg", "error", "status", "reason", "code", "details"]:
+                if key in value:
+                    parts.append(self._flatten_text(value.get(key)))
+            for item in value.values():
+                parts.append(self._flatten_text(item))
+            return " ".join(p for p in parts if p)
+        if isinstance(value, list):
+            return " ".join(self._flatten_text(item) for item in value)
+        return str(value)
+
+    def _is_grsai_quota_or_throttle_error(self, payload: Any) -> bool:
+        text = self._flatten_text(payload).lower()
+        markers = [
+            "resource_exhausted",
+            "public_error_user_requests_throttled",
+            "quota",
+            "throttle",
+            "429",
+            "too many requests",
+            "exhausted",
+        ]
+        return any(marker in text for marker in markers)
+
     def _normalize_doubao_size(self, width: Any, height: Any) -> Optional[str]:
         try:
             w = int(width)
@@ -1861,6 +1891,12 @@ class MediaGenerationService:
             )
             if resp.status_code != 200:
                 print(f"[Grsai] API Error {resp.status_code}: {resp.text}")
+                if resp.status_code == 429 or self._is_grsai_quota_or_throttle_error(resp.text):
+                    logger.error("[GrsaiTrace][%s] submit throttled_or_quota | status=%s body=%s", trace_id, resp.status_code, (resp.text or "")[:500])
+                    return {
+                        "error": "Veo/Grsai 配额或频率受限",
+                        "details": "上游返回 429 RESOURCE_EXHAUSTED（请求过于频繁或额度耗尽）。请降低并发、等待冷却或提升配额后重试。",
+                    }
                 if resp.status_code in retryable_statuses and index < len(upstream_candidates) - 1:
                     last_error = f"Submission Failed {resp.status_code}: {resp.text[:300]}"
                     logger.warning(
@@ -1989,6 +2025,12 @@ class MediaGenerationService:
                             return {"url": media_url, "metadata": meta}
                     elif status_l in {"failed", "error", "canceled", "cancelled"}:
                         print(f"[Grsai] Task Failed: {p_data}")
+                        if self._is_grsai_quota_or_throttle_error(p_data):
+                            logger.error("[GrsaiTrace][%s] task throttled_or_quota | task_id=%s poll_idx=%s detail=%s", trace_id, task_id, i + 1, str(p_data)[:1000])
+                            return {
+                                "error": "Veo/Grsai 配额或频率受限",
+                                "details": "任务失败原因为 429 RESOURCE_EXHAUSTED（上传图片或生成请求被限流/额度不足）。请稍后重试或调整账号配额。",
+                            }
                         logger.error("[GrsaiTrace][%s] task failed | task_id=%s poll_idx=%s detail=%s", trace_id, task_id, i + 1, str(p_data)[:1000])
                         return {"error": "Generation Failed", "details": p_data}
                 else:
