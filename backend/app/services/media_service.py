@@ -1008,7 +1008,17 @@ class MediaGenerationService:
     async def _handle_grsai_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None):
         api_key = config.get("api_key")
         model = config.get("model") or "unknown_model"
+        trace_id = f"grsai-{uuid.uuid4().hex[:10]}"
         print(f"[Grsai] Starting Generation. Type={gen_type}, Model={model}, PromptLen={len(prompt) if prompt else 0}")
+        logger.info(
+            "[GrsaiTrace][%s] start | type=%s model=%s prompt_len=%s render_service=%s render_instance=%s",
+            trace_id,
+            gen_type,
+            model,
+            len(prompt) if prompt else 0,
+            os.getenv("RENDER_SERVICE_ID", ""),
+            os.getenv("RENDER_INSTANCE_ID", ""),
+        )
         tool_conf = config.get("config", {}) or {}
         raw_endpoint = (tool_conf.get("endpoint") or "").strip()
         base_url = config.get("base_url") or "https://grsaiapi.com"
@@ -1080,7 +1090,16 @@ class MediaGenerationService:
             result_url = f"{result_base}/v1/draw/result"
 
             print(f"[Grsai] Submitting Payload: {json.dumps(log_payload, ensure_ascii=False)}")
-            return await self._submit_and_poll_grsai(endpoint, payload, api_key, result_url, extra_metadata=base_metadata)
+            logger.info(
+                "[GrsaiTrace][%s] image submit prepared | endpoint=%s result_url=%s has_refs=%s refs_count=%s payload_keys=%s",
+                trace_id,
+                endpoint,
+                result_url,
+                bool(payload.get("urls")),
+                len(payload.get("urls") or []),
+                sorted(list(payload.keys())),
+            )
+            return await self._submit_and_poll_grsai(endpoint, payload, api_key, result_url, extra_metadata=base_metadata, trace_id=trace_id)
 
         # Video
         elif gen_type == "video":
@@ -1250,9 +1269,17 @@ class MediaGenerationService:
             print(f"[Grsai] Video Payload: {json.dumps(debug_p, ensure_ascii=False)}")
             if is_veo:
                 print(f"[Grsai][Veo] Submit Duration={payload.get('duration')} Model={final_model} Aspect={payload.get('aspectRatio')}")
+            logger.info(
+                "[GrsaiTrace][%s] video submit prepared | endpoint=%s result_url=%s is_veo=%s payload_keys=%s",
+                trace_id,
+                endpoint,
+                result_url,
+                is_veo,
+                sorted(list(payload.keys())),
+            )
             
             # Double check payload validity before sending
-            return await self._submit_and_poll_grsai(endpoint, payload, api_key, result_url, is_video=True, extra_metadata=base_metadata)
+            return await self._submit_and_poll_grsai(endpoint, payload, api_key, result_url, is_video=True, extra_metadata=base_metadata, trace_id=trace_id)
     
     async def _submit_and_poll_grsai_legacy(self, url, payload, api_key, result_url, is_video=False, extra_metadata=None):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
@@ -1753,9 +1780,19 @@ class MediaGenerationService:
         except Exception as e:
             return {"error": str(e)}
 
-    async def _submit_and_poll_grsai(self, url, payload, api_key, result_url, is_video=False, extra_metadata=None):
+    async def _submit_and_poll_grsai(self, url, payload, api_key, result_url, is_video=False, extra_metadata=None, trace_id: Optional[str] = None):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        trace_id = trace_id or f"grsai-{uuid.uuid4().hex[:10]}"
+        payload_digest = hashlib.md5(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:12]
         print(f"[Grsai] Debug - POST URL: {url}")
+        logger.info(
+            "[GrsaiTrace][%s] submit start | submit_url=%s result_url=%s is_video=%s payload_digest=%s",
+            trace_id,
+            url,
+            result_url,
+            is_video,
+            payload_digest,
+        )
 
         def _build_url_pairs(submit_url: str, poll_url: str):
             pairs = [(submit_url, poll_url)]
@@ -1777,6 +1814,14 @@ class MediaGenerationService:
 
         for index, (submit_url, poll_url) in enumerate(upstream_candidates):
             print(f"[Grsai] Upstream Try {index + 1}/{len(upstream_candidates)} -> {submit_url}")
+            logger.info(
+                "[GrsaiTrace][%s] upstream_try | idx=%s total=%s submit_url=%s poll_url=%s",
+                trace_id,
+                index + 1,
+                len(upstream_candidates),
+                submit_url,
+                poll_url,
+            )
 
             def _post():
                 return requests.post(submit_url, json=payload, headers=headers, timeout=(15, 120), verify=False)
@@ -1792,21 +1837,45 @@ class MediaGenerationService:
                 )
 
             try:
+                submit_started = time.perf_counter()
                 try:
                     resp = await asyncio.to_thread(_post)
                 except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+                    logger.warning("[GrsaiTrace][%s] submit primary failed, retry without proxy | submit_url=%s", trace_id, submit_url)
                     resp = await asyncio.to_thread(_post_no_proxy)
+                submit_ms = int((time.perf_counter() - submit_started) * 1000)
             except requests.exceptions.RequestException as e:
                 last_error = str(e)
                 print(f"[Grsai] Submission network error on {submit_url}: {last_error}")
+                logger.error("[GrsaiTrace][%s] submit network_error | submit_url=%s error=%s", trace_id, submit_url, last_error)
                 continue
 
             print(f"[Grsai] API Returned: {resp.text[:1000]}")
+            logger.info(
+                "[GrsaiTrace][%s] submit response | submit_url=%s status=%s elapsed_ms=%s body_preview=%s",
+                trace_id,
+                submit_url,
+                resp.status_code,
+                submit_ms,
+                (resp.text or "")[:300],
+            )
             if resp.status_code != 200:
                 print(f"[Grsai] API Error {resp.status_code}: {resp.text}")
                 if resp.status_code in retryable_statuses and index < len(upstream_candidates) - 1:
                     last_error = f"Submission Failed {resp.status_code}: {resp.text[:300]}"
+                    logger.warning(
+                        "[GrsaiTrace][%s] submit retryable_status | status=%s next_try=%s",
+                        trace_id,
+                        resp.status_code,
+                        True,
+                    )
                     continue
+                logger.error(
+                    "[GrsaiTrace][%s] submit failed_status | status=%s detail=%s",
+                    trace_id,
+                    resp.status_code,
+                    (resp.text or "")[:500],
+                )
                 return {"error": f"Submission Failed {resp.status_code}", "details": resp.text}
 
             try:
@@ -1840,9 +1909,11 @@ class MediaGenerationService:
 
             if not task_id:
                 print(f"[Grsai] No Task ID in response: {data}")
+                logger.error("[GrsaiTrace][%s] submit missing_task_id | response=%s", trace_id, str(data)[:1000])
                 return {"error": "No Task ID", "details": data}
 
             print(f"[Grsai] Task {task_id} submitted. Polling via {poll_url}...")
+            logger.info("[GrsaiTrace][%s] polling start | task_id=%s poll_url=%s", trace_id, task_id, poll_url)
 
             for i in range(100):
                 await asyncio.sleep(3)
@@ -1851,11 +1922,15 @@ class MediaGenerationService:
                     return requests.post(poll_url, json={"id": task_id}, headers=headers, timeout=(10, 30), verify=False)
 
                 try:
+                    poll_started = time.perf_counter()
                     p_resp = await asyncio.to_thread(_poll)
+                    poll_ms = int((time.perf_counter() - poll_started) * 1000)
                 except requests.exceptions.Timeout:
+                    logger.warning("[GrsaiTrace][%s] poll timeout | task_id=%s poll_idx=%s", trace_id, task_id, i + 1)
                     continue
                 except requests.exceptions.RequestException as e:
                     last_error = str(e)
+                    logger.warning("[GrsaiTrace][%s] poll request_exception | task_id=%s poll_idx=%s error=%s", trace_id, task_id, i + 1, last_error)
                     if i < 95:
                         continue
                     return {"error": "Grsai poll failed", "details": last_error}
@@ -1895,22 +1970,46 @@ class MediaGenerationService:
                             )
 
                     status_l = str(status or "").lower()
+                    if i in {0, 1, 2, 4, 9, 19, 39, 69, 99}:
+                        logger.info(
+                            "[GrsaiTrace][%s] poll response | task_id=%s poll_idx=%s status=%s elapsed_ms=%s has_url=%s",
+                            trace_id,
+                            task_id,
+                            i + 1,
+                            status_l,
+                            poll_ms,
+                            bool(media_url),
+                        )
                     if status_l in {"succeeded", "success", "completed", "done"} or (not status_l and media_url):
                         if media_url:
+                            logger.info("[GrsaiTrace][%s] completed | task_id=%s poll_idx=%s media_url=%s", trace_id, task_id, i + 1, media_url)
                             meta = {"raw": p_data}
                             if extra_metadata:
                                 meta.update(extra_metadata)
                             return {"url": media_url, "metadata": meta}
                     elif status_l in {"failed", "error", "canceled", "cancelled"}:
                         print(f"[Grsai] Task Failed: {p_data}")
+                        logger.error("[GrsaiTrace][%s] task failed | task_id=%s poll_idx=%s detail=%s", trace_id, task_id, i + 1, str(p_data)[:1000])
                         return {"error": "Generation Failed", "details": p_data}
                 else:
                     print(f"[Grsai] Poll Failed {p_resp.status_code}: {p_resp.text}")
+                    logger.warning(
+                        "[GrsaiTrace][%s] poll non_200 | task_id=%s poll_idx=%s status=%s elapsed_ms=%s body_preview=%s",
+                        trace_id,
+                        task_id,
+                        i + 1,
+                        p_resp.status_code,
+                        poll_ms,
+                        (p_resp.text or "")[:300],
+                    )
 
             last_error = "Timeout"
+            logger.error("[GrsaiTrace][%s] task timeout | task_id=%s", trace_id, task_id)
 
         if last_error:
+            logger.error("[GrsaiTrace][%s] all upstream failed | last_error=%s", trace_id, last_error)
             return {"error": "Grsai request failed", "details": last_error}
+        logger.error("[GrsaiTrace][%s] all upstream failed | no last_error", trace_id)
         return {"error": "Grsai request failed", "details": "All upstream endpoints failed"}
 
     # -- Helpers --
