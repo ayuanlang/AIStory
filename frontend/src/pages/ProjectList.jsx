@@ -706,8 +706,9 @@ const ProjectList = ({ initialTab = 'projects' }) => {
 
                                                        {/* Top Badge */}
                                                     <div className="absolute left-4 top-4 z-20">
-                                                        <div className={`text-xs font-medium px-2 py-1 rounded-sm border backdrop-blur-md ${isProjectOwner(p) ? 'bg-blue-500/20 text-blue-200 border-blue-300/30' : 'bg-amber-500/20 text-amber-200 border-amber-300/30'}`}>
-                                                            {isProjectOwner(p) ? t('所有者', 'OWNER') : t('共享', 'SHARED')}
+                                                        <div className={`inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-full border backdrop-blur-md ${isProjectOwner(p) ? 'bg-blue-500/20 text-blue-100 border-blue-300/35' : 'bg-amber-500/20 text-amber-100 border-amber-300/35'}`}>
+                                                            {isProjectOwner(p) && <Shield className="w-3 h-3" />}
+                                                            {isProjectOwner(p) ? t('主理人', 'Owner') : t('共享', 'Shared')}
                                                         </div>
                                                     </div>
                                                     </div>

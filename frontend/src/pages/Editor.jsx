@@ -13065,7 +13065,13 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                     return (
                                                         <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_1fr] gap-4">
                                                             <div className="space-y-3">
-                                                                <div className="h-[46vh] xl:h-[58vh] bg-black/40 rounded border border-white/10 overflow-hidden flex items-center justify-center">
+                                                                <div className="h-[46vh] xl:h-[58vh] bg-black/40 rounded border border-white/10 overflow-hidden flex items-center justify-center relative">
+                                                                    {currentGeneratingState.start && (
+                                                                        <div className="absolute inset-0 z-10 bg-black/60 flex items-center justify-center flex-col gap-2">
+                                                                            <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                                                                            <span className="text-xs text-white/80">{t('正在生成起始帧...', 'Generating Start Frame...')}</span>
+                                                                        </div>
+                                                                    )}
                                                                     {editingShot.image_url ? <img src={getFullUrl(editingShot.image_url)} className="w-full h-full object-cover"/> : <ImageIcon className="w-8 h-8 opacity-30" />}
                                                                 </div>
                                                                 <div className="text-xs text-muted-foreground break-all">{t('图片 URL', 'Image URL')}: {editingShot.image_url || '-'}</div>
@@ -13122,7 +13128,13 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                     return (
                                                         <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_1fr] gap-4">
                                                             <div className="space-y-3">
-                                                                <div className="h-[46vh] xl:h-[58vh] bg-black/40 rounded border border-white/10 overflow-hidden flex items-center justify-center">
+                                                                <div className="h-[46vh] xl:h-[58vh] bg-black/40 rounded border border-white/10 overflow-hidden flex items-center justify-center relative">
+                                                                    {currentGeneratingState.end && (
+                                                                        <div className="absolute inset-0 z-10 bg-black/60 flex items-center justify-center flex-col gap-2">
+                                                                            <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                                                                            <span className="text-xs text-white/80">{t('正在生成结束帧...', 'Generating End Frame...')}</span>
+                                                                        </div>
+                                                                    )}
                                                                     {endFrameUrl ? <img src={getFullUrl(endFrameUrl)} className="w-full h-full object-cover"/> : <ImageIcon className="w-8 h-8 opacity-30" />}
                                                                 </div>
                                                                 <div className="text-xs text-muted-foreground break-all">{t('结束帧 URL', 'End Frame URL')}: {endFrameUrl || '-'}</div>
@@ -13179,7 +13191,13 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                     return (
                                                         <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_1fr] gap-4">
                                                             <div className="space-y-3">
-                                                                <div className="h-[46vh] xl:h-[58vh] bg-black/40 rounded border border-white/10 overflow-hidden flex items-center justify-center">
+                                                                <div className="h-[46vh] xl:h-[58vh] bg-black/40 rounded border border-white/10 overflow-hidden flex items-center justify-center relative">
+                                                                    {currentGeneratingState.video && (
+                                                                        <div className="absolute inset-0 z-10 bg-black/60 flex items-center justify-center flex-col gap-2">
+                                                                            <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                                                                            <span className="text-xs text-white/80">{t('正在生成视频...', 'Generating Video...')}</span>
+                                                                        </div>
+                                                                    )}
                                                                     {editingShot.video_url ? <video src={getFullUrl(editingShot.video_url)} controls className="w-full h-full object-cover" /> : <Video className="w-8 h-8 opacity-30" />}
                                                                 </div>
                                                                 <div className="text-xs text-muted-foreground break-all">{t('视频 URL', 'Video URL')}: {editingShot.video_url || '-'}</div>
