@@ -6353,7 +6353,14 @@ def _resolve_runtime_smtp_config() -> Dict[str, Any]:
     return config
 
 
-def _send_email_via_runtime_smtp(to_email: str, subject: str, content: str, *, strict: bool = False) -> None:
+def _send_email_via_runtime_smtp(
+    to_email: str,
+    subject: str,
+    content: str,
+    *,
+    html_content: Optional[str] = None,
+    strict: bool = False,
+) -> None:
     smtp_cfg = _resolve_runtime_smtp_config()
     smtp_host = str(smtp_cfg.get("host") or "").strip()
     smtp_user = str(smtp_cfg.get("username") or "").strip()
@@ -6381,6 +6388,9 @@ def _send_email_via_runtime_smtp(to_email: str, subject: str, content: str, *, s
     message["From"] = from_email
     message["To"] = to_email
     message.set_content(content)
+    html_body = str(html_content or "").strip()
+    if html_body:
+        message.add_alternative(html_body, subtype="html")
 
     if smtp_use_ssl:
         with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=20) as server:
@@ -7541,6 +7551,13 @@ class SMTPConfig(BaseModel):
 class SMTPTestRequest(BaseModel):
     to_email: str
 
+
+class SMTPBroadcastRequest(BaseModel):
+    subject: str
+    content_html: Optional[str] = ""
+    content_text: Optional[str] = ""
+    confirm_phrase: str
+
 @router.get("/admin/payment-config", response_model=PaymentConfig)
 def get_payment_config(
     current_user: User = Depends(get_current_user),
@@ -7723,6 +7740,79 @@ def test_smtp_config(
         raise HTTPException(status_code=400, detail=f"发送失败: {exc}")
 
     return {"success": True, "message": f"测试邮件已发送到 {target_email}"}
+
+
+@router.post("/admin/smtp-config/broadcast")
+def broadcast_email_to_all_users(
+    payload: SMTPBroadcastRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    if str(payload.confirm_phrase or "").strip() != "SEND_TO_ALL_USERS":
+        raise HTTPException(status_code=400, detail="确认口令错误，请输入 SEND_TO_ALL_USERS")
+
+    subject = str(payload.subject or "").strip()
+    html_content = str(payload.content_html or "")
+    text_content = str(payload.content_text or "").strip()
+
+    if not subject:
+        raise HTTPException(status_code=400, detail="邮件主题不能为空")
+
+    if not html_content.strip() and not text_content:
+        raise HTTPException(status_code=400, detail="邮件内容不能为空（HTML 或文本至少填写一个）")
+
+    if not text_content:
+        text_content = "This email contains HTML content. Please view it in an HTML-compatible email client."
+
+    rows = db.query(User.email).all()
+    raw_emails = [str((row[0] or "")).strip().lower() for row in rows]
+
+    recipients = []
+    invalid_count = 0
+    seen = set()
+    for email in raw_emails:
+        if not email:
+            continue
+        if email in seen:
+            continue
+        seen.add(email)
+        if _is_valid_email_format(email):
+            recipients.append(email)
+        else:
+            invalid_count += 1
+
+    if not recipients:
+        raise HTTPException(status_code=400, detail="没有可用的收件邮箱")
+
+    sent = 0
+    failed = 0
+    errors = []
+    for email in recipients:
+        try:
+            _send_email_via_runtime_smtp(
+                email,
+                subject,
+                text_content,
+                html_content=html_content,
+                strict=True,
+            )
+            sent += 1
+        except Exception as exc:
+            failed += 1
+            if len(errors) < 10:
+                errors.append({"email": email, "error": str(exc)})
+
+    return {
+        "success": failed == 0,
+        "total": len(recipients),
+        "sent": sent,
+        "failed": failed,
+        "invalid": invalid_count,
+        "errors": errors,
+    }
 
 
 class RechargeRequest(BaseModel):

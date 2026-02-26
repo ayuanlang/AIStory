@@ -6762,6 +6762,8 @@ const SceneCard = ({ scene, entities, onClick, onGenerateShots, onDelete, select
 const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShots, uiLang = 'zh' }) => {
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
     const [scenes, setScenes] = useState([]);
+    const [sceneSortMode, setSceneSortMode] = useState('updated_desc');
+    const [sceneSortDirection, setSceneSortDirection] = useState('desc');
     const [selectedSceneKeys, setSelectedSceneKeys] = useState([]);
     const [entities, setEntities] = useState([]);
     const [isSuperuser, setIsSuperuser] = useState(false);
@@ -6834,10 +6836,46 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         return `draft:${scene?.scene_no || ''}|${scene?.scene_name || ''}|${scene?.environment_name || ''}|${scene?.original_script_text || ''}`;
     };
 
+    const getSceneUpdatedAtMs = (scene) => {
+        const candidate = scene?.updated_at || scene?.updatedAt || scene?.modified_at || scene?.modifiedAt || scene?.created_at || scene?.createdAt;
+        if (!candidate) return 0;
+        const parsed = Date.parse(candidate);
+        return Number.isFinite(parsed) ? parsed : 0;
+    };
+
+    const getSceneOrderKey = (scene) => {
+        const scenePart = String(scene?.scene_no || scene?.scene_id || scene?.id || '').trim();
+        return scenePart;
+    };
+
     const filteredScenes = useMemo(() => {
-        if (sceneSelectionFilter === 'all') return scenes || [];
-        return (scenes || []).filter((scene) => getSceneSelectionKey(scene) === sceneSelectionFilter);
-    }, [scenes, sceneSelectionFilter]);
+        const base = sceneSelectionFilter === 'all'
+            ? [...(scenes || [])]
+            : (scenes || []).filter((scene) => getSceneSelectionKey(scene) === sceneSelectionFilter);
+
+        if (sceneSortMode === 'hierarchy') {
+            base.sort((a, b) => {
+                const ka = getSceneOrderKey(a);
+                const kb = getSceneOrderKey(b);
+                const cmp = ka.localeCompare(kb, undefined, { numeric: true, sensitivity: 'base' });
+                if (cmp !== 0) return cmp;
+                return String(a?.id || '').localeCompare(String(b?.id || ''), undefined, { numeric: true, sensitivity: 'base' });
+            });
+            if (sceneSortDirection === 'desc') base.reverse();
+            return base;
+        }
+
+        base.sort((a, b) => {
+            const ta = getSceneUpdatedAtMs(a);
+            const tb = getSceneUpdatedAtMs(b);
+            if (tb !== ta) return tb - ta;
+            const ka = getSceneOrderKey(a);
+            const kb = getSceneOrderKey(b);
+            return ka.localeCompare(kb, undefined, { numeric: true, sensitivity: 'base' });
+        });
+        if (sceneSortDirection === 'asc') base.reverse();
+        return base;
+    }, [scenes, sceneSelectionFilter, sceneSortMode, sceneSortDirection]);
 
     useEffect(() => {
         if (sceneSelectionFilter === 'all') return;
@@ -7697,6 +7735,28 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                     </span>
                 </div>
             )}
+
+            <div className="mb-4 flex flex-wrap items-center gap-2 shrink-0">
+                <span className="text-xs text-muted-foreground">{t('排序', 'Sort')}</span>
+                <button
+                    onClick={() => setSceneSortMode('updated_desc')}
+                    className={`px-3 py-1.5 rounded text-xs border ${sceneSortMode === 'updated_desc' ? 'bg-primary/20 text-primary border-primary/30' : 'bg-white/5 text-white border-white/10 hover:bg-white/10'}`}
+                >
+                    {t('按修改时间', 'By Modified Time')}
+                </button>
+                <button
+                    onClick={() => setSceneSortMode('hierarchy')}
+                    className={`px-3 py-1.5 rounded text-xs border ${sceneSortMode === 'hierarchy' ? 'bg-primary/20 text-primary border-primary/30' : 'bg-white/5 text-white border-white/10 hover:bg-white/10'}`}
+                >
+                    {t('按集/场景/镜头', 'By Episode/Scene/Shot')}
+                </button>
+                <button
+                    onClick={() => setSceneSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
+                    className="px-3 py-1.5 rounded text-xs border bg-white/5 text-white border-white/10 hover:bg-white/10"
+                >
+                    {sceneSortDirection === 'asc' ? t('升序', 'Ascending') : t('降序', 'Descending')}
+                </button>
+            </div>
 
             <div className="mb-4 shrink-0">
                 <select
@@ -9746,6 +9806,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const { generationConfig, saveToolConfig, savedToolConfigs, llmConfig } = useStore();
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
     const [scenes, setScenes] = useState([]);
+    const [shotSortMode, setShotSortMode] = useState('updated_desc');
+    const [shotSortDirection, setShotSortDirection] = useState('desc');
     const [selectedSceneId, setSelectedSceneId] = useState('all');
     const [sceneCodeFilter, setSceneCodeFilter] = useState('');
     const [shotIdFilter, setShotIdFilter] = useState('');
@@ -11976,6 +12038,46 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const handleBatchGenerateVideo = async () => {
         await startShotBatchByMode('videos');
     };
+
+    const sceneCodeById = useMemo(() => {
+        const map = {};
+        (scenes || []).forEach((scene) => {
+            map[String(scene?.id)] = String(scene?.scene_no || scene?.scene_id || scene?.id || '').trim();
+        });
+        return map;
+    }, [scenes]);
+
+    const getShotUpdatedAtMs = useCallback((shot) => {
+        const candidate = shot?.updated_at || shot?.updatedAt || shot?.modified_at || shot?.modifiedAt || shot?.created_at || shot?.createdAt;
+        if (!candidate) return 0;
+        const parsed = Date.parse(candidate);
+        return Number.isFinite(parsed) ? parsed : 0;
+    }, []);
+
+    const getShotHierarchyKey = useCallback((shot) => {
+        const episodePart = String(activeEpisode?.episode_number || parseEpisodeNumberFromText(activeEpisode?.title) || activeEpisode?.id || '').trim();
+        const scenePart = String(sceneCodeById[String(shot?.scene_id)] || shot?.scene_code || shot?.scene_id || '').trim();
+        const shotPart = String(shot?.shot_id || shot?.shot_number || shot?.id || '').trim();
+        return `${episodePart}_${scenePart}_${shotPart}`;
+    }, [activeEpisode?.episode_number, activeEpisode?.title, activeEpisode?.id, sceneCodeById]);
+
+    const sortedShots = useMemo(() => {
+        const rows = [...(shots || [])];
+        if (shotSortMode === 'hierarchy') {
+            rows.sort((a, b) => getShotHierarchyKey(a).localeCompare(getShotHierarchyKey(b), undefined, { numeric: true, sensitivity: 'base' }));
+            if (shotSortDirection === 'desc') rows.reverse();
+            return rows;
+        }
+        rows.sort((a, b) => {
+            const ta = getShotUpdatedAtMs(a);
+            const tb = getShotUpdatedAtMs(b);
+            if (tb !== ta) return tb - ta;
+            return getShotHierarchyKey(a).localeCompare(getShotHierarchyKey(b), undefined, { numeric: true, sensitivity: 'base' });
+        });
+        if (shotSortDirection === 'asc') rows.reverse();
+        return rows;
+    }, [shots, shotSortMode, shotSortDirection, getShotUpdatedAtMs, getShotHierarchyKey]);
+
     return (
         <div className="flex flex-col h-full w-full p-6 overflow-hidden">
              {/* Header / Toolbar */}
@@ -12068,6 +12170,27 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                             </div>
                         )}
                     </div>
+
+                    <div className="flex items-center gap-1 ml-2">
+                        <button
+                            onClick={() => setShotSortMode('updated_desc')}
+                            className={`px-3 py-1.5 rounded text-xs border ${shotSortMode === 'updated_desc' ? 'bg-primary/20 text-primary border-primary/30' : 'bg-white/5 text-white border-white/10 hover:bg-white/10'}`}
+                        >
+                            {t('按修改时间', 'By Modified Time')}
+                        </button>
+                        <button
+                            onClick={() => setShotSortMode('hierarchy')}
+                            className={`px-3 py-1.5 rounded text-xs border ${shotSortMode === 'hierarchy' ? 'bg-primary/20 text-primary border-primary/30' : 'bg-white/5 text-white border-white/10 hover:bg-white/10'}`}
+                        >
+                            {t('按集/场景/镜头', 'By Episode/Scene/Shot')}
+                        </button>
+                        <button
+                            onClick={() => setShotSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
+                            className="px-3 py-1.5 rounded text-xs border bg-white/5 text-white border-white/10 hover:bg-white/10"
+                        >
+                            {shotSortDirection === 'asc' ? t('升序', 'Ascending') : t('降序', 'Descending')}
+                        </button>
+                    </div>
                 </div>
                 
                 <div className="flex items-center gap-2">
@@ -12094,7 +12217,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
              <div className="flex-1 overflow-auto custom-scrollbar">
                  {selectedSceneId ? (
                      <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-6 pb-20">
-                        {shots.map((shot, idx) => {
+                        {sortedShots.map((shot, idx) => {
                             const shotState = generatingStateByShot[String(shot.id)] || { start: false, end: false, video: false };
                             const isGeneratingThisShot = !!(shotState.start || shotState.end || shotState.video);
                             return (
@@ -12169,7 +12292,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                             </div>
                             );
                         })}
-                        {shots.length === 0 && (
+                        {sortedShots.length === 0 && (
                             <div className="col-span-full h-64 flex flex-col items-center justify-center text-muted-foreground border-2 border-dashed border-white/10 rounded-xl">
                                 <Film className="w-12 h-12 mb-4 opacity-20" />
                                 <p>{t('该场景暂无镜头。', 'No shots in this scene.')}</p>

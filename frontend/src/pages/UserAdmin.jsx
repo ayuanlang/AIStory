@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { api, getPricingRules, createPricingRule, updatePricingRule, deletePricingRule, getTransactions, updateUserCredits, syncPricingRules, getBillingOptions, getSystemSettingsManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, exportSystemSettingsManage, importSystemSettingsManage, getAdminLlmLogFiles, getAdminLlmLogView } from '../services/api';
 import Footer from '../components/Footer';
 import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft } from 'lucide-react';
-import { confirmUiMessage } from '../lib/uiMessage';
+import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
 import { getUiLang, tUI } from '../lib/uiLang';
 
 const UserAdmin = () => {
@@ -53,6 +53,12 @@ const UserAdmin = () => {
     const [isSmtpConfigLoading, setIsSmtpConfigLoading] = useState(false);
     const [smtpTestEmail, setSmtpTestEmail] = useState('');
     const [isSmtpTestLoading, setIsSmtpTestLoading] = useState(false);
+    const [smtpBroadcast, setSmtpBroadcast] = useState({
+        subject: '',
+        content_html: '',
+        content_text: '',
+    });
+    const [isSmtpBroadcastLoading, setIsSmtpBroadcastLoading] = useState(false);
     const [systemApiRows, setSystemApiRows] = useState([]);
     const [isSystemApiLoading, setIsSystemApiLoading] = useState(false);
     const [isSystemApiImporting, setIsSystemApiImporting] = useState(false);
@@ -500,6 +506,65 @@ const UserAdmin = () => {
         }
     };
 
+    const handleSendSmtpBroadcast = async () => {
+        const subject = String(smtpBroadcast.subject || '').trim();
+        const html = String(smtpBroadcast.content_html || '');
+        const text = String(smtpBroadcast.content_text || '').trim();
+
+        if (!subject) {
+            alert(t('请先填写邮件主题。', 'Please fill in the email subject.'));
+            return;
+        }
+        if (!html.trim() && !text) {
+            alert(t('请填写 HTML 或纯文本内容。', 'Please fill HTML or plain text content.'));
+            return;
+        }
+
+        const ok = await confirmUiMessage(
+            t('将向所有用户发送邮件，是否继续？', 'This will send email to ALL users. Continue?'),
+            {
+                title: t('群发确认', 'Broadcast Confirmation'),
+                confirmText: t('继续', 'Continue'),
+                cancelText: t('取消', 'Cancel'),
+            }
+        );
+        if (!ok) return;
+
+        const phrase = await promptUiMessage(
+            t('为避免误发，请输入确认口令：SEND_TO_ALL_USERS', 'To prevent mistakes, type confirmation phrase: SEND_TO_ALL_USERS'),
+            {
+                title: t('二次确认', 'Second Confirmation'),
+                defaultValue: '',
+            }
+        );
+        if (String(phrase || '').trim() !== 'SEND_TO_ALL_USERS') {
+            alert(t('确认口令不正确，已取消发送。', 'Confirmation phrase is incorrect. Sending canceled.'));
+            return;
+        }
+
+        setIsSmtpBroadcastLoading(true);
+        try {
+            const res = await api.post('/admin/smtp-config/broadcast', {
+                subject,
+                content_html: html,
+                content_text: text,
+                confirm_phrase: 'SEND_TO_ALL_USERS',
+            });
+            const info = res?.data || {};
+            alert(
+                t(
+                    `群发完成：总计 ${info.total || 0}，成功 ${info.sent || 0}，失败 ${info.failed || 0}，无效邮箱 ${info.invalid || 0}`,
+                    `Broadcast finished: total ${info.total || 0}, sent ${info.sent || 0}, failed ${info.failed || 0}, invalid ${info.invalid || 0}`
+                )
+            );
+        } catch (e) {
+            console.error('Failed to send SMTP broadcast', e);
+            alert(e?.response?.data?.detail || e?.message || 'Failed to send broadcast email');
+        } finally {
+            setIsSmtpBroadcastLoading(false);
+        }
+    };
+
     // ... existing fetchAllData ...
 
     // Effect to auto-calculate
@@ -752,14 +817,7 @@ const UserAdmin = () => {
     return (
         <div className="min-h-screen bg-[#09090b] text-white flex flex-col font-sans">
             <main className="flex-1 container mx-auto px-4 pt-8 pb-8">
-                <div className="mb-4">
-                    <button
-                        onClick={() => window.history.back()}
-                        className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-white/15 bg-white/5 hover:bg-white/10 text-sm mb-4"
-                    >
-                        <ArrowLeft size={16} />
-                        {t('返回', 'Back')}
-                    </button>
+                <div className="mb-4 flex items-start justify-between gap-3">
                     <div>
                         <h1 className="text-2xl font-bold flex items-center gap-2">
                             <Shield className="w-8 h-8 text-primary" />
@@ -767,6 +825,14 @@ const UserAdmin = () => {
                         </h1>
                         <p className="text-gray-400 mt-1">{t('管理用户、权限与计费。', 'Manage users, permissions, and billing.')}</p>
                     </div>
+                    <button
+                        onClick={() => window.history.back()}
+                        className="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-white/15 bg-white/5 hover:bg-white/10 shrink-0"
+                        title={t('返回', 'Back')}
+                        aria-label={t('返回', 'Back')}
+                    >
+                        <ArrowLeft size={16} />
+                    </button>
 
                 </div>
 
@@ -1035,6 +1101,46 @@ const UserAdmin = () => {
                                         {isSmtpTestLoading ? <RefreshCw className="animate-spin" size={16}/> : <Mail size={16}/>}
                                         {t('发送测试邮件', 'Send Test Email')}
                                     </button>
+                                </div>
+
+                                <div className="border-t border-white/10 pt-5 space-y-3">
+                                    <h3 className="text-sm font-bold text-white">{t('群发邮件给所有用户', 'Broadcast Email to All Users')}</h3>
+                                    <p className="text-xs text-gray-400">
+                                        {t('支持 HTML 内容（可包含符号、链接、图片标签如 <img src="..." />）。发送前需二次确认口令，避免误发。', 'Supports HTML content (symbols, links, image tags like <img src="..." />). Requires double confirmation phrase before sending.')}
+                                    </p>
+
+                                    <input
+                                        type="text"
+                                        value={smtpBroadcast.subject}
+                                        onChange={(e) => setSmtpBroadcast((prev) => ({ ...prev, subject: e.target.value }))}
+                                        className="w-full bg-black/40 border border-gray-700 rounded p-2.5 text-sm focus:border-primary outline-none focus:ring-1 focus:ring-primary"
+                                        placeholder={t('邮件主题', 'Email subject')}
+                                    />
+
+                                    <textarea
+                                        value={smtpBroadcast.content_html}
+                                        onChange={(e) => setSmtpBroadcast((prev) => ({ ...prev, content_html: e.target.value }))}
+                                        className="w-full h-40 bg-black/40 border border-gray-700 rounded p-2.5 text-sm font-mono focus:border-primary outline-none resize-y focus:ring-1 focus:ring-primary"
+                                        placeholder={t('HTML 内容（可选，推荐）', 'HTML content (optional, recommended)')}
+                                    />
+
+                                    <textarea
+                                        value={smtpBroadcast.content_text}
+                                        onChange={(e) => setSmtpBroadcast((prev) => ({ ...prev, content_text: e.target.value }))}
+                                        className="w-full h-24 bg-black/40 border border-gray-700 rounded p-2.5 text-sm focus:border-primary outline-none resize-y focus:ring-1 focus:ring-primary"
+                                        placeholder={t('纯文本内容（可选，作为兜底）', 'Plain text content (optional, fallback)')}
+                                    />
+
+                                    <div className="flex justify-end">
+                                        <button
+                                            onClick={handleSendSmtpBroadcast}
+                                            disabled={isSmtpBroadcastLoading || isSmtpConfigLoading}
+                                            className="bg-red-500/80 text-white px-5 py-2.5 rounded-lg font-bold hover:bg-red-500 disabled:opacity-50 flex items-center gap-2"
+                                        >
+                                            {isSmtpBroadcastLoading ? <RefreshCw className="animate-spin" size={16}/> : <Mail size={16}/>}
+                                            {t('确认并群发', 'Confirm & Broadcast')}
+                                        </button>
+                                    </div>
                                 </div>
 
                                 <div className="pt-6 flex justify-end border-t border-white/10">
