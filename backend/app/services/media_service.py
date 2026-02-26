@@ -1756,72 +1756,115 @@ class MediaGenerationService:
     async def _submit_and_poll_grsai(self, url, payload, api_key, result_url, is_video=False, extra_metadata=None):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         print(f"[Grsai] Debug - POST URL: {url}")
-        
-        # Increased timeout to 300s
-        def _post(): return requests.post(url, json=payload, headers=headers, timeout=300, verify=False)
-        def _post_no_proxy(): return requests.post(url, json=payload, headers=headers, timeout=300, verify=False, proxies={"http": None, "https": None})
-        
-        try:
+
+        def _build_url_pairs(submit_url: str, poll_url: str):
+            pairs = [(submit_url, poll_url)]
+            host_pairs = [
+                ("grsai.dakka.com.cn", "grsaiapi.com"),
+                ("grsaiapi.com", "grsai.dakka.com.cn"),
+            ]
+            for source_host, target_host in host_pairs:
+                if source_host in submit_url:
+                    alt_submit = submit_url.replace(source_host, target_host)
+                    alt_poll = poll_url.replace(source_host, target_host)
+                    if (alt_submit, alt_poll) not in pairs:
+                        pairs.append((alt_submit, alt_poll))
+            return pairs
+
+        upstream_candidates = _build_url_pairs(url, result_url)
+        retryable_statuses = {502, 503, 504, 520, 521, 522, 523, 524, 525, 526}
+        last_error = None
+
+        for index, (submit_url, poll_url) in enumerate(upstream_candidates):
+            print(f"[Grsai] Upstream Try {index + 1}/{len(upstream_candidates)} -> {submit_url}")
+
+            def _post():
+                return requests.post(submit_url, json=payload, headers=headers, timeout=(15, 120), verify=False)
+
+            def _post_no_proxy():
+                return requests.post(
+                    submit_url,
+                    json=payload,
+                    headers=headers,
+                    timeout=(15, 120),
+                    verify=False,
+                    proxies={"http": None, "https": None},
+                )
+
             try:
-                resp = await asyncio.to_thread(_post)
-            except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout):
-                resp = await asyncio.to_thread(_post_no_proxy)
-            print(f"[Grsai] API Returned: {resp.text[:1000]}") # DEBUG USER REQUEST
-            if resp.status_code != 200: 
+                try:
+                    resp = await asyncio.to_thread(_post)
+                except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+                    resp = await asyncio.to_thread(_post_no_proxy)
+            except requests.exceptions.RequestException as e:
+                last_error = str(e)
+                print(f"[Grsai] Submission network error on {submit_url}: {last_error}")
+                continue
+
+            print(f"[Grsai] API Returned: {resp.text[:1000]}")
+            if resp.status_code != 200:
                 print(f"[Grsai] API Error {resp.status_code}: {resp.text}")
+                if resp.status_code in retryable_statuses and index < len(upstream_candidates) - 1:
+                    last_error = f"Submission Failed {resp.status_code}: {resp.text[:300]}"
+                    continue
                 return {"error": f"Submission Failed {resp.status_code}", "details": resp.text}
-            
-            data = resp.json()
-            
-            # Safe access to data object
+
+            try:
+                data = resp.json()
+            except Exception:
+                return {"error": "Invalid Grsai response", "details": resp.text[:1000]}
+
             data_obj = data.get("data")
             if data_obj is None:
-                 # API returned 200 OK but data is null/missing - check for logic error
-                 print(f"[Grsai] API Logic Failure: {data}")
-                 msg = data.get("msg") or "Unknown Error"
-                 return {"error": f"API Error {data.get('code')}", "details": msg}
-                 
+                print(f"[Grsai] API Logic Failure: {data}")
+                msg = data.get("msg") or "Unknown Error"
+                return {"error": f"API Error {data.get('code')}", "details": msg}
+
             task_id = data_obj.get("id")
-            # If still no ID (and no explicit error above), fail gracefully
-            if not task_id: 
+            if not task_id:
                 print(f"[Grsai] No Task ID in response: {data}")
                 return {"error": "No Task ID", "details": data}
-            
-            print(f"[Grsai] Task {task_id} submitted. Polling...")
+
+            print(f"[Grsai] Task {task_id} submitted. Polling via {poll_url}...")
 
             for i in range(100):
-                 await asyncio.sleep(3)
-                 def _poll(): return requests.post(result_url, json={"id": task_id}, headers=headers, timeout=30, verify=False)
-                 try:
-                     p_resp = await asyncio.to_thread(_poll)
-                 except requests.exceptions.Timeout:
-                     continue
-                 
-                 if p_resp.status_code == 200:
-                      p_data = p_resp.json()
-                      # print(f"[Grsai] Poll {i}: {str(p_data)[:100]}...") # Verbose debug
-                      status = p_data.get("data", {}).get("status")
-                      if status == "succeeded":
-                           res = p_data.get("data", {}).get("results", [])
-                           url = res[0].get("url") if res else p_data.get("data", {}).get("url")
-                           if url: 
-                               meta = {"raw": p_data}
-                               if extra_metadata:
-                                   meta.update(extra_metadata)
-                               return {"url": url, "metadata": meta}
-                      elif status == "failed":
-                           print(f"[Grsai] Task Failed: {p_data}")
-                           return {"error": "Generation Failed", "details": p_data}
-                 else:
-                     print(f"[Grsai] Poll Failed {p_resp.status_code}: {p_resp.text}")
-            
-            return {"error": "Timeout"}
-        except requests.exceptions.Timeout as e:
-            return {"error": "Grsai timeout", "details": str(e)}
-        except requests.exceptions.RequestException as e:
-            return {"error": "Grsai request failed", "details": str(e)}
-        except Exception as e:
-            return {"error": f"Grsai Exception: {str(e)}"}
+                await asyncio.sleep(3)
+
+                def _poll():
+                    return requests.post(poll_url, json={"id": task_id}, headers=headers, timeout=(10, 30), verify=False)
+
+                try:
+                    p_resp = await asyncio.to_thread(_poll)
+                except requests.exceptions.Timeout:
+                    continue
+                except requests.exceptions.RequestException as e:
+                    last_error = str(e)
+                    if i < 95:
+                        continue
+                    return {"error": "Grsai poll failed", "details": last_error}
+
+                if p_resp.status_code == 200:
+                    p_data = p_resp.json()
+                    status = p_data.get("data", {}).get("status")
+                    if status == "succeeded":
+                        res = p_data.get("data", {}).get("results", [])
+                        media_url = res[0].get("url") if res else p_data.get("data", {}).get("url")
+                        if media_url:
+                            meta = {"raw": p_data}
+                            if extra_metadata:
+                                meta.update(extra_metadata)
+                            return {"url": media_url, "metadata": meta}
+                    elif status == "failed":
+                        print(f"[Grsai] Task Failed: {p_data}")
+                        return {"error": "Generation Failed", "details": p_data}
+                else:
+                    print(f"[Grsai] Poll Failed {p_resp.status_code}: {p_resp.text}")
+
+            last_error = "Timeout"
+
+        if last_error:
+            return {"error": "Grsai request failed", "details": last_error}
+        return {"error": "Grsai request failed", "details": "All upstream endpoints failed"}
 
     # -- Helpers --
     def _download_and_save(self, url: str, filename_base: str = None, user_id: int = 1) -> str:

@@ -8590,7 +8590,13 @@ async def generate_image_endpoint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    return await _run_generate_image(req, current_user, db)
+    try:
+        return await asyncio.wait_for(_run_generate_image(req, current_user, db), timeout=55)
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=504,
+            detail="Synchronous image generation timed out. Please use /generate/image/submit and poll /generate/image/jobs/{job_id}.",
+        )
 
 
 async def _run_generate_image(req: GenerationRequest, current_user: User, db: Session):
