@@ -10999,9 +10999,13 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         const tech = JSON.parse(editingShot.technical_notes || '{}');
 
         if (assetType === 'start') {
+            setShotGeneratingState(editingShot.id, 'start', true);
             if (lang === 'zh') {
                 const translated = await translateCnPromptToEn(tech.start_frame_cn, 'Start Frame');
-                if (!translated) return;
+                if (!translated) {
+                    setShotGeneratingState(editingShot.id, 'start', false);
+                    return;
+                }
                 setEditingShot(prev => ({ ...(prev || {}), start_frame: translated }));
                 await handleGenerateStartFrame(translated);
                 return;
@@ -11011,9 +11015,13 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         }
 
         if (assetType === 'end') {
+            setShotGeneratingState(editingShot.id, 'end', true);
             if (lang === 'zh') {
                 const translated = await translateCnPromptToEn(tech.end_frame_cn, 'End Frame');
-                if (!translated) return;
+                if (!translated) {
+                    setShotGeneratingState(editingShot.id, 'end', false);
+                    return;
+                }
                 setEditingShot(prev => ({ ...(prev || {}), end_frame: translated }));
                 await handleGenerateEndFrame(translated);
                 return;
@@ -11023,9 +11031,13 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         }
 
         if (assetType === 'video') {
+            setShotGeneratingState(editingShot.id, 'video', true);
             if (lang === 'zh') {
                 const translated = await translateCnPromptToEn(tech.video_prompt_cn, 'Video Prompt');
-                if (!translated) return;
+                if (!translated) {
+                    setShotGeneratingState(editingShot.id, 'video', false);
+                    return;
+                }
                 setEditingShot(prev => ({ ...(prev || {}), prompt: translated }));
                 await handleGenerateVideo(translated);
                 return;
@@ -11114,8 +11126,14 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
     // --- Entity Injection Helper ---
     // Injects anchor description while keeping original entity token shape.
-    const injectEntityFeatures = (text) => {
+    const injectEntityFeatures = (text, isUserEdited = false) => {
         if (!text) return { text, modified: false };
+        
+        // If the user has manually edited the prompt, we DO NOT inject entity features automatically.
+        // We respect the user's exact prompt.
+        if (isUserEdited) {
+            return { text, modified: false };
+        }
         
         // In ShotsView, 'entities' contains ALL entities.
         const entList = entities;
@@ -11234,8 +11252,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         // 1. Feature Injection
         let prompt = promptOverride || editingShot.start_frame || editingShot.video_content || "A cinematic shot";
         
-        // Apply injection logic
-        const { text: injectedPrompt, modified } = injectEntityFeatures(prompt);
+        const techNotes = JSON.parse(editingShot.technical_notes || '{}');
+        const isManual = techNotes.manual_start_frame === true;
+
+        // Apply injection logic ONLY if the prompt hasn't been manually edited by the user
+        const { text: injectedPrompt, modified } = injectEntityFeatures(prompt, isManual);
         if (modified) {
             // Update local State & use new prompt
             setEditingShot(prev => (prev && prev.id === targetShotId ? { ...prev, start_frame: injectedPrompt } : prev));
@@ -11309,7 +11330,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
                 // NEW: Inject Global Context
                 const globalCtx = getGlobalContextStr();
-                const finalPrompt = prompt + globalCtx;
+                const finalPrompt = isManual ? prompt : (prompt + globalCtx);
 
                 const res = await generateImage(finalPrompt, null, refs.length > 0 ? refs : null, {
                     project_id: projectId,
@@ -11348,7 +11369,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
         // 1. Feature Injection for End Frame
         let prompt = promptOverride || editingShot.end_frame || "End frame";
-        const { text: injectedPrompt, modified } = injectEntityFeatures(prompt);
+        
+        const techNotes = JSON.parse(editingShot.technical_notes || '{}');
+        const isManual = techNotes.manual_end_frame === true;
+
+        const { text: injectedPrompt, modified } = injectEntityFeatures(prompt, isManual);
         if (modified) {
             setEditingShot(prev => (prev && prev.id === targetShotId ? { ...prev, end_frame: injectedPrompt } : prev));
             prompt = injectedPrompt;
@@ -11396,7 +11421,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 
                 // NEW: Inject Global Context
                 const globalCtx = getGlobalContextStr();
-                const finalPrompt = prompt + globalCtx;
+                const finalPrompt = isManual ? prompt : (prompt + globalCtx);
 
                 const res = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
                     project_id: projectId,
@@ -11440,7 +11465,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
         // 1. Feature Injection for Video Prompt
         let prompt = promptOverride || editingShot.prompt || editingShot.video_content || "Video motion";
-        const { text: injectedPrompt, modified } = injectEntityFeatures(prompt);
+        
+        const techNotes = JSON.parse(editingShot.technical_notes || '{}');
+        const isManual = techNotes.manual_video_prompt === true;
+
+        const { text: injectedPrompt, modified } = injectEntityFeatures(prompt, isManual);
         if (modified) {
             setEditingShot(prev => (prev && prev.id === targetShotId ? { ...prev, prompt: injectedPrompt } : prev));
             prompt = injectedPrompt;
@@ -11534,7 +11563,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
             // NEW: Inject Global Context
             const globalCtx = getGlobalContextStr();
-            const finalPrompt = prompt + globalCtx;
+            const finalPrompt = isManual ? prompt : (prompt + globalCtx);
 
             const res = await generateVideo(finalPrompt, null, finalStartRef, finalEndRef, durParam, {
                 project_id: projectId,
@@ -12288,7 +12317,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                             className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[60px]"
                                             placeholder={t('起始帧提示词...', 'Start Frame Prompt...')}
                                             value={editingShot.start_frame || ''} 
-                                            onChange={(e) => setEditingShot({...editingShot, start_frame: e.target.value})}
+                                            onChange={(e) => {
+                                                const tech = JSON.parse(editingShot.technical_notes || '{}');
+                                                tech.manual_start_frame = true;
+                                                setEditingShot({...editingShot, start_frame: e.target.value, technical_notes: JSON.stringify(tech)});
+                                            }}
                                         />
                                         <ReferenceManager 
                                             shot={editingShot} 
@@ -12474,7 +12507,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                             className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[60px]"
                                             placeholder={t('结束帧提示词...', 'End Frame Prompt...')}
                                             value={editingShot.end_frame || ''} 
-                                            onChange={(e) => setEditingShot({...editingShot, end_frame: e.target.value})}
+                                            onChange={(e) => {
+                                                const tech = JSON.parse(editingShot.technical_notes || '{}');
+                                                tech.manual_end_frame = true;
+                                                setEditingShot({...editingShot, end_frame: e.target.value, technical_notes: JSON.stringify(tech)});
+                                            }}
                                         />
                                         <ReferenceManager 
                                             shot={editingShot} 
@@ -12602,7 +12639,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                             className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[60px]"
                                             placeholder={t('动作 / 运动提示词...', 'Action / Motion Prompt...')}
                                             value={editingShot.prompt || editingShot.video_content || ''}
-                                            onChange={(e) => setEditingShot({...editingShot, prompt: e.target.value})}
+                                            onChange={(e) => {
+                                                const tech = JSON.parse(editingShot.technical_notes || '{}');
+                                                tech.manual_video_prompt = true;
+                                                setEditingShot({...editingShot, prompt: e.target.value, technical_notes: JSON.stringify(tech)});
+                                            }}
                                         />
                                         <ReferenceManager 
                                             shot={editingShot} 
