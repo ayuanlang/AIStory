@@ -59,6 +59,8 @@ const UserAdmin = () => {
         content_text: '',
     });
     const [isSmtpBroadcastLoading, setIsSmtpBroadcastLoading] = useState(false);
+    const [isGrsaiDiagLoading, setIsGrsaiDiagLoading] = useState(false);
+    const [grsaiDiagResult, setGrsaiDiagResult] = useState(null);
     const [systemApiRows, setSystemApiRows] = useState([]);
     const [isSystemApiLoading, setIsSystemApiLoading] = useState(false);
     const [isSystemApiImporting, setIsSystemApiImporting] = useState(false);
@@ -552,6 +554,24 @@ const UserAdmin = () => {
             alert(e?.response?.data?.detail || e?.message || 'Failed to send broadcast email');
         } finally {
             setIsSmtpBroadcastLoading(false);
+        }
+    };
+
+    const handleRunGrsaiDiagnostics = async () => {
+        setIsGrsaiDiagLoading(true);
+        try {
+            const res = await api.get('/admin/upstream-diagnostics/grsai', {
+                params: { timeout_seconds: 5 },
+            });
+            setGrsaiDiagResult(res?.data || null);
+        } catch (e) {
+            console.error('Failed to run Grsai diagnostics', e);
+            setGrsaiDiagResult({
+                ok: false,
+                error: e?.response?.data?.detail || e?.message || 'Failed to run diagnostics',
+            });
+        } finally {
+            setIsGrsaiDiagLoading(false);
         }
     };
 
@@ -1077,6 +1097,63 @@ const UserAdmin = () => {
                                         {isSmtpTestLoading ? <RefreshCw className="animate-spin" size={16}/> : <Mail size={16}/>}
                                         {t('发送测试邮件', 'Send Test Email')}
                                     </button>
+                                </div>
+
+                                <div className="border-t border-white/10 pt-5 space-y-3">
+                                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                                        <h3 className="text-sm font-bold text-white">{t('Grsai 连通性诊断（Render 环境）', 'Grsai Connectivity Diagnostics (Render Environment)')}</h3>
+                                        <button
+                                            onClick={handleRunGrsaiDiagnostics}
+                                            disabled={isGrsaiDiagLoading}
+                                            className="bg-white/10 text-white px-4 py-2 rounded-lg font-medium hover:bg-white/20 disabled:opacity-50 flex items-center gap-2"
+                                        >
+                                            {isGrsaiDiagLoading ? <RefreshCw className="animate-spin" size={16}/> : <Activity size={16}/>}
+                                            {t('运行诊断', 'Run Diagnostics')}
+                                        </button>
+                                    </div>
+
+                                    {!grsaiDiagResult && (
+                                        <p className="text-xs text-gray-400">
+                                            {t('点击“运行诊断”后将返回主备域名的 DNS / TCP / HTTP 可达性与代理环境变量。', 'Click "Run Diagnostics" to check DNS / TCP / HTTP reachability and proxy env vars for primary/fallback domains.')}
+                                        </p>
+                                    )}
+
+                                    {!!grsaiDiagResult && (
+                                        <div className="bg-black/20 border border-white/10 rounded-lg p-3 space-y-3 text-sm">
+                                            <div className="flex items-center gap-2">
+                                                <span className={`inline-block w-2 h-2 rounded-full ${grsaiDiagResult.ok ? 'bg-green-400' : 'bg-red-400'}`}></span>
+                                                <span className="text-white font-semibold">
+                                                    {grsaiDiagResult.ok ? t('至少一个上游可达', 'At least one upstream is reachable') : t('上游不可达或异常', 'Upstream unreachable or abnormal')}
+                                                </span>
+                                            </div>
+
+                                            {grsaiDiagResult.error && (
+                                                <div className="text-red-300 text-xs">{String(grsaiDiagResult.error)}</div>
+                                            )}
+
+                                            {Array.isArray(grsaiDiagResult.checks) && grsaiDiagResult.checks.map((item) => (
+                                                <div key={item?.name || Math.random()} className="border border-white/10 rounded p-2">
+                                                    <div className="text-white font-medium mb-1">{item?.name || 'upstream'} · {item?.host || '-'}</div>
+                                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs text-gray-300">
+                                                        <div>DNS: {item?.dns?.ok ? 'OK' : 'FAIL'} ({item?.dns?.ms ?? '-'}ms)</div>
+                                                        <div>TCP: {item?.tcp?.ok ? 'OK' : 'FAIL'} ({item?.tcp?.ms ?? '-'}ms)</div>
+                                                        <div>HTTP: {item?.http?.ok ? 'OK' : 'FAIL'} ({item?.http?.status ?? '-'}, {item?.http?.ms ?? '-'}ms)</div>
+                                                    </div>
+                                                    {item?.dns?.error && <div className="text-red-300 text-xs mt-1">DNS Error: {String(item.dns.error)}</div>}
+                                                    {item?.tcp?.error && <div className="text-red-300 text-xs mt-1">TCP Error: {String(item.tcp.error)}</div>}
+                                                    {item?.http?.error && <div className="text-red-300 text-xs mt-1">HTTP Error: {String(item.http.error)}</div>}
+                                                </div>
+                                            ))}
+
+                                            {!!grsaiDiagResult.proxy_env && (
+                                                <div className="text-xs text-gray-400">
+                                                    HTTP_PROXY: {grsaiDiagResult.proxy_env.HTTP_PROXY || '(empty)'}<br />
+                                                    HTTPS_PROXY: {grsaiDiagResult.proxy_env.HTTPS_PROXY || '(empty)'}<br />
+                                                    NO_PROXY: {grsaiDiagResult.proxy_env.NO_PROXY || '(empty)'}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
 
                                 <div className="border-t border-white/10 pt-5 space-y-3">
