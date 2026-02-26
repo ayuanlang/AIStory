@@ -11001,13 +11001,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         if (assetType === 'start') {
             setShotGeneratingState(editingShot.id, 'start', true);
             if (lang === 'zh') {
-                const translated = await translateCnPromptToEn(tech.start_frame_cn, 'Start Frame');
-                if (!translated) {
-                    setShotGeneratingState(editingShot.id, 'start', false);
-                    return;
-                }
-                setEditingShot(prev => ({ ...(prev || {}), start_frame: translated }));
-                await handleGenerateStartFrame(translated);
+                await handleGenerateStartFrame(tech.start_frame_cn);
                 return;
             }
             await handleGenerateStartFrame();
@@ -11017,13 +11011,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         if (assetType === 'end') {
             setShotGeneratingState(editingShot.id, 'end', true);
             if (lang === 'zh') {
-                const translated = await translateCnPromptToEn(tech.end_frame_cn, 'End Frame');
-                if (!translated) {
-                    setShotGeneratingState(editingShot.id, 'end', false);
-                    return;
-                }
-                setEditingShot(prev => ({ ...(prev || {}), end_frame: translated }));
-                await handleGenerateEndFrame(translated);
+                await handleGenerateEndFrame(tech.end_frame_cn);
                 return;
             }
             await handleGenerateEndFrame();
@@ -11033,13 +11021,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         if (assetType === 'video') {
             setShotGeneratingState(editingShot.id, 'video', true);
             if (lang === 'zh') {
-                const translated = await translateCnPromptToEn(tech.video_prompt_cn, 'Video Prompt');
-                if (!translated) {
-                    setShotGeneratingState(editingShot.id, 'video', false);
-                    return;
-                }
-                setEditingShot(prev => ({ ...(prev || {}), prompt: translated }));
-                await handleGenerateVideo(translated);
+                await handleGenerateVideo(tech.video_prompt_cn);
                 return;
             }
             await handleGenerateVideo();
@@ -11051,13 +11033,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             if (!kf) return;
             if (lang === 'zh') {
                 const cnMap = tech.keyframe_prompt_cn_map || {};
-                const translated = await translateCnPromptToEn(cnMap[kf.time], `Keyframe ${kf.time}`);
-                if (!translated) return;
-                const updated = [...localKeyframes];
-                if (!updated[keyframeIndex]) return;
-                updated[keyframeIndex].prompt = translated;
-                setLocalKeyframes(updated);
-                await handleGenerateKeyframe(keyframeIndex, translated);
+                await handleGenerateKeyframe(keyframeIndex, cnMap[kf.time]);
                 return;
             }
             await handleGenerateKeyframe(keyframeIndex);
