@@ -5,7 +5,7 @@ import smtplib
 from email.message import EmailMessage
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, and_
-from app.db.session import get_db
+from app.db.session import get_db, SessionLocal
 from app.models.all_models import Project, ProjectShare, User, Episode, Scene, Shot, Entity, Asset, APISetting, SystemAPISetting, ScriptSegment, PricingRule, TransactionHistory
 from app.schemas.agent import AgentRequest, AgentResponse, AnalyzeSceneRequest
 from app.services.agent_service import agent_service
@@ -38,6 +38,8 @@ import asyncio
 import urllib.parse
 from pathlib import Path
 from collections import deque
+import threading
+import asyncio
 
 # Import limiter from main app state or create a local reference if needed
 # We will use the request.app.state.limiter in the endpoints
@@ -3139,6 +3141,90 @@ class ScriptScenesGenerateRequest(BaseModel):
     replace_existing_scenes: Optional[bool] = True
 
 
+EPISODE_SCENE_GEN_STATUS_KEY = "episode_scene_generation_status"
+
+
+def _read_episode_scene_generation_status(episode: Episode) -> Dict[str, Any]:
+    try:
+        info = dict(episode.episode_info or {})
+        payload = info.get(EPISODE_SCENE_GEN_STATUS_KEY)
+        if isinstance(payload, dict):
+            return dict(payload)
+    except Exception:
+        pass
+    return {
+        "running": False,
+        "status": "idle",
+        "message": "",
+        "scenes_created": 0,
+        "stop_requested": False,
+    }
+
+
+def _persist_episode_scene_generation_status(db: Session, episode: Episode, status_payload: Dict[str, Any]) -> None:
+    info = dict(episode.episode_info or {})
+    info[EPISODE_SCENE_GEN_STATUS_KEY] = status_payload
+    episode.episode_info = info
+    db.add(episode)
+    db.commit()
+
+
+def _run_episode_scene_generation_job(episode_id: int, req_payload: Dict[str, Any], user_id: int) -> None:
+    db = SessionLocal()
+    try:
+        episode = db.query(Episode).filter(Episode.id == episode_id).first()
+        user = db.query(User).filter(User.id == user_id).first()
+        if not episode or not user:
+            return
+
+        latest = _read_episode_scene_generation_status(episode)
+        if bool(latest.get("stop_requested")):
+            latest["running"] = False
+            latest["status"] = "stopped"
+            latest["message"] = "Stopped before generation started"
+            latest["finished_at"] = datetime.utcnow().isoformat()
+            latest["updated_at"] = latest["finished_at"]
+            _persist_episode_scene_generation_status(db, episode, latest)
+            return
+
+        req = ScriptScenesGenerateRequest(**(req_payload or {}))
+        result = asyncio.run(
+            generate_episode_scenes_from_story(
+                episode_id=episode_id,
+                req=req,
+                db=db,
+                current_user=user,
+            )
+        )
+
+        episode = db.query(Episode).filter(Episode.id == episode_id).first()
+        if episode:
+            status_payload = _read_episode_scene_generation_status(episode)
+            status_payload["running"] = False
+            status_payload["status"] = "completed"
+            status_payload["message"] = "Scene generation completed"
+            status_payload["scenes_created"] = int((result or {}).get("scenes_created") or 0)
+            status_payload["result"] = result
+            status_payload["updated_at"] = datetime.utcnow().isoformat()
+            status_payload["finished_at"] = status_payload["updated_at"]
+            _persist_episode_scene_generation_status(db, episode, status_payload)
+    except Exception as e:
+        try:
+            episode = db.query(Episode).filter(Episode.id == episode_id).first()
+            if episode:
+                status_payload = _read_episode_scene_generation_status(episode)
+                status_payload["running"] = False
+                status_payload["status"] = "failed"
+                status_payload["message"] = str(e)
+                status_payload["updated_at"] = datetime.utcnow().isoformat()
+                status_payload["finished_at"] = status_payload["updated_at"]
+                _persist_episode_scene_generation_status(db, episode, status_payload)
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
 @router.get("/episodes/{episode_id}/character_profiles", response_model=List[Dict[str, Any]])
 def get_episode_character_profiles(
     episode_id: int,
@@ -3558,6 +3644,87 @@ async def generate_episode_scenes_from_story(
     }
 
 
+@router.post("/episodes/{episode_id}/script_generator/scenes/start", response_model=Dict[str, Any])
+def start_episode_scenes_generation_job(
+    episode_id: int,
+    req: ScriptScenesGenerateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    episode = db.query(Episode).filter(Episode.id == episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    _require_project_access(db, episode.project_id, current_user)
+
+    latest = _read_episode_scene_generation_status(episode)
+    if bool(latest.get("running")):
+        raise HTTPException(status_code=409, detail="Scene generation is already running")
+
+    now_iso = datetime.utcnow().isoformat()
+    status_payload = {
+        "running": True,
+        "status": "running",
+        "message": "Scene generation started",
+        "episode_id": episode_id,
+        "project_id": episode.project_id,
+        "request": req.model_dump(),
+        "scenes_created": 0,
+        "result": None,
+        "stop_requested": False,
+        "stop_requested_at": None,
+        "started_at": now_iso,
+        "updated_at": now_iso,
+        "finished_at": None,
+    }
+    _persist_episode_scene_generation_status(db, episode, status_payload)
+
+    worker = threading.Thread(
+        target=_run_episode_scene_generation_job,
+        args=(episode_id, req.model_dump(), current_user.id),
+        daemon=True,
+    )
+    worker.start()
+    return status_payload
+
+
+@router.get("/episodes/{episode_id}/script_generator/scenes/status", response_model=Dict[str, Any])
+def get_episode_scenes_generation_job_status(
+    episode_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    episode = db.query(Episode).filter(Episode.id == episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    _require_project_access(db, episode.project_id, current_user)
+    return _read_episode_scene_generation_status(episode)
+
+
+@router.post("/episodes/{episode_id}/script_generator/scenes/stop", response_model=Dict[str, Any])
+def stop_episode_scenes_generation_job(
+    episode_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    episode = db.query(Episode).filter(Episode.id == episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    _require_project_access(db, episode.project_id, current_user)
+
+    status_payload = _read_episode_scene_generation_status(episode)
+    if not bool(status_payload.get("running")):
+        status_payload["message"] = "No running scene generation task"
+        return status_payload
+
+    now_iso = datetime.utcnow().isoformat()
+    status_payload["stop_requested"] = True
+    status_payload["stop_requested_at"] = now_iso
+    status_payload["updated_at"] = now_iso
+    status_payload["message"] = "Stop requested"
+    _persist_episode_scene_generation_status(db, episode, status_payload)
+    return status_payload
+
+
 @router.post("/projects/{project_id}/script_generator/episodes/scripts", response_model=Dict[str, Any])
 async def generate_project_episode_scripts_from_global_framework(
     project_id: int,
@@ -3621,6 +3788,21 @@ async def generate_project_episode_scripts_from_global_framework(
                 db.commit()
         except Exception as e:
             logger.warning(f"[generate_episode_scripts] failed to persist run status: {e}")
+
+    def _read_run_status() -> Dict[str, Any]:
+        try:
+            latest_project = db.query(Project).filter(Project.id == project_id).first()
+            latest_gi = dict((latest_project.global_info if latest_project else {}) or {})
+            latest_status = latest_gi.get(status_key)
+            if isinstance(latest_status, dict):
+                return dict(latest_status)
+        except Exception as e:
+            logger.warning(f"[generate_episode_scripts] failed to read run status: {e}")
+        return {}
+
+    def _is_stop_requested() -> bool:
+        latest_status = _read_run_status()
+        return bool(latest_status.get("stop_requested"))
 
     # Determine target episode count
     target_n: Optional[int] = None
@@ -3747,6 +3929,12 @@ async def generate_project_episode_scripts_from_global_framework(
         episodes_in_order.append(ep)
 
     previous_status = gi.get(status_key) if isinstance(gi.get(status_key), dict) else {}
+    if isinstance(previous_status, dict) and bool(previous_status.get("running")):
+        logger.info(
+            f"[generate_episode_scripts] RESPONSE success=False status_code=409 project_id={project_id} detail=Episode script generation already running"
+        )
+        raise HTTPException(status_code=409, detail="Episode script generation is already running")
+
     failed_episode_ids: set[int] = set()
     previous_results = previous_status.get("results") if isinstance(previous_status, dict) else []
     if isinstance(previous_results, list):
@@ -3777,6 +3965,9 @@ async def generate_project_episode_scripts_from_global_framework(
         "generated": 0,
         "failed": 0,
         "skipped": 0,
+        "stop_requested": False,
+        "stop_requested_at": None,
+        "stopped_by_user": False,
         "results": [],
     }
 
@@ -3825,6 +4016,45 @@ async def generate_project_episode_scripts_from_global_framework(
             logger.warning(f"[generate_episode_scripts] failed to write {action} system log: {e}")
 
     for idx, ep in episodes_with_index:
+        if _is_stop_requested():
+            stopped_at = datetime.utcnow().isoformat()
+            run_status["stop_requested"] = True
+            if not run_status.get("stop_requested_at"):
+                run_status["stop_requested_at"] = stopped_at
+            run_status["stopped_by_user"] = True
+            run_status["stopped_at_episode_number"] = idx
+            run_status["stop_acknowledged_at"] = stopped_at
+            run_status["message"] = "Stopped by user request"
+
+            remaining = [(n, ep_rest) for n, ep_rest in episodes_with_index if n >= idx]
+            for j, ep_rest in remaining:
+                results.append({
+                    "episode_id": ep_rest.id,
+                    "episode_number": j,
+                    "episode_title": ep_rest.title,
+                    "generated": False,
+                    "skipped": True,
+                    "reason": "stopped by user request",
+                })
+                run_status["processed"] = int(run_status.get("processed") or 0) + 1
+                run_status["skipped"] = int(run_status.get("skipped") or 0) + 1
+                run_status["results"].append({
+                    "episode_id": ep_rest.id,
+                    "episode_number": j,
+                    "episode_title": ep_rest.title,
+                    "status": "skipped",
+                    "reason": "stopped by user request",
+                })
+
+            run_status["updated_at"] = stopped_at
+            _persist_run_status(run_status)
+            _safe_log_episode("GENERATE_EPISODE_SCRIPTS_ABORTED", {
+                "project_id": project_id,
+                "stopped_at_episode_number": idx,
+                "reason": "stopped by user request",
+            })
+            break
+
         should_write = True
         if not req.retry_failed_only and not req.overwrite_existing and (ep.script_content or "").strip():
             should_write = False
@@ -4098,10 +4328,79 @@ def get_project_episode_scripts_generation_status(
             "generated": 0,
             "failed": 0,
             "skipped": 0,
+            "stop_requested": False,
+            "stopped_by_user": False,
             "episodes_in_run": 0,
             "results": [],
         }
     return status_payload
+
+
+@router.post("/projects/{project_id}/script_generator/episodes/scripts/stop", response_model=Dict[str, Any])
+def stop_project_episode_scripts_generation(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    project = _require_project_access(db, project_id, current_user)
+
+    gi = dict(project.global_info or {})
+    status_key = "episode_script_generation_status"
+    status_payload = gi.get(status_key) if isinstance(gi.get(status_key), dict) else None
+    now_iso = datetime.utcnow().isoformat()
+
+    if not isinstance(status_payload, dict):
+        return {
+            "success": True,
+            "project_id": project_id,
+            "running": False,
+            "stop_requested": False,
+            "message": "No generation run status found",
+        }
+
+    if not status_payload.get("running"):
+        status_payload["stop_requested"] = False
+        status_payload["updated_at"] = now_iso
+        gi[status_key] = status_payload
+        project.global_info = gi
+        db.add(project)
+        db.commit()
+        return {
+            "success": True,
+            "project_id": project_id,
+            **status_payload,
+            "message": "No running generation task",
+        }
+
+    status_payload["stop_requested"] = True
+    if not status_payload.get("stop_requested_at"):
+        status_payload["stop_requested_at"] = now_iso
+    status_payload["updated_at"] = now_iso
+    gi[status_key] = status_payload
+    project.global_info = gi
+    db.add(project)
+    db.commit()
+
+    try:
+        log_action(
+            db,
+            user_id=current_user.id,
+            user_name=current_user.username,
+            action="GENERATE_EPISODE_SCRIPTS_STOP_REQUESTED",
+            details=json.dumps({
+                "project_id": project_id,
+                "requested_at": now_iso,
+            }, ensure_ascii=False),
+        )
+    except Exception as e:
+        logger.warning(f"[generate_episode_scripts] failed to write STOP_REQUESTED system log: {e}")
+
+    return {
+        "success": True,
+        "project_id": project_id,
+        **status_payload,
+        "message": "Stop requested",
+    }
 
 @router.delete("/episodes/{episode_id}", status_code=204)
 def delete_episode(
@@ -4667,6 +4966,242 @@ def ai_prompt_preview(
 
 class AnalysisContent(BaseModel):
     content: Union[Dict[str, Any], List[Any]]
+
+
+class SceneAiShotsBatchStartRequest(BaseModel):
+    scene_ids: Optional[List[int]] = None
+
+
+SCENE_AI_SHOTS_BATCH_STATUS_KEY = "scene_ai_shots_batch_status"
+
+
+def _read_scene_ai_shots_batch_status(episode: Episode) -> Dict[str, Any]:
+    try:
+        info = dict(episode.episode_info or {})
+        payload = info.get(SCENE_AI_SHOTS_BATCH_STATUS_KEY)
+        if isinstance(payload, dict):
+            return dict(payload)
+    except Exception:
+        pass
+    return {
+        "running": False,
+        "total": 0,
+        "completed": 0,
+        "success": 0,
+        "failed": 0,
+        "current_scene_id": None,
+        "current_scene_label": "",
+        "message": "",
+        "errors": [],
+    }
+
+
+def _persist_scene_ai_shots_batch_status(db: Session, episode: Episode, status_payload: Dict[str, Any]) -> None:
+    info = dict(episode.episode_info or {})
+    info[SCENE_AI_SHOTS_BATCH_STATUS_KEY] = status_payload
+    episode.episode_info = info
+    db.add(episode)
+    db.commit()
+
+
+def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id: int) -> None:
+    db = SessionLocal()
+    try:
+        episode = db.query(Episode).filter(Episode.id == episode_id).first()
+        user = db.query(User).filter(User.id == user_id).first()
+        if not episode or not user:
+            return
+
+        scene_label_map: Dict[int, str] = {}
+        for sid in scene_ids:
+            sc = db.query(Scene).filter(Scene.id == sid, Scene.episode_id == episode_id).first()
+            if sc:
+                scene_label_map[sid] = str(sc.scene_no or sc.scene_name or f"#{sid}")
+
+        total = len(scene_ids)
+        completed = 0
+        success = 0
+        failed = 0
+        errors: List[str] = []
+
+        for sid in scene_ids:
+            episode = db.query(Episode).filter(Episode.id == episode_id).first()
+            if not episode:
+                break
+            latest = _read_scene_ai_shots_batch_status(episode)
+            if bool(latest.get("stop_requested")):
+                latest["running"] = False
+                latest["completed"] = completed
+                latest["success"] = success
+                latest["failed"] = failed
+                latest["errors"] = errors
+                latest["finished_at"] = datetime.utcnow().isoformat()
+                latest["stopped_by_user"] = True
+                latest["message"] = "Stopped by user request"
+                _persist_scene_ai_shots_batch_status(db, episode, latest)
+                return
+
+            scene_label = scene_label_map.get(sid) or f"#{sid}"
+            latest["current_scene_id"] = sid
+            latest["current_scene_label"] = scene_label
+            latest["message"] = f"Processing scene {scene_label}..."
+            latest["updated_at"] = datetime.utcnow().isoformat()
+            _persist_scene_ai_shots_batch_status(db, episode, latest)
+
+            try:
+                generated = asyncio.run(ai_generate_shots(scene_id=sid, req=None, db=db, current_user=user))
+                generated_rows = generated.get("content") if isinstance(generated, dict) else []
+                if not isinstance(generated_rows, list) or len(generated_rows) == 0:
+                    raise RuntimeError("No parsed rows returned")
+
+                apply_scene_ai_result(
+                    scene_id=sid,
+                    data=AnalysisContent(content=generated_rows),
+                    db=db,
+                    current_user=user,
+                )
+                success += 1
+            except Exception as e:
+                failed += 1
+                errors.append(f"{scene_label}: {str(e)}")
+
+            completed += 1
+            episode = db.query(Episode).filter(Episode.id == episode_id).first()
+            if not episode:
+                break
+            latest = _read_scene_ai_shots_batch_status(episode)
+            latest["completed"] = completed
+            latest["success"] = success
+            latest["failed"] = failed
+            latest["errors"] = errors
+            latest["updated_at"] = datetime.utcnow().isoformat()
+            latest["message"] = f"Progress {completed}/{total}"
+            _persist_scene_ai_shots_batch_status(db, episode, latest)
+
+        episode = db.query(Episode).filter(Episode.id == episode_id).first()
+        if episode:
+            final_status = _read_scene_ai_shots_batch_status(episode)
+            final_status["running"] = False
+            final_status["completed"] = completed
+            final_status["success"] = success
+            final_status["failed"] = failed
+            final_status["errors"] = errors
+            final_status["finished_at"] = datetime.utcnow().isoformat()
+            final_status["updated_at"] = final_status["finished_at"]
+            final_status["stopped_by_user"] = bool(final_status.get("stop_requested"))
+            final_status["message"] = f"Batch done: success {success}, failed {failed}"
+            _persist_scene_ai_shots_batch_status(db, episode, final_status)
+    except Exception as e:
+        try:
+            episode = db.query(Episode).filter(Episode.id == episode_id).first()
+            if episode:
+                failed_status = _read_scene_ai_shots_batch_status(episode)
+                failed_status["running"] = False
+                failed_status["finished_at"] = datetime.utcnow().isoformat()
+                failed_status["updated_at"] = failed_status["finished_at"]
+                failed_status["message"] = f"Batch failed: {str(e)}"
+                failed_status["errors"] = list(failed_status.get("errors") or []) + [str(e)]
+                _persist_scene_ai_shots_batch_status(db, episode, failed_status)
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
+@router.post("/episodes/{episode_id}/scenes/ai_shots/batch/start", response_model=Dict[str, Any])
+def start_scene_ai_shots_batch(
+    episode_id: int,
+    req: SceneAiShotsBatchStartRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    episode = db.query(Episode).filter(Episode.id == episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    _require_project_access(db, episode.project_id, current_user)
+
+    latest_status = _read_scene_ai_shots_batch_status(episode)
+    if bool(latest_status.get("running")):
+        raise HTTPException(status_code=409, detail="Scene AI shots batch is already running")
+
+    requested_scene_ids = [int(x) for x in (req.scene_ids or []) if x]
+    scenes_query = db.query(Scene).filter(Scene.episode_id == episode_id)
+    if requested_scene_ids:
+        scenes_query = scenes_query.filter(Scene.id.in_(requested_scene_ids))
+    target_scenes = scenes_query.order_by(Scene.id.asc()).all()
+    scene_ids = [int(s.id) for s in target_scenes]
+    if not scene_ids:
+        raise HTTPException(status_code=400, detail="No saved scenes found for batch")
+
+    now_iso = datetime.utcnow().isoformat()
+    status_payload = {
+        "running": True,
+        "project_id": episode.project_id,
+        "episode_id": episode_id,
+        "scene_ids": scene_ids,
+        "total": len(scene_ids),
+        "completed": 0,
+        "success": 0,
+        "failed": 0,
+        "current_scene_id": None,
+        "current_scene_label": "",
+        "message": "Batch task started",
+        "errors": [],
+        "stop_requested": False,
+        "stop_requested_at": None,
+        "stopped_by_user": False,
+        "started_at": now_iso,
+        "updated_at": now_iso,
+        "finished_at": None,
+    }
+    _persist_scene_ai_shots_batch_status(db, episode, status_payload)
+
+    worker = threading.Thread(
+        target=_run_scene_ai_shots_batch_job,
+        args=(episode_id, scene_ids, current_user.id),
+        daemon=True,
+    )
+    worker.start()
+
+    return status_payload
+
+
+@router.get("/episodes/{episode_id}/scenes/ai_shots/batch/status", response_model=Dict[str, Any])
+def get_scene_ai_shots_batch_status(
+    episode_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    episode = db.query(Episode).filter(Episode.id == episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    _require_project_access(db, episode.project_id, current_user)
+    return _read_scene_ai_shots_batch_status(episode)
+
+
+@router.post("/episodes/{episode_id}/scenes/ai_shots/batch/stop", response_model=Dict[str, Any])
+def stop_scene_ai_shots_batch(
+    episode_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    episode = db.query(Episode).filter(Episode.id == episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    _require_project_access(db, episode.project_id, current_user)
+
+    status_payload = _read_scene_ai_shots_batch_status(episode)
+    if not bool(status_payload.get("running")):
+        status_payload["message"] = "No running batch task"
+        return status_payload
+
+    now_iso = datetime.utcnow().isoformat()
+    status_payload["stop_requested"] = True
+    status_payload["stop_requested_at"] = now_iso
+    status_payload["updated_at"] = now_iso
+    status_payload["message"] = "Stop requested"
+    _persist_scene_ai_shots_batch_status(db, episode, status_payload)
+    return status_payload
 
 @router.post("/scenes/{scene_id}/ai_generate_shots")
 async def ai_generate_shots(
@@ -5776,32 +6311,99 @@ def _generate_email_verification_code() -> str:
     return f"{uuid.uuid4().int % 1000000:06d}"
 
 
-def send_email_verification_code(to_email: str, code: str) -> None:
-    smtp_host = str(settings.SMTP_HOST or "").strip()
-    smtp_user = str(settings.SMTP_USERNAME or "").strip()
-    smtp_pass = str(settings.SMTP_PASSWORD or "").strip()
-    from_email = str(settings.SMTP_FROM_EMAIL or smtp_user or "").strip()
+def _resolve_runtime_smtp_config() -> Dict[str, Any]:
+    config: Dict[str, Any] = {
+        "host": str(settings.SMTP_HOST or "").strip(),
+        "port": int(settings.SMTP_PORT or 587),
+        "username": str(settings.SMTP_USERNAME or "").strip(),
+        "password": str(settings.SMTP_PASSWORD or "").strip(),
+        "use_ssl": os.getenv("SMTP_USE_SSL", "0") in {"1", "true", "True"},
+        "use_tls": bool(settings.SMTP_USE_TLS),
+        "from_email": str(settings.SMTP_FROM_EMAIL or "").strip(),
+        "frontend_base_url": str(settings.FRONTEND_BASE_URL or "").strip(),
+    }
 
-    if not smtp_host or not from_email:
-        logger.warning("SMTP not configured. Skip sending verification email to %s. code=%s", to_email, code)
+    db = SessionLocal()
+    try:
+        setting = db.query(APISetting).filter(
+            APISetting.category == "System_Email",
+            APISetting.provider == "smtp",
+        ).first()
+        if setting:
+            cfg = setting.config or {}
+            config["host"] = str(cfg.get("host", config["host"]) or "").strip()
+            try:
+                config["port"] = int(cfg.get("port") or config["port"])
+            except Exception:
+                pass
+            config["username"] = str(cfg.get("username", config["username"]) or "").strip()
+            config["password"] = str(setting.api_key or config["password"] or "").strip()
+            config["use_ssl"] = bool(cfg.get("use_ssl", config["use_ssl"]))
+            config["use_tls"] = bool(cfg.get("use_tls", config["use_tls"]))
+            config["from_email"] = str(cfg.get("from_email", config["from_email"]) or "").strip()
+            config["frontend_base_url"] = str(cfg.get("frontend_base_url", config["frontend_base_url"]) or "").strip()
+    except Exception as e:
+        logger.warning("Failed to load runtime SMTP config from DB, fallback to env: %s", e)
+    finally:
+        db.close()
+
+    if not config["from_email"]:
+        config["from_email"] = config["username"]
+
+    return config
+
+
+def _send_email_via_runtime_smtp(to_email: str, subject: str, content: str, *, strict: bool = False) -> None:
+    smtp_cfg = _resolve_runtime_smtp_config()
+    smtp_host = str(smtp_cfg.get("host") or "").strip()
+    smtp_user = str(smtp_cfg.get("username") or "").strip()
+    smtp_pass = str(smtp_cfg.get("password") or "").strip()
+    from_email = str(smtp_cfg.get("from_email") or smtp_user or "").strip()
+    smtp_port = int(smtp_cfg.get("port") or 587)
+    smtp_use_ssl = bool(smtp_cfg.get("use_ssl", False))
+    smtp_use_tls = bool(smtp_cfg.get("use_tls", True))
+
+    missing_fields = []
+    if not smtp_host:
+        missing_fields.append("host")
+    if not from_email:
+        missing_fields.append("from_email/username")
+
+    if missing_fields:
+        message = f"SMTP not configured, missing: {', '.join(missing_fields)}"
+        logger.warning("%s. Skip sending email to %s", message, to_email)
+        if strict:
+            raise RuntimeError(message)
         return
 
     message = EmailMessage()
-    message["Subject"] = "AI Story Email Verification Code"
+    message["Subject"] = subject
     message["From"] = from_email
     message["To"] = to_email
-    message.set_content(
-        "Your AI Story verification code is:\n\n"
-        f"{code}\n\n"
-        "This code expires in 10 minutes."
-    )
+    message.set_content(content)
 
-    with smtplib.SMTP(smtp_host, settings.SMTP_PORT, timeout=20) as server:
-        if settings.SMTP_USE_TLS:
+    if smtp_use_ssl:
+        with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=20) as server:
+            if smtp_user and smtp_pass:
+                server.login(smtp_user, smtp_pass)
+            server.send_message(message)
+        return
+
+    with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as server:
+        if smtp_use_tls:
             server.starttls()
         if smtp_user and smtp_pass:
             server.login(smtp_user, smtp_pass)
         server.send_message(message)
+
+
+def send_email_verification_code(to_email: str, code: str) -> None:
+    content = (
+        "Your AI Story verification code is:\n\n"
+        f"{code}\n\n"
+        "This code expires in 10 minutes."
+    )
+    _send_email_via_runtime_smtp(to_email, "AI Story Email Verification Code", content)
 
 @router.post("/users/", response_model=UserOut)
 def create_user(user: UserCreate, db: Session = Depends(get_db)):
@@ -5962,32 +6564,13 @@ def verify_password_reset_token(token: str) -> Optional[str]:
 
 
 def send_password_reset_email(to_email: str, reset_link: str) -> None:
-    smtp_host = str(settings.SMTP_HOST or "").strip()
-    smtp_user = str(settings.SMTP_USERNAME or "").strip()
-    smtp_pass = str(settings.SMTP_PASSWORD or "").strip()
-    from_email = str(settings.SMTP_FROM_EMAIL or smtp_user or "").strip()
-
-    if not smtp_host or not from_email:
-        logger.warning("SMTP not configured. Skip sending password reset email to %s. reset_link=%s", to_email, reset_link)
-        return
-
-    message = EmailMessage()
-    message["Subject"] = "AI Story Password Reset"
-    message["From"] = from_email
-    message["To"] = to_email
-    message.set_content(
+    content = (
         "You requested a password reset for AI Story.\n\n"
         f"Please open this link to reset your password:\n{reset_link}\n\n"
         f"This link expires in {settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES} minutes.\n"
         "If you did not request this, you can ignore this email."
     )
-
-    with smtplib.SMTP(smtp_host, settings.SMTP_PORT, timeout=20) as server:
-        if settings.SMTP_USE_TLS:
-            server.starttls()
-        if smtp_user and smtp_pass:
-            server.login(smtp_user, smtp_pass)
-        server.send_message(message)
+    _send_email_via_runtime_smtp(to_email, "AI Story Password Reset", content)
 
 def authenticate_user(db: Session, username: str, password: str):
     username = str(username or "").strip()
@@ -6091,7 +6674,8 @@ def forgot_password(request: Request, payload: ForgotPasswordRequest, db: Sessio
         return {"status": "ok", "message": success_msg}
 
     token = create_password_reset_token(email)
-    frontend_base = str(settings.FRONTEND_BASE_URL or "").strip()
+    smtp_cfg = _resolve_runtime_smtp_config()
+    frontend_base = str(smtp_cfg.get("frontend_base_url") or "").strip()
     if not frontend_base:
         frontend_base = "http://localhost:5173"
     reset_link = f"{frontend_base.rstrip('/')}/auth?mode=reset&token={token}"
@@ -6942,6 +7526,21 @@ class PaymentConfig(BaseModel):
     notify_url: Optional[str] = ""
     use_mock: bool = True
 
+
+class SMTPConfig(BaseModel):
+    host: Optional[str] = ""
+    port: int = 587
+    username: Optional[str] = ""
+    password: Optional[str] = ""
+    use_ssl: bool = False
+    use_tls: bool = True
+    from_email: Optional[str] = ""
+    frontend_base_url: Optional[str] = ""
+
+
+class SMTPTestRequest(BaseModel):
+    to_email: str
+
 @router.get("/admin/payment-config", response_model=PaymentConfig)
 def get_payment_config(
     current_user: User = Depends(get_current_user),
@@ -7018,6 +7617,112 @@ def update_payment_config(
     })
     
     return idx
+
+
+@router.get("/admin/smtp-config", response_model=SMTPConfig)
+def get_smtp_config(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    setting = db.query(APISetting).filter(
+        APISetting.category == "System_Email",
+        APISetting.provider == "smtp"
+    ).first()
+
+    if not setting:
+        return SMTPConfig(
+            host=str(settings.SMTP_HOST or "").strip(),
+            port=int(settings.SMTP_PORT or 587),
+            username=str(settings.SMTP_USERNAME or "").strip(),
+            password="",
+            use_ssl=os.getenv("SMTP_USE_SSL", "0") in {"1", "true", "True"},
+            use_tls=bool(settings.SMTP_USE_TLS),
+            from_email=str(settings.SMTP_FROM_EMAIL or "").strip(),
+            frontend_base_url=str(settings.FRONTEND_BASE_URL or "").strip(),
+        )
+
+    config = setting.config or {}
+    return SMTPConfig(
+        host=str(config.get("host", "") or "").strip(),
+        port=int(config.get("port") or 587),
+        username=str(config.get("username", "") or "").strip(),
+        password=setting.api_key or "",
+        use_ssl=bool(config.get("use_ssl", False)),
+        use_tls=bool(config.get("use_tls", True)),
+        from_email=str(config.get("from_email", "") or "").strip(),
+        frontend_base_url=str(config.get("frontend_base_url", "") or "").strip(),
+    )
+
+
+@router.post("/admin/smtp-config", response_model=SMTPConfig)
+def update_smtp_config(
+    idx: SMTPConfig,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    setting = db.query(APISetting).filter(
+        APISetting.category == "System_Email",
+        APISetting.provider == "smtp"
+    ).first()
+
+    if not setting:
+        setting = APISetting(
+            user_id=current_user.id,
+            category="System_Email",
+            provider="smtp",
+            name="SMTP System Config",
+            is_active=True,
+        )
+        db.add(setting)
+
+    setting.api_key = str(idx.password or "")
+    setting.config = {
+        "host": str(idx.host or "").strip(),
+        "port": int(idx.port or 587),
+        "username": str(idx.username or "").strip(),
+        "use_ssl": bool(idx.use_ssl),
+        "use_tls": bool(idx.use_tls),
+        "from_email": str(idx.from_email or "").strip(),
+        "frontend_base_url": str(idx.frontend_base_url or "").strip(),
+    }
+
+    db.commit()
+    db.refresh(setting)
+    return idx
+
+
+@router.post("/admin/smtp-config/test")
+def test_smtp_config(
+    payload: SMTPTestRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    del db
+    target_email = str(payload.to_email or "").strip()
+    if not target_email:
+        raise HTTPException(status_code=400, detail="测试邮箱不能为空")
+
+    subject = "AI Story SMTP 测试邮件"
+    content = (
+        "这是一封来自 AI Story 的 SMTP 测试邮件。\n\n"
+        "如果你收到了这封邮件，说明 SMTP 配置可用。"
+    )
+
+    try:
+        _send_email_via_runtime_smtp(target_email, subject, content, strict=True)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"发送失败: {exc}")
+
+    return {"success": True, "message": f"测试邮件已发送到 {target_email}"}
 
 
 class RechargeRequest(BaseModel):
@@ -7601,6 +8306,12 @@ class VideoGenerationRequest(BaseModel):
     keyframes: Optional[List[str]] = None
 
 
+class ShotMediaBatchStartRequest(BaseModel):
+    mode: str = "keyframes"  # keyframes | videos
+    shot_ids: Optional[List[int]] = None
+    overwrite_existing: bool = False
+
+
 def _sanitize_filename_part(value: Optional[str], max_len: int = 48) -> str:
     if not value:
         return ""
@@ -8158,6 +8869,318 @@ async def generate_video_endpoint(
         traceback.print_exc()
         billing_service.log_failed_transaction(db, current_user.id, "video_gen", req.provider, req.model, str(e))
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+
+
+SHOT_MEDIA_BATCH_STATUS_KEY = "shot_media_batch_status"
+
+
+def _read_shot_media_batch_status(episode: Episode) -> Dict[str, Any]:
+    try:
+        info = dict(episode.episode_info or {})
+        payload = info.get(SHOT_MEDIA_BATCH_STATUS_KEY)
+        if isinstance(payload, dict):
+            return dict(payload)
+    except Exception:
+        pass
+    return {
+        "running": False,
+        "mode": "keyframes",
+        "total": 0,
+        "completed": 0,
+        "success": 0,
+        "failed": 0,
+        "message": "",
+        "errors": [],
+        "stop_requested": False,
+    }
+
+
+def _persist_shot_media_batch_status(db: Session, episode: Episode, status_payload: Dict[str, Any]) -> None:
+    info = dict(episode.episode_info or {})
+    info[SHOT_MEDIA_BATCH_STATUS_KEY] = status_payload
+    episode.episode_info = info
+    db.add(episode)
+    db.commit()
+
+
+def _parse_shot_tech(shot: Shot) -> Dict[str, Any]:
+    try:
+        payload = json.loads(shot.technical_notes or "{}")
+        if isinstance(payload, dict):
+            return payload
+    except Exception:
+        pass
+    return {}
+
+
+def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], user_id: int) -> None:
+    db = SessionLocal()
+    try:
+        episode = db.query(Episode).filter(Episode.id == episode_id).first()
+        user = db.query(User).filter(User.id == user_id).first()
+        if not episode or not user:
+            return
+
+        mode = str((request_payload or {}).get("mode") or "keyframes").strip().lower()
+        overwrite_existing = bool((request_payload or {}).get("overwrite_existing"))
+        requested_shot_ids = [int(x) for x in ((request_payload or {}).get("shot_ids") or []) if x]
+
+        shots_query = db.query(Shot).filter(Shot.episode_id == episode_id).order_by(Shot.id.asc())
+        if requested_shot_ids:
+            shots_query = shots_query.filter(Shot.id.in_(requested_shot_ids))
+        target_shots = shots_query.all()
+
+        total = len(target_shots)
+        completed = 0
+        success = 0
+        failed = 0
+        errors: List[str] = []
+
+        for shot in target_shots:
+            episode = db.query(Episode).filter(Episode.id == episode_id).first()
+            if not episode:
+                break
+            latest = _read_shot_media_batch_status(episode)
+            if bool(latest.get("stop_requested")):
+                latest["running"] = False
+                latest["completed"] = completed
+                latest["success"] = success
+                latest["failed"] = failed
+                latest["errors"] = errors
+                latest["stopped_by_user"] = True
+                latest["message"] = "Stopped by user request"
+                latest["finished_at"] = datetime.utcnow().isoformat()
+                latest["updated_at"] = latest["finished_at"]
+                _persist_shot_media_batch_status(db, episode, latest)
+                return
+
+            shot_label = str(shot.shot_id or shot.shot_name or f"#{shot.id}")
+            latest["current_shot_id"] = shot.id
+            latest["current_shot_label"] = shot_label
+            latest["message"] = f"Processing shot {shot_label}..."
+            latest["updated_at"] = datetime.utcnow().isoformat()
+            _persist_shot_media_batch_status(db, episode, latest)
+
+            shot_ok = True
+            try:
+                tech = _parse_shot_tech(shot)
+                end_frame_url = str(tech.get("end_frame_url") or "").strip()
+
+                need_start = overwrite_existing or not str(shot.image_url or "").strip()
+                need_end = overwrite_existing or not end_frame_url
+
+                if need_start:
+                    start_prompt = str(shot.start_frame or shot.video_content or "").strip()
+                    if start_prompt:
+                        start_req = GenerationRequest(
+                            prompt=start_prompt,
+                            project_id=episode.project_id,
+                            shot_id=shot.id,
+                            shot_number=shot.shot_id,
+                            shot_name=shot.shot_name,
+                            asset_type="start_frame",
+                        )
+                        asyncio.run(generate_image_endpoint(req=start_req, current_user=user, db=db))
+                        shot = db.query(Shot).filter(Shot.id == shot.id).first() or shot
+
+                if need_end:
+                    end_prompt = str(shot.end_frame or "").strip()
+                    if end_prompt:
+                        refs = []
+                        if str(shot.image_url or "").strip():
+                            refs = [shot.image_url]
+                        end_req = GenerationRequest(
+                            prompt=end_prompt,
+                            ref_image_url=refs if refs else None,
+                            project_id=episode.project_id,
+                            shot_id=shot.id,
+                            shot_number=shot.shot_id,
+                            shot_name=shot.shot_name,
+                            asset_type="end_frame",
+                        )
+                        asyncio.run(generate_image_endpoint(req=end_req, current_user=user, db=db))
+                        shot = db.query(Shot).filter(Shot.id == shot.id).first() or shot
+                        tech = _parse_shot_tech(shot)
+                        end_frame_url = str(tech.get("end_frame_url") or "").strip()
+
+                if mode == "videos":
+                    need_video = overwrite_existing or not str(shot.video_url or "").strip()
+                    if need_video:
+                        video_prompt = str(shot.video_content or shot.prompt or "").strip() or "Video motion"
+                        refs = []
+                        if str(shot.image_url or "").strip():
+                            refs.append(shot.image_url)
+                        if end_frame_url:
+                            refs.append(end_frame_url)
+                        refs = [x for x in dict.fromkeys(refs) if x]
+
+                        duration_val = 5.0
+                        try:
+                            duration_val = float(str(shot.duration or 5).strip() or 5)
+                        except Exception:
+                            duration_val = 5.0
+
+                        video_req = VideoGenerationRequest(
+                            prompt=video_prompt,
+                            ref_image_url=refs if refs else None,
+                            last_frame_url=end_frame_url or None,
+                            duration=duration_val,
+                            project_id=episode.project_id,
+                            shot_id=shot.id,
+                            shot_number=shot.shot_id,
+                            shot_name=shot.shot_name,
+                            asset_type="video",
+                        )
+                        asyncio.run(generate_video_endpoint(req=video_req, current_user=user, db=db))
+
+                success += 1
+            except Exception as e:
+                shot_ok = False
+                failed += 1
+                errors.append(f"{shot_label}: {str(e)}")
+
+            completed += 1
+            episode = db.query(Episode).filter(Episode.id == episode_id).first()
+            if not episode:
+                break
+            latest = _read_shot_media_batch_status(episode)
+            latest["completed"] = completed
+            latest["success"] = success
+            latest["failed"] = failed
+            latest["errors"] = errors
+            latest["updated_at"] = datetime.utcnow().isoformat()
+            latest["message"] = (
+                f"Progress {completed}/{total}" if shot_ok else f"Progress {completed}/{total} (with errors)"
+            )
+            _persist_shot_media_batch_status(db, episode, latest)
+
+        episode = db.query(Episode).filter(Episode.id == episode_id).first()
+        if episode:
+            final_status = _read_shot_media_batch_status(episode)
+            final_status["running"] = False
+            final_status["completed"] = completed
+            final_status["success"] = success
+            final_status["failed"] = failed
+            final_status["errors"] = errors
+            final_status["updated_at"] = datetime.utcnow().isoformat()
+            final_status["finished_at"] = final_status["updated_at"]
+            final_status["message"] = f"Batch done: success {success}, failed {failed}"
+            _persist_shot_media_batch_status(db, episode, final_status)
+    except Exception as e:
+        try:
+            episode = db.query(Episode).filter(Episode.id == episode_id).first()
+            if episode:
+                status_payload = _read_shot_media_batch_status(episode)
+                status_payload["running"] = False
+                status_payload["updated_at"] = datetime.utcnow().isoformat()
+                status_payload["finished_at"] = status_payload["updated_at"]
+                status_payload["message"] = f"Batch failed: {str(e)}"
+                status_payload["errors"] = list(status_payload.get("errors") or []) + [str(e)]
+                _persist_shot_media_batch_status(db, episode, status_payload)
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
+@router.post("/episodes/{episode_id}/shots/batch-media/start", response_model=Dict[str, Any])
+def start_shot_media_batch_job(
+    episode_id: int,
+    req: ShotMediaBatchStartRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    episode = db.query(Episode).filter(Episode.id == episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    _require_project_access(db, episode.project_id, current_user)
+
+    mode = str(req.mode or "keyframes").strip().lower()
+    if mode not in {"keyframes", "videos"}:
+        raise HTTPException(status_code=400, detail="mode must be 'keyframes' or 'videos'")
+
+    latest = _read_shot_media_batch_status(episode)
+    if bool(latest.get("running")):
+        raise HTTPException(status_code=409, detail="Shot media batch task is already running")
+
+    shots_query = db.query(Shot).filter(Shot.episode_id == episode_id)
+    if req.shot_ids:
+        shots_query = shots_query.filter(Shot.id.in_(req.shot_ids))
+    target_shots = shots_query.order_by(Shot.id.asc()).all()
+    shot_ids = [int(s.id) for s in target_shots]
+    if not shot_ids:
+        raise HTTPException(status_code=400, detail="No shots found for batch task")
+
+    now_iso = datetime.utcnow().isoformat()
+    status_payload = {
+        "running": True,
+        "mode": mode,
+        "episode_id": episode_id,
+        "project_id": episode.project_id,
+        "shot_ids": shot_ids,
+        "overwrite_existing": bool(req.overwrite_existing),
+        "total": len(shot_ids),
+        "completed": 0,
+        "success": 0,
+        "failed": 0,
+        "current_shot_id": None,
+        "current_shot_label": "",
+        "message": "Batch task started",
+        "errors": [],
+        "stop_requested": False,
+        "stop_requested_at": None,
+        "stopped_by_user": False,
+        "started_at": now_iso,
+        "updated_at": now_iso,
+        "finished_at": None,
+    }
+    _persist_shot_media_batch_status(db, episode, status_payload)
+
+    worker = threading.Thread(
+        target=_run_shot_media_batch_job,
+        args=(episode_id, req.model_dump(), current_user.id),
+        daemon=True,
+    )
+    worker.start()
+    return status_payload
+
+
+@router.get("/episodes/{episode_id}/shots/batch-media/status", response_model=Dict[str, Any])
+def get_shot_media_batch_job_status(
+    episode_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    episode = db.query(Episode).filter(Episode.id == episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    _require_project_access(db, episode.project_id, current_user)
+    return _read_shot_media_batch_status(episode)
+
+
+@router.post("/episodes/{episode_id}/shots/batch-media/stop", response_model=Dict[str, Any])
+def stop_shot_media_batch_job(
+    episode_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    episode = db.query(Episode).filter(Episode.id == episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    _require_project_access(db, episode.project_id, current_user)
+
+    status_payload = _read_shot_media_batch_status(episode)
+    if not bool(status_payload.get("running")):
+        status_payload["message"] = "No running batch task"
+        return status_payload
+
+    now_iso = datetime.utcnow().isoformat()
+    status_payload["stop_requested"] = True
+    status_payload["stop_requested_at"] = now_iso
+    status_payload["updated_at"] = now_iso
+    status_payload["message"] = "Stop requested"
+    _persist_shot_media_batch_status(db, episode, status_payload)
+    return status_payload
 
 class MontageItem(BaseModel):
     url: str

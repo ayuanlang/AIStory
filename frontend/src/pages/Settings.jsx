@@ -125,6 +125,7 @@ const Settings = () => {
 
     // State for Baidu Translation
     const [baiduToken, setBaiduToken] = useState("");
+    const [autoIntelligentApiCalling, setAutoIntelligentApiCalling] = useState(true);
 
     // State for tabs
     const [activeTab, setActiveTab] = useState('general');
@@ -630,6 +631,13 @@ const Settings = () => {
                     if (baiduSetting) {
                         setBaiduToken(baiduSetting.api_key || "");
                     }
+
+                    const smartRouterSetting = data.find((s) => String(s.provider || '').toLowerCase() === 'smart_router' && s.category === 'Tools');
+                    if (smartRouterSetting?.config && Object.prototype.hasOwnProperty.call(smartRouterSetting.config, 'auto_intelligent_api_calling')) {
+                        setAutoIntelligentApiCalling(!!smartRouterSetting.config.auto_intelligent_api_calling);
+                    } else {
+                        setAutoIntelligentApiCalling(true);
+                    }
                 }
                 refreshActiveSettingSources();
              } catch (e) {
@@ -1049,6 +1057,24 @@ const Settings = () => {
 
         // Sync Vision to Backend
         await syncToBackend("Vision", visionModel, visConfig);
+
+        try {
+            const allSettings = await getSettings();
+            const existingSmartRouter = allSettings.find((s) => String(s.provider || '').toLowerCase() === 'smart_router' && s.category === 'Tools');
+            await updateSetting({
+                id: existingSmartRouter?.id,
+                name: existingSmartRouter?.name || 'Smart API Router',
+                provider: 'smart_router',
+                category: 'Tools',
+                is_active: false,
+                config: {
+                    auto_intelligent_api_calling: !!autoIntelligentApiCalling,
+                },
+            });
+        } catch (e) {
+            console.error('Failed to save smart router setting', e);
+            showNotification(t('智能 API 调用开关保存失败', 'Failed to save intelligent API toggle'), 'error');
+        }
 
         await refreshActiveSettingSources();
 
@@ -1590,6 +1616,25 @@ const Settings = () => {
                         <h2 className="text-xl font-semibold">{t('图片与视频工具 API', 'Image & Video Tools API')}</h2>
                         <div className="bg-black/20 p-6 rounded-xl border border-white/10 space-y-6 shadow-sm">
                             {/* Translation Tool Section */}
+                            <div className="space-y-3 border-b border-white/10 pb-6">
+                                <h3 className="text-base font-medium flex items-center gap-2">
+                                    {t('智能 API 路由', 'Intelligent API Routing')}
+                                </h3>
+                                <label className="flex items-center gap-3 text-sm text-white bg-white/5 p-3 rounded-lg border border-white/10">
+                                    <input
+                                        type="checkbox"
+                                        checked={!!autoIntelligentApiCalling}
+                                        onChange={(e) => setAutoIntelligentApiCalling(e.target.checked)}
+                                    />
+                                    <span>
+                                        {t('允许自动智能调用 API（默认开启）', 'Allow automatic intelligent API calling (enabled by default)')}
+                                    </span>
+                                </label>
+                                <p className="text-[11px] text-muted-foreground">
+                                    {t('开启后：多参考图（>4）会临时切到后台配置的多图默认 API；达到重试上限后按同类别优先级自动回退。此行为仅作用于当前调用，不会改变你的默认激活 API。', 'When enabled: multi-reference image jobs (>4 refs) temporarily use the admin-configured multi-ref default API; after retry limit it falls back by same-category priority. This applies per call and does not persistently change your active API.')}
+                                </p>
+                            </div>
+
                             <div className="space-y-4 border-b border-white/10 pb-6">
                                 <h3 className="text-base font-medium flex items-center gap-2">
                                     {t('翻译服务（百度）', 'Translation Service (Baidu)')}

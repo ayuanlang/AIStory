@@ -33,6 +33,7 @@ logger = logging.getLogger("media_service")
 class MediaGenerationService:
 # ...
     DOUBAO_MIN_IMAGE_PIXELS = 3_686_400
+    SMART_ROUTER_PROVIDER = "smart_router"
 
     def _vendor_label(self, provider: Any) -> str:
         raw = str(provider or "").strip()
@@ -179,6 +180,284 @@ class MediaGenerationService:
             APISetting.is_active == True,
         ).order_by(APISetting.id.desc()).first()
 
+    def _normalize_provider_name(self, provider: Optional[str], category: Optional[str] = None) -> str:
+        raw = str(provider or "").strip().lower()
+        mapping = {
+            "grsai-image": "grsai",
+            "grsai-video": "grsai",
+            "grsai": "grsai",
+            "doubao": "doubao",
+            "doubao video": "doubao",
+            "stable diffusion": "stability",
+            "tencent hunyuan": "tencent",
+            "wanxiang": "wanxiang",
+            "wanx": "wanxiang",
+            "vidu (video)": "vidu",
+            "runway": "runway",
+            "kling": "kling",
+        }
+        if raw in mapping:
+            return mapping[raw]
+        if category == "Image" and raw == "ark":
+            return "doubao"
+        if category == "Video" and raw == "ark":
+            return "doubao"
+        return raw
+
+    def _is_smart_routing_enabled(self, session, user_id: int) -> bool:
+        rows = session.query(APISetting).filter(
+            APISetting.user_id == user_id,
+            APISetting.category == "Tools",
+        ).order_by(APISetting.id.desc()).all()
+
+        if not rows:
+            return True
+
+        for row in rows:
+            cfg = self._safe_json_dict(row.config)
+            if row.provider == self.SMART_ROUTER_PROVIDER and "auto_intelligent_api_calling" in cfg:
+                return bool(cfg.get("auto_intelligent_api_calling"))
+
+        for row in rows:
+            cfg = self._safe_json_dict(row.config)
+            if "auto_intelligent_api_calling" in cfg:
+                return bool(cfg.get("auto_intelligent_api_calling"))
+
+        return True
+
+    def _get_system_candidates(self, session, category: str) -> List[Dict[str, Any]]:
+        defaults = {
+            "openai": {"base_url": "https://api.openai.com/v1", "model": "gpt-4-turbo-preview"},
+            "anthropic": {"base_url": "https://api.anthropic.com", "model": "claude-3-opus-20240229"},
+            "stability": {"base_url": "https://api.stability.ai", "model": "stable-diffusion-xl-1024-v1-0"},
+            "runway": {"base_url": "https://api.runwayml.com", "model": "gen-2"},
+            "elevenlabs": {"base_url": "https://api.elevenlabs.io/v1", "model": "premade/Adam"},
+            "doubao": {"base_url": "https://ark.cn-beijing.volces.com/api/v3", "model": "doubao-seedream-4-5-251128"},
+            "grsai": {"base_url": "https://grsaiapi.com", "model": "sora-image"},
+            "tencent": {"base_url": "https://aiart.tencentcloudapi.com", "model": "hunyuan-vision"},
+            "wanxiang": {"base_url": "https://dashscope.aliyuncs.com/api/v1/services/aigc/image2video/video-synthesis", "model": "wanx2.1-i2v-plus"},
+            "vidu": {"base_url": "https://api.vidu.studio/open/v1/creation/video", "model": "vidu2.0"},
+        }
+
+        rows = session.query(SystemAPISetting).filter(
+            SystemAPISetting.category == category,
+        ).order_by(SystemAPISetting.id.asc()).all()
+
+        candidates: List[Dict[str, Any]] = []
+        for row in rows:
+            provider = self._normalize_provider_name(row.provider, category)
+            if not provider:
+                continue
+            cfg = self._safe_json_dict(row.config)
+            priority_raw = cfg.get("smart_priority", cfg.get("priority", 100))
+            retry_raw = cfg.get("smart_retry_limit", cfg.get("retry_limit"))
+            try:
+                priority = int(priority_raw)
+            except Exception:
+                priority = 100
+            try:
+                retry_limit = int(retry_raw) if retry_raw is not None else None
+            except Exception:
+                retry_limit = None
+            candidates.append({
+                "id": row.id,
+                "provider": provider,
+                "model": row.model,
+                "priority": priority,
+                "retry_limit": retry_limit,
+                "is_multi_ref_default": bool(cfg.get("smart_multi_ref_default")),
+                "config": self._setting_to_config(row, provider, defaults),
+            })
+
+        return candidates
+
+    async def _execute_generation_by_provider(
+        self,
+        category: str,
+        provider: str,
+        prompt: str,
+        api_config: Dict[str, Any],
+        reference_image_url: Optional[Union[str, List[str]]],
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+        aspect_ratio: Optional[str] = None,
+        last_frame_url: Optional[str] = None,
+        duration: int = 5,
+        keyframes: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        if category == "Image":
+            if width and height:
+                if not api_config.get("config"):
+                    api_config["config"] = {}
+                api_config["config"]["width"] = width
+                api_config["config"]["height"] = height
+
+            if provider in ["doubao", "ark"]:
+                return await self._handle_doubao_generation("image", prompt, api_config, reference_image_url, aspect_ratio=aspect_ratio)
+            if provider == "grsai":
+                return await self._handle_grsai_generation("image", prompt, api_config, reference_image_url, aspect_ratio=aspect_ratio)
+            if provider == "tencent":
+                return await self._handle_tencent_generation("image", prompt, api_config, reference_image_url)
+            if provider in ["stability", "stable diffusion"]:
+                return await self._handle_stability_generation("image", prompt, api_config, reference_image_url)
+
+            print(f"Mocking Image Gen for {provider}")
+            return {
+                "url": "https://pub-8415848529ba47329437b600ab383416.r2.dev/generated_image.png",
+                "metadata": {"provider": provider, "model": api_config.get("model", "default")}
+            }
+
+        if category == "Video":
+            if provider in ["doubao", "ark"]:
+                return await self._handle_doubao_generation("video", prompt, api_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio)
+            if provider == "grsai":
+                return await self._handle_grsai_generation("video", prompt, api_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio)
+            if provider == "tencent":
+                return await self._handle_tencent_generation("video", prompt, api_config, reference_image_url, duration=duration)
+            if provider in ["wanxiang", "wanx"]:
+                return await self._handle_wanxiang_generation("video", prompt, api_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio)
+            if provider == "vidu":
+                return await self._handle_vidu_generation("video", prompt, api_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio, keyframes=keyframes)
+
+            print(f"Mocking Video Gen for {provider}")
+            return {
+                "url": "https://pub-8415848529ba47329437b600ab383416.r2.dev/generated_video.mp4",
+                "metadata": {"provider": provider, "duration": duration}
+            }
+
+        return {"error": f"Unsupported category: {category}"}
+
+    async def _generate_with_smart_routing(
+        self,
+        category: str,
+        prompt: str,
+        provider: str,
+        api_config: Dict[str, Any],
+        user_id: int,
+        reference_image_url: Optional[Union[str, List[str]]],
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+        aspect_ratio: Optional[str] = None,
+        last_frame_url: Optional[str] = None,
+        duration: int = 5,
+        keyframes: Optional[List[str]] = None,
+        requested_model: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        with SessionLocal() as session:
+            smart_enabled = self._is_smart_routing_enabled(session, user_id)
+            candidates = self._get_system_candidates(session, category)
+
+        effective_provider = self._normalize_provider_name(provider, category)
+        baseline_config = dict(api_config or {})
+        if requested_model:
+            baseline_config["model"] = requested_model
+
+        fallback_candidates = sorted(
+            [
+                c for c in candidates
+                if c.get("provider") and not (
+                    c.get("provider") == effective_provider
+                    and str(c.get("model") or "") == str(baseline_config.get("model") or "")
+                )
+            ],
+            key=lambda x: (x.get("priority", 100), x.get("id", 0)),
+        )
+
+        retry_limit = 1
+        for c in candidates:
+            if c.get("provider") == effective_provider and c.get("retry_limit") is not None:
+                retry_limit = max(1, int(c.get("retry_limit")))
+                break
+
+        multi_ref_count = len(reference_image_url) if isinstance(reference_image_url, list) else 0
+        attempt_items: List[Dict[str, Any]] = []
+
+        if smart_enabled and category == "Image" and multi_ref_count > 4:
+            multi_ref_target = sorted(
+                [c for c in candidates if c.get("is_multi_ref_default")],
+                key=lambda x: (x.get("priority", 100), x.get("id", 0)),
+            )
+            if multi_ref_target:
+                first = multi_ref_target[0]
+                attempt_items.append({
+                    "provider": first.get("provider"),
+                    "config": dict(first.get("config") or {}),
+                    "tag": "multi_ref_default",
+                })
+
+        for _ in range(retry_limit):
+            attempt_items.append({
+                "provider": effective_provider,
+                "config": dict(baseline_config),
+                "tag": "active_retry",
+            })
+
+        if smart_enabled:
+            for c in fallback_candidates:
+                attempt_items.append({
+                    "provider": c.get("provider"),
+                    "config": dict(c.get("config") or {}),
+                    "tag": "priority_fallback",
+                })
+
+        seen = set()
+        deduped_attempts: List[Dict[str, Any]] = []
+        for idx, item in enumerate(attempt_items):
+            key = (idx if item.get("tag") == "active_retry" else None, item.get("provider"), item.get("config", {}).get("model"), item.get("tag"))
+            if item.get("tag") != "active_retry" and key in seen:
+                continue
+            seen.add(key)
+            deduped_attempts.append(item)
+
+        final_error: Dict[str, Any] = {"error": "Generation failed"}
+
+        for index, attempt in enumerate(deduped_attempts, start=1):
+            selected_provider = self._normalize_provider_name(attempt.get("provider"), category)
+            selected_config = dict(attempt.get("config") or {})
+            if not selected_provider:
+                continue
+
+            logger.info(
+                "Smart routing attempt | category=%s user_id=%s attempt=%s/%s provider=%s model=%s tag=%s smart_enabled=%s",
+                category,
+                user_id,
+                index,
+                len(deduped_attempts),
+                selected_provider,
+                selected_config.get("model"),
+                attempt.get("tag"),
+                smart_enabled,
+            )
+
+            result = await self._execute_generation_by_provider(
+                category=category,
+                provider=selected_provider,
+                prompt=prompt,
+                api_config=selected_config,
+                reference_image_url=reference_image_url,
+                width=width,
+                height=height,
+                aspect_ratio=aspect_ratio,
+                last_frame_url=last_frame_url,
+                duration=duration,
+                keyframes=keyframes,
+            )
+
+            if result and not result.get("error"):
+                metadata = result.get("metadata") or {}
+                metadata["smart_routing"] = {
+                    "enabled": smart_enabled,
+                    "attempt": index,
+                    "attempt_tag": attempt.get("tag"),
+                    "provider": selected_provider,
+                }
+                result["metadata"] = metadata
+                return result
+
+            final_error = result or {"error": "Generation failed"}
+
+        return final_error
+
     def get_api_config(
         self,
         provider: str,
@@ -279,26 +558,18 @@ class MediaGenerationService:
     async def generate_image(self, prompt: str, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, width: int = None, height: int = None, aspect_ratio: str = None, user_id: int = 1, user_credits: int = 0, filename_base: Optional[str] = None):
         provider = None
         if llm_config and "provider" in llm_config and llm_config["provider"]:
-            provider = llm_config["provider"]
-        
-        # Normalize provider names from Frontend to Backend IDs
-        if provider == "Grsai-Image": provider = "grsai"
-        if provider == "Doubao": provider = "doubao"
-        if provider == "Stable Diffusion": provider = "stability"
-        if provider == "Tencent Hunyuan": provider = "tencent"
-        
-        # If no provider specified, find the active default for Image
+            provider = self._normalize_provider_name(llm_config["provider"], "Image")
+
         if not provider:
             try:
                 with SessionLocal() as session:
                     self._repair_invalid_user_config_rows(session, user_id, category="Image")
                     active_setting = self._get_active_user_setting(session, user_id, "Image")
                     if active_setting and active_setting.provider:
-                        provider = str(active_setting.provider).strip()
+                        provider = self._normalize_provider_name(active_setting.provider, "Image")
             except Exception as e:
                 print(f"Error finding active provider: {e}")
-        
-        # Default fallback
+
         if not provider:
             provider = "grsai"
 
@@ -309,35 +580,22 @@ class MediaGenerationService:
             requested_model=(llm_config or {}).get("model"),
             user_credits=user_credits,
         )
-        
-        # Override model if specified in request
-        if llm_config and llm_config.get("model"):
-            api_config["model"] = llm_config["model"]
-            
-        # Optimization: Inject resolution into config if provided
-        if width and height:
-            if not api_config.get("config"): api_config["config"] = {}
-            api_config["config"]["width"] = width
-            api_config["config"]["height"] = height
-        
-        # Ensure reference_image_url is passed correctly
+
         print(f"[MediaService] Generating Image. Provider: {provider}, Refs Type: {type(reference_image_url)}, Refs: {reference_image_url}, W: {width}, H: {height}, AR: {aspect_ratio}")
 
-        if provider in ["doubao", "ark"]:
-             result = await self._handle_doubao_generation("image", prompt, api_config, reference_image_url, aspect_ratio=aspect_ratio)
-        elif provider == "grsai":
-              result = await self._handle_grsai_generation("image", prompt, api_config, reference_image_url, aspect_ratio=aspect_ratio)
-        elif provider == "tencent":
-             result = await self._handle_tencent_generation("image", prompt, api_config, reference_image_url)
-        elif provider == "stability" or provider == "stable diffusion":
-             result = await self._handle_stability_generation("image", prompt, api_config, reference_image_url)
-        else:
-            print(f"Mocking Image Gen for {provider}")
-            result = {
-                "url": "https://pub-8415848529ba47329437b600ab383416.r2.dev/generated_image.png",
-                "metadata": {"provider": provider, "model": api_config.get("model", "default")}
-            }
-        
+        result = await self._generate_with_smart_routing(
+            category="Image",
+            prompt=prompt,
+            provider=provider,
+            api_config=api_config,
+            user_id=user_id,
+            reference_image_url=reference_image_url,
+            width=width,
+            height=height,
+            aspect_ratio=aspect_ratio,
+            requested_model=(llm_config or {}).get("model"),
+        )
+
         # Download 
         if result and "url" in result and result["url"]:
             result["url"] = await asyncio.to_thread(
@@ -353,31 +611,21 @@ class MediaGenerationService:
     async def generate_video(self, prompt: str, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, last_frame_url: Optional[str] = None, duration: int = 5, aspect_ratio: Optional[str] = None, keyframes: Optional[List[str]] = None, user_id: int = 1, user_credits: int = 0, filename_base: Optional[str] = None):
         provider = None
         if llm_config and "provider" in llm_config and llm_config["provider"]:
-            provider = llm_config["provider"]
-            
-        # Normalize provider names from Frontend to Backend IDs
-        if provider == "Grsai-Video": provider = "grsai"
-        if provider == "Doubao Video": provider = "doubao"
-        if provider == "Wanxiang": provider = "wanxiang"
-        if provider == "Vidu (Video)": provider = "vidu"
-        if provider == "Kling": provider = "kling" # Placeholder
-        if provider == "Runway": provider = "runway"
+            provider = self._normalize_provider_name(llm_config["provider"], "Video")
 
-        # If no provider specified, find the active default for Video
         if not provider:
             try:
                 with SessionLocal() as session:
                     self._repair_invalid_user_config_rows(session, user_id, category="Video")
                     active_setting = self._get_active_user_setting(session, user_id, "Video")
                     if active_setting and active_setting.provider:
-                        provider = str(active_setting.provider).strip()
+                        provider = self._normalize_provider_name(active_setting.provider, "Video")
             except Exception as e:
                 print(f"Error finding active provider: {e}")
 
-        # Default fallback
         if not provider:
-            provider = "grsai"  # Default has shifted to grsai for consistency if not configured
-            
+            provider = "grsai"
+
         api_config = self.get_api_config(
             provider,
             user_id,
@@ -386,28 +634,21 @@ class MediaGenerationService:
             user_credits=user_credits,
         )
 
-        # Override model if specified
-        if llm_config and llm_config.get("model"):
-            api_config["model"] = llm_config["model"]
-
         print(f"[MediaService] Generating Video. Provider: {provider}, Refs: {reference_image_url}, LastFrame: {last_frame_url}, Ratio: {aspect_ratio}, Keyframes: {len(keyframes) if keyframes else 0}")
 
-        if provider in ["doubao", "ark"]:
-             result = await self._handle_doubao_generation("video", prompt, api_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio)
-        elif provider == "grsai":
-             result = await self._handle_grsai_generation("video", prompt, api_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio)
-        elif provider == "tencent":
-             result = await self._handle_tencent_generation("video", prompt, api_config, reference_image_url, duration=duration)
-        elif provider == "wanxiang" or provider == "wanx":
-             result = await self._handle_wanxiang_generation("video", prompt, api_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio)
-        elif provider == "vidu":
-             result = await self._handle_vidu_generation("video", prompt, api_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio, keyframes=keyframes)
-        else:
-            print(f"Mocking Video Gen for {provider}")
-            result = {
-                "url": "https://pub-8415848529ba47329437b600ab383416.r2.dev/generated_video.mp4",
-                "metadata": {"provider": provider, "duration": duration}
-            }
+        result = await self._generate_with_smart_routing(
+            category="Video",
+            prompt=prompt,
+            provider=provider,
+            api_config=api_config,
+            user_id=user_id,
+            reference_image_url=reference_image_url,
+            aspect_ratio=aspect_ratio,
+            last_frame_url=last_frame_url,
+            duration=duration,
+            keyframes=keyframes,
+            requested_model=(llm_config or {}).get("model"),
+        )
 
         # Download 
         if result and "url" in result and result["url"]:

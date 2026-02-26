@@ -123,6 +123,16 @@ import {
     generateEpisodeScenes,
     generateProjectEpisodeScripts,
     getProjectEpisodeScriptsStatus,
+    stopProjectEpisodeScripts,
+    startSceneAiShotsBatch,
+    getSceneAiShotsBatchStatus,
+    stopSceneAiShotsBatch,
+    startEpisodeScenesGeneration,
+    getEpisodeScenesGenerationStatus,
+    stopEpisodeScenesGeneration,
+    startShotMediaBatch,
+    getShotMediaBatchStatus,
+    stopShotMediaBatch,
     saveProjectStoryGeneratorGlobalInput,
     exportProjectStoryGlobalPackage,
     importProjectStoryGlobalPackage,
@@ -565,6 +575,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
     });
     const [isGeneratingGlobalStory, setIsGeneratingGlobalStory] = useState(false);
     const [isGeneratingEpisodeScripts, setIsGeneratingEpisodeScripts] = useState(false);
+    const [isStoppingEpisodeScripts, setIsStoppingEpisodeScripts] = useState(false);
     const [episodeScriptsProgress, setEpisodeScriptsProgress] = useState(null);
     const [showEpisodeScriptsProgressModal, setShowEpisodeScriptsProgressModal] = useState(false);
     const [isAnalyzingNovel, setIsAnalyzingNovel] = useState(false);
@@ -1504,7 +1515,6 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                 addLog?.(`Episode script generation finished. ${summary}`, 'success');
                 alert(`Episode script generation finished. ${summary}`);
             }
-            // Refresh project + episodes from parent (ProjectOverview does not own episode state)
             if (onProjectUpdate) {
                 await onProjectUpdate();
             }
@@ -1519,6 +1529,25 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                 episodeScriptsStatusTimerRef.current = null;
             }
             setIsGeneratingEpisodeScripts(false);
+        }
+    };
+
+    const handleStopEpisodeScripts = async () => {
+        if (!id) return;
+        setIsStoppingEpisodeScripts(true);
+        try {
+            const res = await stopProjectEpisodeScripts(id);
+            addLog?.(res?.message || 'Stop requested for episode scripts task.', 'warning');
+            const status = await pollEpisodeScriptsStatus();
+            if (status?.running && !episodeScriptsStatusTimerRef.current) {
+                episodeScriptsStatusTimerRef.current = setInterval(pollEpisodeScriptsStatus, 1500);
+            }
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || String(e);
+            addLog?.(`Stop episode scripts failed: ${detail}`, 'error');
+            alert(`Failed to stop episode scripts: ${detail}`);
+        } finally {
+            setIsStoppingEpisodeScripts(false);
         }
     };
 
@@ -1595,7 +1624,6 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
     };
 
     const handleBorrowedFilmsChange = (str) => {
-        // Simple comma separated handling
         const arr = str.split(/[,，]/).map(s => s.trim()).filter(Boolean);
         setInfo(prev => ({ ...prev, borrowed_films: arr }));
     };
@@ -1604,6 +1632,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
     const episodesInRun = Number(episodeScriptsProgress?.episodes_in_run || 0);
     const processedCount = Number(episodeScriptsProgress?.processed || 0);
     const progressPercent = episodesInRun > 0 ? Math.min(100, Math.round((processedCount / episodesInRun) * 100)) : 0;
+    const episodeScriptsRunning = Boolean(episodeScriptsProgress?.running) || isGeneratingEpisodeScripts;
 
     const episodeTitleByNumber = useMemo(() => {
         const titleMap = new Map();
@@ -1649,7 +1678,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
             }
         }
         return rows;
-    }, [episodeScriptsProgress, episodeScriptResults, episodesInRun, episodeTitleByNumber]);
+    }, [episodeScriptsProgress, episodeScriptResults, episodesInRun, episodeTitleByNumber, t]);
 
     const failedEpisodeRows = episodeResultRows.filter(item => item?.status === 'failed' && item?.episode_id);
 
@@ -1667,70 +1696,69 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
             </div>
 
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-8 w-full">
-                {/* Basic Info */}
                 <div className="bg-card border border-white/10 p-6 rounded-xl space-y-6">
                     <h3 className="text-lg font-semibold text-primary border-b border-white/10 pb-2">{t('基本信息', 'Basic Information')}</h3>
-                    
+
                     <div className="grid grid-cols-1 gap-4">
                         <InputGroup idPrefix={prefix} label={t('剧本标题', 'Script Title')} value={info.script_title} onChange={v => updateField('script_title', v)} placeholder={t('例如：我的科幻史诗', 'e.g. My Sci-Fi Epic')} />
                     </div>
 
                     <div className="grid grid-cols-2 gap-4">
                         <InputGroup idPrefix={prefix}
-                            label={t('类型', 'Type')} 
-                            value={info.type} 
-                            onChange={v => updateField('type', v)} 
+                            label={t('类型', 'Type')}
+                            value={info.type}
+                            onChange={v => updateField('type', v)}
                             list={[
-                                "Live Action", 
+                                "Live Action",
                                 "Live Action (Realism/Cinematic 8K)",
-                                "2D Animation", 
-                                "3D Animation", 
-                                "Stop Motion", 
-                                "Tokusatsu", 
-                                "Stage Play", 
-                                "CG Animation", 
-                                "Mixed Media", 
+                                "2D Animation",
+                                "3D Animation",
+                                "Stop Motion",
+                                "Tokusatsu",
+                                "Stage Play",
+                                "CG Animation",
+                                "Mixed Media",
                                 "Documentary"
-                            ]} 
+                            ]}
                         />
                          <InputGroup idPrefix={prefix}
-                            label={t('语言', 'Language')} 
-                            value={info.language} 
-                            onChange={v => updateField('language', v)} 
-                            list={["Chinese", "English", "Bilingual (CN/EN)", "Japanese", "Korean", "French", "Spanish", "German", "Other"]} 
+                            label={t('语言', 'Language')}
+                            value={info.language}
+                            onChange={v => updateField('language', v)}
+                            list={["Chinese", "English", "Bilingual (CN/EN)", "Japanese", "Korean", "French", "Spanish", "German", "Other"]}
                         />
                     </div>
-                    
+
                     <InputGroup idPrefix={prefix}
-                        label={t('基础定位', 'Base Positioning')} 
-                        value={info.base_positioning} 
-                        onChange={v => updateField('base_positioning', v)} 
+                        label={t('基础定位', 'Base Positioning')}
+                        value={info.base_positioning}
+                        onChange={v => updateField('base_positioning', v)}
                         list={["Urban Romance", "Sci-Fi Adventure", "Mystery / Thriller", "Period / Wuxia", "Fantasy Epic", "Modern Workplace", "High School / Youth", "Cyberpunk", "Horror", "Comedy", "Drama", "Action", "Historical"]}
                         placeholder={t('例如：都市爱情 / 科幻', 'e.g. Urban Romance / Sci-Fi')}
                     />
 
                     <InputGroup idPrefix={prefix}
-                        label={t('全局风格', 'Global Style')} 
-                        value={info.Global_Style} 
-                        onChange={v => updateField('Global_Style', v)} 
+                        label={t('全局风格', 'Global Style')}
+                        value={info.Global_Style}
+                        onChange={v => updateField('Global_Style', v)}
                         multi={true}
                         list={[
                             "Photorealistic, Cinematic Lighting, 8k, Masterpiece",
                             "Hyperrealistic Portrait, RAW Photo, Ultra Detailed",
-                            "Cyberpunk", 
-                            "Minimalist", 
-                            "Photorealistic", 
-                            "Disney Style", 
-                            "Ghibli Style", 
-                            "Film Noir", 
-                            "Steampunk", 
-                            "Watercolor", 
-                            "Oil Painting", 
-                            "Pixel Art", 
-                            "Vaporwave", 
-                            "Gothic", 
+                            "Cyberpunk",
+                            "Minimalist",
+                            "Photorealistic",
+                            "Disney Style",
+                            "Ghibli Style",
+                            "Film Noir",
+                            "Steampunk",
+                            "Watercolor",
+                            "Oil Painting",
+                            "Pixel Art",
+                            "Vaporwave",
+                            "Gothic",
                             "Surrealism"
-                        ]} 
+                        ]}
                     />
 
                     <div>
@@ -1900,27 +1928,35 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
 
                             <button
                                 onClick={handleGenerateEpisodeScripts}
-                                disabled={isGeneratingEpisodeScripts || isGeneratingGlobalStory}
-                                className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${(isGeneratingEpisodeScripts || isGeneratingGlobalStory) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts}
+                                className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${(episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
                                 title={t('从全局框架 + 项目角色设定生成分集剧本，自动创建缺失分集并写入对应分集', 'Generate episode scripts from Global Framework + Project Character Canon, create missing episodes, and save each script into its episode')}
                             >
-                                {isGeneratingEpisodeScripts ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('生成中...', 'Generating...')}</> : <><Wand2 className="w-4 h-4" /> {t('生成分集剧本', 'Generate Episode Scripts')}</>}
+                                {episodeScriptsRunning ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('生成中...', 'Generating...')}</> : <><Wand2 className="w-4 h-4" /> {t('生成分集剧本', 'Generate Episode Scripts')}</>}
                             </button>
                             <button
                                 onClick={() => handleGenerateEpisodeScripts({ forceStart: true })}
-                                disabled={isGeneratingEpisodeScripts || isGeneratingGlobalStory}
-                                className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${(isGeneratingEpisodeScripts || isGeneratingGlobalStory) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts}
+                                className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${(episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
                                 title={t('强制启动所有目标分集并覆盖已有剧本', 'Force start generation for all target episodes and overwrite existing scripts')}
                             >
-                                {isGeneratingEpisodeScripts ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('执行中...', 'Running...')}</> : <><RefreshCw className="w-4 h-4" /> {t('强制启动剧本', 'Force Start Scripts')}</>}
+                                {episodeScriptsRunning ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('执行中...', 'Running...')}</> : <><RefreshCw className="w-4 h-4" /> {t('强制启动剧本', 'Force Start Scripts')}</>}
                             </button>
                             <button
                                 onClick={() => handleGenerateEpisodeScripts({ retryFailedOnly: true })}
-                                disabled={isGeneratingEpisodeScripts || isGeneratingGlobalStory}
-                                className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${(isGeneratingEpisodeScripts || isGeneratingGlobalStory) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts}
+                                className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${(episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
                                 title={t('仅重试上次运行失败的分集', 'Retry only failed episodes from the last run')}
                             >
-                                {isGeneratingEpisodeScripts ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('执行中...', 'Running...')}</> : <><RefreshCw className="w-4 h-4" /> {t('重试失败分集', 'Retry Failed Episodes')}</>}
+                                {episodeScriptsRunning ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('执行中...', 'Running...')}</> : <><RefreshCw className="w-4 h-4" /> {t('重试失败分集', 'Retry Failed Episodes')}</>}
+                            </button>
+                            <button
+                                onClick={handleStopEpisodeScripts}
+                                disabled={!episodeScriptsRunning || isStoppingEpisodeScripts}
+                                className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${(!episodeScriptsRunning || isStoppingEpisodeScripts) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                title={t('停止当前批量分集剧本任务（当前分集完成后停止）', 'Stop current batch episode scripts task (stops after current episode finishes)')}
+                            >
+                                {isStoppingEpisodeScripts ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('停止中...', 'Stopping...')}</> : <><X className="w-4 h-4" /> {t('停止任务', 'Stop Task')}</>}
                             </button>
                         </div>
                     </div>
@@ -1936,6 +1972,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                             </div>
                             <div className="text-sm text-white flex flex-wrap gap-x-4 gap-y-1">
                                 <span>{t('状态', 'Status')}: <b>{episodeScriptsProgress.running ? t('运行中', 'Running') : t('空闲', 'Idle')}</b></span>
+                                {episodeScriptsProgress.stop_requested ? <span>{t('停止请求', 'Stop Requested')}: <b>{t('是', 'Yes')}</b></span> : null}
                                 <span>{t('已处理', 'Processed')}: <b>{processedCount}</b> / <b>{episodesInRun}</b></span>
                                 <span>{t('已生成', 'Generated')}: <b>{episodeScriptsProgress.generated || 0}</b></span>
                                 <span>{t('失败', 'Failed')}: <b>{episodeScriptsProgress.failed || 0}</b></span>
@@ -1953,6 +1990,13 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                                     className="px-3 py-1.5 rounded-md text-xs font-bold bg-white/10 text-white hover:bg-white/20 flex items-center gap-1.5"
                                 >
                                     <RefreshCw className="w-3.5 h-3.5" /> {t('刷新', 'Refresh')}
+                                </button>
+                                <button
+                                    onClick={handleStopEpisodeScripts}
+                                    disabled={!episodeScriptsRunning || isStoppingEpisodeScripts}
+                                    className={`px-3 py-1.5 rounded-md text-xs font-bold flex items-center gap-1.5 ${(!episodeScriptsRunning || isStoppingEpisodeScripts) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                >
+                                    {isStoppingEpisodeScripts ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('停止中...', 'Stopping...')}</> : <><X className="w-3.5 h-3.5" /> {t('停止任务', 'Stop Task')}</>}
                                 </button>
                             </div>
                         </div>
@@ -2310,6 +2354,13 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                             </div>
                             <div className="flex items-center gap-2">
                                 <button
+                                    onClick={handleStopEpisodeScripts}
+                                    disabled={!episodeScriptsRunning || isStoppingEpisodeScripts}
+                                    className={`px-3 py-1.5 rounded-md text-xs font-bold flex items-center gap-1.5 ${(!episodeScriptsRunning || isStoppingEpisodeScripts) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                >
+                                    {isStoppingEpisodeScripts ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('停止中...', 'Stopping...')}</> : <><X className="w-3.5 h-3.5" /> {t('停止任务', 'Stop Task')}</>}
+                                </button>
+                                <button
                                     onClick={pollEpisodeScriptsStatus}
                                     className="px-3 py-1.5 rounded-md text-xs font-bold bg-white/10 text-white hover:bg-white/20 flex items-center gap-1.5"
                                 >
@@ -2328,7 +2379,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                         <div className="p-5 space-y-4 overflow-y-auto max-h-[calc(90vh-80px)]">
                             {episodeScriptsProgress ? (
                                 <>
-                                    <div className="grid grid-cols-2 md:grid-cols-6 gap-3 text-sm">
+                                    <div className="grid grid-cols-2 md:grid-cols-7 gap-3 text-sm">
                                         <div className="border border-white/10 rounded-lg p-3 bg-black/20">
                                             <div className="text-xs text-muted-foreground">{t('模式', 'Mode')}</div>
                                             <div className="font-bold text-white">{episodeScriptsProgress.mode || 'full'}</div>
@@ -2336,6 +2387,10 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                                         <div className="border border-white/10 rounded-lg p-3 bg-black/20">
                                             <div className="text-xs text-muted-foreground">{t('状态', 'Status')}</div>
                                             <div className="font-bold text-white">{episodeScriptsProgress.running ? t('运行中', 'Running') : t('空闲', 'Idle')}</div>
+                                        </div>
+                                        <div className="border border-white/10 rounded-lg p-3 bg-black/20">
+                                            <div className="text-xs text-muted-foreground">{t('停止请求', 'Stop Requested')}</div>
+                                            <div className="font-bold text-white">{episodeScriptsProgress.stop_requested ? t('是', 'Yes') : t('否', 'No')}</div>
                                         </div>
                                         <div className="border border-white/10 rounded-lg p-3 bg-black/20">
                                             <div className="text-xs text-muted-foreground">{t('已处理', 'Processed')}</div>
@@ -4393,6 +4448,9 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
     const [sceneGenNotes, setSceneGenNotes] = useState('');
     const [sceneGenReplaceExisting, setSceneGenReplaceExisting] = useState(true);
     const [sceneGenGenerating, setSceneGenGenerating] = useState(false);
+    const [sceneGenStatus, setSceneGenStatus] = useState(null);
+    const [isStoppingSceneGen, setIsStoppingSceneGen] = useState(false);
+    const sceneGenStatusTimerRef = useRef(null);
 
     const canonOptionValue = (opt) => `${opt.label}：${opt.detail}`;
 
@@ -4681,6 +4739,61 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         setShowCanonModal(false);
     };
 
+    const pollSceneGenStatus = useCallback(async () => {
+        if (!activeEpisode?.id) return null;
+        try {
+            const status = await getEpisodeScenesGenerationStatus(activeEpisode.id);
+            if (status && typeof status === 'object') {
+                setSceneGenStatus(status);
+                setSceneGenGenerating(Boolean(status.running));
+                if (!status.running && sceneGenStatusTimerRef.current) {
+                    clearInterval(sceneGenStatusTimerRef.current);
+                    sceneGenStatusTimerRef.current = null;
+                }
+                return status;
+            }
+        } catch (e) {}
+        return null;
+    }, [activeEpisode?.id]);
+
+    useEffect(() => {
+        if (!activeEpisode?.id) return;
+        let cancelled = false;
+
+        const hydrate = async () => {
+            const status = await pollSceneGenStatus();
+            if (cancelled || !status) return;
+            if (status.running && !sceneGenStatusTimerRef.current) {
+                sceneGenStatusTimerRef.current = setInterval(pollSceneGenStatus, 1500);
+            }
+        };
+
+        hydrate();
+        return () => {
+            cancelled = true;
+            if (sceneGenStatusTimerRef.current) {
+                clearInterval(sceneGenStatusTimerRef.current);
+                sceneGenStatusTimerRef.current = null;
+            }
+        };
+    }, [activeEpisode?.id, pollSceneGenStatus]);
+
+    const handleStopGenerateScenes = async () => {
+        if (!activeEpisode?.id) return;
+        setIsStoppingSceneGen(true);
+        try {
+            const res = await stopEpisodeScenesGeneration(activeEpisode.id);
+            await pollSceneGenStatus();
+            if (onLog) onLog(`Scene generation: ${res?.message || 'stop requested'}`, 'warning');
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || String(e);
+            if (onLog) onLog(`Scene generation stop failed: ${detail}`, 'error');
+            alert(`Stop failed: ${detail}`);
+        } finally {
+            setIsStoppingSceneGen(false);
+        }
+    };
+
     const handleGenerateScenes = async () => {
         if (!activeEpisode?.id) return;
         const n = Number(sceneGenCount);
@@ -4688,22 +4801,32 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             alert('Please enter a valid scene count.');
             return;
         }
+
+        const latest = await pollSceneGenStatus();
+        if (latest?.running) {
+            if (onLog) onLog('Scene generation is already running. Please stop current task first.', 'warning');
+            alert('Scene generation is already running. Please stop current task first.');
+            return;
+        }
+
         setSceneGenGenerating(true);
         try {
-            if (onLog) onLog(`Generating scenes for episode (target: ${n})`, 'process');
-            const res = await generateEpisodeScenes(activeEpisode.id, {
+            if (onLog) onLog(`Starting background scene generation (target: ${n})`, 'process');
+            await startEpisodeScenesGeneration(activeEpisode.id, {
                 scene_count: n,
                 extra_notes: sceneGenNotes,
                 replace_existing_scenes: !!sceneGenReplaceExisting,
             });
-            if (onLog) onLog(`Scenes generated: ${res?.scenes_created ?? 0}`, 'success');
-            alert(`Scenes generated: ${res?.scenes_created ?? 0}. Open the Scenes tab to view them.`);
+            if (sceneGenStatusTimerRef.current) {
+                clearInterval(sceneGenStatusTimerRef.current);
+                sceneGenStatusTimerRef.current = null;
+            }
+            sceneGenStatusTimerRef.current = setInterval(pollSceneGenStatus, 1500);
+            await pollSceneGenStatus();
         } catch (e) {
             console.error(e);
             if (onLog) onLog(`Scene generation failed: ${e.message}`, 'error');
             alert(`Generation failed: ${e.message}`);
-        } finally {
-            setSceneGenGenerating(false);
         }
     };
 
@@ -6656,6 +6779,8 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         message: '',
         errors: [],
     });
+    const [isStoppingBatchAiShots, setIsStoppingBatchAiShots] = useState(false);
+    const batchAiShotsStatusTimerRef = useRef(null);
     const [aiShotsStaging, setAiShotsStaging] = useState({
         loading: false,
         sceneId: null,
@@ -7250,6 +7375,76 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         }
     };
 
+    const pollBatchAiShotsStatus = useCallback(async () => {
+        if (!activeEpisode?.id) return null;
+        try {
+            const status = await getSceneAiShotsBatchStatus(activeEpisode.id);
+            if (!status || typeof status !== 'object') return null;
+
+            setBatchAiShotsProgress(prev => ({
+                ...prev,
+                running: Boolean(status.running),
+                total: Number(status.total || 0),
+                completed: Number(status.completed || 0),
+                success: Number(status.success || 0),
+                failed: Number(status.failed || 0),
+                currentSceneLabel: status.current_scene_label || '',
+                message: status.message || prev.message || '',
+                errors: Array.isArray(status.errors) ? status.errors : [],
+            }));
+
+            if (!status.running && batchAiShotsStatusTimerRef.current) {
+                clearInterval(batchAiShotsStatusTimerRef.current);
+                batchAiShotsStatusTimerRef.current = null;
+                if (typeof onSwitchToShots === 'function' && Number(status.completed || 0) > 0) {
+                    onSwitchToShots();
+                }
+            }
+
+            return status;
+        } catch (e) {
+            return null;
+        }
+    }, [activeEpisode?.id, onSwitchToShots]);
+
+    useEffect(() => {
+        if (!activeEpisode?.id) return;
+        let cancelled = false;
+
+        const hydrate = async () => {
+            const status = await pollBatchAiShotsStatus();
+            if (cancelled || !status) return;
+            if (status.running && !batchAiShotsStatusTimerRef.current) {
+                batchAiShotsStatusTimerRef.current = setInterval(pollBatchAiShotsStatus, 1500);
+            }
+        };
+
+        hydrate();
+        return () => {
+            cancelled = true;
+            if (batchAiShotsStatusTimerRef.current) {
+                clearInterval(batchAiShotsStatusTimerRef.current);
+                batchAiShotsStatusTimerRef.current = null;
+            }
+        };
+    }, [activeEpisode?.id, pollBatchAiShotsStatus]);
+
+    const handleStopBatchAiShots = async () => {
+        if (!activeEpisode?.id) return;
+        setIsStoppingBatchAiShots(true);
+        try {
+            const res = await stopSceneAiShotsBatch(activeEpisode.id);
+            await pollBatchAiShotsStatus();
+            onLog?.(`SceneManager: Batch AI Shots ${res?.message || 'stop requested'}.`, 'warning');
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'stop failed';
+            onLog?.(`SceneManager: Failed to stop batch AI Shots - ${detail}`, 'error');
+            alert(`Failed to stop batch AI Shots: ${detail}`);
+        } finally {
+            setIsStoppingBatchAiShots(false);
+        }
+    };
+
     const runBatchGenerateAiShotsForAllScenes = async () => {
         const allScenes = Array.isArray(scenes) ? scenes : [];
         const targets = allScenes.filter((scene) => !!scene?.id);
@@ -7266,86 +7461,33 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         );
         if (!await confirmUiMessage(confirmText)) return;
 
-        setBatchAiShotsProgress({
-            running: true,
-            total: targets.length,
-            completed: 0,
-            success: 0,
-            failed: 0,
-            currentSceneLabel: '',
-            message: t('批量任务已启动...', 'Batch task started...'),
-            errors: [],
-        });
-
-        onLog?.(`SceneManager: Batch AI Shots started. total=${targets.length}, skipped_unsaved=${skipped}`, 'info');
-
-        let completed = 0;
-        let success = 0;
-        let failed = 0;
-        const errors = [];
-
-        for (const scene of targets) {
-            const label = scene?.scene_no || scene?.scene_name || `#${scene?.id}`;
+        try {
+            const started = await startSceneAiShotsBatch(activeEpisode.id, {
+                scene_ids: targets.map((s) => s.id),
+            });
             setBatchAiShotsProgress((prev) => ({
                 ...prev,
-                currentSceneLabel: label,
-                message: t(`正在处理：${label}`, `Processing: ${label}`),
+                running: Boolean(started?.running),
+                total: Number(started?.total || targets.length),
+                completed: Number(started?.completed || 0),
+                success: Number(started?.success || 0),
+                failed: Number(started?.failed || 0),
+                currentSceneLabel: started?.current_scene_label || '',
+                message: started?.message || t('批量任务已启动...', 'Batch task started...'),
+                errors: Array.isArray(started?.errors) ? started.errors : [],
             }));
+            onLog?.(`SceneManager: Batch AI Shots started. total=${targets.length}, skipped_unsaved=${skipped}`, 'info');
 
-            try {
-                const promptData = await fetchSceneShotsPrompt(scene.id);
-                const result = await generateSceneShots(scene.id, {
-                    user_prompt: promptData?.user_prompt,
-                    system_prompt: promptData?.system_prompt,
-                });
-
-                const generatedRows = Array.isArray(result?.content) ? result.content : [];
-                const generatedRaw = String(result?.raw_text || '').trim();
-                if (generatedRows.length === 0) {
-                    if (generatedRaw) {
-                        const rawPreview = generatedRaw.replace(/\s+/g, ' ').slice(0, 180);
-                        throw new Error(`No parsed rows. Raw preview: ${rawPreview}`);
-                    }
-                    throw new Error('No parsed rows returned');
-                }
-
-                await applySceneAIResult(scene.id, { content: generatedRows });
-                success += 1;
-                onLog?.(`SceneManager: Batch AI Shots success for ${label}`, 'success');
-            } catch (e) {
-                failed += 1;
-                const detail = e?.response?.data?.detail || e?.message || 'Unknown error';
-                errors.push(`${label}: ${detail}`);
-                onLog?.(`SceneManager: Batch AI Shots failed for ${label} - ${detail}`, 'error');
-            } finally {
-                completed += 1;
-                setBatchAiShotsProgress((prev) => ({
-                    ...prev,
-                    completed,
-                    success,
-                    failed,
-                    errors,
-                    message: t(
-                        `进度 ${completed}/${targets.length}（成功 ${success}，失败 ${failed}）`,
-                        `Progress ${completed}/${targets.length} (success ${success}, failed ${failed})`
-                    ),
-                }));
+            if (batchAiShotsStatusTimerRef.current) {
+                clearInterval(batchAiShotsStatusTimerRef.current);
+                batchAiShotsStatusTimerRef.current = null;
             }
-        }
-
-        setBatchAiShotsProgress((prev) => ({
-            ...prev,
-            running: false,
-            message: t(
-                `批量完成：成功 ${success}，失败 ${failed}${skipped > 0 ? `，跳过 ${skipped}` : ''}`,
-                `Batch done: success ${success}, failed ${failed}${skipped > 0 ? `, skipped ${skipped}` : ''}`
-            ),
-        }));
-
-        onLog?.(`SceneManager: Batch AI Shots finished. success=${success}, failed=${failed}, skipped=${skipped}`, failed > 0 ? 'warning' : 'success');
-
-        if (typeof onSwitchToShots === 'function') {
-            onSwitchToShots();
+            batchAiShotsStatusTimerRef.current = setInterval(pollBatchAiShotsStatus, 1500);
+            pollBatchAiShotsStatus();
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'Batch start failed';
+            onLog?.(`SceneManager: Failed to start batch AI Shots - ${detail}`, 'error');
+            alert(`Failed to start batch AI Shots: ${detail}`);
         }
     };
 
@@ -7517,12 +7659,21 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                 <div className="flex gap-2">
                     <button
                         onClick={runBatchGenerateAiShotsForAllScenes}
-                        disabled={batchAiShotsProgress.running || scenes.length === 0}
+                        disabled={batchAiShotsProgress.running || scenes.length === 0 || isStoppingBatchAiShots}
                         className="px-4 py-2 bg-blue-600/90 text-white rounded-lg text-sm font-bold hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                         title={t('后台批量对当前分集所有场景执行 AI Shots 并自动导入', 'Run AI Shots in background for all scenes in this episode and auto-apply')}
                     >
                         {batchAiShotsProgress.running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
                         {batchAiShotsProgress.running ? t('批量执行中...', 'Batch Running...') : t('批量 AI Shots（全部）', 'Batch AI Shots (All)')}
+                    </button>
+                    <button
+                        onClick={handleStopBatchAiShots}
+                        disabled={!batchAiShotsProgress.running || isStoppingBatchAiShots}
+                        className="px-4 py-2 bg-white/10 text-white rounded-lg text-sm font-bold hover:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                        title={t('停止当前后台批量 AI Shots 任务（当前场景完成后停止）', 'Stop current background batch AI Shots task (stops after current scene finishes)')}
+                    >
+                        {isStoppingBatchAiShots ? <Loader2 className="w-4 h-4 animate-spin" /> : <X className="w-4 h-4" />}
+                        {isStoppingBatchAiShots ? t('停止中...', 'Stopping...') : t('停止批量', 'Stop Batch')}
                     </button>
                      <button onClick={handleSave} className="px-4 py-2 bg-primary text-black rounded-lg text-sm font-bold hover:bg-primary/90 flex items-center gap-2">
                         <CheckCircle className="w-4 h-4" />
@@ -9634,9 +9785,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const [pickerConfig, setPickerConfig] = useState({ isOpen: false, callback: null });
     const [generatingStateByShot, setGeneratingStateByShot] = useState({});
     const [isBatchGenerating, setIsBatchGenerating] = useState(false);
+    const [isStoppingShotBatch, setIsStoppingShotBatch] = useState(false);
     const [isManualRebindingMedia, setIsManualRebindingMedia] = useState(false);
     const [translatingPromptField, setTranslatingPromptField] = useState('');
     const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0, status: '' }); // Progress tracking
+    const shotBatchStatusTimerRef = useRef(null);
     const [activeSources, setActiveSources] = useState({ Image: 'unset', Video: 'unset' });
     const [localKeyframes, setLocalKeyframes] = useState([]);
     const generationStateStorageKey = useMemo(() => {
@@ -11705,351 +11858,123 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         }
     };
 
-    const handleBatchGenerate = async () => {
-        if (shots.length === 0) return;
-        if (!await confirmUiMessage(`Generate missing Start/End frames for all ${shots.length} shots? This may take a while.`)) return;
+    const pollShotBatchStatus = useCallback(async () => {
+        if (!activeEpisode?.id) return null;
+        try {
+            const status = await getShotMediaBatchStatus(activeEpisode.id);
+            if (!status || typeof status !== 'object') return null;
 
-        setIsBatchGenerating(true);
-        setBatchProgress({ current: 0, total: shots.length, status: 'Starting...' });
-        onLog?.("Starting Batch Generation...", "process");
+            const running = Boolean(status.running);
+            setIsBatchGenerating(running);
+            setBatchProgress({
+                current: Number(status.completed || 0),
+                total: Number(status.total || 0),
+                status: String(status.message || ''),
+            });
 
-        let generatedCount = 0;
-        let processedCount = 0;
-
-        // Iterate sequentially
-        for (const shot of shots) {
-             // Update progress UI
-             processedCount++;
-             const statusBase = `Processing Shot ${shot.shot_id}`;
-             setBatchProgress({ current: processedCount, total: shots.length, status: statusBase });
-
-             // 1. Check Start Frame
-            if (!shot.image_url) {
-                try {
-                    setBatchProgress({ current: processedCount, total: shots.length, status: `${statusBase}: Start Frame...` });
-                    let prompt = shot.start_frame || shot.video_content || "A cinematic shot";
-
-                    if (isStartFrameInheritPrompt(prompt)) {
-                        const prevEndUrl = findPrevShotEndFrameUrl(shot.id);
-                        if (prevEndUrl) {
-                            const inheritData = { image_url: prevEndUrl };
-                            await onUpdateShot(shot.id, inheritData);
-                            shot.image_url = prevEndUrl;
-                            generatedCount++;
-                            onLog?.(`[Batch ${processedCount}/${shots.length}] Inherited Start for Shot ${shot.shot_id} via SAP/SAME`, 'success');
-                        } else {
-                            onLog?.(`[Batch ${processedCount}/${shots.length}] Skip Start for Shot ${shot.shot_id}: SAP/SAME but previous End Frame missing`, 'warning');
-                        }
-                        continue;
-                    }
-
-                    const { text: injectedPrompt } = injectEntityFeatures(prompt);
-                    
-                    let refs = [];
-                    try {
-                        const noteStr = shot.technical_notes || '{}';
-                        const tech = JSON.parse(noteStr);
-                        if (Array.isArray(tech.ref_image_urls)) {
-                            refs = [...tech.ref_image_urls];
-                        } else {
-                            refs = getSuggestedRefImages(shot, injectedPrompt, true);
-                        }
-
-                        // UNIVERSAL INJECTION: Previous Shot End Frame (Batch)
-                        try {
-                            const idx = shots.findIndex(s => s.id === shot.id);
-                            if (idx > 0) {
-                                const prevShot = shots[idx - 1];
-                                const prevTech = JSON.parse(prevShot.technical_notes || '{}');
-                                if (prevTech.end_frame_url && !refs.includes(prevTech.end_frame_url)) {
-                                     refs.unshift(prevTech.end_frame_url);
-                                }
-                            }
-                        } catch(e) {}
-                    } catch(e) {}
-                    refs = [...new Set(refs)].filter(Boolean);
-
-                    onLog?.(`[Batch ${processedCount}/${shots.length}] Generating Start for Shot ${shot.shot_id}...`, "info");
-                    
-                    // NEW: Inject Global Context
-                    const globalCtx = getGlobalContextStr();
-                    const finalPrompt = injectedPrompt + globalCtx; 
-
-                    const res = await generateImage(finalPrompt, null, refs.length > 0 ? refs : null, {
-                        project_id: projectId,
-                        shot_id: shot.id,
-                        shot_number: shot.shot_id,
-                        shot_name: shot.shot_name,
-                        asset_type: 'start_frame'
-                    });
-
-                    if (res && res.url) {
-                        const newData = { image_url: res.url, start_frame: injectedPrompt };
-                        await onUpdateShot(shot.id, newData); // This triggers UI update
-                        generatedCount++;
-                    }
-                } catch(e) {
-                    console.error(`Batch Start Gen Error (Shot ${shot.id}):`, e);
-                }
+            if (!running && shotBatchStatusTimerRef.current) {
+                clearInterval(shotBatchStatusTimerRef.current);
+                shotBatchStatusTimerRef.current = null;
+                refreshShots();
             }
-            
-            // 2. Check End Frame
-            let tech = {};
-            try { tech = JSON.parse(shot.technical_notes || '{}'); } catch(e){}
-            
-            if (!tech.end_frame_url) {
-                 try {
-                     let prompt = shot.end_frame || "End frame";
-                     const { text: injectedPrompt } = injectEntityFeatures(prompt);
-                     
-                     let refs = [];
-                     
-                     // 1. Manual List
-                     if (Array.isArray(tech.end_ref_image_urls)) {
-                         refs.push(...tech.end_ref_image_urls);
-                     } else {
-                         // 2. Auto Entities
-                         const suggested = getSuggestedRefImages(shot, injectedPrompt, true);
-                         refs.push(...suggested);
-                     }
-                     
-                     // UNIVERSAL INJECTION: Start Frame (Batch)
-                     if (shot.image_url && !refs.includes(shot.image_url)) {
-                         refs.unshift(shot.image_url);
-                     }
-                     
-                     const uniqueRefs = [...new Set(refs)].filter(Boolean);
 
-                     onLog?.(`[Batch ${processedCount}/${shots.length}] Generating End for Shot ${shot.shot_id}...`, "info");
-                     setBatchProgress({ current: processedCount, total: shots.length, status: `${statusBase}: End Frame...` });
-                     const res = await generateImage(injectedPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
-                        project_id: projectId,
-                        shot_id: shot.id,
-                        shot_number: shot.shot_id,
-                                shot_name: shot.shot_name,
-                        asset_type: 'end_frame'
-                    });
+            return status;
+        } catch (e) {
+            return null;
+        }
+    }, [activeEpisode?.id, refreshShots]);
 
-                    if (res && res.url) {
-                        tech.end_frame_url = res.url;
-                        const newData = { technical_notes: JSON.stringify(tech), end_frame: injectedPrompt };
-                        await onUpdateShot(shot.id, newData); // This triggers UI update
-                        generatedCount++;
-                    }
-                 } catch(e) {
-                      console.error(`Batch End Gen Error (Shot ${shot.id}):`, e);
-                 }
+    useEffect(() => {
+        if (!activeEpisode?.id) return;
+        let cancelled = false;
+
+        const hydrate = async () => {
+            const status = await pollShotBatchStatus();
+            if (cancelled || !status) return;
+            if (status.running && !shotBatchStatusTimerRef.current) {
+                shotBatchStatusTimerRef.current = setInterval(pollShotBatchStatus, 1500);
             }
+        };
+
+        hydrate();
+        return () => {
+            cancelled = true;
+            if (shotBatchStatusTimerRef.current) {
+                clearInterval(shotBatchStatusTimerRef.current);
+                shotBatchStatusTimerRef.current = null;
+            }
+        };
+    }, [activeEpisode?.id, pollShotBatchStatus]);
+
+    const handleStopShotBatch = async () => {
+        if (!activeEpisode?.id) return;
+        setIsStoppingShotBatch(true);
+        try {
+            const res = await stopShotMediaBatch(activeEpisode.id);
+            await pollShotBatchStatus();
+            onLog?.(`Shot batch: ${res?.message || 'stop requested'}`, 'warning');
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'stop failed';
+            onLog?.(`Stop batch failed: ${detail}`, 'error');
+            alert(`Stop batch failed: ${detail}`);
+        } finally {
+            setIsStoppingShotBatch(false);
+        }
+    };
+
+    const startShotBatchByMode = async (mode) => {
+        if (!activeEpisode?.id || shots.length === 0) return;
+
+        const latest = await pollShotBatchStatus();
+        if (latest?.running) {
+            alert('A batch task is already running. Please stop it first.');
+            return;
         }
 
-        setIsBatchGenerating(false);
-        setBatchProgress({ current: 0, total: 0, status: '' });
-        onLog?.(`Batch Generation Complete. Generated ${generatedCount} new keyframes.`, "success");
-        refreshShots();
+        const ok = mode === 'videos'
+            ? await confirmUiMessage(`Generate Videos for all ${shots.length} shots? This will AUTO-GENERATE any missing Start/End frames first.`)
+            : await confirmUiMessage(`Generate missing Start/End frames for all ${shots.length} shots? This may take a while.`);
+        if (!ok) return;
+
+        try {
+            await startShotMediaBatch(activeEpisode.id, {
+                mode,
+                shot_ids: shots.map((shot) => shot.id).filter(Boolean),
+                overwrite_existing: false,
+            });
+
+            setIsBatchGenerating(true);
+            setBatchProgress({
+                current: 0,
+                total: shots.length,
+                status: mode === 'videos' ? 'Video batch started...' : 'Keyframe batch started...',
+            });
+            onLog?.(
+                mode === 'videos'
+                    ? 'Background batch video generation started.'
+                    : 'Background batch keyframe generation started.',
+                'process'
+            );
+
+            if (shotBatchStatusTimerRef.current) {
+                clearInterval(shotBatchStatusTimerRef.current);
+                shotBatchStatusTimerRef.current = null;
+            }
+            shotBatchStatusTimerRef.current = setInterval(pollShotBatchStatus, 1500);
+            await pollShotBatchStatus();
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'batch start failed';
+            onLog?.(`Batch start failed: ${detail}`, 'error');
+            alert(`Batch start failed: ${detail}`);
+        }
+    };
+
+    const handleBatchGenerate = async () => {
+        await startShotBatchByMode('keyframes');
     };
 
     const handleBatchGenerateVideo = async () => {
-        if (shots.length === 0) return;
-        if (!await confirmUiMessage(`Generate Videos for all ${shots.length} shots? This will AUTO-GENERATE any missing Start/End frames first.`)) return;
-
-        setIsBatchGenerating(true);
-        setBatchProgress({ current: 0, total: shots.length, status: 'Starting Video Batch...' });
-        onLog?.("Starting Batch Video Generation...", "process");
-
-        let generatedCount = 0;
-        let processedCount = 0;
-
-        for (const shot of shots) {
-            processedCount++;
-            const statusBase = `Shot ${shot.shot_id}`;
-            
-            // Optimization: If video exists, skip everything for this shot
-            if (shot.video_url) {
-                // Optional: Update progress or log if needed, but 'continue' is faster
-                continue; 
-            }
-
-            setBatchProgress({ current: processedCount, total: shots.length, status: `${statusBase}: Checking...` });
-            
-            // We use a local updated copy to carry forward image urls generated in step 1/2 to step 3
-            let currentShot = { ...shot }; 
-            let shotTech = {};
-            try { shotTech = JSON.parse(currentShot.technical_notes || '{}'); } catch(e){}
-
-            const resolveVideoMode = (t) => {
-                if (t?.video_mode_unified) return t.video_mode_unified;
-                if (t?.video_ref_submit_mode === 'refs_video') return 'refs_video';
-                return t?.video_gen_mode || 'start';
-            };
-            const resolvedCurrentMode = resolveVideoMode(shotTech);
-            const currentShotMode = shotTech.video_gen_mode || 'start'; // Default: Start Only
-            const currentVideoRefSubmitMode = resolvedCurrentMode === 'refs_video' ? 'refs_video' : 'auto';
-
-            try {
-                // 1. Ensure Start Frame
-                if (currentVideoRefSubmitMode !== 'refs_video' && currentShotMode !== 'end' && !currentShot.image_url) {
-                    try {
-                        setBatchProgress({ current: processedCount, total: shots.length, status: `${statusBase}: Start Frame...` });
-                        let prompt = currentShot.start_frame || currentShot.video_content || "A cinematic shot";
-                        const isInheritPrompt = isStartFrameInheritPrompt(prompt);
-
-                        if (isInheritPrompt) {
-                            const prevEndUrl = findPrevShotEndFrameUrl(currentShot.id);
-                            if (prevEndUrl) {
-                                const inheritData = { image_url: prevEndUrl };
-                                await onUpdateShot(currentShot.id, inheritData);
-                                currentShot.image_url = prevEndUrl;
-                                onLog?.(`Inherited Start Frame for Shot ${currentShot.shot_id} via SAP/SAME`, 'success');
-                            } else {
-                                onLog?.(`Skip inheriting Start Frame for Shot ${currentShot.shot_id}: previous End Frame missing`, 'warning');
-                                // SAP/SAME without previous End Frame should not trigger image generation
-                                continue;
-                            }
-                            // continue to next steps (End/Video) using currentShot.image_url if inherited
-                        }
-
-                        const { text: injectedPrompt } = injectEntityFeatures(prompt);
-                        
-                        let refs = [];
-                        try {
-                            const noteStr = currentShot.technical_notes || '{}';
-                            const tech = JSON.parse(noteStr);
-                            if (Array.isArray(tech.ref_image_urls)) {
-                                refs = tech.ref_image_urls;
-                            } else {
-                                // Auto Logic used during Manual as well
-                                refs = getSuggestedRefImages(currentShot, injectedPrompt, true);
-                            }
-                        } catch(e) {}
-                        refs = [...new Set(refs)].filter(Boolean);
-
-                        if (!isInheritPrompt || !currentShot.image_url) {
-                            const res = await generateImage(injectedPrompt, null, refs.length > 0 ? refs : null, {
-                                project_id: projectId,
-                                shot_id: currentShot.id,
-                                shot_number: currentShot.shot_id,
-                                shot_name: currentShot.shot_name,
-                                asset_type: 'start_frame'
-                            });
-
-                            if (res && res.url) {
-                                const newData = { image_url: res.url, start_frame: injectedPrompt };
-                                await onUpdateShot(currentShot.id, newData);
-                                currentShot.image_url = res.url; // Update local for video step
-                                onLog?.(`Generated Start Frame for Shot ${currentShot.shot_id}`, "success");
-                            }
-                        }
-                    } catch(e) { console.error("Batch Start Gen Error", e); }
-                }
-
-                // 2. Ensure End Frame
-                let tech = {};
-                try { tech = JSON.parse(currentShot.technical_notes || '{}'); } catch(e){}
-                
-                // Determine Shot Mode (default start)
-                const shotMode = tech.video_gen_mode || 'start';
-
-                if (currentVideoRefSubmitMode !== 'refs_video' && shotMode !== 'start' && !tech.end_frame_url) {
-                    try {
-                        setBatchProgress({ current: processedCount, total: shots.length, status: `${statusBase}: End Frame...` });
-                        let prompt = currentShot.end_frame || "End frame";
-                        const { text: injectedPrompt } = injectEntityFeatures(prompt);
-                        
-                        let refs = [];
-                        if (Array.isArray(tech.end_ref_image_urls)) {
-                            refs.push(...tech.end_ref_image_urls);
-                        } else {
-                            if (currentShot.image_url) refs.push(currentShot.image_url);
-                            const suggested = getSuggestedRefImages(currentShot, injectedPrompt, true);
-                            refs.push(...suggested);
-                        }
-                        const uniqueRefs = [...new Set(refs)].filter(Boolean);
-
-                        const res = await generateImage(injectedPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
-                            project_id: projectId,
-                            shot_id: currentShot.id,
-                            shot_number: currentShot.shot_id,
-                            shot_name: currentShot.shot_name,
-                            asset_type: 'end_frame'
-                        });
-
-                        if (res && res.url) {
-                            tech.end_frame_url = res.url;
-                            const newData = { technical_notes: JSON.stringify(tech), end_frame: injectedPrompt };
-                            await onUpdateShot(currentShot.id, newData);
-                            currentShot.technical_notes = JSON.stringify(tech); // Update local
-                            onLog?.(`Generated End Frame for Shot ${currentShot.shot_id}`, "success");
-                        }
-                    } catch(e) { console.error("Batch End Gen Error", e); }
-                }
-
-                // 3. Generate Video
-                if (!currentShot.video_url) {
-                    try {
-                        setBatchProgress({ current: processedCount, total: shots.length, status: `${statusBase}: Generating Video...` });
-                        const prompt = currentShot.video_content || currentShot.video_content || currentShot.prompt || "Video motion";
-                        const { text: injectedPrompt } = injectEntityFeatures(prompt);
-                        
-                        // Refs: Strategy based on shot specific mode
-                        let refs = [];
-                        let tech2 = {};
-                        try { tech2 = JSON.parse(currentShot.technical_notes || '{}'); } catch(e){}
-                        const shotMode2 = tech2.video_gen_mode || 'start'; // Default: Start Only
-                        const resolvedMode2 = resolveVideoMode(tech2);
-                        const shotVideoRefSubmitMode = resolvedMode2 === 'refs_video' ? 'refs_video' : 'auto';
-
-                        if (shotVideoRefSubmitMode === 'refs_video') {
-                            if (tech2.video_ref_image_urls && Array.isArray(tech2.video_ref_image_urls)) {
-                                refs.push(...tech2.video_ref_image_urls);
-                            }
-                        } else if (tech2.video_ref_image_urls && Array.isArray(tech2.video_ref_image_urls)) {
-                            refs.push(...tech2.video_ref_image_urls);
-                        } else {
-                            // Auto Mode respecting shotMode
-                            if (shotMode2 !== 'end' && currentShot.image_url) refs.push(currentShot.image_url);
-                            if (tech2.keyframes && Array.isArray(tech2.keyframes)) refs.push(...tech2.keyframes);
-                            if (shotMode2 === 'start_end' && tech2.end_frame_url) refs.push(tech2.end_frame_url);
-
-                            // Retrieve entity keywords -> REMOVED strict logic
-                            // refs.push(...getSuggestedRefImages(currentShot, injectedPrompt));
-                        }
-
-                        const uniqueRefs = [...new Set(refs)].filter(Boolean);
-                        
-                        let lastFrame = null;
-                        if (shotVideoRefSubmitMode !== 'refs_video' && (shotMode2 === 'start_end' || shotMode2 === 'end')) {
-                            lastFrame = tech2.end_frame_url || null;
-                        }
-
-                        onLog?.(`[Batch ${processedCount}/${shots.length}] Generating Video for Shot ${currentShot.shot_id}...`, "info");
-                        
-                        const durParam = parseFloat(currentShot.duration) || 5;
-
-                        const res = await generateVideo(injectedPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, lastFrame, durParam, {
-                            project_id: projectId,
-                            shot_id: currentShot.id,
-                            shot_number: currentShot.shot_id,
-                            shot_name: currentShot.shot_name,
-                            asset_type: 'video'
-                        });
-
-                        if (res && res.url) {
-                            const newData = { video_url: res.url, prompt: injectedPrompt };
-                            await onUpdateShot(currentShot.id, newData);
-                            generatedCount++;
-                            // No need to update currentShot.video_url unless we do something else later
-                        }
-                    } catch(e) {
-                        onLog?.(`Batch Video Error (Shot ${currentShot.shot_id}): ${e.message}`, "error");
-                    }
-                }
-            } catch(e) { console.error("Batch Loop Fatal Error", e); }
-        }
-
-        setIsBatchGenerating(false);
-        setBatchProgress({ current: 0, total: 0, status: '' });
-        onLog?.(`Batch Video Generation Complete. Generated ${generatedCount} videos.`, "success");
-        refreshShots();
+        await startShotBatchByMode('videos');
     };
     return (
         <div className="flex flex-col h-full w-full p-6 overflow-hidden">
@@ -12088,7 +12013,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                         <div className="relative inline-flex items-center ml-2 border border-white/20 rounded overflow-hidden">
                              <button
                                 onClick={handleManualRebindMediaSlots}
-                                disabled={isManualRebindingMedia || isBatchGenerating}
+                                disabled={isManualRebindingMedia || isBatchGenerating || isStoppingShotBatch}
                                 className={`px-3 py-1.5 text-xs flex items-center gap-1 transition-all border-r border-white/10 ${isManualRebindingMedia ? 'bg-white/20 text-white/80 cursor-wait' : 'bg-white/10 text-white hover:bg-white/20'}`}
                                 title={t('手动回填历史媒体关联（只补空槽位）', 'Manual historical media rebind (fills empty slots only)')}
                             >
@@ -12096,7 +12021,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                             </button>
                              <button 
                                 onClick={handleBatchGenerate}
-                                disabled={isBatchGenerating}
+                                disabled={isBatchGenerating || isStoppingShotBatch}
                                 className={`px-3 py-1.5 text-xs flex items-center gap-1 transition-all border-r border-white/10 ${isBatchGenerating ? 'bg-primary/20 text-primary cursor-wait' : 'bg-primary/10 text-primary hover:bg-primary/20'}`}
                                 title={t('批量生成缺失的起始/结束帧', 'Batch Generate Missing Start/End Frames')}
                             >
@@ -12104,12 +12029,22 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                             </button>
                             <button 
                                 onClick={handleBatchGenerateVideo}
-                                disabled={isBatchGenerating}
-                                className={`px-3 py-1.5 text-xs flex items-center gap-1 transition-all ${isBatchGenerating ? 'bg-primary/20 text-primary cursor-wait' : 'bg-primary/10 text-primary hover:bg-primary/20'}`}
+                                disabled={isBatchGenerating || isStoppingShotBatch}
+                                className={`px-3 py-1.5 text-xs flex items-center gap-1 transition-all border-r border-white/10 ${isBatchGenerating ? 'bg-primary/20 text-primary cursor-wait' : 'bg-primary/10 text-primary hover:bg-primary/20'}`}
                                 title={t('批量生成视频（会先自动生成图片）', 'Batch Generate Videos (Auto-creates images first)')}
                             >
                                 {isBatchGenerating ? <Loader2 className="w-3 h-3 animate-spin"/> : <Film className="w-3 h-3"/>}
                             </button>
+                            {isBatchGenerating && (
+                                <button
+                                    onClick={handleStopShotBatch}
+                                    disabled={isStoppingShotBatch}
+                                    className={`px-3 py-1.5 text-xs flex items-center gap-1 transition-all ${isStoppingShotBatch ? 'bg-amber-500/20 text-amber-200 cursor-wait' : 'bg-amber-500/10 text-amber-300 hover:bg-amber-500/20'}`}
+                                    title={t('停止当前批处理任务', 'Stop current batch task')}
+                                >
+                                    {isStoppingShotBatch ? <Loader2 className="w-3 h-3 animate-spin"/> : <X className="w-3 h-3"/>}
+                                </button>
+                            )}
                         </div>
 
                         {/* Progress Indicator - Moved outside overflow-hidden container */}

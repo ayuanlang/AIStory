@@ -12,6 +12,7 @@ services:
       cd backend
       python add_users_credits_column.py || true
       python add_scene_ai_shots_result_column.py || true
+      python add_users_email_verification_columns.py || true
       python backfill_user_verification_for_active.py || true
       uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*' --workers ${WEB_CONCURRENCY:-1}
     envVars:

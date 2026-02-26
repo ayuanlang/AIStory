@@ -375,6 +375,56 @@ export const getProjectEpisodeScriptsStatus = async (projectId) => {
     return response.data;
 }
 
+export const stopProjectEpisodeScripts = async (projectId) => {
+    const response = await api.post(`/projects/${projectId}/script_generator/episodes/scripts/stop`);
+    return response.data;
+}
+
+export const startSceneAiShotsBatch = async (episodeId, payload = {}) => {
+    const response = await api.post(`/episodes/${episodeId}/scenes/ai_shots/batch/start`, payload);
+    return response.data;
+}
+
+export const getSceneAiShotsBatchStatus = async (episodeId) => {
+    const response = await api.get(`/episodes/${episodeId}/scenes/ai_shots/batch/status`);
+    return response.data;
+}
+
+export const stopSceneAiShotsBatch = async (episodeId) => {
+    const response = await api.post(`/episodes/${episodeId}/scenes/ai_shots/batch/stop`);
+    return response.data;
+}
+
+export const startEpisodeScenesGeneration = async (episodeId, payload) => {
+    const response = await api.post(`/episodes/${episodeId}/script_generator/scenes/start`, payload);
+    return response.data;
+}
+
+export const getEpisodeScenesGenerationStatus = async (episodeId) => {
+    const response = await api.get(`/episodes/${episodeId}/script_generator/scenes/status`);
+    return response.data;
+}
+
+export const stopEpisodeScenesGeneration = async (episodeId) => {
+    const response = await api.post(`/episodes/${episodeId}/script_generator/scenes/stop`);
+    return response.data;
+}
+
+export const startShotMediaBatch = async (episodeId, payload) => {
+    const response = await api.post(`/episodes/${episodeId}/shots/batch-media/start`, payload);
+    return response.data;
+}
+
+export const getShotMediaBatchStatus = async (episodeId) => {
+    const response = await api.get(`/episodes/${episodeId}/shots/batch-media/status`);
+    return response.data;
+}
+
+export const stopShotMediaBatch = async (episodeId) => {
+    const response = await api.post(`/episodes/${episodeId}/shots/batch-media/stop`);
+    return response.data;
+}
+
 // Entities
 export const fetchEntities = async (projectId, type = null) => {
     const params = type ? { type } : {};

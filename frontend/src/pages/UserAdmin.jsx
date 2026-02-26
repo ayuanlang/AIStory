@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { api, getPricingRules, createPricingRule, updatePricingRule, deletePricingRule, getTransactions, updateUserCredits, syncPricingRules, getBillingOptions, getSystemSettingsManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, exportSystemSettingsManage, importSystemSettingsManage, getAdminLlmLogFiles, getAdminLlmLogView } from '../services/api';
-import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
-import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download } from 'lucide-react';
+import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft } from 'lucide-react';
 import { confirmUiMessage } from '../lib/uiMessage';
 import { getUiLang, tUI } from '../lib/uiLang';
 
@@ -41,6 +40,19 @@ const UserAdmin = () => {
         use_mock: true
     });
     const [isPaymentConfigLoading, setIsPaymentConfigLoading] = useState(false);
+    const [smtpConfig, setSmtpConfig] = useState({
+        host: '',
+        port: 587,
+        username: '',
+        password: '',
+        use_ssl: false,
+        use_tls: true,
+        from_email: '',
+        frontend_base_url: '',
+    });
+    const [isSmtpConfigLoading, setIsSmtpConfigLoading] = useState(false);
+    const [smtpTestEmail, setSmtpTestEmail] = useState('');
+    const [isSmtpTestLoading, setIsSmtpTestLoading] = useState(false);
     const [systemApiRows, setSystemApiRows] = useState([]);
     const [isSystemApiLoading, setIsSystemApiLoading] = useState(false);
     const [isSystemApiImporting, setIsSystemApiImporting] = useState(false);
@@ -48,6 +60,7 @@ const UserAdmin = () => {
     const [selectedSystemApiId, setSelectedSystemApiId] = useState('');
     const [systemApiFilterCategory, setSystemApiFilterCategory] = useState('all');
     const [systemApiFilterProvider, setSystemApiFilterProvider] = useState('all');
+    const [systemApiSortMode, setSystemApiSortMode] = useState('default');
     const [systemApiForm, setSystemApiForm] = useState({
         name: '',
         category: 'LLM',
@@ -56,6 +69,9 @@ const UserAdmin = () => {
         base_url: '',
         model: '',
         webHook: '',
+        smart_priority: '100',
+        smart_retry_limit: '1',
+        smart_multi_ref_default: false,
         is_active: false,
     });
     const systemApiImportInputRef = React.useRef(null);
@@ -93,6 +109,12 @@ const UserAdmin = () => {
     useEffect(() => {
         if (activeTab === 'payment') {
             fetchPaymentConfig();
+        }
+    }, [activeTab]);
+
+    useEffect(() => {
+        if (activeTab === 'smtp') {
+            fetchSmtpConfig();
         }
     }, [activeTab]);
 
@@ -139,6 +161,9 @@ const UserAdmin = () => {
                 base_url: '',
                 model: '',
                 webHook: '',
+                smart_priority: '100',
+                smart_retry_limit: '1',
+                smart_multi_ref_default: false,
                 is_active: false,
             });
             return;
@@ -153,6 +178,9 @@ const UserAdmin = () => {
             base_url: row.base_url || '',
             model: row.model || '',
             webHook: row?.config?.webHook || '',
+            smart_priority: String(row?.config?.smart_priority ?? row?.config?.priority ?? '100'),
+            smart_retry_limit: String(row?.config?.smart_retry_limit ?? row?.config?.retry_limit ?? '1'),
+            smart_multi_ref_default: !!row?.config?.smart_multi_ref_default,
             is_active: !!row.is_active,
         });
     }, [selectedSystemApiId, systemApiRows]);
@@ -185,16 +213,43 @@ const UserAdmin = () => {
         });
     }, [systemApiRows, systemApiFilterCategory, systemApiFilterProvider]);
 
+    const visibleSystemApiRows = React.useMemo(() => {
+        const rows = [...filteredSystemApiRows];
+        if (systemApiSortMode === 'priority') {
+            rows.sort((a, b) => {
+                const pa = getSmartPriority(a);
+                const pb = getSmartPriority(b);
+                if (pa !== pb) return pa - pb;
+                return Number(a?.id || 0) - Number(b?.id || 0);
+            });
+        }
+        return rows;
+    }, [filteredSystemApiRows, systemApiSortMode]);
+
+    const getSmartPriority = (row) => {
+        const raw = row?.config?.smart_priority ?? row?.config?.priority ?? 100;
+        const parsed = Number(raw);
+        return Number.isFinite(parsed) ? parsed : 100;
+    };
+
+    const getSmartRetryLimit = (row) => {
+        const raw = row?.config?.smart_retry_limit ?? row?.config?.retry_limit ?? 1;
+        const parsed = Number(raw);
+        return Number.isFinite(parsed) && parsed >= 1 ? parsed : 1;
+    };
+
+    const isSmartMultiRefDefault = (row) => !!row?.config?.smart_multi_ref_default;
+
     useEffect(() => {
-        if (!filteredSystemApiRows.length) {
+        if (!visibleSystemApiRows.length) {
             setSelectedSystemApiId('');
             return;
         }
-        const existsInFiltered = filteredSystemApiRows.some((row) => String(row.id) === String(selectedSystemApiId));
+        const existsInFiltered = visibleSystemApiRows.some((row) => String(row.id) === String(selectedSystemApiId));
         if (!existsInFiltered) {
-            setSelectedSystemApiId(String(filteredSystemApiRows[0].id));
+            setSelectedSystemApiId(String(visibleSystemApiRows[0].id));
         }
-    }, [filteredSystemApiRows, selectedSystemApiId]);
+    }, [visibleSystemApiRows, selectedSystemApiId]);
 
     const handleCreateSystemApiSetting = async () => {
         const provider = String(systemApiForm.provider || '').trim();
@@ -210,7 +265,12 @@ const UserAdmin = () => {
                 api_key: String(systemApiForm.api_key || '').trim() || undefined,
                 base_url: String(systemApiForm.base_url || '').trim() || undefined,
                 model: String(systemApiForm.model || '').trim() || undefined,
-                config: { webHook: String(systemApiForm.webHook || '').trim() || '' },
+                config: {
+                    webHook: String(systemApiForm.webHook || '').trim() || '',
+                    smart_priority: Number(systemApiForm.smart_priority || 100),
+                    smart_retry_limit: Number(systemApiForm.smart_retry_limit || 1),
+                    smart_multi_ref_default: !!systemApiForm.smart_multi_ref_default,
+                },
                 is_active: !!systemApiForm.is_active,
             });
             await fetchSystemApiManageRows();
@@ -233,7 +293,12 @@ const UserAdmin = () => {
                 api_key: String(systemApiForm.api_key || '').trim() || undefined,
                 base_url: String(systemApiForm.base_url || '').trim() || undefined,
                 model: String(systemApiForm.model || '').trim() || undefined,
-                config: { webHook: String(systemApiForm.webHook || '').trim() || '' },
+                config: {
+                    webHook: String(systemApiForm.webHook || '').trim() || '',
+                    smart_priority: Number(systemApiForm.smart_priority || 100),
+                    smart_retry_limit: Number(systemApiForm.smart_retry_limit || 1),
+                    smart_multi_ref_default: !!systemApiForm.smart_multi_ref_default,
+                },
                 is_active: !!systemApiForm.is_active,
             });
             await fetchSystemApiManageRows();
@@ -358,6 +423,29 @@ const UserAdmin = () => {
         }
     };
 
+    const fetchSmtpConfig = async () => {
+        setIsSmtpConfigLoading(true);
+        try {
+            const res = await api.get('/admin/smtp-config');
+            if (res.data) {
+                setSmtpConfig({
+                    host: res.data.host || '',
+                    port: Number(res.data.port || 587),
+                    username: res.data.username || '',
+                    password: res.data.password || '',
+                    use_ssl: !!res.data.use_ssl,
+                    use_tls: !!res.data.use_tls,
+                    from_email: res.data.from_email || '',
+                    frontend_base_url: res.data.frontend_base_url || '',
+                });
+            }
+        } catch (e) {
+            console.error('Failed to load SMTP config', e);
+        } finally {
+            setIsSmtpConfigLoading(false);
+        }
+    };
+
     const handleSavePaymentConfig = async () => {
         try {
             await api.post('/admin/payment-config', paymentConfig);
@@ -365,6 +453,50 @@ const UserAdmin = () => {
         } catch (e) {
             console.error("Failed to save payment config", e);
             alert(`Failed to save payment configuration: ${e?.message || 'Unknown error'}`);
+        }
+    };
+
+    const handleSaveSmtpConfig = async () => {
+        setIsSmtpConfigLoading(true);
+        try {
+            await api.post('/admin/smtp-config', {
+                ...smtpConfig,
+                port: Number(smtpConfig.port || 587),
+            });
+            alert('SMTP configuration saved successfully!');
+        } catch (e) {
+            console.error('Failed to save SMTP config', e);
+            alert(`Failed to save SMTP configuration: ${e?.message || 'Unknown error'}`);
+        } finally {
+            setIsSmtpConfigLoading(false);
+        }
+    };
+
+    const apply126Template = () => {
+        setSmtpConfig((prev) => ({
+            ...prev,
+            host: 'smtp.126.com',
+            port: 465,
+            use_ssl: true,
+            use_tls: false,
+        }));
+    };
+
+    const handleSendSmtpTestEmail = async () => {
+        const toEmail = String(smtpTestEmail || '').trim();
+        if (!toEmail) {
+            alert('Please input a test recipient email.');
+            return;
+        }
+        setIsSmtpTestLoading(true);
+        try {
+            await api.post('/admin/smtp-config/test', { to_email: toEmail });
+            alert(`Test email sent to ${toEmail}`);
+        } catch (e) {
+            console.error('Failed to send SMTP test email', e);
+            alert(e?.response?.data?.detail || e?.message || 'Failed to send test email');
+        } finally {
+            setIsSmtpTestLoading(false);
         }
     };
 
@@ -548,12 +680,19 @@ const UserAdmin = () => {
     const TabButton = ({ id, label, icon: Icon }) => (
         <button
             onClick={() => setActiveTab(id)}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
-                activeTab === id ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+            className={`relative flex items-center gap-2 px-4 py-2.5 rounded-lg border text-sm font-medium transition-all whitespace-nowrap ${
+                activeTab === id
+                    ? 'bg-primary/10 border-primary/30 text-white'
+                    : 'bg-transparent border-transparent text-gray-300 hover:bg-white/5 hover:text-white'
             }`}
         >
-            <Icon size={18} />
+            <Icon size={16} />
             {label}
+            <span
+                className={`absolute left-3 right-3 -bottom-1 h-0.5 rounded-full transition-all ${
+                    activeTab === id ? 'bg-primary opacity-100' : 'bg-transparent opacity-0'
+                }`}
+            />
         </button>
     );
 
@@ -589,7 +728,15 @@ const UserAdmin = () => {
     if (error) {
          return (
              <div className="min-h-screen bg-[#09090b] text-white flex flex-col">
-                <Navbar />
+                <div className="container mx-auto px-4 pt-8">
+                    <button
+                        onClick={() => window.history.back()}
+                        className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-white/15 bg-white/5 hover:bg-white/10 text-sm"
+                    >
+                        <ArrowLeft size={16} />
+                        {t('返回', 'Back')}
+                    </button>
+                </div>
                 <div className="flex-1 flex items-center justify-center">
                     <div className="bg-red-500/10 border border-red-500/50 p-8 rounded-xl text-center">
                         <Shield className="w-12 h-12 text-red-500 mx-auto mb-4" />
@@ -604,10 +751,15 @@ const UserAdmin = () => {
 
     return (
         <div className="min-h-screen bg-[#09090b] text-white flex flex-col font-sans">
-            <Navbar forceSolid={true} hideMenu={true} className="bg-[#09090b]/90 border-white/10" />
-            
-            <main className="flex-1 container mx-auto px-4 pt-24 pb-8">
-                <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
+            <main className="flex-1 container mx-auto px-4 pt-8 pb-8">
+                <div className="mb-4">
+                    <button
+                        onClick={() => window.history.back()}
+                        className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-white/15 bg-white/5 hover:bg-white/10 text-sm mb-4"
+                    >
+                        <ArrowLeft size={16} />
+                        {t('返回', 'Back')}
+                    </button>
                     <div>
                         <h1 className="text-2xl font-bold flex items-center gap-2">
                             <Shield className="w-8 h-8 text-primary" />
@@ -615,14 +767,18 @@ const UserAdmin = () => {
                         </h1>
                         <p className="text-gray-400 mt-1">{t('管理用户、权限与计费。', 'Manage users, permissions, and billing.')}</p>
                     </div>
-                    
-                    <div className="flex gap-2">
+
+                </div>
+
+                <div className="mb-6 rounded-xl border border-white/10 bg-white/5 p-1.5 overflow-x-auto">
+                    <div className="flex items-center gap-1 min-w-max">
                         <TabButton id="users" label={t('用户', 'Users')} icon={User} />
                         <TabButton id="pricing" label={t('定价', 'Pricing')} icon={DollarSign} />
                         <TabButton id="transactions" label={t('记录', 'History')} icon={Activity} />
                         <TabButton id="system_api" label={t('系统 API', 'System API')} icon={Key} />
                         <TabButton id="llm_logs" label={t('LLM 日志', 'LLM Logs')} icon={List} />
                         <TabButton id="payment" label={t('支付', 'Payment')} icon={CreditCard} />
+                        <TabButton id="smtp" label={t('邮件 SMTP', 'Email SMTP')} icon={Mail} />
                     </div>
                 </div>
 
@@ -745,6 +901,150 @@ const UserAdmin = () => {
                                     >
                                         {isPaymentConfigLoading ? <RefreshCw className="animate-spin" size={18}/> : <Check size={18}/>}
                                         {t('保存配置', 'Save Configuration')}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* SMTP TAB */}
+                    {activeTab === 'smtp' && (
+                        <div className="bg-white/5 border border-white/10 rounded-xl p-6">
+                            <h2 className="text-xl font-bold mb-6 flex items-center gap-2 text-white">
+                                <Mail className="text-primary"/> {t('邮件 SMTP 配置', 'Email SMTP Configuration')}
+                            </h2>
+
+                            <div className="mb-4 p-4 rounded-lg border border-white/10 bg-black/20">
+                                <div className="flex flex-wrap items-center justify-between gap-3">
+                                    <p className="text-sm text-gray-300">
+                                        {t('网易 126 推荐模板：smtp.126.com，端口 465，SSL 开启，STARTTLS 关闭。', 'NetEase 126 template: smtp.126.com, port 465, SSL on, STARTTLS off.')}
+                                    </p>
+                                    <button
+                                        onClick={apply126Template}
+                                        className="px-3 py-2 text-sm rounded bg-white/10 hover:bg-white/20 text-white"
+                                    >
+                                        {t('一键填充 126 模板', 'Apply 126 Template')}
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="space-y-6 max-w-4xl">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div className="space-y-4">
+                                        <div>
+                                            <label className="block text-xs uppercase font-bold text-gray-500 mb-1">SMTP Host</label>
+                                            <input
+                                                type="text"
+                                                value={smtpConfig.host}
+                                                onChange={(e) => setSmtpConfig({...smtpConfig, host: e.target.value})}
+                                                className="w-full bg-black/40 border border-gray-700 rounded p-2.5 text-sm focus:border-primary outline-none focus:ring-1 focus:ring-primary"
+                                                placeholder="smtp.qq.com"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs uppercase font-bold text-gray-500 mb-1">SMTP Port</label>
+                                            <input
+                                                type="number"
+                                                value={smtpConfig.port}
+                                                onChange={(e) => setSmtpConfig({...smtpConfig, port: e.target.value})}
+                                                className="w-full bg-black/40 border border-gray-700 rounded p-2.5 text-sm focus:border-primary outline-none focus:ring-1 focus:ring-primary"
+                                                placeholder="587"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs uppercase font-bold text-gray-500 mb-1">SMTP Username</label>
+                                            <input
+                                                type="text"
+                                                value={smtpConfig.username}
+                                                onChange={(e) => setSmtpConfig({...smtpConfig, username: e.target.value})}
+                                                className="w-full bg-black/40 border border-gray-700 rounded p-2.5 text-sm focus:border-primary outline-none focus:ring-1 focus:ring-primary"
+                                                placeholder={t('发信邮箱账号', 'Sender email account')}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs uppercase font-bold text-gray-500 mb-1">SMTP Password / App Password</label>
+                                            <input
+                                                type="password"
+                                                value={smtpConfig.password}
+                                                onChange={(e) => setSmtpConfig({...smtpConfig, password: e.target.value})}
+                                                className="w-full bg-black/40 border border-gray-700 rounded p-2.5 text-sm focus:border-primary outline-none focus:ring-1 focus:ring-primary"
+                                                placeholder={t('邮箱授权码', 'Email app password')}
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="space-y-4">
+                                        <div>
+                                            <label className="block text-xs uppercase font-bold text-gray-500 mb-1">From Email</label>
+                                            <input
+                                                type="text"
+                                                value={smtpConfig.from_email}
+                                                onChange={(e) => setSmtpConfig({...smtpConfig, from_email: e.target.value})}
+                                                className="w-full bg-black/40 border border-gray-700 rounded p-2.5 text-sm focus:border-primary outline-none focus:ring-1 focus:ring-primary"
+                                                placeholder={t('例如：noreply@yourdomain.com', 'e.g. noreply@yourdomain.com')}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs uppercase font-bold text-gray-500 mb-1">Frontend Base URL</label>
+                                            <input
+                                                type="text"
+                                                value={smtpConfig.frontend_base_url}
+                                                onChange={(e) => setSmtpConfig({...smtpConfig, frontend_base_url: e.target.value})}
+                                                className="w-full bg-black/40 border border-gray-700 rounded p-2.5 text-sm focus:border-primary outline-none focus:ring-1 focus:ring-primary"
+                                                placeholder={t('例如：https://your-frontend-domain.com', 'e.g. https://your-frontend-domain.com')}
+                                            />
+                                            <p className="text-xs text-gray-500 mt-1">
+                                                {t('用于密码重置邮件中的跳转链接。', 'Used for password reset links in email.')}
+                                            </p>
+                                        </div>
+                                        <div className="bg-black/20 p-4 rounded-lg border border-white/10">
+                                            <label className="flex items-center gap-3 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={!!smtpConfig.use_ssl}
+                                                    onChange={(e) => setSmtpConfig({...smtpConfig, use_ssl: e.target.checked, use_tls: e.target.checked ? false : smtpConfig.use_tls})}
+                                                />
+                                                <span className="font-medium text-white">{t('启用 SSL（常用于 465 端口）', 'Enable SSL (usually for port 465)')}</span>
+                                            </label>
+                                        </div>
+                                        <div className="bg-black/20 p-4 rounded-lg border border-white/10">
+                                            <label className="flex items-center gap-3 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={!!smtpConfig.use_tls}
+                                                    onChange={(e) => setSmtpConfig({...smtpConfig, use_tls: e.target.checked, use_ssl: e.target.checked ? false : smtpConfig.use_ssl})}
+                                                />
+                                                <span className="font-medium text-white">{t('启用 STARTTLS（推荐）', 'Enable STARTTLS (recommended)')}</span>
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-3 border-t border-white/10 pt-5">
+                                    <input
+                                        type="email"
+                                        value={smtpTestEmail}
+                                        onChange={(e) => setSmtpTestEmail(e.target.value)}
+                                        className="w-full bg-black/40 border border-gray-700 rounded p-2.5 text-sm focus:border-primary outline-none focus:ring-1 focus:ring-primary"
+                                        placeholder={t('输入测试收件邮箱', 'Input test recipient email')}
+                                    />
+                                    <button
+                                        onClick={handleSendSmtpTestEmail}
+                                        disabled={isSmtpTestLoading || isSmtpConfigLoading}
+                                        className="bg-white/10 text-white px-4 py-2.5 rounded-lg font-medium hover:bg-white/20 disabled:opacity-50 flex items-center justify-center gap-2"
+                                    >
+                                        {isSmtpTestLoading ? <RefreshCw className="animate-spin" size={16}/> : <Mail size={16}/>}
+                                        {t('发送测试邮件', 'Send Test Email')}
+                                    </button>
+                                </div>
+
+                                <div className="pt-6 flex justify-end border-t border-white/10">
+                                    <button
+                                        onClick={handleSaveSmtpConfig}
+                                        disabled={isSmtpConfigLoading}
+                                        className="bg-primary text-black px-6 py-2.5 rounded-lg font-bold hover:opacity-90 disabled:opacity-50 flex items-center gap-2 transform active:scale-95 transition-all"
+                                    >
+                                        {isSmtpConfigLoading ? <RefreshCw className="animate-spin" size={18}/> : <Check size={18}/>}
+                                        {t('保存 SMTP 配置', 'Save SMTP Configuration')}
                                     </button>
                                 </div>
                             </div>
@@ -1068,6 +1368,9 @@ const UserAdmin = () => {
                             ) : (
                                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                                     <div className="border border-white/10 rounded-lg p-4 bg-black/20 space-y-3">
+                                        <div className="text-[11px] text-gray-300 bg-white/5 border border-white/10 rounded p-2 leading-relaxed">
+                                            {t('智能路由规则：多参考图（>4）会优先尝试“多图默认 API”；主通道达到重试上限后，按同类别优先级（数字越小越优先）依次回退。', 'Smart routing rule: multi-reference image jobs (>4) first try the “multi-ref default API”; after retry limit on the main path, fallback follows same-category priority (lower number first).')}
+                                        </div>
                                         <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                                             <div>
                                                 <label className="text-xs uppercase text-gray-400">{t('模型类型筛选', 'Model Type Filter')}</label>
@@ -1103,12 +1406,24 @@ const UserAdmin = () => {
                                                     onClick={() => {
                                                         setSystemApiFilterCategory('all');
                                                         setSystemApiFilterProvider('all');
+                                                        setSystemApiSortMode('default');
                                                     }}
                                                     className="w-full bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded text-sm"
                                                 >
                                                     {t('重置筛选', 'Reset Filters')}
                                                 </button>
                                             </div>
+                                        </div>
+
+                                        <div className="flex items-center justify-between gap-2 text-xs">
+                                            <span className="text-gray-400">{t('列表排序', 'List Order')}</span>
+                                            <button
+                                                onClick={() => setSystemApiSortMode((prev) => (prev === 'priority' ? 'default' : 'priority'))}
+                                                className={`px-2.5 py-1 rounded border transition-colors ${systemApiSortMode === 'priority' ? 'bg-primary/20 text-primary border-primary/40' : 'bg-white/5 text-gray-300 border-white/10 hover:bg-white/10'}`}
+                                                title={t('仅改变当前列表展示顺序，不修改数据库数据。', 'Only changes current list view order, does not modify database data.')}
+                                            >
+                                                {systemApiSortMode === 'priority' ? t('当前：按优先级', 'Current: By Priority') : t('当前：默认顺序', 'Current: Default Order')}
+                                            </button>
                                         </div>
 
                                         <label className="text-xs uppercase text-gray-400">{t('选择已有设置', 'Select Existing Setting')}</label>
@@ -1118,7 +1433,7 @@ const UserAdmin = () => {
                                             className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
                                         >
                                             <option value="">{t('请选择...', 'Select...')}</option>
-                                            {filteredSystemApiRows.map((row) => (
+                                            {visibleSystemApiRows.map((row) => (
                                                 <option key={row.id} value={row.id}>
                                                     [{row.category}] {row.provider} / {row.model || '-'} (ID:{row.id})
                                                 </option>
@@ -1133,11 +1448,12 @@ const UserAdmin = () => {
                                                         <th className="text-left p-2">{t('类别', 'Category')}</th>
                                                         <th className="text-left p-2">{t('提供方', 'Provider')}</th>
                                                         <th className="text-left p-2">{t('模型', 'Model')}</th>
+                                                        <th className="text-left p-2">{t('智能策略', 'Smart Strategy')}</th>
                                                         <th className="text-left p-2">{t('启用', 'Active')}</th>
                                                     </tr>
                                                 </thead>
                                                 <tbody>
-                                                    {filteredSystemApiRows.map((row) => (
+                                                    {visibleSystemApiRows.map((row) => (
                                                         <tr
                                                             key={row.id}
                                                             onClick={() => setSelectedSystemApiId(String(row.id))}
@@ -1147,12 +1463,27 @@ const UserAdmin = () => {
                                                             <td className="p-2">{row.category}</td>
                                                             <td className="p-2">{row.provider}</td>
                                                             <td className="p-2">{row.model || '-'}</td>
+                                                            <td className="p-2">
+                                                                <div className="flex flex-wrap gap-1">
+                                                                    <span className="px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-200 border border-blue-500/30">
+                                                                        {t('优先级', 'Priority')}: {getSmartPriority(row)}
+                                                                    </span>
+                                                                    <span className="px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-200 border border-purple-500/30">
+                                                                        {t('重试', 'Retry')}: {getSmartRetryLimit(row)}
+                                                                    </span>
+                                                                    {isSmartMultiRefDefault(row) && (
+                                                                        <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-200 border border-emerald-500/30">
+                                                                            {t('多图默认', 'Multi-ref Default')}
+                                                                        </span>
+                                                                    )}
+                                                                </div>
+                                                            </td>
                                                             <td className="p-2">{row.is_active ? t('是', 'Yes') : t('否', 'No')}</td>
                                                         </tr>
                                                     ))}
-                                                    {filteredSystemApiRows.length === 0 && (
+                                                    {visibleSystemApiRows.length === 0 && (
                                                         <tr className="border-t border-white/10">
-                                                            <td className="p-3 text-gray-400" colSpan={5}>
+                                                            <td className="p-3 text-gray-400" colSpan={6}>
                                                                 {t('无匹配结果，请调整筛选条件。', 'No matching settings. Adjust your filters.')}
                                                             </td>
                                                         </tr>
@@ -1218,6 +1549,33 @@ const UserAdmin = () => {
                                                     className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
                                                 />
                                             </div>
+                                            <div>
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('智能路由优先级（越小越优先）', 'Smart Priority (lower first)')}</label>
+                                                <input
+                                                    type="number"
+                                                    value={systemApiForm.smart_priority}
+                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, smart_priority: e.target.value }))}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('重试上限（触发回退前）', 'Retry Limit (before fallback)')}</label>
+                                                <input
+                                                    type="number"
+                                                    min="1"
+                                                    value={systemApiForm.smart_retry_limit}
+                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, smart_retry_limit: e.target.value }))}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                />
+                                            </div>
+                                            <label className="md:col-span-2 flex items-center gap-2 text-xs text-gray-300 bg-white/5 border border-white/10 rounded p-2">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={!!systemApiForm.smart_multi_ref_default}
+                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, smart_multi_ref_default: e.target.checked }))}
+                                                />
+                                                {t('设为“多参考图（>4）”临时默认 API', 'Use as temporary default API for multi-ref image (>4)')}
+                                            </label>
                                             <div className="md:col-span-2">
                                                 <label className="block text-xs uppercase text-gray-400 mb-1">{t('API Key（留空则保留当前共享密钥）', 'API Key (leave blank to keep current shared key)')}</label>
                                                 <input
