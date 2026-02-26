@@ -454,9 +454,51 @@ export const deleteAllEntities = async (projectId) => {
 
 
 // Generation
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const pollImageJobUntilDone = async (jobId, { timeoutMs = 10 * 60 * 1000, pollIntervalMs = 2000 } = {}) => {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+        const response = await api.get(`/generate/image/jobs/${jobId}`);
+        const data = response?.data || {};
+        const status = String(data.status || '').toLowerCase();
+
+        if (status === 'succeeded') {
+            return data.result || {};
+        }
+        if (status === 'failed') {
+            throw new Error(data.error || 'Image generation job failed');
+        }
+
+        await sleep(pollIntervalMs);
+    }
+
+    throw new Error('Image generation timed out while polling job status');
+};
+
 export const generateImage = async (prompt, provider = null, ref_image_url = null, options = {}) => {
-    const response = await api.post('/generate/image', { prompt, provider, ref_image_url, ...options });
-    return response.data;
+    const payload = { prompt, provider, ref_image_url, ...options };
+
+    try {
+        const submitResp = await api.post('/generate/image/submit', payload);
+        const jobId = submitResp?.data?.job_id;
+        if (!jobId) {
+            throw new Error('Missing image job_id from submit response');
+        }
+        return await pollImageJobUntilDone(jobId, {
+            timeoutMs: Number(options?.job_timeout_ms || 10 * 60 * 1000),
+            pollIntervalMs: Number(options?.job_poll_interval_ms || 2000),
+        });
+    } catch (error) {
+        const status = Number(error?.response?.status || 0);
+        const shouldFallback = status === 404 || status === 405 || status === 501;
+        if (!shouldFallback) {
+            throw error;
+        }
+
+        const response = await api.post('/generate/image', payload);
+        return response.data;
+    }
 }
 
 export const generateVideo = async (prompt, provider = null, ref_image_url = null, last_frame_url = null, duration = 5, options = {}, keyframes = []) => {
