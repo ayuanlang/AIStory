@@ -8744,7 +8744,6 @@ async def submit_generate_image_endpoint(
     now = datetime.utcnow().isoformat()
     _set_image_job(
         job_id,
-        job_id=job_id,
         status="queued",
         user_id=current_user.id,
         username=current_user.username,
