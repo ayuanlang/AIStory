@@ -19,6 +19,11 @@ class Settings(BaseSettings):
         _db_url = _db_url.replace("postgres://", "postgresql://", 1)
     
     DATABASE_URL: str = _db_url
+    DB_POOL_SIZE: int = int(os.getenv("DB_POOL_SIZE", "10"))
+    DB_MAX_OVERFLOW: int = int(os.getenv("DB_MAX_OVERFLOW", "20"))
+    DB_POOL_TIMEOUT: int = int(os.getenv("DB_POOL_TIMEOUT", "30"))
+    DB_POOL_RECYCLE: int = int(os.getenv("DB_POOL_RECYCLE", "1800"))
+    DB_POOL_PRE_PING: bool = os.getenv("DB_POOL_PRE_PING", "1") not in {"0", "false", "False"}
     
     # Security
     SECRET_KEY: str = os.getenv("SECRET_KEY", "supersecretkey")
