@@ -25,4 +25,18 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     user = db.query(User).filter(User.username == username).first()
     if user is None:
         raise credentials_exception
+    if (
+        getattr(user, "account_status", 1) == -1
+        and not bool(getattr(user, "is_active", True))
+        and not bool(getattr(user, "is_superuser", False))
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Email verification required",
+        )
+    if not bool(getattr(user, "is_active", True)):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User is disabled",
+        )
     return user

@@ -130,6 +130,7 @@ import {
     saveProjectCharacterCanonCategories,
     updateProjectCharacterProfiles,
     recordSystemLogAction,
+    rebindShotMediaAssets,
 } from '../services/api';
 
 import RefineControl from '../components/RefineControl.jsx';
@@ -9633,13 +9634,17 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const [pickerConfig, setPickerConfig] = useState({ isOpen: false, callback: null });
     const [generatingStateByShot, setGeneratingStateByShot] = useState({});
     const [isBatchGenerating, setIsBatchGenerating] = useState(false);
+    const [isManualRebindingMedia, setIsManualRebindingMedia] = useState(false);
+    const [translatingPromptField, setTranslatingPromptField] = useState('');
     const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0, status: '' }); // Progress tracking
     const [activeSources, setActiveSources] = useState({ Image: 'unset', Video: 'unset' });
+    const [localKeyframes, setLocalKeyframes] = useState([]);
     const generationStateStorageKey = useMemo(() => {
         if (!activeEpisode?.id) return '';
         return `aistory.shotGenerationState.${activeEpisode.id}`;
     }, [activeEpisode?.id]);
     const hasHydratedGenerationStateRef = useRef(false);
+    const mediaRebindAttemptedRef = useRef('');
     const GENERATION_STATE_TTL_MS = 1000 * 60 * 60;
 
     const normalizeGeneratingState = useCallback((raw) => {
@@ -9766,8 +9771,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     );
 
     const [assetDetailModal, setAssetDetailModal] = useState({ open: false, type: 'start', keyframeIndex: -1 });
-    const [detailTranslateLoading, setDetailTranslateLoading] = useState({});
-    const [detailOptimizeLoading, setDetailOptimizeLoading] = useState({});
 
     const openAssetDetailModal = (type, keyframeIndex = -1) => {
         setAssetDetailModal({ open: true, type, keyframeIndex });
@@ -9806,106 +9809,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             return { ...current, technical_notes: JSON.stringify(techObj) };
         });
     }, []);
-
-    const extractTranslatedText = (res) => {
-        if (!res) return '';
-        if (typeof res?.translated_text === 'string' && res.translated_text.trim()) {
-            return res.translated_text.trim();
-        }
-
-        const nestedList = res?.result?.trans_result;
-        if (Array.isArray(nestedList) && nestedList.length > 0) {
-            const joined = nestedList
-                .map(item => (typeof item?.dst === 'string' ? item.dst.trim() : ''))
-                .filter(Boolean)
-                .join('\n');
-            if (joined) return joined;
-        }
-
-        const flatList = res?.trans_result;
-        if (Array.isArray(flatList) && flatList.length > 0) {
-            const joined = flatList
-                .map(item => (typeof item?.dst === 'string' ? item.dst.trim() : ''))
-                .filter(Boolean)
-                .join('\n');
-            if (joined) return joined;
-        }
-
-        if (typeof res?.data === 'string' && res.data.trim()) {
-            return res.data.trim();
-        }
-
-        return '';
-    };
-
-    const runDetailTranslate = async ({ text, from, to, onResult, loadingKey }) => {
-        const raw = String(text || '').trim();
-        if (!raw) {
-            showNotification(t('没有可翻译内容', 'No text to translate'), 'warning');
-            return;
-        }
-        setDetailTranslateLoading(prev => ({ ...prev, [loadingKey]: true }));
-        try {
-            const res = await translateText(raw, from, to);
-            const translated = extractTranslatedText(res);
-            if (!translated) throw new Error('No translation returned');
-            await onResult?.(translated);
-            showNotification(t('翻译完成', 'Translation completed'), 'success');
-        } catch (e) {
-            const msg = e?.response?.data?.detail || e?.message || 'Translate failed';
-            onLog?.(`Detail translate failed: ${msg}`, 'error');
-            showNotification(t('翻译失败', 'Translation failed'), 'error');
-        } finally {
-            setDetailTranslateLoading(prev => ({ ...prev, [loadingKey]: false }));
-        }
-    };
-
-    const runBilingualOptimize = async ({
-        enText,
-        cnText,
-        optimizeType = 'image',
-        loadingKey,
-        onEnUpdate,
-        onCnUpdate,
-    }) => {
-        const baseEn = String(enText || '').trim();
-        const baseCn = String(cnText || '').trim();
-        if (!baseEn && !baseCn) {
-            showNotification(t('没有可优化内容', 'No prompt to optimize'), 'warning');
-            return;
-        }
-
-        setDetailOptimizeLoading(prev => ({ ...prev, [loadingKey]: true }));
-        try {
-            let sourceEn = baseEn;
-            if (!sourceEn && baseCn) {
-                const trans = await translateText(baseCn, 'zh', 'en');
-                sourceEn = extractTranslatedText(trans);
-            }
-            if (!sourceEn) throw new Error('No EN source for optimization');
-
-            const refined = await refinePrompt(
-                sourceEn,
-                'Polish this prompt for better visual quality while preserving original intent and entities.',
-                optimizeType
-            );
-            const nextEn = String(refined?.refined_prompt || refined?.optimized_prompt || sourceEn).trim();
-            if (!nextEn) throw new Error('No optimized prompt returned');
-            onEnUpdate?.(nextEn);
-
-            const zh = await translateText(nextEn, 'en', 'zh');
-            const nextCn = extractTranslatedText(zh);
-            if (nextCn) onCnUpdate?.(nextCn);
-
-            showNotification(t('中英提示词已同步优化', 'CN/EN prompts optimized'), 'success');
-        } catch (e) {
-            const msg = e?.response?.data?.detail || e?.message || 'Optimize failed';
-            onLog?.(`Bilingual optimize failed: ${msg}`, 'error');
-            showNotification(t('提示词优化失败', 'Prompt optimization failed'), 'error');
-        } finally {
-            setDetailOptimizeLoading(prev => ({ ...prev, [loadingKey]: false }));
-        }
-    };
 
     const shotFilterStorageKey = useMemo(() => {
         if (!activeEpisode?.id) return '';
@@ -10227,6 +10130,239 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             console.error("Failed to refresh shots", e);
         }
     }, [activeEpisode?.id, selectedSceneId, sceneCodeFilter, shotIdFilter]);
+
+    const handleManualRebindMediaSlots = useCallback(async () => {
+        if (!projectId || !activeEpisode?.id || isManualRebindingMedia) return;
+
+        setIsManualRebindingMedia(true);
+        try {
+            const payload = {
+                project_id: Number(projectId),
+                episode_id: Number(activeEpisode.id),
+                limit: 10000,
+            };
+
+            if (selectedSceneId && selectedSceneId !== 'all') {
+                payload.scene_id = Number(selectedSceneId);
+            }
+
+            const res = await rebindShotMediaAssets(payload);
+            const rebound = Number(res?.bound || 0);
+            const updatedShots = Number(res?.updated_shots || 0);
+            onLog?.(
+                `Media rebind finished: bound ${rebound}, updated shots ${updatedShots}, scanned ${Number(res?.scanned || 0)}.`,
+                rebound > 0 ? 'success' : 'info'
+            );
+            await refreshShots();
+        } catch (e) {
+            onLog?.(`Media rebind failed: ${e?.response?.data?.detail || e?.message || 'unknown error'}`, 'error');
+        } finally {
+            setIsManualRebindingMedia(false);
+        }
+    }, [projectId, activeEpisode?.id, selectedSceneId, isManualRebindingMedia, onLog, refreshShots]);
+
+    const setEditingShotTechField = useCallback((key, value) => {
+        setEditingShot((prev) => {
+            if (!prev) return prev;
+            let tech = {};
+            try {
+                tech = JSON.parse(prev.technical_notes || '{}');
+                if (!tech || typeof tech !== 'object') tech = {};
+            } catch (e) {
+                tech = {};
+            }
+            tech[key] = value;
+            return { ...prev, technical_notes: JSON.stringify(tech) };
+        });
+    }, [setEditingShot]);
+
+    const getEditingShotTech = useCallback(() => {
+        if (!editingShot) return {};
+        try {
+            const parsed = JSON.parse(editingShot.technical_notes || '{}');
+            return parsed && typeof parsed === 'object' ? parsed : {};
+        } catch (e) {
+            return {};
+        }
+    }, [editingShot]);
+
+    const translatePromptToChinese = useCallback(async (field) => {
+        if (!editingShot) return;
+        const map = {
+            start: { enKey: 'start_frame', cnKey: 'start_frame_cn' },
+            end: { enKey: 'end_frame', cnKey: 'end_frame_cn' },
+            video: { enKey: 'prompt', cnKey: 'video_prompt_cn' },
+        };
+        const cfg = map[field];
+        if (!cfg) return;
+
+        const source = String(editingShot[cfg.enKey] || (field === 'video' ? editingShot.video_content || '' : '')).trim();
+        if (!source) {
+            onLog?.(t('请先填写英文提示词', 'Please enter the prompt text first'), 'warning');
+            return;
+        }
+
+        setTranslatingPromptField(`${field}:to-cn`);
+        try {
+            const res = await translateText(source, 'auto', 'zh');
+            const translated = String(res?.translated_text || '').trim();
+            if (!translated) throw new Error('empty translation');
+            setEditingShotTechField(cfg.cnKey, translated);
+            onLog?.(t('已翻译为中文', 'Translated to Chinese'), 'success');
+        } catch (e) {
+            onLog?.(`${t('翻译失败', 'Translation failed')}: ${e?.response?.data?.detail || e?.message || 'unknown error'}`, 'error');
+        } finally {
+            setTranslatingPromptField('');
+        }
+    }, [editingShot, onLog, setEditingShotTechField, t]);
+
+    const translatePromptToEnglish = useCallback(async (field) => {
+        if (!editingShot) return;
+        const map = {
+            start: { enKey: 'start_frame', cnKey: 'start_frame_cn' },
+            end: { enKey: 'end_frame', cnKey: 'end_frame_cn' },
+            video: { enKey: 'prompt', cnKey: 'video_prompt_cn' },
+        };
+        const cfg = map[field];
+        if (!cfg) return;
+
+        const tech = getEditingShotTech();
+        const cnText = String(tech[cfg.cnKey] || '').trim();
+
+        if (!cnText) {
+            onLog?.(t('请先填写中文提示词', 'Please enter Chinese prompt first'), 'warning');
+            return;
+        }
+
+        setTranslatingPromptField(`${field}:to-en`);
+        try {
+            const res = await translateText(cnText, 'zh', 'en');
+            const translated = String(res?.translated_text || '').trim();
+            if (!translated) throw new Error('empty translation');
+
+            setEditingShot((prev) => (prev ? { ...prev, [cfg.enKey]: translated } : prev));
+            onLog?.(t('已翻译为英文', 'Translated to English'), 'success');
+        } catch (e) {
+            onLog?.(`${t('翻译失败', 'Translation failed')}: ${e?.response?.data?.detail || e?.message || 'unknown error'}`, 'error');
+        } finally {
+            setTranslatingPromptField('');
+        }
+    }, [editingShot, getEditingShotTech, onLog, setEditingShot, t]);
+
+    const translateKeyframeToChinese = useCallback(async (index) => {
+        if (!editingShot || index < 0) return;
+        const keyframe = localKeyframes[index];
+        const source = String(keyframe?.prompt || '').trim();
+        if (!source) {
+            onLog?.(t('请先填写关键帧英文提示词', 'Please enter keyframe prompt text first'), 'warning');
+            return;
+        }
+        const timeKey = String(keyframe?.time || '').trim();
+        if (!timeKey) {
+            onLog?.(t('请先填写关键帧时间', 'Please set keyframe time first'), 'warning');
+            return;
+        }
+
+        const token = `keyframe:${index}:to-cn`;
+        setTranslatingPromptField(token);
+        try {
+            const res = await translateText(source, 'auto', 'zh');
+            const translated = String(res?.translated_text || '').trim();
+            if (!translated) throw new Error('empty translation');
+
+            setEditingShot((prev) => {
+                if (!prev) return prev;
+                let tech = {};
+                try {
+                    tech = JSON.parse(prev.technical_notes || '{}');
+                    if (!tech || typeof tech !== 'object') tech = {};
+                } catch (e) {
+                    tech = {};
+                }
+                const nextMap = { ...(tech.keyframe_prompt_cn_map || {}) };
+                nextMap[timeKey] = translated;
+                tech.keyframe_prompt_cn_map = nextMap;
+                return { ...prev, technical_notes: JSON.stringify(tech) };
+            });
+
+            onLog?.(t('关键帧已翻译为中文', 'Keyframe translated to Chinese'), 'success');
+        } catch (e) {
+            onLog?.(`${t('关键帧翻译失败', 'Keyframe translation failed')}: ${e?.response?.data?.detail || e?.message || 'unknown error'}`, 'error');
+        } finally {
+            setTranslatingPromptField('');
+        }
+    }, [editingShot, localKeyframes, onLog, t]);
+
+    const translateKeyframeToEnglish = useCallback(async (index) => {
+        if (!editingShot || index < 0) return;
+        const keyframe = localKeyframes[index];
+        const timeKey = String(keyframe?.time || '').trim();
+        if (!timeKey) {
+            onLog?.(t('请先填写关键帧时间', 'Please set keyframe time first'), 'warning');
+            return;
+        }
+
+        const tech = getEditingShotTech();
+        const cnMap = (tech && typeof tech === 'object' && tech.keyframe_prompt_cn_map && typeof tech.keyframe_prompt_cn_map === 'object')
+            ? tech.keyframe_prompt_cn_map
+            : {};
+        const cnText = String(cnMap[timeKey] || '').trim();
+
+        if (!cnText) {
+            onLog?.(t('请先填写关键帧中文提示词', 'Please enter keyframe Chinese prompt first'), 'warning');
+            return;
+        }
+
+        const token = `keyframe:${index}:to-en`;
+        setTranslatingPromptField(token);
+        try {
+            const res = await translateText(cnText, 'zh', 'en');
+            const translated = String(res?.translated_text || '').trim();
+            if (!translated) throw new Error('empty translation');
+
+            setLocalKeyframes((prev) => {
+                const updated = [...(prev || [])];
+                if (!updated[index]) return prev;
+                updated[index] = { ...updated[index], prompt: translated };
+                return updated;
+            });
+            onLog?.(t('关键帧已翻译为英文', 'Keyframe translated to English'), 'success');
+        } catch (e) {
+            onLog?.(`${t('关键帧翻译失败', 'Keyframe translation failed')}: ${e?.response?.data?.detail || e?.message || 'unknown error'}`, 'error');
+        } finally {
+            setTranslatingPromptField('');
+        }
+    }, [editingShot, getEditingShotTech, localKeyframes, onLog, setLocalKeyframes, t]);
+
+    useEffect(() => {
+        if (!projectId || !activeEpisode?.id) return;
+        const key = `${projectId}:${activeEpisode.id}`;
+        if (mediaRebindAttemptedRef.current === key) return;
+        mediaRebindAttemptedRef.current = key;
+
+        let cancelled = false;
+        (async () => {
+            try {
+                const res = await rebindShotMediaAssets({
+                    project_id: Number(projectId),
+                    episode_id: Number(activeEpisode.id),
+                    limit: 5000,
+                });
+
+                const rebound = Number(res?.bound || 0);
+                if (rebound > 0 && !cancelled) {
+                    onLog?.(`Recovered ${rebound} historical media-slot links.`, 'success');
+                    await refreshShots();
+                }
+            } catch (e) {
+                console.warn('Historical shot-media rebind skipped:', e);
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [projectId, activeEpisode?.id, onLog, refreshShots]);
 
     useEffect(() => {
         if(activeEpisode?.id) {
@@ -10852,8 +10988,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     }, [editingShot?.id, entities]); // Only run when shot ID changes or entities load
 
     // Keyframe State Management
-    const [localKeyframes, setLocalKeyframes] = useState([]);
-    
+
     // Parse keyframes from shot text + technical_notes images
     useEffect(() => {
         if (!editingShot) return;
@@ -10975,55 +11110,23 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
          // Or rely on the fact that we are editing 'localKeyframes' state for text, and only syncing on Blur?
     };
 
-    const translateCnPromptToEn = async (cnText, label = 'Prompt') => {
-        const raw = String(cnText || '').trim();
-        if (!raw) {
-            showNotification(`${label} CN is empty`, 'warning');
-            return null;
-        }
-        try {
-            const res = await translateText(raw, 'zh', 'en');
-            const translated = extractTranslatedText(res);
-            if (!translated) throw new Error('No translation returned');
-            return translated;
-        } catch (e) {
-            const msg = e?.response?.data?.detail || e?.message || 'Translate failed';
-            onLog?.(`Translate CN->EN failed: ${msg}`, 'error');
-            showNotification(`Translate failed: ${msg}`, 'error');
-            return null;
-        }
-    };
-
-    const generateAssetWithLang = async (assetType, lang = 'en', keyframeIndex = -1) => {
+    const generateAssetWithLang = async (assetType, keyframeIndex = -1) => {
         if (!editingShot) return;
-        const tech = JSON.parse(editingShot.technical_notes || '{}');
 
         if (assetType === 'start') {
             setShotGeneratingState(editingShot.id, 'start', true);
-            if (lang === 'zh') {
-                await handleGenerateStartFrame(tech.start_frame_cn);
-                return;
-            }
             await handleGenerateStartFrame();
             return;
         }
 
         if (assetType === 'end') {
             setShotGeneratingState(editingShot.id, 'end', true);
-            if (lang === 'zh') {
-                await handleGenerateEndFrame(tech.end_frame_cn);
-                return;
-            }
             await handleGenerateEndFrame();
             return;
         }
 
         if (assetType === 'video') {
             setShotGeneratingState(editingShot.id, 'video', true);
-            if (lang === 'zh') {
-                await handleGenerateVideo(tech.video_prompt_cn);
-                return;
-            }
             await handleGenerateVideo();
             return;
         }
@@ -11031,11 +11134,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         if (assetType === 'keyframe') {
             const kf = localKeyframes[keyframeIndex];
             if (!kf) return;
-            if (lang === 'zh') {
-                const cnMap = tech.keyframe_prompt_cn_map || {};
-                await handleGenerateKeyframe(keyframeIndex, cnMap[kf.time]);
-                return;
-            }
             await handleGenerateKeyframe(keyframeIndex);
         }
     };
@@ -11957,6 +12055,14 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                             <Trash2 className="w-3 h-3"/>
                         </button>
                         <div className="relative inline-flex items-center ml-2 border border-white/20 rounded overflow-hidden">
+                             <button
+                                onClick={handleManualRebindMediaSlots}
+                                disabled={isManualRebindingMedia || isBatchGenerating}
+                                className={`px-3 py-1.5 text-xs flex items-center gap-1 transition-all border-r border-white/10 ${isManualRebindingMedia ? 'bg-white/20 text-white/80 cursor-wait' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                title={t('手动回填历史媒体关联（只补空槽位）', 'Manual historical media rebind (fills empty slots only)')}
+                            >
+                                {isManualRebindingMedia ? <Loader2 className="w-3 h-3 animate-spin"/> : <RefreshCw className="w-3 h-3"/>}
+                            </button>
                              <button 
                                 onClick={handleBatchGenerate}
                                 disabled={isBatchGenerating}
@@ -12235,20 +12341,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                     </button>
                                                 )}
                                                 <button 
-                                                    onClick={() => generateAssetWithLang('start', 'zh')} 
-                                                    disabled={currentGeneratingState.start}
-                                                    className={`text-[10px] px-2 py-0.5 rounded flex items-center gap-1 ${currentGeneratingState.start ? 'bg-emerald-500/10 text-emerald-300/50 cursor-wait' : 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'}`}
-                                                >
-                                                    {currentGeneratingState.start ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
-                                                    {currentGeneratingState.start ? t('生成中...', 'Generating...') : 'Gen(CN)'}
-                                                </button>
-                                                <button 
-                                                    onClick={() => generateAssetWithLang('start', 'en')} 
+                                                    onClick={() => generateAssetWithLang('start')} 
                                                     disabled={currentGeneratingState.start}
                                                     className={`text-[10px] px-2 py-0.5 rounded flex items-center gap-1 ${currentGeneratingState.start ? 'bg-sky-500/10 text-sky-300/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30'}`}
                                                 >
                                                     {currentGeneratingState.start ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
-                                                    {currentGeneratingState.start ? t('生成中...', 'Generating...') : 'Gen(EN)'}
+                                                    {currentGeneratingState.start ? t('生成中...', 'Generating...') : t('生成', 'Generate')}
                                                 </button>
                                             </div>
                                         </div>
@@ -12388,20 +12486,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                     </button>
                                                 )}
                                                 <button 
-                                                    onClick={() => generateAssetWithLang('end', 'zh')} 
-                                                    disabled={currentGeneratingState.end}
-                                                    className={`text-[10px] px-2 py-0.5 rounded flex items-center gap-1 ${currentGeneratingState.end ? 'bg-emerald-500/10 text-emerald-300/50 cursor-wait' : 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'}`}
-                                                >
-                                                    {currentGeneratingState.end ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
-                                                    {currentGeneratingState.end ? t('生成中...', 'Generating...') : 'Gen(CN)'}
-                                                </button>
-                                                <button 
-                                                    onClick={() => generateAssetWithLang('end', 'en')} 
+                                                    onClick={() => generateAssetWithLang('end')} 
                                                     disabled={currentGeneratingState.end}
                                                     className={`text-[10px] px-2 py-0.5 rounded flex items-center gap-1 ${currentGeneratingState.end ? 'bg-sky-500/10 text-sky-300/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30'}`}
                                                 >
                                                     {currentGeneratingState.end ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
-                                                    {currentGeneratingState.end ? t('生成中...', 'Generating...') : 'Gen(EN)'}
+                                                    {currentGeneratingState.end ? t('生成中...', 'Generating...') : t('生成', 'Generate')}
                                                 </button>
                                             </div>
                                         </div>
@@ -12566,20 +12656,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 </select>
 
                                                 <button 
-                                                    onClick={() => generateAssetWithLang('video', 'zh')} 
-                                                    disabled={currentGeneratingState.video}
-                                                    className={`text-[10px] font-bold px-3 py-0.5 rounded flex items-center gap-1 ${currentGeneratingState.video ? 'bg-primary/50 text-black/50 cursor-wait' : 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30' }`}
-                                                >
-                                                    {currentGeneratingState.video ? <Loader2 className="w-3 h-3 animate-spin"/> : <Film className="w-3 h-3"/>} 
-                                                    {currentGeneratingState.video ? t('生成中...', 'Generating...') : 'Gen(CN)'}
-                                                </button>
-                                                <button 
-                                                    onClick={() => generateAssetWithLang('video', 'en')} 
+                                                    onClick={() => generateAssetWithLang('video')} 
                                                     disabled={currentGeneratingState.video}
                                                     className={`text-[10px] font-bold px-3 py-0.5 rounded flex items-center gap-1 ${currentGeneratingState.video ? 'bg-primary/50 text-black/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30' }`}
                                                 >
                                                     {currentGeneratingState.video ? <Loader2 className="w-3 h-3 animate-spin"/> : <Film className="w-3 h-3"/>} 
-                                                    {currentGeneratingState.video ? t('生成中...', 'Generating...') : 'Gen(EN)'}
+                                                    {currentGeneratingState.video ? t('生成中...', 'Generating...') : t('生成', 'Generate')}
                                                 </button>
                                             </div>
                                         </div>
@@ -12697,20 +12779,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                             {t('详情', 'Detail')}
                                                         </button>
                                                         <button 
-                                                            onClick={() => generateAssetWithLang('keyframe', 'zh', idx)} 
-                                                            className="px-1.5 py-0.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 rounded flex items-center gap-1"
-                                                            disabled={kf.loading}
-                                                        >
-                                                            {kf.loading ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
-                                                            Gen(CN)
-                                                        </button>
-                                                        <button 
-                                                            onClick={() => generateAssetWithLang('keyframe', 'en', idx)} 
+                                                            onClick={() => generateAssetWithLang('keyframe', idx)} 
                                                             className="px-1.5 py-0.5 bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 rounded flex items-center gap-1"
                                                             disabled={kf.loading}
                                                         >
                                                             {kf.loading ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
-                                                            Gen(EN)
+                                                            {t('生成', 'Generate')}
                                                         </button>
                                                         <button 
                                                             onClick={() => {
@@ -12968,50 +13042,33 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                             </div>
                                                             <div className="space-y-3">
                                                                 <div className="flex items-center gap-2">
-                                                                    <button onClick={() => generateAssetWithLang('start', 'zh')} className="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30">{t('生成(CN)', 'Gen(CN)')}</button>
                                                                     <button 
-                                                                        onClick={() => generateAssetWithLang('start', 'en')} 
+                                                                        onClick={() => generateAssetWithLang('start')} 
                                                                         disabled={currentGeneratingState.start}
                                                                         className={`text-xs px-2 py-1 rounded ${currentGeneratingState.start ? 'bg-sky-500/10 text-sky-300/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30'}`}
                                                                     >
-                                                                        {currentGeneratingState.start ? t('生成中...', 'Generating...') : 'Gen(EN)'}
+                                                                        {currentGeneratingState.start ? t('生成中...', 'Generating...') : t('生成', 'Generate')}
                                                                     </button>
                                                                 </div>
-                                                                <div className="flex items-center justify-between">
-                                                                    <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('英文提示词', 'Prompt (EN)')}</div>
-                                                                    <button
-                                                                        onClick={() => runDetailTranslate({
-                                                                            text: tech.start_frame_cn || '',
-                                                                            from: 'zh',
-                                                                            to: 'en',
-                                                                            loadingKey: 'start_cn2en',
-                                                                            onResult: async (v) => {
-                                                                                await persistShotFields({ start_frame: v });
-                                                                            },
-                                                                        })}
-                                                                        disabled={!!detailTranslateLoading.start_cn2en}
-                                                                        className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/80"
-                                                                    >
-                                                                        {detailTranslateLoading.start_cn2en ? t('翻译中...', 'Translating...') : t('中→英', 'CN→EN')}
-                                                                    </button>
-                                                                </div>
+                                                                <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('英文提示词', 'Prompt (EN)')}</div>
                                                                 <textarea className="w-full h-48 bg-black/30 border border-white/10 rounded p-2 text-sm" value={editingShot.start_frame || ''} onChange={(e) => setEditingShot({...editingShot, start_frame: e.target.value})} />
-                                                                <div className="flex items-center justify-between">
-                                                                    <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('中文对照提示词', 'Prompt (CN)')}</div>
+                                                                <div className="flex items-center justify-center gap-2">
                                                                     <button
-                                                                        onClick={() => runDetailTranslate({
-                                                                            text: editingShot.start_frame || '',
-                                                                            from: 'en',
-                                                                            to: 'zh',
-                                                                            loadingKey: 'start_en2cn',
-                                                                            onResult: (v) => persistTechField('start_frame_cn', v),
-                                                                        })}
-                                                                        disabled={!!detailTranslateLoading.start_en2cn}
-                                                                        className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/80"
+                                                                        onClick={() => translatePromptToChinese('start')}
+                                                                        disabled={translatingPromptField.startsWith('start:')}
+                                                                        className={`text-xs px-2 py-1 rounded ${translatingPromptField.startsWith('start:') ? 'bg-purple-500/10 text-purple-300/50 cursor-wait' : 'bg-purple-500/20 text-purple-200 hover:bg-purple-500/30'}`}
                                                                     >
-                                                                        {detailTranslateLoading.start_en2cn ? t('翻译中...', 'Translating...') : t('英→中', 'EN→CN')}
+                                                                        {translatingPromptField === 'start:to-cn' ? t('翻译中...', 'Translating...') : t('翻译成中文', 'To Chinese')}
+                                                                    </button>
+                                                                    <button
+                                                                        onClick={() => translatePromptToEnglish('start')}
+                                                                        disabled={translatingPromptField.startsWith('start:')}
+                                                                        className={`text-xs px-2 py-1 rounded ${translatingPromptField.startsWith('start:') ? 'bg-white/10 text-white/50 cursor-wait' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                                                    >
+                                                                        {translatingPromptField === 'start:to-en' ? t('翻译中...', 'Translating...') : t('翻译成英文', 'To English')}
                                                                     </button>
                                                                 </div>
+                                                                <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('中文对照提示词', 'Prompt (CN)')}</div>
                                                                 <textarea
                                                                     className="w-full h-40 bg-black/30 border border-white/10 rounded p-2 text-sm"
                                                                     value={tech.start_frame_cn || ''}
@@ -13042,50 +13099,33 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                             </div>
                                                             <div className="space-y-3">
                                                                 <div className="flex items-center gap-2">
-                                                                    <button onClick={() => generateAssetWithLang('end', 'zh')} className="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30">{t('生成(CN)', 'Gen(CN)')}</button>
                                                                     <button 
-                                                                        onClick={() => generateAssetWithLang('end', 'en')} 
+                                                                        onClick={() => generateAssetWithLang('end')} 
                                                                         disabled={currentGeneratingState.end}
                                                                         className={`text-xs px-2 py-1 rounded ${currentGeneratingState.end ? 'bg-sky-500/10 text-sky-300/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30'}`}
                                                                     >
-                                                                        {currentGeneratingState.end ? t('生成中...', 'Generating...') : 'Gen(EN)'}
+                                                                        {currentGeneratingState.end ? t('生成中...', 'Generating...') : t('生成', 'Generate')}
                                                                     </button>
                                                                 </div>
-                                                                <div className="flex items-center justify-between">
-                                                                    <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('英文提示词', 'Prompt (EN)')}</div>
-                                                                    <button
-                                                                        onClick={() => runDetailTranslate({
-                                                                            text: tech.end_frame_cn || '',
-                                                                            from: 'zh',
-                                                                            to: 'en',
-                                                                            loadingKey: 'end_cn2en',
-                                                                            onResult: async (v) => {
-                                                                                await persistShotFields({ end_frame: v });
-                                                                            },
-                                                                        })}
-                                                                        disabled={!!detailTranslateLoading.end_cn2en}
-                                                                        className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/80"
-                                                                    >
-                                                                        {detailTranslateLoading.end_cn2en ? t('翻译中...', 'Translating...') : t('中→英', 'CN→EN')}
-                                                                    </button>
-                                                                </div>
+                                                                <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('英文提示词', 'Prompt (EN)')}</div>
                                                                 <textarea className="w-full h-48 bg-black/30 border border-white/10 rounded p-2 text-sm" value={editingShot.end_frame || ''} onChange={(e) => setEditingShot({...editingShot, end_frame: e.target.value})} />
-                                                                <div className="flex items-center justify-between">
-                                                                    <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('中文对照提示词', 'Prompt (CN)')}</div>
+                                                                <div className="flex items-center justify-center gap-2">
                                                                     <button
-                                                                        onClick={() => runDetailTranslate({
-                                                                            text: editingShot.end_frame || '',
-                                                                            from: 'en',
-                                                                            to: 'zh',
-                                                                            loadingKey: 'end_en2cn',
-                                                                            onResult: (v) => persistTechField('end_frame_cn', v),
-                                                                        })}
-                                                                        disabled={!!detailTranslateLoading.end_en2cn}
-                                                                        className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/80"
+                                                                        onClick={() => translatePromptToChinese('end')}
+                                                                        disabled={translatingPromptField.startsWith('end:')}
+                                                                        className={`text-xs px-2 py-1 rounded ${translatingPromptField.startsWith('end:') ? 'bg-purple-500/10 text-purple-300/50 cursor-wait' : 'bg-purple-500/20 text-purple-200 hover:bg-purple-500/30'}`}
                                                                     >
-                                                                        {detailTranslateLoading.end_en2cn ? t('翻译中...', 'Translating...') : t('英→中', 'EN→CN')}
+                                                                        {translatingPromptField === 'end:to-cn' ? t('翻译中...', 'Translating...') : t('翻译成中文', 'To Chinese')}
+                                                                    </button>
+                                                                    <button
+                                                                        onClick={() => translatePromptToEnglish('end')}
+                                                                        disabled={translatingPromptField.startsWith('end:')}
+                                                                        className={`text-xs px-2 py-1 rounded ${translatingPromptField.startsWith('end:') ? 'bg-white/10 text-white/50 cursor-wait' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                                                    >
+                                                                        {translatingPromptField === 'end:to-en' ? t('翻译中...', 'Translating...') : t('翻译成英文', 'To English')}
                                                                     </button>
                                                                 </div>
+                                                                <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('中文对照提示词', 'Prompt (CN)')}</div>
                                                                 <textarea
                                                                     className="w-full h-40 bg-black/30 border border-white/10 rounded p-2 text-sm"
                                                                     value={tech.end_frame_cn || ''}
@@ -13117,13 +13157,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                             </div>
                                                             <div className="space-y-3">
                                                                 <div className="flex items-center gap-2">
-                                                                    <button onClick={() => generateAssetWithLang('video', 'zh')} className="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30">{t('生成(CN)', 'Gen(CN)')}</button>
                                                                     <button 
-                                                                        onClick={() => generateAssetWithLang('video', 'en')} 
+                                                                        onClick={() => generateAssetWithLang('video')} 
                                                                         disabled={currentGeneratingState.video}
                                                                         className={`text-xs px-2 py-1 rounded ${currentGeneratingState.video ? 'bg-sky-500/10 text-sky-300/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30'}`}
                                                                     >
-                                                                        {currentGeneratingState.video ? t('生成中...', 'Generating...') : 'Gen(EN)'}
+                                                                        {currentGeneratingState.video ? t('生成中...', 'Generating...') : t('生成', 'Generate')}
                                                                     </button>
                                                                 </div>
                                                                 <div className="flex items-center justify-between">
@@ -13145,41 +13184,25 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                         <option value="refs_video">{t('视频参考图模式', 'Refs (Video) As Ref')}</option>
                                                                     </select>
                                                                 </div>
-                                                                <div className="flex items-center justify-between">
-                                                                    <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('英文提示词', 'Prompt (EN)')}</div>
-                                                                    <button
-                                                                        onClick={() => runDetailTranslate({
-                                                                            text: tech.video_prompt_cn || '',
-                                                                            from: 'zh',
-                                                                            to: 'en',
-                                                                            loadingKey: 'video_cn2en',
-                                                                            onResult: async (v) => {
-                                                                                await persistShotFields({ prompt: v, video_content: '' });
-                                                                            },
-                                                                        })}
-                                                                        disabled={!!detailTranslateLoading.video_cn2en}
-                                                                        className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/80"
-                                                                    >
-                                                                        {detailTranslateLoading.video_cn2en ? t('翻译中...', 'Translating...') : t('中→英', 'CN→EN')}
-                                                                    </button>
-                                                                </div>
+                                                                <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('英文提示词', 'Prompt (EN)')}</div>
                                                                 <textarea className="w-full h-48 bg-black/30 border border-white/10 rounded p-2 text-sm" value={editingShot.prompt || editingShot.video_content || ''} onChange={(e) => setEditingShot({...editingShot, prompt: e.target.value})} />
-                                                                <div className="flex items-center justify-between">
-                                                                    <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('中文对照提示词', 'Prompt (CN)')}</div>
+                                                                <div className="flex items-center justify-center gap-2">
                                                                     <button
-                                                                        onClick={() => runDetailTranslate({
-                                                                            text: editingShot.prompt || editingShot.video_content || '',
-                                                                            from: 'en',
-                                                                            to: 'zh',
-                                                                            loadingKey: 'video_en2cn',
-                                                                            onResult: (v) => persistTechField('video_prompt_cn', v),
-                                                                        })}
-                                                                        disabled={!!detailTranslateLoading.video_en2cn}
-                                                                        className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/80"
+                                                                        onClick={() => translatePromptToChinese('video')}
+                                                                        disabled={translatingPromptField.startsWith('video:')}
+                                                                        className={`text-xs px-2 py-1 rounded ${translatingPromptField.startsWith('video:') ? 'bg-purple-500/10 text-purple-300/50 cursor-wait' : 'bg-purple-500/20 text-purple-200 hover:bg-purple-500/30'}`}
                                                                     >
-                                                                        {detailTranslateLoading.video_en2cn ? t('翻译中...', 'Translating...') : t('英→中', 'EN→CN')}
+                                                                        {translatingPromptField === 'video:to-cn' ? t('翻译中...', 'Translating...') : t('翻译成中文', 'To Chinese')}
+                                                                    </button>
+                                                                    <button
+                                                                        onClick={() => translatePromptToEnglish('video')}
+                                                                        disabled={translatingPromptField.startsWith('video:')}
+                                                                        className={`text-xs px-2 py-1 rounded ${translatingPromptField.startsWith('video:') ? 'bg-white/10 text-white/50 cursor-wait' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                                                    >
+                                                                        {translatingPromptField === 'video:to-en' ? t('翻译中...', 'Translating...') : t('翻译成英文', 'To English')}
                                                                     </button>
                                                                 </div>
+                                                                <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('中文对照提示词', 'Prompt (CN)')}</div>
                                                                 <textarea
                                                                     className="w-full h-40 bg-black/30 border border-white/10 rounded p-2 text-sm"
                                                                     value={tech.video_prompt_cn || ''}
@@ -13209,59 +13232,38 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                     updated[assetDetailModal.keyframeIndex].time = e.target.value;
                                                                     setLocalKeyframes(updated);
                                                                 }} />
-                                                                <button onClick={() => generateAssetWithLang('keyframe', 'zh', assetDetailModal.keyframeIndex)} className="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30">{t('生成(CN)', 'Gen(CN)')}</button>
                                                                 <button 
-                                                                    onClick={() => generateAssetWithLang('keyframe', 'en', assetDetailModal.keyframeIndex)} 
+                                                                    onClick={() => generateAssetWithLang('keyframe', assetDetailModal.keyframeIndex)} 
                                                                     disabled={!!keyframe?.loading}
                                                                     className={`text-xs px-2 py-1 rounded ${keyframe?.loading ? 'bg-sky-500/10 text-sky-300/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30'}`}
                                                                 >
-                                                                    {keyframe?.loading ? t('生成中...', 'Generating...') : 'Gen(EN)'}
+                                                                    {keyframe?.loading ? t('生成中...', 'Generating...') : t('生成', 'Generate')}
                                                                 </button>
                                                             </div>
-                                                            <div className="flex items-center justify-between">
-                                                                <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('英文提示词', 'Prompt (EN)')}</div>
-                                                                <button
-                                                                    onClick={() => runDetailTranslate({
-                                                                        text: (tech.keyframe_prompt_cn_map && keyframe?.time) ? (tech.keyframe_prompt_cn_map[keyframe.time] || '') : '',
-                                                                        from: 'zh',
-                                                                        to: 'en',
-                                                                        loadingKey: `kf_cn2en_${assetDetailModal.keyframeIndex}`,
-                                                                        onResult: async (v) => {
-                                                                            const updated = [...localKeyframes];
-                                                                            if (!updated[assetDetailModal.keyframeIndex]) return;
-                                                                            updated[assetDetailModal.keyframeIndex].prompt = v;
-                                                                            setLocalKeyframes(updated);
-                                                                            await reconstructKeyframes(updated);
-                                                                        },
-                                                                    })}
-                                                                    disabled={!!detailTranslateLoading[`kf_cn2en_${assetDetailModal.keyframeIndex}`]}
-                                                                    className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/80"
-                                                                >
-                                                                    {detailTranslateLoading[`kf_cn2en_${assetDetailModal.keyframeIndex}`] ? t('翻译中...', 'Translating...') : t('中→英', 'CN→EN')}
-                                                                </button>
-                                                            </div>
+                                                            <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('英文提示词', 'Prompt (EN)')}</div>
                                                             <textarea className="w-full h-48 bg-black/30 border border-white/10 rounded p-2 text-sm" value={keyframe?.prompt || ''} onChange={(e) => {
                                                                 const updated = [...localKeyframes];
                                                                 if (!updated[assetDetailModal.keyframeIndex]) return;
                                                                 updated[assetDetailModal.keyframeIndex].prompt = e.target.value;
                                                                 setLocalKeyframes(updated);
                                                             }} />
-                                                            <div className="flex items-center justify-between">
-                                                                <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('中文对照提示词', 'Prompt (CN)')}</div>
+                                                            <div className="flex items-center justify-center gap-2">
                                                                 <button
-                                                                    onClick={() => runDetailTranslate({
-                                                                        text: keyframe?.prompt || '',
-                                                                        from: 'en',
-                                                                        to: 'zh',
-                                                                        loadingKey: `kf_en2cn_${assetDetailModal.keyframeIndex}`,
-                                                                        onResult: (v) => persistKeyframeCnMap(keyframe?.time, v),
-                                                                    })}
-                                                                    disabled={!!detailTranslateLoading[`kf_en2cn_${assetDetailModal.keyframeIndex}`]}
-                                                                    className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/80"
+                                                                    onClick={() => translateKeyframeToChinese(assetDetailModal.keyframeIndex)}
+                                                                    disabled={translatingPromptField.startsWith(`keyframe:${assetDetailModal.keyframeIndex}:`)}
+                                                                    className={`text-xs px-2 py-1 rounded ${translatingPromptField.startsWith(`keyframe:${assetDetailModal.keyframeIndex}:`) ? 'bg-purple-500/10 text-purple-300/50 cursor-wait' : 'bg-purple-500/20 text-purple-200 hover:bg-purple-500/30'}`}
                                                                 >
-                                                                    {detailTranslateLoading[`kf_en2cn_${assetDetailModal.keyframeIndex}`] ? t('翻译中...', 'Translating...') : t('英→中', 'EN→CN')}
+                                                                    {translatingPromptField === `keyframe:${assetDetailModal.keyframeIndex}:to-cn` ? t('翻译中...', 'Translating...') : t('翻译成中文', 'To Chinese')}
+                                                                </button>
+                                                                <button
+                                                                    onClick={() => translateKeyframeToEnglish(assetDetailModal.keyframeIndex)}
+                                                                    disabled={translatingPromptField.startsWith(`keyframe:${assetDetailModal.keyframeIndex}:`)}
+                                                                    className={`text-xs px-2 py-1 rounded ${translatingPromptField.startsWith(`keyframe:${assetDetailModal.keyframeIndex}:`) ? 'bg-white/10 text-white/50 cursor-wait' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                                                >
+                                                                    {translatingPromptField === `keyframe:${assetDetailModal.keyframeIndex}:to-en` ? t('翻译中...', 'Translating...') : t('翻译成英文', 'To English')}
                                                                 </button>
                                                             </div>
+                                                            <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('中文对照提示词', 'Prompt (CN)')}</div>
                                                             <textarea
                                                                 className="w-full h-40 bg-black/30 border border-white/10 rounded p-2 text-sm"
                                                                 value={(tech.keyframe_prompt_cn_map && keyframe?.time) ? (tech.keyframe_prompt_cn_map[keyframe.time] || '') : ''}

@@ -20,12 +20,17 @@ class Settings(BaseSettings):
     
     DATABASE_URL: str = _db_url
     
-    # Security (simplistic for demo)
-    SECRET_KEY: str = "supersecretkey"
+    # Security
+    SECRET_KEY: str = os.getenv("SECRET_KEY", "supersecretkey")
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 525600  # 1 year
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "43200"))
     PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = 30
     UPLOAD_DIR: str = "uploads"
+    SECURITY_HEADERS_ENABLED: bool = os.getenv("SECURITY_HEADERS_ENABLED", "1") not in {"0", "false", "False"}
+    SECURITY_HSTS_SECONDS: int = int(os.getenv("SECURITY_HSTS_SECONDS", "31536000"))
+    GZIP_MINIMUM_SIZE: int = int(os.getenv("GZIP_MINIMUM_SIZE", "1024"))
+    RATE_LIMIT_LOGIN: str = os.getenv("RATE_LIMIT_LOGIN", "5/minute")
+    RATE_LIMIT_RESET: str = os.getenv("RATE_LIMIT_RESET", "3/minute")
     CORS_ORIGINS: str = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173")
     CORS_ALLOW_ORIGIN_REGEX: str = os.getenv("CORS_ALLOW_ORIGIN_REGEX", r"^https://.*\.onrender\.com$")
     MAX_ASSET_UPLOAD_MB: int = int(os.getenv("MAX_ASSET_UPLOAD_MB", "100"))

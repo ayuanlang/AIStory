@@ -4,9 +4,9 @@ import logging
 import smtplib
 from email.message import EmailMessage
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
+from sqlalchemy import or_, and_
 from app.db.session import get_db
-from app.models.all_models import Project, User, Episode, Scene, Shot, Entity, Asset, APISetting, SystemAPISetting, ScriptSegment, PricingRule, TransactionHistory
+from app.models.all_models import Project, ProjectShare, User, Episode, Scene, Shot, Entity, Asset, APISetting, SystemAPISetting, ScriptSegment, PricingRule, TransactionHistory
 from app.schemas.agent import AgentRequest, AgentResponse, AnalyzeSceneRequest
 from app.services.agent_service import agent_service
 from app.services.billing_service import billing_service
@@ -38,6 +38,14 @@ import asyncio
 import urllib.parse
 from pathlib import Path
 from collections import deque
+
+# Import limiter from main app state or create a local reference if needed
+# We will use the request.app.state.limiter in the endpoints
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+# Create a local limiter instance for the router decorators
+limiter = Limiter(key_func=get_remote_address)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/login/access-token")
 
@@ -895,10 +903,9 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         saved_to_episode = False
         if getattr(request, "episode_id", None):
             episode_id = request.episode_id
-            q = db.query(Episode).filter(Episode.id == episode_id)
-            if not getattr(current_user, "is_superuser", False):
-                q = q.join(Project, Episode.project_id == Project.id).filter(Project.owner_id == current_user.id)
-            episode = q.first()
+            episode = db.query(Episode).filter(Episode.id == episode_id).first()
+            if episode and not getattr(current_user, "is_superuser", False):
+                _require_project_access(db, episode.project_id, current_user)
             if not episode:
                 raise HTTPException(status_code=404, detail="Episode not found")
             episode.ai_scene_analysis_result = result_content
@@ -1349,12 +1356,7 @@ async def process_agent_command(
     project_id = request.project_id or request.context.get("projectId")
     
     if project_id:
-        # Verify ownership
-        project = db.query(Project).filter(Project.id == project_id).first()
-        if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
-        if project.owner_id != current_user.id:
-            raise HTTPException(status_code=403, detail="Not authorized to access this project")
+        _require_project_access(db, int(project_id), current_user)
 
     # Resolve Provider/Model for Billing
     provider = request.llm_config.get("provider") if request.llm_config else None
@@ -1446,12 +1448,65 @@ class ProjectUpdate(BaseModel):
 class ProjectOut(BaseModel):
     id: int
     title: str
+    owner_id: int
     global_info: dict
     aspectRatio: Optional[str] = None
     cover_image: Optional[str] = None
+    is_owner: Optional[bool] = True
     
     class Config:
         from_attributes = True
+
+
+class ProjectShareCreate(BaseModel):
+    target_user: str
+
+
+class ProjectShareOut(BaseModel):
+    id: int
+    project_id: int
+    user_id: int
+    username: str
+    email: Optional[str] = None
+    full_name: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+
+def _is_project_shared_with_user(db: Session, project_id: int, user_id: int) -> bool:
+    share = db.query(ProjectShare).filter(
+        ProjectShare.project_id == project_id,
+        ProjectShare.user_id == user_id,
+    ).first()
+    return share is not None
+
+
+def _require_project_access(
+    db: Session,
+    project_id: int,
+    current_user: User,
+    owner_only: bool = False,
+) -> Project:
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    is_owner = project.owner_id == current_user.id
+    if is_owner:
+        return project
+
+    if owner_only:
+        raise HTTPException(status_code=403, detail="Delete is restricted to project owner")
+
+    if _is_project_shared_with_user(db, project.id, current_user.id):
+        return project
+
+    raise HTTPException(status_code=403, detail="Not authorized")
+
+
+def _attach_project_flags(project: Project, current_user: User) -> Project:
+    project.is_owner = (project.owner_id == current_user.id)
+    return project
 
 def get_project_cover_image(db: Session, project_id: int) -> Optional[str]:
     # 1. Try to find first valid image in Shots
@@ -1816,7 +1871,105 @@ def create_project(
     db_project.cover_image = None
     # Extract aspectRatio for response from global_info
     db_project.aspectRatio = db_project.global_info.get('aspectRatio') if db_project.global_info else None
+    db_project.is_owner = True
     return db_project
+
+
+@router.get("/projects/{project_id}/shares", response_model=List[ProjectShareOut])
+def list_project_shares(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_project_access(db, project_id, current_user, owner_only=True)
+    rows = (
+        db.query(ProjectShare, User)
+        .join(User, User.id == ProjectShare.user_id)
+        .filter(ProjectShare.project_id == project_id)
+        .order_by(ProjectShare.id.desc())
+        .all()
+    )
+    return [
+        ProjectShareOut(
+            id=share.id,
+            project_id=share.project_id,
+            user_id=share.user_id,
+            username=user.username,
+            email=user.email,
+            full_name=user.full_name,
+            created_at=share.created_at,
+        )
+        for share, user in rows
+    ]
+
+
+@router.post("/projects/{project_id}/shares", response_model=ProjectShareOut)
+def create_project_share(
+    project_id: int,
+    payload: ProjectShareCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_project_access(db, project_id, current_user, owner_only=True)
+    target = str(payload.target_user or "").strip()
+    if not target:
+        raise HTTPException(status_code=400, detail="target_user is required")
+
+    target_user = db.query(User).filter(or_(User.username == target, User.email == target)).first()
+    if not target_user:
+        raise HTTPException(status_code=404, detail="Target user not found")
+
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if project and project.owner_id == target_user.id:
+        raise HTTPException(status_code=400, detail="Project owner already has access")
+
+    existing = db.query(ProjectShare).filter(
+        ProjectShare.project_id == project_id,
+        ProjectShare.user_id == target_user.id,
+    ).first()
+    if existing:
+        return ProjectShareOut(
+            id=existing.id,
+            project_id=existing.project_id,
+            user_id=existing.user_id,
+            username=target_user.username,
+            email=target_user.email,
+            full_name=target_user.full_name,
+            created_at=existing.created_at,
+        )
+
+    share = ProjectShare(project_id=project_id, user_id=target_user.id)
+    db.add(share)
+    db.commit()
+    db.refresh(share)
+    return ProjectShareOut(
+        id=share.id,
+        project_id=share.project_id,
+        user_id=share.user_id,
+        username=target_user.username,
+        email=target_user.email,
+        full_name=target_user.full_name,
+        created_at=share.created_at,
+    )
+
+
+@router.delete("/projects/{project_id}/shares/{shared_user_id}", status_code=204)
+def delete_project_share(
+    project_id: int,
+    shared_user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_project_access(db, project_id, current_user, owner_only=True)
+    share = db.query(ProjectShare).filter(
+        ProjectShare.project_id == project_id,
+        ProjectShare.user_id == shared_user_id,
+    ).first()
+    if not share:
+        raise HTTPException(status_code=404, detail="Share record not found")
+    db.delete(share)
+    db.commit()
+    return None
 
 
 @router.post("/projects/{project_id}/story_generator/global", response_model=ProjectOut)
@@ -1826,9 +1979,7 @@ async def generate_project_story_dna_global(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    project = _require_project_access(db, project_id, current_user)
 
     gi_existing = dict(project.global_info or {})
 
@@ -1938,9 +2089,7 @@ def save_project_story_generator_global_input(
     current_user: User = Depends(get_current_user),
 ):
     """Persist Story Generator (Global/Project) draft inputs without calling the LLM."""
-    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    project = _require_project_access(db, project_id, current_user)
 
     try:
         story_input = req.model_dump()
@@ -1987,9 +2136,7 @@ def export_project_story_generator_global_package(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    project = _require_project_access(db, project_id, current_user)
 
     gi = dict(project.global_info or {})
     basic_info_nested = gi.get("basic_information") if isinstance(gi.get("basic_information"), dict) else {}
@@ -2143,9 +2290,7 @@ def import_project_story_generator_global_package(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    project = _require_project_access(db, project_id, current_user)
 
     now_iso = datetime.utcnow().isoformat()
     gi = dict(project.global_info or {})
@@ -2266,9 +2411,7 @@ async def analyze_project_novel_to_story_generator_fields(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    project = _require_project_access(db, project_id, current_user)
 
     novel_text = (req.novel_text or "").strip()
     if not novel_text:
@@ -2360,9 +2503,18 @@ def read_projects(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    shared_project_ids = [
+        row[0]
+        for row in db.query(ProjectShare.project_id).filter(ProjectShare.user_id == current_user.id).all()
+    ]
     projects = (
         db.query(Project)
-        .filter(Project.owner_id == current_user.id)
+        .filter(
+            or_(
+                Project.owner_id == current_user.id,
+                Project.id.in_(shared_project_ids),
+            )
+        )
         .order_by(Project.created_at.desc(), Project.id.desc())
         .offset(skip)
         .limit(limit)
@@ -2370,6 +2522,7 @@ def read_projects(
     )
     for p in projects:
         p.cover_image = get_project_cover_image(db, p.id)
+        _attach_project_flags(p, current_user)
         # Populate alias field
         if p.global_info:
              p.aspectRatio = p.global_info.get('aspectRatio')
@@ -2386,13 +2539,12 @@ def read_project(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
-    if project is None:
-        raise HTTPException(status_code=404, detail="Project not found")
+    project = _require_project_access(db, project_id, current_user)
     
     project.cover_image = get_project_cover_image(db, project.id)
     if project.global_info:
-         project.aspectRatio = project.global_info.get('aspectRatio')
+        project.aspectRatio = project.global_info.get('aspectRatio')
+    _attach_project_flags(project, current_user)
     return project
 
 @router.put("/projects/{project_id}", response_model=ProjectOut)
@@ -2402,9 +2554,7 @@ def update_project(
     db: Session = Depends(get_db), 
     current_user: User = Depends(get_current_user)
 ):
-    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    project = _require_project_access(db, project_id, current_user)
     
     if project_in.title is not None:
         project.title = project_in.title
@@ -2431,7 +2581,8 @@ def update_project(
     db.refresh(project)
     project.cover_image = get_project_cover_image(db, project.id)
     if project.global_info:
-         project.aspectRatio = project.global_info.get('aspectRatio')
+        project.aspectRatio = project.global_info.get('aspectRatio')
+    _attach_project_flags(project, current_user)
     return project
 
 @router.delete("/projects/{project_id}", status_code=204)
@@ -2440,9 +2591,7 @@ def delete_project(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
-    if project is None:
-        raise HTTPException(status_code=404, detail="Project not found")
+    project = _require_project_access(db, project_id, current_user, owner_only=True)
 
     # Cascade delete related data (scenes, shots, subjects/entities, etc.)
     # Note: We do not delete user-level assets unless they are explicitly referenced by the project.
@@ -2592,9 +2741,7 @@ def read_episodes(
     current_user: User = Depends(get_current_user)
 ):
     # Verify access
-    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    _require_project_access(db, project_id, current_user)
     
     return db.query(Episode).filter(Episode.project_id == project_id).all()
 
@@ -2609,9 +2756,7 @@ def update_episode_segments(
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
     
-    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    _require_project_access(db, episode.project_id, current_user)
 
     # Clear existing
     db.query(ScriptSegment).filter(ScriptSegment.episode_id == episode_id).delete()
@@ -2642,9 +2787,7 @@ def create_episode(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    _require_project_access(db, project_id, current_user)
         
     db_episode = Episode(
         project_id=project_id, 
@@ -2670,10 +2813,8 @@ def update_episode(
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
     
-    # Check ownership via project
-    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    # Check access via project
+    _require_project_access(db, episode.project_id, current_user)
 
     if episode_in.title is not None:
         episode.title = episode_in.title
@@ -2724,9 +2865,7 @@ def get_project_character_profiles(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    project = _require_project_access(db, project_id, current_user)
     gi = project.global_info or {}
     if not isinstance(gi, dict):
         return []
@@ -2741,9 +2880,7 @@ def update_project_character_profiles(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    project = _require_project_access(db, project_id, current_user)
 
     def _render_canon_md(items: List[Dict[str, Any]]) -> str:
         blocks: List[str] = []
@@ -2783,9 +2920,7 @@ def save_project_character_canon_input(
     current_user: User = Depends(get_current_user),
 ):
     """Persist Project Character Canon draft inputs without calling the LLM."""
-    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    project = _require_project_access(db, project_id, current_user)
 
     now_iso = datetime.utcnow().isoformat()
     gi = dict(project.global_info or {})
@@ -2825,9 +2960,7 @@ def save_project_character_canon_categories(
     current_user: User = Depends(get_current_user),
 ):
     """Persist Project Character Canon tag/identity category configuration."""
-    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    project = _require_project_access(db, project_id, current_user)
 
     now_iso = datetime.utcnow().isoformat()
     gi = dict(project.global_info or {})
@@ -2861,9 +2994,7 @@ async def generate_project_character_profile(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    project = _require_project_access(db, project_id, current_user)
 
     name = (req.name or "").strip()
     if not name:
@@ -3017,9 +3148,7 @@ def get_episode_character_profiles(
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
-    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    _require_project_access(db, episode.project_id, current_user)
     return episode.character_profiles or []
 
 
@@ -3033,9 +3162,7 @@ def update_episode_character_profiles(
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
-    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    _require_project_access(db, episode.project_id, current_user)
     episode.character_profiles = req.character_profiles or []
     db.commit()
     db.refresh(episode)
@@ -3052,9 +3179,7 @@ async def generate_episode_character_profile(
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
-    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    _require_project_access(db, episode.project_id, current_user)
 
     name = (req.name or "").strip()
     if not name:
@@ -3178,9 +3303,7 @@ async def generate_episode_story_dna(
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
-    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    project = _require_project_access(db, episode.project_id, current_user)
 
     mode = (req.mode or "").strip().lower()
     if mode not in ("global", "episode"):
@@ -3280,9 +3403,7 @@ def save_episode_story_generator_input(
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
-    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    project = _require_project_access(db, episode.project_id, current_user)
 
     mode = (req.mode or "").strip().lower()
     if mode not in ("global", "episode"):
@@ -3323,9 +3444,7 @@ async def generate_episode_scenes_from_story(
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
-    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    project = _require_project_access(db, episode.project_id, current_user)
 
     prompt_dir = os.path.join(str(settings.BASE_DIR), "app", "core", "prompts")
     prompt_path = os.path.join(prompt_dir, "script_generator_scenes.txt")
@@ -3468,13 +3587,14 @@ async def generate_project_episode_scripts_from_global_framework(
     }
     logger.info(f"[generate_episode_scripts] START {json.dumps(call_meta, ensure_ascii=False)}")
 
-    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        logger.warning(f"[generate_episode_scripts] project not found. project_id={project_id} user_id={current_user.id}")
+    try:
+        project = _require_project_access(db, project_id, current_user)
+    except HTTPException as e:
+        logger.warning(f"[generate_episode_scripts] project access denied. project_id={project_id} user_id={current_user.id} detail={e.detail}")
         logger.info(
-            f"[generate_episode_scripts] RESPONSE success=False status_code=404 project_id={project_id} detail=Project not found"
+            f"[generate_episode_scripts] RESPONSE success=False status_code={e.status_code} project_id={project_id} detail={e.detail}"
         )
-        raise HTTPException(status_code=404, detail="Project not found")
+        raise
 
     try:
         log_action(
@@ -3966,9 +4086,7 @@ def get_project_episode_scripts_generation_status(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    project = _require_project_access(db, project_id, current_user)
 
     gi = dict(project.global_info or {})
     status_payload = gi.get("episode_script_generation_status") if isinstance(gi, dict) else None
@@ -3995,9 +4113,7 @@ def delete_episode(
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
     
-    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    _require_project_access(db, episode.project_id, current_user, owner_only=True)
     
     db.delete(episode)
     db.commit()
@@ -4044,9 +4160,7 @@ def read_scenes(
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
         
-    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    _require_project_access(db, episode.project_id, current_user)
         
     query = db.query(Scene).filter(Scene.episode_id == episode_id)
     if scene_code:
@@ -4077,9 +4191,7 @@ def create_scene(
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
         
-    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    _require_project_access(db, episode.project_id, current_user)
 
     db_scene = Scene(
         episode_id=episode_id,
@@ -4110,9 +4222,7 @@ def update_scene(
         
     # Ownership
     episode = db.query(Episode).filter(Episode.id == db_scene.episode_id).first()
-    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
-    if not project:
-         raise HTTPException(status_code=403, detail="Not authorized")
+    _require_project_access(db, episode.project_id, current_user)
 
     update_data = scene_in.model_dump(exclude_unset=True)
     for field, value in update_data.items():
@@ -4138,9 +4248,7 @@ def delete_scene(
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
 
-    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    _require_project_access(db, episode.project_id, current_user, owner_only=True)
 
     db.delete(db_scene)
     db.commit()
@@ -4163,6 +4271,25 @@ class ShotCreate(BaseModel):
     keyframes: Optional[str] = None
     
     # Optional legacy/AI fields
+    image_url: Optional[str] = None
+    video_url: Optional[str] = None
+    prompt: Optional[str] = None
+    technical_notes: Optional[str] = None
+
+
+class ShotUpdate(BaseModel):
+    shot_id: Optional[str] = None
+    shot_name: Optional[str] = None
+    start_frame: Optional[str] = None
+    end_frame: Optional[str] = None
+    video_content: Optional[str] = None
+    duration: Optional[str] = None
+    associated_entities: Optional[str] = None
+    scene_code: Optional[str] = None
+    project_id: Optional[int] = None
+    episode_id: Optional[int] = None
+    shot_logic_cn: Optional[str] = None
+    keyframes: Optional[str] = None
     image_url: Optional[str] = None
     video_url: Optional[str] = None
     prompt: Optional[str] = None
@@ -4208,9 +4335,7 @@ def read_episode_shots(
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
         
-    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
-    if not project:
-         raise HTTPException(status_code=403, detail="Not authorized")
+    project = _require_project_access(db, episode.project_id, current_user)
 
     query = db.query(Shot).filter(
         Shot.project_id == project.id,
@@ -4535,9 +4660,7 @@ def ai_prompt_preview(
         raise HTTPException(status_code=404, detail="Scene not found")
         
     episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
-    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    project = _require_project_access(db, episode.project_id, current_user)
         
     system, user = _build_shot_prompts(db, scene, project)
     return {"system_prompt": system, "user_prompt": user}
@@ -4573,13 +4696,14 @@ async def ai_generate_shots(
             )
             raise HTTPException(status_code=404, detail="Episode not found")
 
-        project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
-        if not project:
+        try:
+            project = _require_project_access(db, episode.project_id, current_user)
+        except HTTPException:
             logger.warning(
                 f"[ai_generate_shots] unauthorized_or_project_not_found "
                 f"scene_id={scene_id} episode_id={episode.id} project_id={episode.project_id} user_id={current_user.id}"
             )
-            raise HTTPException(status_code=403, detail="Not authorized")
+            raise
 
         logger.info(
             f"[ai_generate_shots] context scene_id={scene_id} episode_id={episode.id} project_id={project.id}"
@@ -4811,9 +4935,7 @@ def get_scene_latest_ai_result(
         raise HTTPException(status_code=404, detail="Scene not found")
         
     episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
-    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
-    if not project:
-         raise HTTPException(status_code=403, detail="Not authorized")
+    _require_project_access(db, episode.project_id, current_user)
          
     raw_value = scene.ai_shots_result
     if not raw_value:
@@ -4876,9 +4998,7 @@ def update_scene_latest_ai_result(
         raise HTTPException(status_code=404, detail="Scene not found")
         
     episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
-    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
-    if not project:
-         raise HTTPException(status_code=403, detail="Not authorized")
+    _require_project_access(db, episode.project_id, current_user)
     
     # Scheme A: Save draft by converting edited content back to Markdown and overwriting ai_shots_result.
     headers = [
@@ -4938,9 +5058,7 @@ def apply_scene_ai_result(
         raise HTTPException(status_code=404, detail="Scene not found")
         
     episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
-    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
-    if not project:
-         raise HTTPException(status_code=403, detail="Not authorized")
+    project = _require_project_access(db, episode.project_id, current_user)
          
     shots_data = []
     
@@ -5069,9 +5187,7 @@ def read_shots(
         
     # Check Project ownership via Episode
     episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
-    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    project = _require_project_access(db, episode.project_id, current_user)
         
     # Optimized: Return shots strictly by Scene ID (Physical Association)
     # Removing logical 'scene_code' sync as requested.
@@ -5104,10 +5220,11 @@ def create_shot(
         logger.error(f"[create_shot] Scene {scene_id} refers to non-existent episode {scene.episode_id}")
         raise HTTPException(status_code=404, detail="Parent Episode not found")
 
-    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
-    if not project:
+    try:
+        project = _require_project_access(db, episode.project_id, current_user)
+    except HTTPException:
          logger.error(f"[create_shot] User {current_user.id} not authorized for Project {episode.project_id}")
-         raise HTTPException(status_code=403, detail="Not authorized")
+         raise
          
     try:
         db_shot = Shot(
@@ -5150,7 +5267,7 @@ def create_shot(
 @router.put("/shots/{shot_id}", response_model=ShotOut)
 def update_shot(
     shot_id: int,
-    shot_in: ShotCreate,
+    shot_in: ShotUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -5160,9 +5277,7 @@ def update_shot(
         
     scene = db.query(Scene).filter(Scene.id == db_shot.scene_id).first()
     episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
-    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    _require_project_access(db, episode.project_id, current_user)
         
     for key, value in shot_in.dict(exclude_unset=True).items():
         setattr(db_shot, key, value)
@@ -5183,9 +5298,7 @@ def delete_shot(
          
     scene = db.query(Scene).filter(Scene.id == db_shot.scene_id).first()
     episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
-    project = db.query(Project).filter(Project.id == episode.project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    _require_project_access(db, episode.project_id, current_user, owner_only=True)
         
     db.delete(db_shot)
     db.commit()
@@ -5253,9 +5366,7 @@ def read_entities(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    _require_project_access(db, project_id, current_user)
     
     query = db.query(Entity).filter(Entity.project_id == project_id)
     if type:
@@ -5269,9 +5380,7 @@ def create_entity(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    _require_project_access(db, project_id, current_user)
         
     # Check if entity with same name exists in project
     existing_entity = db.query(Entity).filter(
@@ -5353,9 +5462,7 @@ def update_entity(
         raise HTTPException(status_code=404, detail="Entity not found")
     
     # Verify ownership via project
-    project = db.query(Project).filter(Project.id == entity.project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    project = _require_project_access(db, entity.project_id, current_user)
 
     update_data = entity_in.dict(exclude_unset=True)
     
@@ -5421,9 +5528,7 @@ async def generate_sora_character(
     if not entity:
         raise HTTPException(status_code=404, detail="Entity not found")
     
-    project = db.query(Project).filter(Project.id == entity.project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    _require_project_access(db, entity.project_id, current_user)
 
     logger.info(f"[sora_char] Generating for entity {entity.name}. MainImg: {req.main_image_url}")
 
@@ -5607,9 +5712,7 @@ def delete_entity(
     if not entity:
         raise HTTPException(status_code=404, detail="Entity not found")
         
-    project = db.query(Project).filter(Project.id == entity.project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    _require_project_access(db, entity.project_id, current_user, owner_only=True)
         
     db.delete(entity)
     db.commit()
@@ -5621,9 +5724,7 @@ def delete_project_entities(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    _require_project_access(db, project_id, current_user, owner_only=True)
         
     db.query(Entity).filter(Entity.project_id == project_id).delete()
     db.commit()
@@ -5637,6 +5738,15 @@ class UserCreate(BaseModel):
     password: str
     full_name: Optional[str] = None
 
+
+class EmailVerificationSendRequest(BaseModel):
+    email: str
+
+
+class EmailVerificationConfirmRequest(BaseModel):
+    email: str
+    code: str
+
 class UserOut(BaseModel):
     id: int
     username: str
@@ -5644,6 +5754,8 @@ class UserOut(BaseModel):
     full_name: Optional[str]
     avatar_url: Optional[str] = None
     is_active: bool
+    account_status: int = 1
+    email_verified: bool = False
     is_superuser: bool
     is_authorized: bool
     is_system: bool
@@ -5652,9 +5764,52 @@ class UserOut(BaseModel):
     class Config:
         from_attributes = True
 
+
+def _is_valid_email_format(email: str) -> bool:
+    raw = (email or "").strip()
+    if not raw:
+        return False
+    return bool(re.match(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$", raw))
+
+
+def _generate_email_verification_code() -> str:
+    return f"{uuid.uuid4().int % 1000000:06d}"
+
+
+def send_email_verification_code(to_email: str, code: str) -> None:
+    smtp_host = str(settings.SMTP_HOST or "").strip()
+    smtp_user = str(settings.SMTP_USERNAME or "").strip()
+    smtp_pass = str(settings.SMTP_PASSWORD or "").strip()
+    from_email = str(settings.SMTP_FROM_EMAIL or smtp_user or "").strip()
+
+    if not smtp_host or not from_email:
+        logger.warning("SMTP not configured. Skip sending verification email to %s. code=%s", to_email, code)
+        return
+
+    message = EmailMessage()
+    message["Subject"] = "AI Story Email Verification Code"
+    message["From"] = from_email
+    message["To"] = to_email
+    message.set_content(
+        "Your AI Story verification code is:\n\n"
+        f"{code}\n\n"
+        "This code expires in 10 minutes."
+    )
+
+    with smtplib.SMTP(smtp_host, settings.SMTP_PORT, timeout=20) as server:
+        if settings.SMTP_USE_TLS:
+            server.starttls()
+        if smtp_user and smtp_pass:
+            server.login(smtp_user, smtp_pass)
+        server.send_message(message)
+
 @router.post("/users/", response_model=UserOut)
 def create_user(user: UserCreate, db: Session = Depends(get_db)):
-    db_user_email = db.query(User).filter(User.email == user.email).first()
+    normalized_email = (user.email or "").strip().lower()
+    if not _is_valid_email_format(normalized_email):
+        raise HTTPException(status_code=400, detail="Invalid email format")
+
+    db_user_email = db.query(User).filter(User.email == normalized_email).first()
     if db_user_email:
         raise HTTPException(status_code=400, detail="Email already registered")
     
@@ -5663,18 +5818,95 @@ def create_user(user: UserCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Username already registered")
 
     hashed_password = get_password_hash(user.password)
+    verify_code = _generate_email_verification_code()
+    expire_at = (datetime.utcnow() + timedelta(minutes=10)).isoformat()
     db_user = User(
-        email=user.email, 
+        email=normalized_email,
         username=user.username,
         full_name=user.full_name,
-        hashed_password=hashed_password
+        hashed_password=hashed_password,
+        is_active=False,
+        account_status=-1,
+        email_verified=False,
+        email_verification_code=verify_code,
+        email_verification_expires_at=expire_at,
     )
     db.add(db_user)
     db.flush()
     _seed_default_system_settings_for_user(db, db_user.id)
     db.commit()
     db.refresh(db_user)
+    try:
+        send_email_verification_code(normalized_email, verify_code)
+    except Exception as e:
+        logger.error("Failed to send verification email to %s: %s", normalized_email, e)
     return db_user
+
+
+@router.post("/users/verification/send")
+@limiter.limit(settings.RATE_LIMIT_RESET)
+def send_user_verification_code(
+    request: Request,
+    payload: EmailVerificationSendRequest,
+    db: Session = Depends(get_db),
+):
+    email = (payload.email or "").strip().lower()
+    if not _is_valid_email_format(email):
+        raise HTTPException(status_code=400, detail="Invalid email format")
+
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    code = _generate_email_verification_code()
+    user.email_verification_code = code
+    user.email_verification_expires_at = (datetime.utcnow() + timedelta(minutes=10)).isoformat()
+    db.commit()
+    try:
+        send_email_verification_code(email, code)
+    except Exception as e:
+        logger.error("Failed to send verification email to %s: %s", email, e)
+        raise HTTPException(status_code=500, detail="Failed to send verification code")
+    return {"status": "ok", "message": "Verification code sent"}
+
+
+@router.post("/users/verification/confirm", response_model=UserOut)
+@limiter.limit(settings.RATE_LIMIT_RESET)
+def confirm_user_verification_code(
+    request: Request,
+    payload: EmailVerificationConfirmRequest,
+    db: Session = Depends(get_db),
+):
+    email = (payload.email or "").strip().lower()
+    code = (payload.code or "").strip()
+    if not email or not code:
+        raise HTTPException(status_code=400, detail="Email and code are required")
+
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if user.email_verified and user.account_status == 1:
+        return user
+
+    if not user.email_verification_code or user.email_verification_code != code:
+        raise HTTPException(status_code=400, detail="Invalid verification code")
+
+    try:
+        expire_at = datetime.fromisoformat(str(user.email_verification_expires_at or ""))
+    except Exception:
+        expire_at = None
+    if not expire_at or datetime.utcnow() > expire_at:
+        raise HTTPException(status_code=400, detail="Verification code expired")
+
+    user.email_verified = True
+    user.account_status = 1
+    user.is_active = True
+    user.email_verification_code = None
+    user.email_verification_expires_at = None
+    db.commit()
+    db.refresh(user)
+    return user
 
 # --- Login ---
 
@@ -5758,11 +5990,12 @@ def send_password_reset_email(to_email: str, reset_link: str) -> None:
         server.send_message(message)
 
 def authenticate_user(db: Session, username: str, password: str):
+    username = str(username or "").strip()
     # Try by username
     user = db.query(User).filter(User.username == username).first()
     if not user:
         # Try by email
-        user = db.query(User).filter(User.email == username).first()
+        user = db.query(User).filter(User.email == str(username or "").strip().lower()).first()
     
     if not user:
         return None
@@ -5771,7 +6004,8 @@ def authenticate_user(db: Session, username: str, password: str):
     return user
 
 @router.post("/login/access-token", response_model=Token)
-def login_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+@limiter.limit(settings.RATE_LIMIT_LOGIN)
+def login_access_token(request: Request, form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     """
     OAuth2 compatible token login, get an access token for future requests.
     Requires 'username' and 'password' as form fields.
@@ -5779,6 +6013,14 @@ def login_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Ses
     user = authenticate_user(db, form_data.username, form_data.password)
     if not user:
         raise HTTPException(status_code=400, detail="Incorrect email or password")
+    if (
+        user.account_status == -1
+        and (not bool(user.is_active))
+        and (not bool(getattr(user, "is_superuser", False)))
+    ):
+        raise HTTPException(status_code=403, detail="Email verification required. Please verify your email code before login")
+    if not bool(user.is_active):
+        raise HTTPException(status_code=403, detail="User is disabled")
 
     try:
         _seed_default_system_settings_for_user(db, user.id)
@@ -5797,7 +6039,8 @@ def login_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Ses
     return {"access_token": access_token, "token_type": "bearer"}
 
 @router.post("/login", response_model=Token)
-def login_json(login_data: LoginRequest, db: Session = Depends(get_db)):
+@limiter.limit(settings.RATE_LIMIT_LOGIN)
+def login_json(request: Request, login_data: LoginRequest, db: Session = Depends(get_db)):
     """
     JSON compatible login endpoint. 
     Accepts {"username": "...", "password": "..."} in body.
@@ -5807,6 +6050,14 @@ def login_json(login_data: LoginRequest, db: Session = Depends(get_db)):
         # Optional: Log failed login attempts?
         # log_action(db, user_id=None, user_name=login_data.username, action="LOGIN_FAILED", details="Incorrect password")
         raise HTTPException(status_code=400, detail="Incorrect email or password")
+    if (
+        user.account_status == -1
+        and (not bool(user.is_active))
+        and (not bool(getattr(user, "is_superuser", False)))
+    ):
+        raise HTTPException(status_code=403, detail="Email verification required. Please verify your email code before login")
+    if not bool(user.is_active):
+        raise HTTPException(status_code=403, detail="User is disabled")
 
     try:
         _seed_default_system_settings_for_user(db, user.id)
@@ -5826,7 +6077,8 @@ def login_json(login_data: LoginRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/password/forgot")
-def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)):
+@limiter.limit(settings.RATE_LIMIT_RESET)
+def forgot_password(request: Request, payload: ForgotPasswordRequest, db: Session = Depends(get_db)):
     email = (payload.email or "").strip().lower()
     if not email:
         raise HTTPException(status_code=400, detail="Email is required")
@@ -5861,7 +6113,8 @@ def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db
 
 
 @router.post("/password/reset")
-def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db)):
+@limiter.limit(settings.RATE_LIMIT_RESET)
+def reset_password(request: Request, payload: ResetPasswordRequest, db: Session = Depends(get_db)):
     token = (payload.token or "").strip()
     new_password = (payload.new_password or "").strip()
 
@@ -6052,6 +6305,14 @@ class AssetCreate(BaseModel):
 class AssetUpdate(BaseModel):
     remark: Optional[str] = None
     meta_info: Optional[dict] = None
+
+class AssetRebindShotMediaRequest(BaseModel):
+    project_id: Optional[int] = None
+    episode_id: Optional[int] = None
+    scene_id: Optional[int] = None
+    shot_id: Optional[int] = None
+    limit: int = 2000
+    dry_run: bool = False
 
 @router.get("/assets/", response_model=List[dict])
 def get_assets(
@@ -6458,6 +6719,189 @@ def update_asset(
         "meta_info": asset.meta_info,
         "remark": asset.remark,
         "created_at": asset.created_at
+    }
+
+
+@router.post("/assets/rebind-shot-media", response_model=dict)
+def rebind_shot_media_from_assets(
+    payload: AssetRebindShotMediaRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if payload.project_id:
+        _require_project_access(db, int(payload.project_id), current_user)
+
+    safe_limit = max(1, min(int(payload.limit or 2000), 10000))
+
+    query = db.query(Asset).filter(Asset.user_id == current_user.id).order_by(Asset.id.asc())
+    assets = query.limit(safe_limit).all()
+
+    shot_cache: Dict[int, Optional[Shot]] = {}
+    scene_cache: Dict[int, Optional[Scene]] = {}
+    episode_cache: Dict[int, Optional[Episode]] = {}
+
+    touched_shots: Dict[int, Shot] = {}
+    stats = {
+        "scanned": 0,
+        "eligible": 0,
+        "bound": 0,
+        "skipped_existing": 0,
+        "skipped_no_shot": 0,
+        "skipped_filter": 0,
+        "skipped_unknown_type": 0,
+    }
+
+    def _meta_dict(raw_meta: Any) -> Dict[str, Any]:
+        if isinstance(raw_meta, dict):
+            return raw_meta
+        if isinstance(raw_meta, str):
+            try:
+                parsed = json.loads(raw_meta)
+                return parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                return {}
+        return {}
+
+    def _to_int(value: Any) -> Optional[int]:
+        try:
+            if value is None or value == "":
+                return None
+            return int(value)
+        except Exception:
+            return None
+
+    for asset in assets:
+        stats["scanned"] += 1
+        meta = _meta_dict(asset.meta_info)
+
+        sid = _to_int(meta.get("shot_id"))
+        if not sid:
+            stats["skipped_no_shot"] += 1
+            continue
+
+        if payload.shot_id and int(payload.shot_id) != sid:
+            stats["skipped_filter"] += 1
+            continue
+
+        if payload.project_id:
+            meta_project_id = _to_int(meta.get("project_id"))
+            if meta_project_id and meta_project_id != int(payload.project_id):
+                stats["skipped_filter"] += 1
+                continue
+
+        shot = shot_cache.get(sid)
+        if sid not in shot_cache:
+            shot = db.query(Shot).filter(Shot.id == sid).first()
+            shot_cache[sid] = shot
+
+        if not shot:
+            stats["skipped_no_shot"] += 1
+            continue
+
+        if payload.scene_id and int(payload.scene_id) != int(shot.scene_id or 0):
+            stats["skipped_filter"] += 1
+            continue
+
+        current_scene = None
+        current_episode = None
+
+        if payload.episode_id or payload.project_id:
+            scene_id_int = int(shot.scene_id or 0)
+            if not scene_id_int:
+                stats["skipped_filter"] += 1
+                continue
+
+            if scene_id_int not in scene_cache:
+                scene_cache[scene_id_int] = db.query(Scene).filter(Scene.id == scene_id_int).first()
+            current_scene = scene_cache.get(scene_id_int)
+            if not current_scene:
+                stats["skipped_filter"] += 1
+                continue
+
+            episode_id_int = int(current_scene.episode_id or 0)
+            if not episode_id_int:
+                stats["skipped_filter"] += 1
+                continue
+
+            if episode_id_int not in episode_cache:
+                episode_cache[episode_id_int] = db.query(Episode).filter(Episode.id == episode_id_int).first()
+            current_episode = episode_cache.get(episode_id_int)
+            if not current_episode:
+                stats["skipped_filter"] += 1
+                continue
+
+        if payload.episode_id and current_episode and int(payload.episode_id) != int(current_episode.id):
+            stats["skipped_filter"] += 1
+            continue
+
+        if payload.project_id and current_episode and int(payload.project_id) != int(current_episode.project_id or 0):
+            stats["skipped_filter"] += 1
+            continue
+
+        asset_type = str(meta.get("asset_type") or meta.get("frame_type") or "").strip().lower()
+        slot = None
+        if asset_type in {"start_frame", "start"}:
+            slot = "start"
+        elif asset_type in {"end_frame", "end"}:
+            slot = "end"
+        elif asset_type == "video" or str(asset.type or "").lower() == "video":
+            slot = "video"
+        elif str(asset.type or "").lower() == "image":
+            slot = "start"
+
+        if not slot:
+            stats["skipped_unknown_type"] += 1
+            continue
+
+        stats["eligible"] += 1
+        changed = False
+
+        if slot == "start":
+            if str(shot.image_url or "").strip():
+                stats["skipped_existing"] += 1
+                continue
+            if not payload.dry_run:
+                shot.image_url = asset.url
+                changed = True
+
+        elif slot == "video":
+            if str(shot.video_url or "").strip():
+                stats["skipped_existing"] += 1
+                continue
+            if not payload.dry_run:
+                shot.video_url = asset.url
+                changed = True
+
+        elif slot == "end":
+            tech = {}
+            try:
+                tech = json.loads(shot.technical_notes or "{}")
+                if not isinstance(tech, dict):
+                    tech = {}
+            except Exception:
+                tech = {}
+
+            if str(tech.get("end_frame_url") or "").strip():
+                stats["skipped_existing"] += 1
+                continue
+
+            if not payload.dry_run:
+                tech["end_frame_url"] = asset.url
+                shot.technical_notes = json.dumps(tech, ensure_ascii=False)
+                changed = True
+
+        if changed:
+            touched_shots[shot.id] = shot
+        stats["bound"] += 1
+
+    if not payload.dry_run and touched_shots:
+        db.commit()
+
+    return {
+        **stats,
+        "dry_run": bool(payload.dry_run),
+        "updated_shots": len(touched_shots),
+        "limit": safe_limit,
     }
 
 
@@ -7257,6 +7701,85 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
     except Exception as e:
         print(f"Asset reg failed: {e}")
 
+
+def _bind_generated_media_to_shot(db: Session, current_user: User, req: Any, media_url: Optional[str]) -> None:
+    if not media_url:
+        return
+
+    def get_attr(obj, key):
+        if isinstance(obj, dict):
+            return obj.get(key)
+        return getattr(obj, key, None)
+
+    shot_id = get_attr(req, "shot_id")
+    if not shot_id:
+        return
+
+    try:
+        shot_id_int = int(shot_id)
+    except Exception:
+        return
+
+    shot = db.query(Shot).filter(Shot.id == shot_id_int).first()
+    if not shot:
+        return
+
+    try:
+        project_id = shot.project_id
+        if not project_id and shot.scene_id:
+            scene = db.query(Scene).filter(Scene.id == shot.scene_id).first()
+            if scene and scene.episode_id:
+                episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
+                if episode:
+                    project_id = episode.project_id
+        if project_id:
+            _require_project_access(db, int(project_id), current_user)
+    except Exception:
+        return
+
+    asset_type = str(get_attr(req, "asset_type") or "").strip().lower()
+    req_prompt = str(get_attr(req, "prompt") or "").strip()
+    changed = False
+
+    if asset_type in {"start_frame", "start"}:
+        if shot.image_url != media_url:
+            shot.image_url = media_url
+            changed = True
+        if req_prompt and not str(shot.start_frame or "").strip():
+            shot.start_frame = req_prompt
+            changed = True
+
+    elif asset_type in {"end_frame", "end"}:
+        tech = {}
+        try:
+            tech = json.loads(shot.technical_notes or "{}")
+            if not isinstance(tech, dict):
+                tech = {}
+        except Exception:
+            tech = {}
+
+        if tech.get("end_frame_url") != media_url:
+            tech["end_frame_url"] = media_url
+            shot.technical_notes = json.dumps(tech, ensure_ascii=False)
+            changed = True
+        if req_prompt and not str(shot.end_frame or "").strip():
+            shot.end_frame = req_prompt
+            changed = True
+
+    elif asset_type == "video":
+        if shot.video_url != media_url:
+            shot.video_url = media_url
+            changed = True
+        if req_prompt and not str(shot.prompt or "").strip():
+            shot.prompt = req_prompt
+            changed = True
+
+    if not changed:
+        return
+
+    db.add(shot)
+    db.commit()
+
 @router.post("/generate/image")
 async def generate_image_endpoint(
     req: GenerationRequest,
@@ -7346,6 +7869,7 @@ async def generate_image_endpoint(
         if result.get("url"):
             # Only register if not error? result.get("url") check handles it.
             _register_asset_helper(db, current_user.id, result["url"], req, result.get("metadata"))
+            _bind_generated_media_to_shot(db, current_user, req, result.get("url"))
 
         return result
     except HTTPException:
@@ -7359,7 +7883,12 @@ async def generate_image_endpoint(
 
 # --- User Management ---
 class UserUpdate(BaseModel):
+    username: Optional[str] = None
+    email: Optional[str] = None
+    full_name: Optional[str] = None
     is_active: Optional[bool] = None
+    account_status: Optional[int] = None
+    email_verified: Optional[bool] = None
     is_authorized: Optional[bool] = None
     is_superuser: Optional[bool] = None
     is_system: Optional[bool] = None
@@ -7486,9 +8015,39 @@ def update_user(
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+
+    if user_in.username is not None:
+        next_username = (user_in.username or "").strip()
+        if not next_username:
+            raise HTTPException(status_code=400, detail="Username cannot be empty")
+        dup = db.query(User).filter(User.username == next_username, User.id != user_id).first()
+        if dup:
+            raise HTTPException(status_code=400, detail="Username already registered")
+        user.username = next_username
+
+    if user_in.email is not None:
+        next_email = (user_in.email or "").strip().lower()
+        if not _is_valid_email_format(next_email):
+            raise HTTPException(status_code=400, detail="Invalid email format")
+        dup = db.query(User).filter(User.email == next_email, User.id != user_id).first()
+        if dup:
+            raise HTTPException(status_code=400, detail="Email already registered")
+        user.email = next_email
+
+    if user_in.full_name is not None:
+        user.full_name = (user_in.full_name or "").strip() or None
         
     if user_in.is_active is not None:
         user.is_active = user_in.is_active
+    if user_in.account_status is not None:
+        user.account_status = int(user_in.account_status)
+        if user.account_status == -1:
+            user.is_active = False
+            user.email_verified = False
+    if user_in.email_verified is not None:
+        user.email_verified = bool(user_in.email_verified)
+        if user.email_verified and user.account_status == -1:
+            user.account_status = 1
     if user_in.is_authorized is not None:
         user.is_authorized = user_in.is_authorized
     if user_in.is_superuser is not None:
@@ -7586,6 +8145,7 @@ async def generate_video_endpoint(
         # Register Asset
         if result.get("url"):
             _register_asset_helper(db, current_user.id, result["url"], req, result.get("metadata"))
+            _bind_generated_media_to_shot(db, current_user, req, result.get("url"))
             
         # Billing Deduct
         billing_service.deduct_credits(db, current_user.id, "video_gen", req.provider, req.model, {"duration": req.duration})
@@ -7867,12 +8427,7 @@ async def analyze_entity_image(
     if not entity:
         raise HTTPException(status_code=404, detail="Entity not found")
         
-    project = db.query(Project).filter(Project.id == entity.project_id).first()
-    if not project:
-        logger.warning(f"Project not found for entity {entity.id} (project_id={entity.project_id})")
-        raise HTTPException(status_code=404, detail="Project not found for this entity")
-    if project.owner_id != current_user.id:
-         raise HTTPException(status_code=403, detail="Not authorized")
+    project = _require_project_access(db, entity.project_id, current_user)
 
     if not entity.image_url:
         raise HTTPException(status_code=400, detail="Entity has no image to analyze.")
@@ -8258,11 +8813,7 @@ def get_entity_latest_analysis(
     if not entity:
         raise HTTPException(status_code=404, detail="Entity not found")
         
-    project = db.query(Project).filter(Project.id == entity.project_id).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found for this entity")
-    if project.owner_id != current_user.id:
-         raise HTTPException(status_code=403, detail="Not authorized")
+    _require_project_access(db, entity.project_id, current_user)
          
     custom_attrs = entity.custom_attributes or {}
     # Handle DB Storage format (Text vs JSON)
@@ -8287,11 +8838,7 @@ def update_entity_latest_analysis(
     if not entity:
         raise HTTPException(status_code=404, detail="Entity not found")
         
-    project = db.query(Project).filter(Project.id == entity.project_id).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found for this entity")
-    if project.owner_id != current_user.id:
-         raise HTTPException(status_code=403, detail="Not authorized")
+    _require_project_access(db, entity.project_id, current_user)
          
     custom_attrs = entity.custom_attributes or {}
     if isinstance(custom_attrs, str):
@@ -8325,11 +8872,7 @@ def apply_entity_analysis(
     if not entity:
         raise HTTPException(status_code=404, detail="Entity not found")
     
-    project = db.query(Project).filter(Project.id == entity.project_id).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found for this entity")
-    if project.owner_id != current_user.id:
-         raise HTTPException(status_code=403, detail="Not authorized")
+    _require_project_access(db, entity.project_id, current_user)
     
     updated_info = {}
     

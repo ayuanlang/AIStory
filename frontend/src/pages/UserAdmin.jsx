@@ -758,8 +758,11 @@ const UserAdmin = () => {
                                 <thead>
                                     <tr className="border-b border-gray-800 text-gray-400 text-sm">
                                         <th className="p-3">{t('用户', 'User')}</th>
+                                        <th className="p-3">{t('姓名', 'Full Name')}</th>
                                         <th className="p-3">{t('积分', 'Credits')}</th>
                                         <th className="p-3 text-center">{t('启用', 'Active')}</th>
+                                        <th className="p-3 text-center">{t('状态', 'Status')}</th>
+                                        <th className="p-3 text-center">{t('邮箱已验证', 'Email Verified')}</th>
                                         <th className="p-3 text-center">{t('授权', 'Authorized')}</th>
                                         <th className="p-3 text-center">{t('系统密钥提供方', 'System Key Provider')}</th>
                                         <th className="p-3 text-center">{t('超级管理员', 'Superuser')}</th>
@@ -770,8 +773,26 @@ const UserAdmin = () => {
                                     {users.map(user => (
                                         <tr key={user.id} className="border-b border-gray-800/50 hover:bg-gray-800/50">
                                             <td className="p-3">
-                                                <div className="font-medium">{user.username}</div>
-                                                <div className="text-xs text-gray-500">{user.email}</div>
+                                                <input
+                                                    className="w-full bg-black/30 border border-gray-700 rounded px-2 py-1 text-sm"
+                                                    value={user.username || ''}
+                                                    onChange={(e) => setUsers(users.map(u => u.id === user.id ? { ...u, username: e.target.value } : u))}
+                                                    onBlur={() => updateUser(user.id, { username: user.username })}
+                                                />
+                                                <input
+                                                    className="w-full mt-1 bg-black/30 border border-gray-700 rounded px-2 py-1 text-xs text-gray-300"
+                                                    value={user.email || ''}
+                                                    onChange={(e) => setUsers(users.map(u => u.id === user.id ? { ...u, email: e.target.value } : u))}
+                                                    onBlur={() => updateUser(user.id, { email: user.email })}
+                                                />
+                                            </td>
+                                            <td className="p-3">
+                                                <input
+                                                    className="w-full bg-black/30 border border-gray-700 rounded px-2 py-1 text-sm"
+                                                    value={user.full_name || ''}
+                                                    onChange={(e) => setUsers(users.map(u => u.id === user.id ? { ...u, full_name: e.target.value } : u))}
+                                                    onBlur={() => updateUser(user.id, { full_name: user.full_name })}
+                                                />
                                             </td>
                                             <td className="p-3 font-mono text-green-400">
                                                 {user.credits}
@@ -786,6 +807,24 @@ const UserAdmin = () => {
                                                 <Toggle 
                                                     active={user.is_active} 
                                                     onClick={() => updateUser(user.id, { is_active: !user.is_active })}
+                                                />
+                                            </td>
+                                            <td className="p-3 text-center">
+                                                <select
+                                                    className="bg-black/30 border border-gray-700 rounded px-2 py-1 text-xs"
+                                                    value={user.account_status ?? 1}
+                                                    onChange={(e) => updateUser(user.id, { account_status: Number(e.target.value) })}
+                                                >
+                                                    <option value={1}>{t('正常', 'Active')}</option>
+                                                    <option value={0}>{t('禁用', 'Disabled')}</option>
+                                                    <option value={-1}>{t('待邮箱校验', 'Pending Verify')}</option>
+                                                </select>
+                                            </td>
+                                            <td className="p-3 text-center">
+                                                <Toggle
+                                                    active={!!user.email_verified}
+                                                    color="bg-amber-500"
+                                                    onClick={() => updateUser(user.id, { email_verified: !user.email_verified })}
                                                 />
                                             </td>
                                             <td className="p-3 text-center">
@@ -810,7 +849,16 @@ const UserAdmin = () => {
                                                 />
                                             </td>
                                             <td className="p-3">
-                                                {/* Details or Delete button could go here */}
+                                                <button
+                                                    className="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20"
+                                                    onClick={async () => {
+                                                        const pwd = window.prompt(t('请输入新密码（至少 6 位）', 'Enter new password (min 6 chars)'));
+                                                        if (!pwd) return;
+                                                        await updateUser(user.id, { password: pwd });
+                                                    }}
+                                                >
+                                                    {t('重置密码', 'Reset Password')}
+                                                </button>
                                             </td>
                                         </tr>
                                     ))}

@@ -116,6 +116,21 @@ export const createProject = async (data) => {
     return response.data;
 }
 
+export const fetchProjectShares = async (projectId) => {
+    const response = await api.get(`/projects/${projectId}/shares`);
+    return response.data;
+}
+
+export const createProjectShare = async (projectId, target_user) => {
+    const response = await api.post(`/projects/${projectId}/shares`, { target_user });
+    return response.data;
+}
+
+export const deleteProjectShare = async (projectId, sharedUserId) => {
+    const response = await api.delete(`/projects/${projectId}/shares/${sharedUserId}`);
+    return response.data;
+}
+
 
 export const fetchSystemLogs = async (skip = 0, limit = 100) => {
     const response = await api.get(`/system/logs?skip=${skip}&limit=${limit}`);
@@ -410,6 +425,16 @@ export const registerUser = async (data) => {
     return response.data;
 }
 
+export const sendEmailVerificationCode = async (email) => {
+    const response = await api.post('/users/verification/send', { email });
+    return response.data;
+}
+
+export const confirmEmailVerificationCode = async (email, code) => {
+    const response = await api.post('/users/verification/confirm', { email, code });
+    return response.data;
+}
+
 export const apiLogin = async (username, password) => {
     const response = await api.post('/login', {
         username,
@@ -570,6 +595,11 @@ export const updateAsset = async (id, data) => {
 
 export const analyzeAssetImage = async (asset_id) => {
     const response = await api.post('/assets/analyze', { asset_id });
+    return response.data;
+};
+
+export const rebindShotMediaAssets = async (payload = {}) => {
+    const response = await api.post('/assets/rebind-shot-media', payload);
     return response.data;
 };
 

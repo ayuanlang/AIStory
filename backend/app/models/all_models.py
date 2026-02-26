@@ -14,6 +14,10 @@ class User(Base):
     hashed_password = Column(String)
     
     is_active = Column(Boolean, default=True)
+    account_status = Column(Integer, default=1)  # 1=active, -1=pending email verification, 0=disabled
+    email_verified = Column(Boolean, default=False)
+    email_verification_code = Column(String, nullable=True)
+    email_verification_expires_at = Column(String, nullable=True)
     is_superuser = Column(Boolean, default=False)
     is_authorized = Column(Boolean, default=False) # Can reuse system keys
     is_system = Column(Boolean, default=False) # Provider of shared keys
@@ -21,6 +25,7 @@ class User(Base):
     credits = Column(Integer, default=0) # User points/credits
 
     projects = relationship("Project", back_populates="owner")
+    shared_projects = relationship("ProjectShare", back_populates="user", cascade="all, delete-orphan")
     api_settings = relationship("APISetting", back_populates="user")
     assets = relationship("Asset", back_populates="owner")
     system_logs = relationship("SystemLog", back_populates="user")
@@ -94,8 +99,21 @@ class Project(Base):
     updated_at = Column(String, default=datetime.datetime.utcnow().isoformat)
     
     owner = relationship("User", back_populates="projects")
+    shares = relationship("ProjectShare", back_populates="project", cascade="all, delete-orphan")
     episodes = relationship("Episode", back_populates="project", cascade="all, delete-orphan")
     entities = relationship("Entity", back_populates="project", cascade="all, delete-orphan")
+
+
+class ProjectShare(Base):
+    __tablename__ = "project_shares"
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), index=True, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    created_at = Column(String, default=datetime.datetime.utcnow().isoformat)
+
+    project = relationship("Project", back_populates="shares")
+    user = relationship("User", back_populates="shared_projects")
 
 class Episode(Base):
     __tablename__ = "episodes"

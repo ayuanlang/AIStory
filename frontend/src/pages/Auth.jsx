@@ -1,7 +1,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { apiLogin, forgotPassword, registerUser, resetPassword } from '../services/api';
+import { apiLogin, forgotPassword, registerUser, resetPassword, sendEmailVerificationCode, confirmEmailVerificationCode } from '../services/api';
 import { useStore } from '../lib/store';
 import { Lock, Mail, User, AlertCircle, Sparkles, ArrowRight } from 'lucide-react';
 import { getUiLang, tUI } from '../lib/uiLang';
@@ -15,7 +15,8 @@ const Auth = () => {
         password: '',
         email: '',
         full_name: '',
-        reset_token: ''
+        reset_token: '',
+        verify_code: '',
     });
     const [error, setError] = useState('');
     const [notice, setNotice] = useState('');
@@ -59,8 +60,12 @@ const Auth = () => {
                 navigate('/projects', { replace: true });
             } else if (mode === 'register') {
                 await registerUser(formData);
+                setMode('verify');
+                setNotice(t('注册成功，请输入邮箱验证码完成校验。', 'Registration successful. Please enter the email verification code.'));
+            } else if (mode === 'verify') {
+                await confirmEmailVerificationCode(formData.email, formData.verify_code);
                 setMode('login');
-                setNotice(t('注册成功，请登录。', 'Registration successful! Please login.'));
+                setNotice(t('邮箱校验通过，请登录。', 'Email verified successfully. Please sign in.'));
             } else if (mode === 'forgot') {
                 await forgotPassword(formData.email);
                 setNotice(t('如果邮箱存在，重置链接已发送。', 'If the email exists, a reset link has been sent.'));
@@ -139,12 +144,14 @@ const Auth = () => {
                                     <h1 className="text-2xl font-bold">
                         {mode === 'login' && t('欢迎回来', 'Welcome Back')}
                         {mode === 'register' && t('创建账号', 'Create Account')}
+                        {mode === 'verify' && t('邮箱校验', 'Email Verification')}
                         {mode === 'forgot' && t('找回密码', 'Forgot Password')}
                         {mode === 'reset' && t('重置密码', 'Reset Password')}
                                     </h1>
                                     <p className="mt-2 text-sm text-muted-foreground">
                         {mode === 'login' && t('输入账号信息以访问你的项目。', 'Enter your credentials to access your projects.')}
                         {mode === 'register' && t('开启你的 AI Story 创作之旅。', 'Start your journey with AI Story.')}
+                        {mode === 'verify' && t('输入邮箱收到的 6 位验证码。', 'Enter the 6-digit code sent to your email.')}
                         {mode === 'forgot' && t('输入注册邮箱，我们会发送重置链接。', 'Enter your email and we will send a reset link.')}
                         {mode === 'reset' && t('输入重置令牌与新密码。', 'Enter your reset token and new password.')}
                                     </p>
@@ -233,6 +240,52 @@ const Auth = () => {
                         </div>
                     )}
 
+                    {mode === 'verify' && (
+                        <>
+                        <div className="space-y-1">
+                            <label className="text-sm font-medium">{t('邮箱', 'Email')}</label>
+                            <div className="relative">
+                                <Mail className="w-4 h-4 absolute left-3 top-3 text-muted-foreground" />
+                                <input
+                                    name="email"
+                                    type="email"
+                                    className="w-full rounded-md border bg-background py-2 pl-10 pr-3 outline-none ring-offset-background transition placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                                    placeholder={t('name@example.com', 'john@example.com')}
+                                    value={formData.email}
+                                    onChange={handleChange}
+                                />
+                            </div>
+                        </div>
+                        <div className="space-y-1">
+                            <label className="text-sm font-medium">{t('验证码', 'Verification Code')}</label>
+                            <input
+                                name="verify_code"
+                                className="w-full rounded-md border bg-background px-3 py-2 outline-none ring-offset-background transition placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                                placeholder={t('6 位验证码', '6-digit code')}
+                                value={formData.verify_code}
+                                onChange={handleChange}
+                            />
+                        </div>
+                        <button
+                            type="button"
+                            onClick={async () => {
+                                try {
+                                    setError('');
+                                    setNotice('');
+                                    await sendEmailVerificationCode(formData.email);
+                                    setNotice(t('验证码已发送，请查收邮箱。', 'Verification code sent. Please check your email.'));
+                                } catch (err) {
+                                    const detail = err.response?.data?.detail;
+                                    setError(typeof detail === 'string' ? detail : t('发送验证码失败。', 'Failed to send verification code.'));
+                                }
+                            }}
+                            className="inline-flex w-full items-center justify-center gap-2 rounded-md border py-2 font-medium transition hover:bg-muted"
+                        >
+                            {t('重新发送验证码', 'Resend Verification Code')}
+                        </button>
+                        </>
+                    )}
+
                     {(mode === 'login' || mode === 'register') && (
                         <div className="space-y-1">
                             <label className="text-sm font-medium">{t('用户名', 'Username')}</label>
@@ -288,6 +341,7 @@ const Auth = () => {
                         {loading && t('处理中...', 'Processing...')}
                         {!loading && mode === 'login' && t('登录', 'Sign In')}
                         {!loading && mode === 'register' && t('注册', 'Sign Up')}
+                        {!loading && mode === 'verify' && t('验证邮箱', 'Verify Email')}
                         {!loading && mode === 'forgot' && t('发送重置链接', 'Send Reset Link')}
                         {!loading && mode === 'reset' && t('重置密码', 'Reset Password')}
                         {!loading && <ArrowRight className="h-4 w-4" />}
@@ -327,7 +381,7 @@ const Auth = () => {
                         </>
                     )}
 
-                    {(mode === 'forgot' || mode === 'reset') && (
+                    {(mode === 'forgot' || mode === 'reset' || mode === 'verify') && (
                         <button
                             onClick={() => { setMode('login'); setError(''); setNotice(''); }}
                             className="text-primary hover:underline font-medium"

@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from app.core.config import settings
 from app.api import endpoints, settings as settings_api
@@ -13,6 +14,9 @@ from app.db.init_db import check_and_migrate_tables, create_default_superuser, i
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 # Create DB tables
 Base.metadata.create_all(bind=engine)
@@ -21,6 +25,8 @@ check_and_migrate_tables()
 create_default_superuser()
 init_initial_data()
 
+limiter = Limiter(key_func=get_remote_address)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     configure_uvicorn_logging_noise_reduction()
@@ -28,8 +34,11 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(LoggingMiddleware)
+app.add_middleware(GZipMiddleware, minimum_size=settings.GZIP_MINIMUM_SIZE)
 
 # Ensure upload dir exists
 import os
@@ -80,12 +89,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    if settings.SECURITY_HEADERS_ENABLED:
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        if request.url.scheme == "https":
+            response.headers["Strict-Transport-Security"] = f"max-age={settings.SECURITY_HSTS_SECONDS}; includeSubDomains"
+    return response
+
 app.include_router(endpoints.router, prefix=settings.API_V1_STR)
 app.include_router(settings_api.router, prefix=settings.API_V1_STR)
 
 @app.get("/")
 def root():
     return {"message": "Welcome to AI Story API"}
+
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok"}
 
 if __name__ == "__main__":
     import uvicorn

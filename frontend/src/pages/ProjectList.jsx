@@ -1,6 +1,6 @@
 
 import React, { useEffect, useState } from 'react';
-import { api, fetchProjects, createProject, getSettings, updateSetting, getSettingDefaults, deleteSetting, deleteProject, recordSystemLogAction } from '../services/api';
+import { api, fetchProjects, createProject, getSettings, updateSetting, getSettingDefaults, deleteSetting, deleteProject, recordSystemLogAction, fetchProjectShares, createProjectShare, deleteProjectShare } from '../services/api';
 import { BASE_URL } from '../config';
 import Editor from './Editor';
 import SettingsPage from './Settings';
@@ -14,7 +14,6 @@ import {
     LogOut, 
     Search,
     User,
-    MoreVertical,
     Cpu,
     MessageSquare,
     Save,
@@ -28,7 +27,10 @@ import {
     Palette,
     Monitor,
     Activity,
-    Shield
+    Shield,
+    Share2,
+    X,
+    Loader2
 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
@@ -157,6 +159,12 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     // Theme Logic - Moved to Parent for persistence on reload
     const [currentTheme, setCurrentTheme] = useState('default');
     const [toast, setToast] = useState(null);
+    const [shareModalProject, setShareModalProject] = useState(null);
+    const [projectShares, setProjectShares] = useState([]);
+    const [projectShareCounts, setProjectShareCounts] = useState({});
+    const [shareTargetUser, setShareTargetUser] = useState('');
+    const [shareLoading, setShareLoading] = useState(false);
+    const [shareSubmitting, setShareSubmitting] = useState(false);
     
     useEffect(() => {
         // Fetch User Info to check admin status
@@ -232,7 +240,30 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const loadProjects = async () => {
         try {
             const data = await fetchProjects();
-            setProjects(sortProjectsNewestFirst(data));
+            const sorted = sortProjectsNewestFirst(data);
+            setProjects(sorted);
+
+            const ownerProjects = (Array.isArray(sorted) ? sorted : []).filter((item) => {
+                if (typeof item?.is_owner === 'boolean') return item.is_owner;
+                return Number(item?.owner_id) === Number(currentUser?.id);
+            });
+
+            const countEntries = await Promise.all(
+                ownerProjects.map(async (item) => {
+                    try {
+                        const shares = await fetchProjectShares(item.id);
+                        return [item.id, Array.isArray(shares) ? shares.length : 0];
+                    } catch {
+                        return [item.id, 0];
+                    }
+                })
+            );
+
+            const nextCounts = {};
+            countEntries.forEach(([projectId, count]) => {
+                nextCounts[projectId] = count;
+            });
+            setProjectShareCounts(nextCounts);
         } catch (error) {
             console.error("Failed to load projects", error);
         }
@@ -331,6 +362,71 @@ const ProjectList = ({ initialTab = 'projects' }) => {
         } catch (error) {
             console.error("Failed to delete project", error);
             setToast({ type: 'error', message: t('项目删除失败', 'Failed to delete project') });
+            setTimeout(() => setToast(null), 3000);
+        }
+    };
+
+    const isProjectOwner = (project) => {
+        if (!project) return false;
+        if (typeof project.is_owner === 'boolean') return project.is_owner;
+        return Number(project.owner_id) === Number(currentUser?.id);
+    };
+
+    const getProjectShareCountText = (project) => {
+        if (!project || !isProjectOwner(project)) return t('共享给你', 'Shared with you');
+        const count = Number(projectShareCounts?.[project.id] || 0);
+        return t(`已共享给 ${count} 人`, `Shared with ${count} user${count === 1 ? '' : 's'}`);
+    };
+
+    const handleOpenShareModal = async (event, project) => {
+        event.stopPropagation();
+        if (!isProjectOwner(project)) return;
+        setShareModalProject(project);
+        setShareTargetUser('');
+        setShareLoading(true);
+        try {
+            const shares = await fetchProjectShares(project.id);
+            setProjectShares(Array.isArray(shares) ? shares : []);
+        } catch (error) {
+            console.error('Failed to load project shares', error);
+            setProjectShares([]);
+            setToast({ type: 'error', message: t('加载共享列表失败', 'Failed to load share list') });
+            setTimeout(() => setToast(null), 3000);
+        } finally {
+            setShareLoading(false);
+        }
+    };
+
+    const handleCreateShare = async () => {
+        if (!shareModalProject) return;
+        const target = String(shareTargetUser || '').trim();
+        if (!target) return;
+
+        setShareSubmitting(true);
+        try {
+            await createProjectShare(shareModalProject.id, target);
+            const shares = await fetchProjectShares(shareModalProject.id);
+            setProjectShares(Array.isArray(shares) ? shares : []);
+            setShareTargetUser('');
+            setToast({ type: 'success', message: t('共享成功', 'Project shared successfully') });
+            setTimeout(() => setToast(null), 2500);
+        } catch (error) {
+            console.error('Failed to create project share', error);
+            setToast({ type: 'error', message: error?.response?.data?.detail || t('共享失败', 'Failed to share project') });
+            setTimeout(() => setToast(null), 3000);
+        } finally {
+            setShareSubmitting(false);
+        }
+    };
+
+    const handleDeleteShare = async (sharedUserId) => {
+        if (!shareModalProject) return;
+        try {
+            await deleteProjectShare(shareModalProject.id, sharedUserId);
+            setProjectShares((prev) => prev.filter((item) => Number(item.user_id) !== Number(sharedUserId)));
+        } catch (error) {
+            console.error('Failed to delete share', error);
+            setToast({ type: 'error', message: t('取消共享失败', 'Failed to revoke share') });
             setTimeout(() => setToast(null), 3000);
         }
     };
@@ -609,30 +705,46 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                                        <div className="absolute inset-0 bg-gradient-to-t from-card via-transparent to-transparent opacity-90 z-10" />
 
                                                        {/* Top Badge */}
-                                                       <div className="absolute top-4 right-4 z-20">
-                                                            <div className="text-[10px] uppercase tracking-widest font-bold px-2 py-1 rounded-sm bg-black/80 text-white/70 border border-white/10 backdrop-blur-md">
-                                                                {p.global_info?.overall_genre || t('场景', 'SCENE')}
-                                                            </div>
-                                                       </div>
+                                                    <div className="absolute left-4 top-4 z-20">
+                                                        <div className={`text-xs font-medium px-2 py-1 rounded-sm border backdrop-blur-md ${isProjectOwner(p) ? 'bg-blue-500/20 text-blue-200 border-blue-300/30' : 'bg-amber-500/20 text-amber-200 border-amber-300/30'}`}>
+                                                            {isProjectOwner(p) ? t('所有者', 'OWNER') : t('共享', 'SHARED')}
+                                                        </div>
+                                                    </div>
                                                     </div>
 
                                                     {/* Card Content */}
                                                     <div className="p-4 relative z-20">
                                                         <div className="flex justify-between items-center">
-                                                            <h3 className="text-lg font-bold text-white group-hover:text-primary transition-colors truncate tracking-tight flex-1 mr-2">{p.title}</h3>
-                                                            <button 
-                                                                onClick={(e) => handleDeleteProject(e, p.id)}
-                                                                className="opacity-0 group-hover:opacity-100 p-1.5 text-muted-foreground hover:text-red-500 hover:bg-white/10 rounded-lg transition-all"
-                                                                title={t('删除项目', 'Delete Project')}
-                                                            >
-                                                                <Trash2 className="w-4 h-4" />
-                                                            </button>
+                                                            <h3 className="text-lg font-semibold text-white group-hover:text-primary transition-colors truncate flex-1 mr-2">{p.title}</h3>
+                                                            <div className="flex items-center gap-1">
+                                                                {isProjectOwner(p) && (
+                                                                    <button
+                                                                        onClick={(e) => handleOpenShareModal(e, p)}
+                                                                        className="opacity-0 group-hover:opacity-100 p-1.5 text-muted-foreground hover:text-blue-400 hover:bg-white/10 rounded-lg transition-all"
+                                                                        title={t('项目共享', 'Project Sharing')}
+                                                                    >
+                                                                        <Share2 className="w-4 h-4" />
+                                                                    </button>
+                                                                )}
+                                                                {isProjectOwner(p) && (
+                                                                    <button 
+                                                                        onClick={(e) => handleDeleteProject(e, p.id)}
+                                                                        className="opacity-0 group-hover:opacity-100 p-1.5 text-muted-foreground hover:text-red-500 hover:bg-white/10 rounded-lg transition-all"
+                                                                        title={t('删除项目', 'Delete Project')}
+                                                                    >
+                                                                        <Trash2 className="w-4 h-4" />
+                                                                    </button>
+                                                                )}
+                                                            </div>
                                                         </div>
                                                         
                                                         {/* Description & Footer - Reveal on Hover */}
                                                         <div className="max-h-0 opacity-0 group-hover:max-h-32 group-hover:opacity-100 overflow-hidden transition-all duration-500 ease-in-out">
-                                                            <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed font-light opacity-80 mt-2 mb-4">
+                                                            <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed opacity-80 mt-2">
                                                                 {p.global_info?.notes || t('暂无描述。', 'No description added.')}
+                                                            </p>
+                                                            <p className="text-[11px] text-muted-foreground/80 mt-2 mb-4">
+                                                                {getProjectShareCountText(p)}
                                                             </p>
                                                             
                                                             {/* Footer Meta */}
@@ -668,6 +780,61 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                     </div>
                 </div>
             </main>
+
+            {shareModalProject && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setShareModalProject(null)}>
+                    <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-card p-5" onClick={(e) => e.stopPropagation()}>
+                        <div className="mb-4 flex items-center justify-between">
+                            <h3 className="text-lg font-semibold">{t('项目共享', 'Project Sharing')} · {shareModalProject.title}</h3>
+                            <button className="rounded p-1 text-muted-foreground hover:bg-secondary" onClick={() => setShareModalProject(null)}>
+                                <X className="h-4 w-4" />
+                            </button>
+                        </div>
+
+                        <div className="mb-4 flex gap-2">
+                            <input
+                                value={shareTargetUser}
+                                onChange={(e) => setShareTargetUser(e.target.value)}
+                                placeholder={t('输入用户名或邮箱', 'Enter username or email')}
+                                className="flex-1 rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+                            />
+                            <button
+                                onClick={handleCreateShare}
+                                disabled={shareSubmitting || !String(shareTargetUser || '').trim()}
+                                className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
+                            >
+                                {shareSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
+                                {t('添加', 'Add')}
+                            </button>
+                        </div>
+
+                        <div className="max-h-72 overflow-auto rounded-lg border border-white/10">
+                            {shareLoading ? (
+                                <div className="p-4 text-sm text-muted-foreground">{t('加载中...', 'Loading...')}</div>
+                            ) : projectShares.length === 0 ? (
+                                <div className="p-4 text-sm text-muted-foreground">{t('暂无共享用户', 'No shared users')}</div>
+                            ) : (
+                                <div className="divide-y divide-white/10">
+                                    {projectShares.map((s) => (
+                                        <div key={s.id} className="flex items-center justify-between px-3 py-2">
+                                            <div>
+                                                <div className="text-sm font-medium">{s.username}</div>
+                                                <div className="text-xs text-muted-foreground">{s.email || '-'}</div>
+                                            </div>
+                                            <button
+                                                onClick={() => handleDeleteShare(s.user_id)}
+                                                className="rounded px-2 py-1 text-xs text-red-400 hover:bg-red-500/10"
+                                            >
+                                                {t('取消共享', 'Revoke')}
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

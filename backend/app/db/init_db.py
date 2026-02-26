@@ -37,8 +37,8 @@ def create_default_superuser():
                 # PostgreSQL and SQLite compatible parameter binding for raw SQL varies (%(name)s vs :name)
                 # We'll use text() with params which usually handles it via SQLAlchemy
                 sql = text("""
-                    INSERT INTO users (username, email, hashed_password, is_active, is_superuser, is_authorized, is_system)
-                    VALUES (:username, :email, :password, :active, :superuser, :authorized, :system)
+                    INSERT INTO users (username, email, hashed_password, is_active, account_status, email_verified, is_superuser, is_authorized, is_system)
+                    VALUES (:username, :email, :password, :active, :account_status, :email_verified, :superuser, :authorized, :system)
                 """)
                 
                 conn.execute(sql, {
@@ -46,6 +46,8 @@ def create_default_superuser():
                     "email": "ylsystem@admin.com",
                     "password": hashed,
                     "active": True, # SQLAlchemy generic type handling should convert to 1/0 or TRUE/FALSE
+                    "account_status": 1,
+                    "email_verified": True,
                     "superuser": True,
                     "authorized": True,
                     "system": True
@@ -106,6 +108,10 @@ def check_and_migrate_tables():
             # Robust Postgres Strategy
             user_columns_pg = [
                 ("is_active", "BOOLEAN DEFAULT TRUE"),
+                ("account_status", "INTEGER DEFAULT 1"),
+                ("email_verified", "BOOLEAN DEFAULT FALSE"),
+                ("email_verification_code", "VARCHAR"),
+                ("email_verification_expires_at", "VARCHAR"),
                 ("is_superuser", "BOOLEAN DEFAULT FALSE"),
                 ("is_authorized", "BOOLEAN DEFAULT FALSE"),
                 ("is_system", "BOOLEAN DEFAULT FALSE"),
@@ -129,6 +135,10 @@ def check_and_migrate_tables():
         # format: (column_name, sql_type_and_default)
         columns_to_check = [
             ("is_active", "BOOLEAN DEFAULT TRUE"),
+            ("account_status", "INTEGER DEFAULT 1"),
+            ("email_verified", "BOOLEAN DEFAULT FALSE"),
+            ("email_verification_code", "VARCHAR"),
+            ("email_verification_expires_at", "VARCHAR"),
             ("is_superuser", "BOOLEAN DEFAULT FALSE"),
             ("is_authorized", "BOOLEAN DEFAULT FALSE"),
             ("is_system", "BOOLEAN DEFAULT FALSE"),

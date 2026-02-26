@@ -57,7 +57,7 @@
     5) 景别/镜高变化引起可见背景结构发生重组（例如俯拍暴露地面构图，平视以墙面为主）。
   - **同场地多场景强制 (Same Venue, Multi-Scene Mandate)**：同一个地理地点可拆为多个“AI场景变体”。命名建议：`{场地名}_{机位方向/轴线标签}_{景别}`，例如：`GrandTheater_AudienceToStage_FrontWide`、`GrandTheater_AudienceToAudience_ReverseMid`。
   - **命名模板强制 (Naming Template Mandate)**：Environment Name 必须遵循统一模板：`{Venue}_{DirectionTag}_{ShotScale}_{LightingTag可选}`。
-    - **脚本语言优先 (Script-Language Naming Priority)**：`Venue` 主体命名必须优先使用剧本主语言（中文剧本优先中文命名，英文剧本优先英文命名）；仅结构标签保持统一（如 `Front/Reverse/Wide`）。
+    - **脚本语言优先 (Script-Language Naming Priority)**：`Venue` 主体命名必须优先使用中文（除非整个剧本是英文，或subject名字在剧本存在英文名字）；仅结构标签保持统一（如 `Front/Reverse/Wide`）。
     - **简洁命名 (Concise Naming)**：避免冗长描述，使用短而稳定的可复用名称。
     - `Venue`: 稳定地点名（如 GrandTheater, OfficeLobby）。
     - `DirectionTag`: 必须使用 `Front` 或 `Reverse`（如有必要可加 `SideLeft/SideRight`，但 Front/Reverse 仍为主标签）。
