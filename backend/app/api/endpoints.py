@@ -36,6 +36,8 @@ from PIL import Image
 import requests
 import asyncio
 import urllib.parse
+import socket
+import time
 from pathlib import Path
 from collections import deque
 import threading
@@ -7815,6 +7817,107 @@ def broadcast_email_to_all_users(
         "failed": failed,
         "invalid": invalid_count,
         "errors": errors,
+    }
+
+
+@router.get("/admin/upstream-diagnostics/grsai")
+def admin_diagnose_grsai_connectivity(
+    timeout_seconds: int = 5,
+    current_user: User = Depends(get_current_user),
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    timeout_seconds = max(2, min(int(timeout_seconds or 5), 20))
+
+    targets = [
+        {
+            "name": "primary",
+            "base_url": "https://grsai.dakka.com.cn",
+            "submit_path": "/v1/draw/nano-banana",
+            "poll_path": "/v1/draw/result",
+        },
+        {
+            "name": "fallback",
+            "base_url": "https://grsaiapi.com",
+            "submit_path": "/v1/draw/completions",
+            "poll_path": "/v1/draw/result",
+        },
+    ]
+
+    def _check_one(target: Dict[str, str]) -> Dict[str, Any]:
+        base_url = target["base_url"].rstrip("/")
+        parsed = urllib.parse.urlparse(base_url)
+        host = parsed.hostname or ""
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+
+        result: Dict[str, Any] = {
+            "name": target["name"],
+            "host": host,
+            "port": port,
+            "base_url": base_url,
+            "submit_url": f"{base_url}{target['submit_path']}",
+            "poll_url": f"{base_url}{target['poll_path']}",
+            "dns": {"ok": False, "ips": [], "error": None, "ms": None},
+            "tcp": {"ok": False, "error": None, "ms": None},
+            "http": {
+                "ok": False,
+                "status": None,
+                "error": None,
+                "ms": None,
+                "note": "HTTP 200/401/403/404/405 are all considered reachable",
+            },
+        }
+
+        dns_start = time.perf_counter()
+        try:
+            infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+            ips = sorted({info[4][0] for info in infos if info and len(info) >= 5 and info[4]})
+            result["dns"]["ok"] = len(ips) > 0
+            result["dns"]["ips"] = ips
+        except Exception as exc:
+            result["dns"]["error"] = str(exc)
+        finally:
+            result["dns"]["ms"] = int((time.perf_counter() - dns_start) * 1000)
+
+        tcp_start = time.perf_counter()
+        try:
+            conn = socket.create_connection((host, port), timeout=timeout_seconds)
+            conn.close()
+            result["tcp"]["ok"] = True
+        except Exception as exc:
+            result["tcp"]["error"] = str(exc)
+        finally:
+            result["tcp"]["ms"] = int((time.perf_counter() - tcp_start) * 1000)
+
+        http_start = time.perf_counter()
+        try:
+            resp = requests.get(
+                result["submit_url"],
+                timeout=(timeout_seconds, timeout_seconds),
+                verify=False,
+            )
+            result["http"]["status"] = resp.status_code
+            result["http"]["ok"] = resp.status_code in {200, 401, 403, 404, 405}
+        except Exception as exc:
+            result["http"]["error"] = str(exc)
+        finally:
+            result["http"]["ms"] = int((time.perf_counter() - http_start) * 1000)
+
+        return result
+
+    checks = [_check_one(target) for target in targets]
+    overall_ok = any(item.get("http", {}).get("ok") for item in checks)
+
+    return {
+        "ok": overall_ok,
+        "timeout_seconds": timeout_seconds,
+        "proxy_env": {
+            "HTTP_PROXY": os.getenv("HTTP_PROXY") or "",
+            "HTTPS_PROXY": os.getenv("HTTPS_PROXY") or "",
+            "NO_PROXY": os.getenv("NO_PROXY") or "",
+        },
+        "checks": checks,
     }
 
 
