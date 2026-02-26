@@ -2,6 +2,7 @@
 import logging
 import time
 import re
+from typing import Optional
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from jose import jwt, JWTError
@@ -106,15 +107,51 @@ def get_function_name(method: str, path: str):
             return name
     return None
 
+
+def _safe_int(value) -> Optional[int]:
+    try:
+        if value is None:
+            return None
+        return int(str(value).strip())
+    except Exception:
+        return None
+
+
+def _extract_first_int_by_regex(path: str, pattern: str) -> Optional[int]:
+    m = re.search(pattern, path or "")
+    if not m:
+        return None
+    return _safe_int(m.group(1))
+
+
+def _resolve_project_id_for_logging(path: str, request: Request) -> Optional[int]:
+    direct_project_id = _extract_first_int_by_regex(path, r"/projects/(\d+)")
+    if direct_project_id:
+        return direct_project_id
+
+    query_project_id = _safe_int(request.query_params.get("project_id"))
+    if query_project_id:
+        return query_project_id
+
+    return None
+
+
 def get_user_from_token(auth_header: str):
     if not auth_header or not auth_header.startswith("Bearer "):
-        return None
+        return {"user_id": None, "username": "Guest"}
     token = auth_header.split(" ")[1]
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        return payload.get("sub") # format return as needed
+        user_id = _safe_int(payload.get("uid") or payload.get("user_id") or payload.get("id"))
+        username = str(
+            payload.get("uname")
+            or payload.get("username")
+            or payload.get("sub")
+            or "Guest"
+        ).strip() or "Guest"
+        return {"user_id": user_id, "username": username}
     except JWTError:
-        return None
+        return {"user_id": None, "username": "Guest"}
 
 class LoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
@@ -140,11 +177,14 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         
         # 3. Extract User (Best Effort)
         username = "Guest"
+        user_id = None
         auth = request.headers.get("Authorization")
         if auth:
             user = get_user_from_token(auth)
-            if user:
-                username = user
+            username = user.get("username") or "Guest"
+            user_id = user.get("user_id")
+
+        project_id = _resolve_project_id_for_logging(path, request)
 
         try:
             response = await call_next(request)
@@ -153,7 +193,8 @@ class LoggingMiddleware(BaseHTTPMiddleware):
             if not is_noise:
                 action = func_name or f"API Call: {method} {path}"
                 logger.error(
-                    f"API Result | User: {username} | Action: {action} | Method: {method} | Path: {path} | "
+                    f"API Result | UserID: {user_id} | Username: {username} | ProjectID: {project_id} | "
+                    f"Action: {action} | Method: {method} | Path: {path} | "
                     f"Status: EXCEPTION | IP: {client_host} | Time: {process_ms}ms | Error: {type(e).__name__}: {str(e)[:200]}"
                 )
             raise
@@ -169,24 +210,28 @@ class LoggingMiddleware(BaseHTTPMiddleware):
 
             if 200 <= response.status_code < 400:
                 logger.info(
-                    f"API Result | User: {username} | Action: {action} | Method: {method} | Path: {path} | "
+                    f"API Result | UserID: {user_id} | Username: {username} | ProjectID: {project_id} | "
+                    f"Action: {action} | Method: {method} | Path: {path} | "
                     f"Status: {response.status_code} | IP: {client_host} | Time: {process_ms}ms{size_part}"
                 )
             elif 400 <= response.status_code < 500:
                 logger.warning(
-                    f"API Result | User: {username} | Action: {action} | Method: {method} | Path: {path} | "
+                    f"API Result | UserID: {user_id} | Username: {username} | ProjectID: {project_id} | "
+                    f"Action: {action} | Method: {method} | Path: {path} | "
                     f"Status: {response.status_code} | IP: {client_host} | Time: {process_ms}ms{size_part}"
                 )
             else:
                 logger.error(
-                    f"API Result | User: {username} | Action: {action} | Method: {method} | Path: {path} | "
+                    f"API Result | UserID: {user_id} | Username: {username} | ProjectID: {project_id} | "
+                    f"Action: {action} | Method: {method} | Path: {path} | "
                     f"Status: {response.status_code} | IP: {client_host} | Time: {process_ms}ms{size_part}"
                 )
 
         # 5. Fallback for non-API 5xxs (rare but useful)
         elif response.status_code >= 500 and (not is_noise):
             logger.error(
-                f"System Error | User: {username} | Path: {method} {path} | Status: {response.status_code} | "
+                f"System Error | UserID: {user_id} | Username: {username} | ProjectID: {project_id} | "
+                f"Path: {method} {path} | Status: {response.status_code} | "
                 f"IP: {client_host} | Time: {process_ms}ms"
             )
 

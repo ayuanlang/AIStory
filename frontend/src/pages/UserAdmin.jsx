@@ -478,16 +478,6 @@ const UserAdmin = () => {
         }
     };
 
-    const apply126Template = () => {
-        setSmtpConfig((prev) => ({
-            ...prev,
-            host: 'smtp.126.com',
-            port: 465,
-            use_ssl: true,
-            use_tls: false,
-        }));
-    };
-
     const handleSendSmtpTestEmail = async () => {
         const toEmail = String(smtpTestEmail || '').trim();
         if (!toEmail) {
@@ -979,20 +969,6 @@ const UserAdmin = () => {
                             <h2 className="text-xl font-bold mb-6 flex items-center gap-2 text-white">
                                 <Mail className="text-primary"/> {t('邮件 SMTP 配置', 'Email SMTP Configuration')}
                             </h2>
-
-                            <div className="mb-4 p-4 rounded-lg border border-white/10 bg-black/20">
-                                <div className="flex flex-wrap items-center justify-between gap-3">
-                                    <p className="text-sm text-gray-300">
-                                        {t('网易 126 推荐模板：smtp.126.com，端口 465，SSL 开启，STARTTLS 关闭。', 'NetEase 126 template: smtp.126.com, port 465, SSL on, STARTTLS off.')}
-                                    </p>
-                                    <button
-                                        onClick={apply126Template}
-                                        className="px-3 py-2 text-sm rounded bg-white/10 hover:bg-white/20 text-white"
-                                    >
-                                        {t('一键填充 126 模板', 'Apply 126 Template')}
-                                    </button>
-                                </div>
-                            </div>
 
                             <div className="space-y-6 max-w-4xl">
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

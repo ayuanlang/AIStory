@@ -1665,29 +1665,35 @@ class MediaGenerationService:
             return requests.post(url, **kwargs)
         
         try:
-             try:
-                 resp = await asyncio.to_thread(_post, True)
-             except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError) as e:
-                 # Retry without proxy if connection fails (common for domestic APIs vs Global Proxy)
-                 print(f"[{log_tag}] Connection Failed with Proxy ({str(e)[:50]}...). Retrying without proxy...")
-                 resp = await asyncio.to_thread(_post, False)
+            try:
+                resp = await asyncio.to_thread(_post, True)
+            except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                # Retry without proxy if connection fails (common for domestic APIs vs Global Proxy)
+                print(f"[{log_tag}] Connection Failed with Proxy ({str(e)[:50]}...). Retrying without proxy...")
+                resp = await asyncio.to_thread(_post, False)
 
-             if resp.status_code == 200:
-                  data = resp.json()
-                  print(f"[{log_tag}] API Response: {data}") # DEBUG USER REQUEST
-                  metadata = {"raw": data}
-                  if extra_metadata:
-                      metadata.update(extra_metadata)
+            if resp.status_code == 200:
+                data = resp.json()
+                print(f"[{log_tag}] API Response: {data}") # DEBUG USER REQUEST
+                metadata = {"raw": data}
+                if extra_metadata:
+                    metadata.update(extra_metadata)
 
-                  if "data" in data and len(data["data"]) > 0:
-                      return {"url": data["data"][0]["url"], "metadata": metadata}
-                  return {"url": data.get("url"), "metadata": metadata}
-             else:
-                  print(f"[{log_tag}] Error {resp.status_code}: {resp.text}")
-                  return {"error": f"API Error {resp.status_code}", "details": resp.text}
+                if "data" in data and len(data["data"]) > 0:
+                    return {"url": data["data"][0]["url"], "metadata": metadata}
+                return {"url": data.get("url"), "metadata": metadata}
+            else:
+                print(f"[{log_tag}] Error {resp.status_code}: {resp.text}")
+                return {"error": f"API Error {resp.status_code}", "details": resp.text}
+        except requests.exceptions.Timeout as e:
+            print(f"[{log_tag}] Timeout: {e}")
+            return {"error": "Upstream request timeout", "details": str(e)}
+        except requests.exceptions.RequestException as e:
+            print(f"[{log_tag}] RequestException: {e}")
+            return {"error": "Upstream request failed", "details": str(e)}
         except Exception as e:
-             print(f"[{log_tag}] Exception: {e}")
-             return {"error": str(e)}
+            print(f"[{log_tag}] Exception: {e}")
+            return {"error": str(e)}
 
     async def _submit_and_poll_video(self, url, payload, api_key, log_tag, extra_metadata=None, poll_timeout_seconds: int = 600, poll_interval_seconds: int = 2):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
@@ -1696,7 +1702,10 @@ class MediaGenerationService:
         
         try:
             print(f"[{log_tag}] POST Payload Length: {len(json.dumps(payload))}") 
-            resp = await asyncio.to_thread(_post)
+            try:
+                resp = await asyncio.to_thread(_post)
+            except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+                resp = await asyncio.to_thread(_post)
             print(f"[{log_tag}] Submission Response: {resp.text[:500]}...") # DEBUG USER REQUEST
             if resp.status_code not in [200, 201]: 
                 print(f"[{log_tag}] Error {resp.status_code}: {resp.text}")
@@ -1715,7 +1724,10 @@ class MediaGenerationService:
             for _ in range(max_attempts):
                 await asyncio.sleep(poll_interval_seconds)
                 def _poll(): return requests.get(f"{url}/{task_id}", headers=headers, timeout=30, verify=False)
-                p_resp = await asyncio.to_thread(_poll)
+                try:
+                    p_resp = await asyncio.to_thread(_poll)
+                except requests.exceptions.Timeout:
+                    continue
                 if p_resp.status_code == 200:
                     p_data = p_resp.json()
                     print(f"[{log_tag}] Poll Response: {p_data}") # DEBUG USER REQUEST
@@ -1734,6 +1746,10 @@ class MediaGenerationService:
                     elif status_l in ["failed", "error", "canceled", "cancelled"]:
                         return {"error": "Generation Failed", "details": p_data.get("error")}
             return {"error": f"Timeout after {poll_timeout_seconds}s"}
+        except requests.exceptions.Timeout as e:
+            return {"error": "Upstream request timeout", "details": str(e)}
+        except requests.exceptions.RequestException as e:
+            return {"error": "Upstream request failed", "details": str(e)}
         except Exception as e:
             return {"error": str(e)}
 
@@ -1743,9 +1759,13 @@ class MediaGenerationService:
         
         # Increased timeout to 300s
         def _post(): return requests.post(url, json=payload, headers=headers, timeout=300, verify=False)
+        def _post_no_proxy(): return requests.post(url, json=payload, headers=headers, timeout=300, verify=False, proxies={"http": None, "https": None})
         
         try:
-            resp = await asyncio.to_thread(_post)
+            try:
+                resp = await asyncio.to_thread(_post)
+            except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+                resp = await asyncio.to_thread(_post_no_proxy)
             print(f"[Grsai] API Returned: {resp.text[:1000]}") # DEBUG USER REQUEST
             if resp.status_code != 200: 
                 print(f"[Grsai] API Error {resp.status_code}: {resp.text}")
@@ -1772,7 +1792,10 @@ class MediaGenerationService:
             for i in range(100):
                  await asyncio.sleep(3)
                  def _poll(): return requests.post(result_url, json={"id": task_id}, headers=headers, timeout=30, verify=False)
-                 p_resp = await asyncio.to_thread(_poll)
+                 try:
+                     p_resp = await asyncio.to_thread(_poll)
+                 except requests.exceptions.Timeout:
+                     continue
                  
                  if p_resp.status_code == 200:
                       p_data = p_resp.json()
@@ -1793,10 +1816,12 @@ class MediaGenerationService:
                      print(f"[Grsai] Poll Failed {p_resp.status_code}: {p_resp.text}")
             
             return {"error": "Timeout"}
+        except requests.exceptions.Timeout as e:
+            return {"error": "Grsai timeout", "details": str(e)}
+        except requests.exceptions.RequestException as e:
+            return {"error": "Grsai request failed", "details": str(e)}
         except Exception as e:
-             import traceback
-             traceback.print_exc()
-             return {"error": f"Grsai Exception: {str(e)}"}
+            return {"error": f"Grsai Exception: {str(e)}"}
 
     # -- Helpers --
     def _download_and_save(self, url: str, filename_base: str = None, user_id: int = 1) -> str:

@@ -64,6 +64,9 @@ router = APIRouter()
 media_service = MediaGenerationService()
 logger = logging.getLogger("api_logger")
 
+IMAGE_JOB_STORE: Dict[str, Dict[str, Any]] = {}
+IMAGE_JOB_LOCK = threading.Lock()
+
 
 def _vendor_failed_message(provider: Optional[str], reason: Any) -> str:
     vendor = str(provider or "").strip() or "unknown"
@@ -6627,7 +6630,7 @@ def login_access_token(request: Request, form_data: OAuth2PasswordRequestForm = 
     
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
-        data={"sub": user.username}, expires_delta=access_token_expires
+        data={"sub": user.username, "uid": user.id, "uname": user.username}, expires_delta=access_token_expires
     )
     return {"access_token": access_token, "token_type": "bearer"}
 
@@ -6664,7 +6667,7 @@ def login_json(request: Request, login_data: LoginRequest, db: Session = Depends
     
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
-        data={"sub": user.username}, expires_delta=access_token_expires
+        data={"sub": user.username, "uid": user.id, "uname": user.username}, expires_delta=access_token_expires
     )
     return {"access_token": access_token, "token_type": "bearer"}
 
@@ -8587,6 +8590,10 @@ async def generate_image_endpoint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    return await _run_generate_image(req, current_user, db)
+
+
+async def _run_generate_image(req: GenerationRequest, current_user: User, db: Session):
     # Billing Check
     cost = billing_service.estimate_cost(db, "image_gen", req.provider, req.model)
     billing_service.check_can_proceed(current_user, cost)
@@ -8676,10 +8683,106 @@ async def generate_image_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        import traceback
-        traceback.print_exc()
         billing_service.log_failed_transaction(db, current_user.id, "image_gen", req.provider, req.model, str(e))
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+
+
+def _set_image_job(job_id: str, **fields) -> None:
+    with IMAGE_JOB_LOCK:
+        current = IMAGE_JOB_STORE.get(job_id, {})
+        current.update(fields)
+        IMAGE_JOB_STORE[job_id] = current
+
+
+async def _run_generate_image_job(job_id: str, user_id: int, req_payload: Dict[str, Any]) -> None:
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            _set_image_job(
+                job_id,
+                status="failed",
+                finished_at=datetime.utcnow().isoformat(),
+                error="User not found",
+            )
+            return
+
+        req_obj = GenerationRequest(**req_payload)
+        _set_image_job(job_id, status="running", started_at=datetime.utcnow().isoformat())
+        result = await _run_generate_image(req_obj, user, db)
+        _set_image_job(
+            job_id,
+            status="succeeded",
+            finished_at=datetime.utcnow().isoformat(),
+            result=result,
+            error=None,
+        )
+    except HTTPException as e:
+        _set_image_job(
+            job_id,
+            status="failed",
+            finished_at=datetime.utcnow().isoformat(),
+            error=str(e.detail),
+        )
+    except Exception as e:
+        _set_image_job(
+            job_id,
+            status="failed",
+            finished_at=datetime.utcnow().isoformat(),
+            error=str(e),
+        )
+    finally:
+        db.close()
+
+
+@router.post("/generate/image/submit")
+async def submit_generate_image_endpoint(
+    req: GenerationRequest,
+    current_user: User = Depends(get_current_user),
+):
+    job_id = uuid.uuid4().hex
+    now = datetime.utcnow().isoformat()
+    _set_image_job(
+        job_id,
+        job_id=job_id,
+        status="queued",
+        user_id=current_user.id,
+        username=current_user.username,
+        created_at=now,
+        started_at=None,
+        finished_at=None,
+        result=None,
+        error=None,
+    )
+
+    asyncio.create_task(_run_generate_image_job(job_id, current_user.id, req.model_dump()))
+    return {"job_id": job_id, "status": "queued", "created_at": now}
+
+
+@router.get("/generate/image/jobs/{job_id}")
+def get_generate_image_job_status(
+    job_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    with IMAGE_JOB_LOCK:
+        job = dict(IMAGE_JOB_STORE.get(job_id) or {})
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    owner_id = job.get("user_id")
+    if not current_user.is_superuser and owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    return {
+        "job_id": job.get("job_id"),
+        "status": job.get("status"),
+        "created_at": job.get("created_at"),
+        "started_at": job.get("started_at"),
+        "finished_at": job.get("finished_at"),
+        "error": job.get("error"),
+        "result": job.get("result"),
+    }
 
 
 # --- User Management ---

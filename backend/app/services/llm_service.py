@@ -887,10 +887,12 @@ class LLMService:
 
         try:
             response = await asyncio.to_thread(_request, False)
-        except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError) as e:
+        except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
             logger.warning(f"Connection failed ({str(e)}). Retrying without proxy...")
             try:
                 response = await asyncio.to_thread(_request, True)
+            except requests.exceptions.Timeout as e2:
+                raise Exception(self._vendor_failed_message(provider, f"Upstream timeout: {e2}"))
             except Exception as e2:
                 raise Exception(self._vendor_failed_message(provider, e2))
         
