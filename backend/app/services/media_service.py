@@ -1817,10 +1817,27 @@ class MediaGenerationService:
             data_obj = data.get("data")
             if data_obj is None:
                 print(f"[Grsai] API Logic Failure: {data}")
-                msg = data.get("msg") or "Unknown Error"
+                msg = data.get("msg") or data.get("message") or "Unknown Error"
                 return {"error": f"API Error {data.get('code')}", "details": msg}
 
-            task_id = data_obj.get("id")
+            task_id = None
+            if isinstance(data_obj, dict):
+                task_id = data_obj.get("id") or data_obj.get("task_id") or data_obj.get("taskId")
+                if not task_id and isinstance(data_obj.get("data"), dict):
+                    nested = data_obj.get("data") or {}
+                    task_id = nested.get("id") or nested.get("task_id") or nested.get("taskId")
+            elif isinstance(data_obj, str):
+                task_id = data_obj.strip()
+            elif isinstance(data_obj, list) and len(data_obj) > 0:
+                first = data_obj[0]
+                if isinstance(first, dict):
+                    task_id = first.get("id") or first.get("task_id") or first.get("taskId")
+                elif isinstance(first, str):
+                    task_id = first.strip()
+
+            if not task_id:
+                task_id = data.get("id") or data.get("task_id") or data.get("taskId")
+
             if not task_id:
                 print(f"[Grsai] No Task ID in response: {data}")
                 return {"error": "No Task ID", "details": data}
@@ -1844,17 +1861,47 @@ class MediaGenerationService:
                     return {"error": "Grsai poll failed", "details": last_error}
 
                 if p_resp.status_code == 200:
-                    p_data = p_resp.json()
-                    status = p_data.get("data", {}).get("status")
-                    if status == "succeeded":
-                        res = p_data.get("data", {}).get("results", [])
-                        media_url = res[0].get("url") if res else p_data.get("data", {}).get("url")
+                    try:
+                        p_data = p_resp.json()
+                    except Exception:
+                        continue
+
+                    data_block = p_data.get("data")
+                    status = None
+                    media_url = None
+
+                    if isinstance(data_block, dict):
+                        status = data_block.get("status") or p_data.get("status")
+                        results = data_block.get("results")
+                        if isinstance(results, list) and results:
+                            first_result = results[0] if isinstance(results[0], dict) else {}
+                            media_url = first_result.get("url") or first_result.get("imageUrl") or first_result.get("videoUrl")
+                        if not media_url:
+                            media_url = (
+                                data_block.get("url")
+                                or data_block.get("imageUrl")
+                                or data_block.get("videoUrl")
+                                or data_block.get("result_url")
+                            )
+                    elif isinstance(data_block, list) and data_block:
+                        first_item = data_block[0]
+                        if isinstance(first_item, dict):
+                            status = first_item.get("status") or p_data.get("status")
+                            media_url = (
+                                first_item.get("url")
+                                or first_item.get("imageUrl")
+                                or first_item.get("videoUrl")
+                                or first_item.get("result_url")
+                            )
+
+                    status_l = str(status or "").lower()
+                    if status_l in {"succeeded", "success", "completed", "done"} or (not status_l and media_url):
                         if media_url:
                             meta = {"raw": p_data}
                             if extra_metadata:
                                 meta.update(extra_metadata)
                             return {"url": media_url, "metadata": meta}
-                    elif status == "failed":
+                    elif status_l in {"failed", "error", "canceled", "cancelled"}:
                         print(f"[Grsai] Task Failed: {p_data}")
                         return {"error": "Generation Failed", "details": p_data}
                 else:
