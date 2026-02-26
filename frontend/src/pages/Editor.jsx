@@ -9645,7 +9645,17 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     }, [activeEpisode?.id]);
     const hasHydratedGenerationStateRef = useRef(false);
     const mediaRebindAttemptedRef = useRef('');
+    const generationMediaBaselineRef = useRef({});
     const GENERATION_STATE_TTL_MS = 1000 * 60 * 60;
+
+    const getShotEndFrameUrl = useCallback((shot) => {
+        try {
+            const tech = JSON.parse(shot?.technical_notes || '{}');
+            return String(tech?.end_frame_url || '');
+        } catch (e) {
+            return '';
+        }
+    }, []);
 
     const normalizeGeneratingState = useCallback((raw) => {
         if (!raw || typeof raw !== 'object') return {};
@@ -9720,11 +9730,34 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const setShotGeneratingState = useCallback((shotId, key, value) => {
         if (!shotId) return;
         const stableShotId = String(shotId);
+
+        if (value === true) {
+            const matchedShot = (shots || []).find((item) => String(item?.id) === stableShotId)
+                || (editingShot && String(editingShot?.id) === stableShotId ? editingShot : null);
+            const prevBase = generationMediaBaselineRef.current[stableShotId] || {};
+            const nextBase = { ...prevBase };
+            if (key === 'start') nextBase.start = String(matchedShot?.image_url || '');
+            if (key === 'end') nextBase.end = String(getShotEndFrameUrl(matchedShot));
+            if (key === 'video') nextBase.video = String(matchedShot?.video_url || '');
+            generationMediaBaselineRef.current[stableShotId] = nextBase;
+        } else {
+            const prevBase = generationMediaBaselineRef.current[stableShotId] || {};
+            if (prevBase && Object.prototype.hasOwnProperty.call(prevBase, key)) {
+                const nextBase = { ...prevBase };
+                delete nextBase[key];
+                if (Object.keys(nextBase).length === 0) {
+                    delete generationMediaBaselineRef.current[stableShotId];
+                } else {
+                    generationMediaBaselineRef.current[stableShotId] = nextBase;
+                }
+            }
+        }
+
         setStoredShotGeneratingState(stableShotId, key, value);
         setGeneratingStateByShot(prev => {
             return applyGeneratingStateChange(prev, stableShotId, key, value);
         });
-    }, [applyGeneratingStateChange, setStoredShotGeneratingState]);
+    }, [applyGeneratingStateChange, setStoredShotGeneratingState, shots, editingShot, getShotEndFrameUrl]);
 
     useEffect(() => {
         hasHydratedGenerationStateRef.current = false;
@@ -10392,33 +10425,31 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             let changed = false;
             const next = { ...prev };
 
-            const hasEndFrameUrl = (shot) => {
-                try {
-                    const tech = JSON.parse(shot?.technical_notes || '{}');
-                    return !!tech?.end_frame_url;
-                } catch (e) {
-                    return false;
-                }
-            };
-
             Object.entries(prev || {}).forEach(([shotId, state]) => {
                 const shot = (shots || []).find((item) => String(item?.id) === String(shotId));
                 if (!shot) return;
                 let updated = { ...state };
-                if (updated.start && shot?.image_url) {
+
+                const base = generationMediaBaselineRef.current[String(shotId)] || {};
+                const currentStartUrl = String(shot?.image_url || '');
+                const currentEndUrl = String(getShotEndFrameUrl(shot));
+                const currentVideoUrl = String(shot?.video_url || '');
+
+                if (updated.start && Object.prototype.hasOwnProperty.call(base, 'start') && currentStartUrl !== String(base.start || '')) {
                     updated.start = false;
                     updated.startAt = 0;
                 }
-                if (updated.end && hasEndFrameUrl(shot)) {
+                if (updated.end && Object.prototype.hasOwnProperty.call(base, 'end') && currentEndUrl !== String(base.end || '')) {
                     updated.end = false;
                     updated.endAt = 0;
                 }
-                if (updated.video && shot?.video_url) {
+                if (updated.video && Object.prototype.hasOwnProperty.call(base, 'video') && currentVideoUrl !== String(base.video || '')) {
                     updated.video = false;
                     updated.videoAt = 0;
                 }
                 if (!updated.start && !updated.end && !updated.video) {
                     delete next[shotId];
+                    delete generationMediaBaselineRef.current[String(shotId)];
                     changed = true;
                     return;
                 }
@@ -10439,7 +10470,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             writeGenerationStateStorage(next);
             return next;
         });
-    }, [shots, hasActiveGeneration, writeGenerationStateStorage]);
+    }, [shots, hasActiveGeneration, writeGenerationStateStorage, getShotEndFrameUrl]);
 
     useEffect(() => {
         if (!editingShot?.id || (shots || []).length === 0) return;
