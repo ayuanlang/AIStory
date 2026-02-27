@@ -167,8 +167,10 @@ class LoggingMiddleware(BaseHTTPMiddleware):
             "/redoc",
         )
         noise_exact = {
+            "/",
             "/openapi.json",
             "/favicon.ico",
+            "/healthz",
         }
         is_noise = path in noise_exact or any(path.startswith(p) for p in noise_prefixes)
         

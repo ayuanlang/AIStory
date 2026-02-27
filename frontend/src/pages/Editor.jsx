@@ -13763,6 +13763,7 @@ const Editor = ({ projectId, onClose }) => {
     const [isAgentOpen, setIsAgentOpen] = useState(false);
     const [activeTab, setActiveTab] = useState('overview');
     const [isImportOpen, setIsImportOpen] = useState(false);
+    const [isSuperuser, setIsSuperuser] = useState(false);
     const [refreshKey, setRefreshKey] = useState(0);
     const [editingShot, setEditingShot] = useState(null);
     const [shotsFocusRequest, setShotsFocusRequest] = useState(null);
@@ -13782,6 +13783,12 @@ const Editor = ({ projectId, onClose }) => {
     useEffect(() => {
         loadProjectData();
     }, [id]);
+
+    useEffect(() => {
+        fetchMe()
+            .then((user) => setIsSuperuser(!!user?.is_superuser))
+            .catch(() => setIsSuperuser(false));
+    }, []);
 
     useEffect(() => {
         try {
