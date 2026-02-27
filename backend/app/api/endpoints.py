@@ -6596,22 +6596,25 @@ def _send_email_via_runtime_smtp(
             raise RuntimeError(message)
         return
 
-    final_text_content = str(content or "")
-    if frontend_base_url:
-        final_text_content = (
-            f"{final_text_content}\n\n"
-            f"Frontend Base URL:\n{frontend_base_url}\n"
-        )
+    frontend_base_url_display = frontend_base_url or "(not configured)"
+    final_text_content = (
+        f"{str(content or '')}\n\n"
+        f"Frontend Base URL:\n{frontend_base_url_display}\n"
+    )
 
     html_body = str(html_content or "").strip()
+    safe_url = html.escape(frontend_base_url_display, quote=True)
     if frontend_base_url:
-        safe_url = html.escape(frontend_base_url, quote=True)
-        footer_html = (
-            "<hr style=\"border:none;border-top:1px solid #e5e7eb;margin:16px 0;\">"
-            f"<p style=\"color:#6b7280;font-size:12px;\">Frontend Base URL: "
-            f"<a href=\"{safe_url}\" target=\"_blank\" rel=\"noopener noreferrer\">{safe_url}</a></p>"
+        footer_line = (
+            f"<a href=\"{safe_url}\" target=\"_blank\" rel=\"noopener noreferrer\">{safe_url}</a>"
         )
-        html_body = f"{html_body}{footer_html}" if html_body else footer_html
+    else:
+        footer_line = safe_url
+    footer_html = (
+        "<hr style=\"border:none;border-top:1px solid #e5e7eb;margin:16px 0;\">"
+        f"<p style=\"color:#6b7280;font-size:12px;\">Frontend Base URL: {footer_line}</p>"
+    )
+    html_body = f"{html_body}{footer_html}" if html_body else footer_html
 
     message = EmailMessage()
     message["Subject"] = subject
