@@ -9379,6 +9379,12 @@ def get_generate_image_job_status(
             with IMAGE_JOB_LOCK:
                 IMAGE_JOB_STORE[job_id] = dict(file_job)
             job = dict(file_job)
+            logger.info(
+                "[ImageJob] recovered from shared file store | job_id=%s status=%s user_id=%s",
+                job_id,
+                job.get("status"),
+                job.get("user_id"),
+            )
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
