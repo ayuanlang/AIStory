@@ -72,6 +72,47 @@ IMAGE_JOB_TTL_SECONDS = max(300, int(os.getenv("IMAGE_JOB_TTL_SECONDS", "3600"))
 IMAGE_JOB_MAX_ITEMS = max(100, int(os.getenv("IMAGE_JOB_MAX_ITEMS", "500")))
 
 
+def _is_shot_submit_debug_enabled() -> bool:
+    return str(os.getenv("SHOT_SUBMIT_DEBUG", "0")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _normalize_ref_list(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raw = value.strip()
+        return [raw] if raw else []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item or "").strip()]
+    return []
+
+
+def _log_shot_submit_debug(kind: str, req: Any, refs: Any = None, extra: Optional[Dict[str, Any]] = None) -> None:
+    if not _is_shot_submit_debug_enabled():
+        return
+    try:
+        final_refs = _normalize_ref_list(refs if refs is not None else getattr(req, "ref_image_url", None))
+        payload = {
+            "kind": kind,
+            "project_id": getattr(req, "project_id", None),
+            "shot_id": getattr(req, "shot_id", None),
+            "shot_number": getattr(req, "shot_number", None),
+            "shot_name": getattr(req, "shot_name", None),
+            "asset_type": getattr(req, "asset_type", None),
+            "provider": getattr(req, "provider", None),
+            "model": getattr(req, "model", None),
+            "prompt": str(getattr(req, "prompt", "") or ""),
+            "prompt_len": len(str(getattr(req, "prompt", "") or "")),
+            "ref_count": len(final_refs),
+            "refs": final_refs,
+        }
+        if extra:
+            payload.update(extra)
+        logger.info("[ShotSubmitDebug] %s", json.dumps(payload, ensure_ascii=False, default=str))
+    except Exception as exc:
+        logger.warning("[ShotSubmitDebug] failed to log payload: %s", exc)
+
+
 def _parse_iso_datetime(value: Any) -> Optional[datetime]:
     raw = str(value or "").strip()
     if not raw:
@@ -8878,6 +8919,17 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
         except: height = 1080
 
         logger.info(f"[GenerateImage] Context Params - AR: {aspect_ratio}, W: {width}, H: {height}")
+        _log_shot_submit_debug(
+            "image_submit",
+            req,
+            refs=req.ref_image_url,
+            extra={
+                "aspect_ratio": aspect_ratio,
+                "width": width,
+                "height": height,
+                "user_id": current_user.id,
+            },
+        )
 
         # Assuming generate_image returns {"url": "...", ...}
         result = await media_service.generate_image(
@@ -9219,7 +9271,6 @@ async def generate_video_endpoint(
     cost = billing_service.estimate_cost(db, "video_gen", req.provider, req.model)
     billing_service.check_can_proceed(current_user, cost)
 
-    print(f"DEBUG: Backend Received Video Prompt: {req.prompt}")
     try:
         # 1. Resolve Context for Aspect Ratio
         aspect_ratio = None
@@ -9258,6 +9309,18 @@ async def generate_video_endpoint(
              aspect_ratio = episode_info.get("aspect_ratio")
 
         logger.info(f"[GenerateVideo] Extracted Aspect Ratio: {aspect_ratio}")
+        _log_shot_submit_debug(
+            "video_submit",
+            req,
+            refs=req.ref_image_url,
+            extra={
+                "last_frame_url": req.last_frame_url,
+                "duration": req.duration,
+                "aspect_ratio": aspect_ratio,
+                "keyframes_count": len(req.keyframes or []),
+                "user_id": current_user.id,
+            },
+        )
 
         result = await media_service.generate_video(
             prompt=req.prompt, 
