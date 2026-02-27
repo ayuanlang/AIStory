@@ -8995,8 +8995,11 @@ class GenerationRequest(BaseModel):
     shot_id: Optional[int] = None
     shot_number: Optional[str] = None
     shot_name: Optional[str] = None
+    entity_id: Optional[int] = None
     entity_name: Optional[str] = None
     subject_name: Optional[str] = None
+    subject_type: Optional[str] = None
+    entity_type: Optional[str] = None
     asset_type: Optional[str] = None
 
 class VideoGenerationRequest(BaseModel):
@@ -9063,15 +9066,32 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
     project_id = get_attr(req, "project_id")
     if not project_id: return
 
+    def _normalize_entity_type(raw: Optional[str]) -> Optional[str]:
+        if raw is None:
+            return None
+        text = str(raw).strip().lower()
+        if not text:
+            return None
+        if text in {"character", "char", "role", "人物", "角色"}:
+            return "character"
+        if text in {"environment", "env", "scene", "场景", "环境"}:
+            return "environment"
+        if text in {"prop", "props", "道具", "物件"}:
+            return "prop"
+        return text
+
     try:
         # Determine paths
         import urllib.parse
         fname = os.path.basename(urllib.parse.urlparse(url).path)
         file_path = os.path.join(settings.UPLOAD_DIR, fname)
+        lower_url = str(url or "").lower()
+        is_image = lower_url.endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"))
+        is_video = lower_url.endswith((".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"))
         
         meta = {}
         # Copy known fields
-        for field in ["shot_number", "shot_id", "project_id", "asset_type", "entity_id", "entity_name"]:
+        for field in ["shot_number", "shot_id", "project_id", "asset_type", "entity_id", "entity_name", "subject_name", "subject_type", "entity_type"]:
             val = get_attr(req, field)
             if val: meta[field] = val
         
@@ -9084,22 +9104,115 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
                 if k in source_metadata:
                     meta[k] = source_metadata[k]
 
-        if os.path.exists(file_path):
-            size = os.path.getsize(file_path)
-            meta["size"] = size
-            meta["size_display"] = f"{size/1024:.2f} KB"
-            if size > 1024*1024:
-                meta["size_display"] = f"{size/1024/1024:.2f} MB"
-            
-            # Try getting resolution
+        def _set_size(bytes_size: Optional[int]) -> None:
+            if bytes_size is None:
+                return
             try:
-                if url.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
+                size_val = int(bytes_size)
+            except Exception:
+                return
+            if size_val <= 0:
+                return
+            meta["size"] = size_val
+            meta["file_size_bytes"] = size_val
+            if size_val >= 1024 * 1024:
+                display = f"{size_val/1024/1024:.2f} MB"
+            else:
+                display = f"{size_val/1024:.2f} KB"
+            meta["size_display"] = display
+            meta["file_size_display"] = display
+
+        def _set_resolution(width: Optional[int], height: Optional[int]) -> None:
+            try:
+                w = int(width) if width is not None else None
+                h = int(height) if height is not None else None
+            except Exception:
+                return
+            if not w or not h or w <= 0 or h <= 0:
+                return
+            meta["width"] = w
+            meta["height"] = h
+            meta["resolution"] = f"{w}x{h}"
+
+        is_subject_generation = str(get_attr(req, "asset_type") or "").strip().lower() == "subject"
+        if is_subject_generation:
+            resolved_type = _normalize_entity_type(
+                get_attr(req, "subject_type")
+                or get_attr(req, "entity_type")
+                or get_attr(req, "category")
+                or meta.get("subject_type")
+                or meta.get("entity_type")
+            )
+
+            entity_id_val = get_attr(req, "entity_id")
+            if not resolved_type and entity_id_val:
+                try:
+                    e = db.query(Entity).filter(Entity.id == int(entity_id_val)).first()
+                    if e:
+                        resolved_type = _normalize_entity_type(e.type)
+                except Exception:
+                    pass
+
+            if not resolved_type and project_id:
+                subject_label = str(get_attr(req, "entity_name") or get_attr(req, "subject_name") or "").strip()
+                if subject_label:
+                    e = db.query(Entity).filter(
+                        Entity.project_id == int(project_id),
+                        or_(Entity.name == subject_label, Entity.name_en == subject_label)
+                    ).first()
+                    if e:
+                        resolved_type = _normalize_entity_type(e.type)
+                        if not meta.get("entity_id"):
+                            meta["entity_id"] = e.id
+
+            if resolved_type:
+                meta["subject_type"] = resolved_type
+                meta["entity_type"] = resolved_type
+                if resolved_type == "character":
+                    meta["subject_type_cn"] = "角色"
+                elif resolved_type == "environment":
+                    meta["subject_type_cn"] = "环境"
+                elif resolved_type == "prop":
+                    meta["subject_type_cn"] = "道具"
+
+        local_exists = os.path.exists(file_path)
+        if local_exists:
+            _set_size(os.path.getsize(file_path))
+
+            try:
+                if is_image:
                     with Image.open(file_path) as img:
-                        meta["width"] = img.width
-                        meta["height"] = img.height
-                        meta["resolution"] = f"{img.width}x{img.height}"
+                        _set_resolution(img.width, img.height)
+                        if img.format and "format" not in meta:
+                            meta["format"] = str(img.format)
+                elif is_video:
+                    from moviepy import VideoFileClip
+                    with VideoFileClip(file_path) as clip:
+                        _set_resolution(clip.w, clip.h)
+                        if clip.duration and "duration" not in meta:
+                            meta["duration"] = float(clip.duration)
             except Exception as e:
                 print(f"Meta extraction error: {e}")
+        else:
+            try:
+                head = requests.head(url, timeout=6, allow_redirects=True)
+                content_length = head.headers.get("Content-Length")
+                if content_length:
+                    _set_size(content_length)
+            except Exception:
+                pass
+
+            if is_image and ("width" not in meta or "height" not in meta):
+                try:
+                    resp = requests.get(url, timeout=10)
+                    if resp.ok and resp.content:
+                        from io import BytesIO
+                        with Image.open(BytesIO(resp.content)) as img:
+                            _set_resolution(img.width, img.height)
+                            if img.format and "format" not in meta:
+                                meta["format"] = str(img.format)
+                except Exception:
+                    pass
 
         remark = get_attr(req, "remark")
         if not remark:
@@ -9111,7 +9224,7 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
 
         asset = Asset(
             user_id=user_id,
-            type="image" if url.lower().endswith(('.png', '.jpg', '.webp')) else "video",
+            type="image" if is_image else "video",
             url=url,
             filename=fname,
             meta_info=meta,

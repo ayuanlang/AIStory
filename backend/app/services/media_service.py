@@ -14,6 +14,7 @@ import random
 import io
 import traceback
 import math
+import ipaddress
 from PIL import Image
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Union
@@ -762,18 +763,14 @@ class MediaGenerationService:
                 ref_list = ref_image if isinstance(ref_image, list) else [ref_image]
                 ref_list = [r for r in ref_list if r]
                 
-                base64_refs = []
-                for ref_url in ref_list:
-                    # Doubao API requires Data URI format if not using http URL
-                    b64 = self._get_image_base64_for_api(ref_url, force_data_uri=True)
-                    if b64: base64_refs.append(b64)
+                resolved_refs = self._resolve_ref_list_for_api(ref_list, force_data_uri_for_local=True)
                     
-                if base64_refs:
+                if resolved_refs:
                     model_name = model or "doubao-seedream-4-5-251128"
                     payload = {
                         "model": model_name, "prompt": prompt, "response_format": "url",
                         # USER FEEDBACK: Field name must be "image", not "image_urls" for Doubao image-to-image
-                        "image": base64_refs,
+                        "image": resolved_refs,
                         "sequential_image_generation": "disabled",
                         "watermark": False
                     }
@@ -823,28 +820,38 @@ class MediaGenerationService:
             
             if start_img_url and last_frame_url:
                 # Start + End Frame Mode (Explicit Roles Required)
+                start_ref = self._resolve_ref_for_api(start_img_url, force_data_uri_for_local=True)
+                end_ref = self._resolve_ref_for_api(last_frame_url, force_data_uri_for_local=True)
+                if not start_ref or not end_ref:
+                    return {"error": "Failed to resolve reference image(s) for Doubao video"}
                 content_payload.append({
                     "type": "image_url", 
-                    "image_url": {"url": self._get_image_base64_for_api(start_img_url, force_data_uri=True)},
+                    "image_url": {"url": start_ref},
                     "role": "first_frame"
                 })
                 content_payload.append({
                     "type": "image_url", 
-                    "image_url": {"url": self._get_image_base64_for_api(last_frame_url, force_data_uri=True)},
+                    "image_url": {"url": end_ref},
                     "role": "last_frame"
                 })
             elif start_img_url:
                 # Start Frame Only - Strict 'first_frame' role required for newer models (1.5 Pro)
+                start_ref = self._resolve_ref_for_api(start_img_url, force_data_uri_for_local=True)
+                if not start_ref:
+                    return {"error": "Failed to resolve start reference image for Doubao video"}
                 content_payload.append({
                     "type": "image_url", 
-                    "image_url": {"url": self._get_image_base64_for_api(start_img_url, force_data_uri=True)},
+                    "image_url": {"url": start_ref},
                      "role": "first_frame"
                 })
             elif last_frame_url:
                 # Last Frame Only (Rare, but use role if strictly End frame)
+                 end_ref = self._resolve_ref_for_api(last_frame_url, force_data_uri_for_local=True)
+                 if not end_ref:
+                    return {"error": "Failed to resolve last reference image for Doubao video"}
                  content_payload.append({
                     "type": "image_url", 
-                    "image_url": {"url": self._get_image_base64_for_api(last_frame_url, force_data_uri=True)},
+                    "image_url": {"url": end_ref},
                     "role": "last_frame"
                 })
 
@@ -963,10 +970,10 @@ class MediaGenerationService:
             if not start_img_src:
                  return {"error": "Vidu Multi-Frame requires a Start Image (Reference Image)"}
                  
-            start_b64 = self._get_image_base64_for_api(start_img_src, force_data_uri=True)
-            if not start_b64: return {"error": "Failed to load Start Image"}
+            start_ref = self._resolve_ref_for_api(start_img_src, force_data_uri_for_local=True)
+            if not start_ref: return {"error": "Failed to load Start Image"}
             
-            payload["start_image"] = start_b64
+            payload["start_image"] = start_ref
             
             # 2. Image Settings (Keyframes)
             # User spec: Array of keyframe config. Min 2.
@@ -982,13 +989,13 @@ class MediaGenerationService:
             
             settings_arr = []
             for kf in keyframes:
-                b64 = self._get_image_base64_for_api(kf, force_data_uri=True)
-                if b64:
+                 resolved_kf = self._resolve_ref_for_api(kf, force_data_uri_for_local=True)
+                 if resolved_kf:
                      # Attempt generic structure. 
                      # If backend rejects, we will know.
                      # Vidu Character Consistency uses "characters".
                      # This "image_settings" is likely for timeline control.
-                     settings_arr.append({"image": b64})
+                     settings_arr.append({"image": resolved_kf})
             
             # Validation: Min 2 keyframes
             if len(settings_arr) < 2:
@@ -1009,14 +1016,14 @@ class MediaGenerationService:
             if ref_image:
                 refs = ref_image if isinstance(ref_image, list) else [ref_image]
                 if refs:
-                    start_b64 = self._get_image_base64_for_api(refs[0], force_data_uri=True)
-                    if start_b64: images.append(start_b64)
+                    start_ref = self._resolve_ref_for_api(refs[0], force_data_uri_for_local=True)
+                    if start_ref: images.append(start_ref)
             
             if last_frame_url:
-                end_b64 = self._get_image_base64_for_api(last_frame_url, force_data_uri=True)
-                if end_b64:
-                     if not images: images.append(end_b64) # Use as start if no start
-                     else: images.append(end_b64) # Use as end
+                end_ref = self._resolve_ref_for_api(last_frame_url, force_data_uri_for_local=True)
+                if end_ref:
+                     if not images: images.append(end_ref) # Use as start if no start
+                     else: images.append(end_ref) # Use as end
             
             if images: payload["images"] = images
 
@@ -1123,20 +1130,18 @@ class MediaGenerationService:
                 base_metadata["submit_aspect_ratio"] = normalized_ar
 
             if ref_image:
-                # Force base64 conversion for Image references
                 ref_list = [ref_image] if isinstance(ref_image, str) else ref_image
-                base64_refs = []
+                resolved_refs = []
                 print(f"[Grsai] Processing {len(ref_list)} reference images...")
                 for i, r in enumerate(ref_list):
-                    # Pass force_data_uri=True if API expects data URI
-                    b64 = self._get_image_base64_for_api(r, force_data_uri=True)
-                    if b64: 
-                        base64_refs.append(b64)
+                    resolved = self._resolve_ref_for_api(r, force_data_uri_for_local=True)
+                    if resolved:
+                        resolved_refs.append(resolved)
                     else:
-                        print(f"[Grsai] Error: Failed to convert ref image {i} ({r}) to base64. Dropping.")
+                        print(f"[Grsai] Error: Failed to resolve ref image {i} ({r}). Dropping.")
                 
-                print(f"[Grsai] Final Base64 Refs Count: {len(base64_refs)}")
-                payload["urls"] = base64_refs
+                print(f"[Grsai] Final Refs Count: {len(resolved_refs)}")
+                payload["urls"] = resolved_refs
             
             # Resolution Logic
             w = tool_conf.get("width")
@@ -1282,7 +1287,7 @@ class MediaGenerationService:
                     # Explicitly process for Veo requirements
                     payload["firstFrameUrl"] = self._process_veo_image(ref_image, aspect_ratio or "16:9")
                 else:
-                    val = self._get_image_base64_for_api(ref_image, force_data_uri=True)
+                    val = self._resolve_ref_for_api(ref_image, force_data_uri_for_local=True)
                     if val: payload["url"] = val
             elif is_veo:
                 # Veo: firstFrameUrl is Optional. 
@@ -1305,7 +1310,7 @@ class MediaGenerationService:
                 if is_veo:
                     payload["lastFrameUrl"] = self._process_veo_image(last_frame_url, aspect_ratio or "16:9")
                 else:
-                    val = self._get_image_base64_for_api(last_frame_url, force_data_uri=True)
+                    val = self._resolve_ref_for_api(last_frame_url, force_data_uri_for_local=True)
                     if val: payload["end_reference_image"] = val
 
             # Veo Clean Prompt Logic
@@ -1488,11 +1493,11 @@ class MediaGenerationService:
         if ref_image:
             submit_action = "ImageToImage"
             is_sync = True
-            b64_img = self._get_image_base64_for_api(ref_image)
-            if not b64_img: 
+            ref_value = self._resolve_ref_for_api(ref_image, force_data_uri_for_local=False)
+            if not ref_value:
                 print("Failed to load reference image for Tencent I2I")
                 return {"error": "Failed to load reference image for Tencent I2I"}
-            payload["InputImage"] = b64_img
+            payload["InputImage"] = ref_value
             payload["RspImgType"] = "url"
 
         if submit_action == "SubmitTextToImageJob":
@@ -1570,7 +1575,7 @@ class MediaGenerationService:
         # kf2v (KeyFrame) uses first_frame_url/last_frame_url, so we exclude it from is_i2v
         is_i2v = "i2v" in model
         
-        first_img = self._get_image_base64_for_api(ref_image, force_data_uri=True)
+        first_img = self._resolve_ref_for_api(ref_image, force_data_uri_for_local=True)
         
         # Validations
         if is_i2v and not first_img:
@@ -1587,7 +1592,7 @@ class MediaGenerationService:
             input_data["first_frame_url"] = first_img
 
         if last_frame_url:
-            last_img = self._get_image_base64_for_api(last_frame_url, force_data_uri=True)
+            last_img = self._resolve_ref_for_api(last_frame_url, force_data_uri_for_local=True)
             if last_img:
                 if is_i2v:
                      logger.warning("[Wanxiang] Warning: Model is i2v but last_frame_url provided. Ignoring.")
@@ -1698,17 +1703,18 @@ class MediaGenerationService:
         if ref_image:
              url = f"{endpoint}/v1/generation/{model}/image-to-image"
              ref_bytes = None
-             # Need bytes for FormData
-             # Re-read or download
-             if "/uploads/" in ref_image:
-                  # .. simplified ..
-                  pass
-             
-             # For now, let's use the helper to get bytes, but helper returns base64. 
-             # decode base64 back to bytes
-             b64 = self._get_image_base64_for_api(ref_image)
-             if b64:
-                 ref_bytes = base64.b64decode(b64)
+
+             if self._is_public_http_url(ref_image):
+                 try:
+                     resp = requests.get(ref_image, timeout=30)
+                     if resp.status_code == 200:
+                         ref_bytes = resp.content
+                 except Exception:
+                     ref_bytes = None
+             else:
+                 b64 = self._get_image_base64_for_api(ref_image)
+                 if b64 and b64 != ref_image:
+                     ref_bytes = base64.b64decode(b64)
             
              if ref_bytes:
                  files = {"init_image": ("init_image.png", ref_bytes, "image/png")}
@@ -2203,6 +2209,56 @@ class MediaGenerationService:
             import traceback
             traceback.print_exc()
             return ""
+
+    def _is_public_http_url(self, value: Any) -> bool:
+        raw = str(value or "").strip()
+        if not raw.lower().startswith(("http://", "https://")):
+            return False
+        try:
+            import urllib.parse
+            parsed = urllib.parse.urlparse(raw)
+            host = (parsed.hostname or "").strip().lower()
+            if not host:
+                return False
+            if host in {"localhost", "127.0.0.1", "0.0.0.0"}:
+                return False
+            try:
+                ip_obj = ipaddress.ip_address(host)
+                if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
+                    return False
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return False
+
+    def _resolve_ref_for_api(self, url_or_path, force_data_uri_for_local=True):
+        if isinstance(url_or_path, list):
+            if not url_or_path:
+                return None
+            url_or_path = url_or_path[0]
+
+        raw = str(url_or_path or "").strip()
+        if not raw:
+            return None
+        if raw.startswith("data:"):
+            return raw
+        if self._is_public_http_url(raw):
+            return raw
+
+        encoded = self._get_image_base64_for_api(raw, force_data_uri=force_data_uri_for_local)
+        if not encoded or encoded == raw:
+            return None
+        return encoded
+
+    def _resolve_ref_list_for_api(self, refs, force_data_uri_for_local=True):
+        source = refs if isinstance(refs, list) else [refs]
+        result = []
+        for item in source:
+            resolved = self._resolve_ref_for_api(item, force_data_uri_for_local=force_data_uri_for_local)
+            if resolved:
+                result.append(resolved)
+        return result
 
     def _get_image_base64_for_api(self, url_or_path, force_data_uri=False):
         # Helper to get base64 from local or remote

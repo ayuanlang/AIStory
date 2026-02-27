@@ -82,8 +82,11 @@ const buildImageSubmitSignature = (payload) => {
         shot_id: payload?.shot_id ?? null,
         shot_number: payload?.shot_number ?? null,
         shot_name: payload?.shot_name ?? null,
+        entity_id: payload?.entity_id ?? null,
         entity_name: payload?.entity_name ?? null,
         subject_name: payload?.subject_name ?? null,
+        subject_type: payload?.subject_type ?? null,
+        entity_type: payload?.entity_type ?? null,
         asset_type: payload?.asset_type ?? null,
     };
     return JSON.stringify(signatureSource);
@@ -511,18 +514,66 @@ export const deleteAllEntities = async (projectId) => {
 // Generation
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const AUTO_DOWNLOAD_PREF_KEY_PREFIX = 'aistory.autoDownloadLocal';
+
+const decodeJwtPayload = (token) => {
+    try {
+        const parts = String(token || '').split('.');
+        if (parts.length < 2) return null;
+        const base64Url = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+        const padded = base64Url.padEnd(Math.ceil(base64Url.length / 4) * 4, '=');
+        return JSON.parse(atob(padded));
+    } catch {
+        return null;
+    }
+};
+
+const resolveCurrentUserStorageScope = () => {
+    const token = localStorage.getItem('token');
+    if (!token) return 'anonymous';
+    const payload = decodeJwtPayload(token);
+    const rawUser = payload?.sub ?? payload?.user_id ?? payload?.id ?? payload?.email ?? payload?.username;
+    const scope = String(rawUser || '').trim();
+    return scope || 'anonymous';
+};
+
+const autoDownloadPreferenceStorageKey = () => `${AUTO_DOWNLOAD_PREF_KEY_PREFIX}:${resolveCurrentUserStorageScope()}`;
+
+export const getAutoDownloadLocalPreference = () => {
+    try {
+        const raw = localStorage.getItem(autoDownloadPreferenceStorageKey());
+        if (raw === '1') return true;
+        if (raw === '0') return false;
+    } catch {
+        // ignore
+    }
+    return null;
+};
+
+export const setAutoDownloadLocalPreference = (enabled) => {
+    try {
+        localStorage.setItem(autoDownloadPreferenceStorageKey(), enabled ? '1' : '0');
+    } catch {
+        // ignore storage failures
+    }
+};
+
 const shouldAutoDownloadByUserSetting = () => {
+    const explicitUserPref = getAutoDownloadLocalPreference();
+    if (explicitUserPref !== null) {
+        return explicitUserPref;
+    }
     try {
         const raw = localStorage.getItem('generationConfig');
-        if (!raw) return true;
+        if (!raw) return false;
         const parsed = JSON.parse(raw);
         if (parsed && Object.prototype.hasOwnProperty.call(parsed, 'autoDownloadLocal')) {
             return !!parsed.autoDownloadLocal;
         }
     } catch {
-        // ignore parsing issues and fallback to default enabled behavior
+        // ignore parsing issues and fallback to default disabled behavior
     }
-    return true;
+    return false;
 };
 
 const resolveMediaDownloadUrl = (url) => {

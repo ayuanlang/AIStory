@@ -54,8 +54,10 @@ const parseMetaForGrouping = (rawMeta) => {
     let meta = rawMeta;
     for (let i = 0; i < 3; i++) {
         if (typeof meta !== 'string') break;
+        const text = meta.trim();
+        if (!text) return {};
         try {
-            meta = JSON.parse(meta);
+            meta = JSON.parse(text);
         } catch {
             break;
         }
@@ -63,25 +65,258 @@ const parseMetaForGrouping = (rawMeta) => {
 
     if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return {};
 
-    const merged = { ...meta };
-    ['meta_info', 'metadata', 'extra', 'details'].forEach((k) => {
-        const nested = meta?.[k];
-        if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
-            Object.assign(merged, nested);
-        }
-    });
+    const merged = {};
+    const visit = (node) => {
+        if (!node || typeof node !== 'object' || Array.isArray(node)) return;
+
+        Object.entries(node).forEach(([k, v]) => {
+            if (v === null || v === undefined) return;
+
+            if (typeof v === 'string') {
+                const text = v.trim();
+                if ((text.startsWith('{') && text.endsWith('}')) || (text.startsWith('[') && text.endsWith(']'))) {
+                    try {
+                        const parsed = JSON.parse(text);
+                        if (parsed && typeof parsed === 'object') {
+                            visit(parsed);
+                        }
+                    } catch {}
+                }
+                merged[k] = text;
+                return;
+            }
+
+            if (typeof v === 'object' && !Array.isArray(v)) {
+                visit(v);
+                return;
+            }
+
+            merged[k] = v;
+        });
+    };
+
+    visit(meta);
     return merged;
 };
 
-const pickMetaValue = (meta, keys = []) => {
+const normalizeGroupKey = (key) => String(key || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+const buildMetaLookup = (asset) => {
+    const merged = {
+        ...(asset && typeof asset === 'object' ? asset : {}),
+        ...(parseMetaForGrouping(asset?.meta_info)),
+    };
+    const lookup = {};
+
+    Object.entries(merged).forEach(([key, value]) => {
+        if (value === null || value === undefined || typeof value === 'object') return;
+        const text = String(value).trim();
+        if (!text) return;
+        lookup[normalizeGroupKey(key)] = text;
+    });
+
+    return lookup;
+};
+
+const pickMetaValue = (lookup, keys = []) => {
     for (const key of keys) {
-        const value = meta?.[key];
+        const value = lookup?.[normalizeGroupKey(key)];
         if (value === null || value === undefined) continue;
         const text = String(value).trim();
         if (!text || text.toLowerCase() === 'null' || text.toLowerCase() === 'undefined') continue;
         return text;
     }
     return '';
+};
+
+const hasAnyLookupValue = (lookup, keys = []) => {
+    for (const key of keys) {
+        const value = lookup?.[normalizeGroupKey(key)];
+        if (value === null || value === undefined) continue;
+        const text = String(value).trim();
+        if (!text || text.toLowerCase() === 'null' || text.toLowerCase() === 'undefined') continue;
+        return true;
+    }
+    return false;
+};
+
+const decodeSafe = (value) => {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    try {
+        return decodeURIComponent(raw);
+    } catch {
+        return raw;
+    }
+};
+
+const inferLabelFromFilename = (filename, mode) => {
+    const name = decodeSafe(String(filename || '').trim());
+    if (!name) return '';
+
+    if (mode === 'subject') {
+        const subjectMatch = name.match(/^subject_subject_(.+?)_gen_/i);
+        if (subjectMatch?.[1]) return subjectMatch[1].replace(/_/g, ' ').trim();
+    }
+
+    if (mode === 'shot') {
+        const shotMatch = name.match(/^(start_frame|end_frame|video)_shot_(.+?)_gen_/i);
+        if (shotMatch?.[2]) return shotMatch[2].replace(/_/g, ' ').trim();
+    }
+
+    return '';
+};
+
+const inferRecencyBucket = (createdAt) => {
+    const ts = Date.parse(String(createdAt || '').trim());
+    if (!Number.isFinite(ts)) return 'unknown';
+    const diffDays = Math.floor((Date.now() - ts) / (1000 * 60 * 60 * 24));
+    if (diffDays <= 7) return 'recent_7d';
+    if (diffDays <= 30) return 'recent_30d';
+    return 'older';
+};
+
+const inferTypeBucket = (assetType) => {
+    const category = getAssetCategory(assetType);
+    if (category === 'image') return 'images';
+    if (category === 'video') return 'videos';
+    return 'others';
+};
+
+const inferLocalFolderLabel = (asset) => {
+    const path = String(
+        asset?.meta_info?.local_path || asset?.local_path || asset?.remark || ''
+    ).replace(/\\/g, '/');
+    if (!path || path === 'Local file') return '';
+    const parts = path.split('/').filter(Boolean);
+    if (!parts.length) return '';
+    if (parts.length === 1) return 'Local Files';
+    return `Local/${parts[0]}`;
+};
+
+const normalizeDisplayText = (value) => String(value || '').replace(/[_\-]+/g, ' ').trim();
+
+const extractLastNumber = (value) => {
+    const text = String(value || '');
+    const match = text.match(/(\d+)(?!.*\d)/);
+    return match ? Number(match[1]) : Number.POSITIVE_INFINITY;
+};
+
+const compareNaturalText = (a, b) => {
+    const left = String(a || '').trim();
+    const right = String(b || '').trim();
+    return left.localeCompare(right, undefined, { numeric: true, sensitivity: 'base' });
+};
+
+const normalizeSubjectType = (value) => {
+    const text = String(value || '').trim().toLowerCase();
+    if (!text) return 'other';
+    if (text.includes('character') || text.includes('role') || text.includes('人物') || text.includes('角色')) return 'character';
+    if (text.includes('environment') || text.includes('scene') || text.includes('场景') || text.includes('环境')) return 'environment';
+    if (text.includes('prop') || text.includes('道具') || text.includes('物件')) return 'prop';
+    return 'other';
+};
+
+const inferSceneLabelFromShotText = (value) => {
+    const text = String(value || '').trim();
+    if (!text) return '';
+    const upper = text.toUpperCase();
+    const epScene = upper.match(/(EP\d{1,3}_SC\d{1,3})/);
+    if (epScene?.[1]) return epScene[1];
+    const sceneOnly = upper.match(/(SC\d{1,3})/);
+    if (sceneOnly?.[1]) return sceneOnly[1];
+    return '';
+};
+
+const buildGroupingContext = (asset) => {
+    const lookup = buildMetaLookup(asset);
+
+    const projectId = pickMetaValue(lookup, [
+        'project_id', 'projectid', 'project', 'proj_id', 'projid',
+    ]);
+    const projectName = pickMetaValue(lookup, [
+        'project_title', 'projecttitle', 'project_name', 'projectname', 'project',
+    ]);
+
+    const subjectId = pickMetaValue(lookup, [
+        'entity_id', 'entityid', 'subject_id', 'subjectid', 'character_id', 'characterid',
+    ]);
+    const subjectName = pickMetaValue(lookup, [
+        'entity_name', 'entityname', 'subject_name', 'subjectname', 'character_name', 'charactername',
+    ]);
+    const subjectTypeRaw = pickMetaValue(lookup, [
+        'entity_type', 'entitytype', 'subject_type', 'subjecttype', 'type',
+    ]);
+
+    const shotId = pickMetaValue(lookup, [
+        'shot_id', 'shotid', 'current_shot_id', 'currentshotid', 'origin_shot_id', 'originshotid',
+    ]);
+    const shotNo = pickMetaValue(lookup, [
+        'shot_number', 'shotnumber', 'shot_no', 'shotno', 'current_shot_number', 'currentshotnumber',
+    ]);
+    const sceneId = pickMetaValue(lookup, [
+        'scene_id', 'sceneid', 'current_scene_id', 'currentsceneid',
+    ]);
+    const sceneNo = pickMetaValue(lookup, [
+        'scene_no', 'sceneno', 'scene_code', 'scenecode', 'scene_number', 'scenenumber',
+    ]);
+    const sceneName = pickMetaValue(lookup, [
+        'scene_name', 'scenename', 'scene_title', 'scenetitle',
+    ]);
+
+    const inferredSubject = inferLabelFromFilename(asset?.filename, 'subject');
+    const inferredShot = inferLabelFromFilename(asset?.filename, 'shot');
+    const localFolderLabel = asset?.__is_local ? inferLocalFolderLabel(asset) : '';
+
+    const hasShotSignals = Boolean(shotId || shotNo || inferredShot) || hasAnyLookupValue(lookup, [
+        'scene_id', 'sceneid', 'scene_code', 'scenecode',
+        'start_frame', 'startframe', 'end_frame', 'endframe',
+        'video_url', 'videourl', 'shot_logic_cn', 'shotlogiccn',
+        'keyframes', 'technical_notes',
+    ]);
+
+    const hasSubjectSignalsRaw = Boolean(subjectId || subjectName || inferredSubject) || hasAnyLookupValue(lookup, [
+        'subject', 'entity', 'entity_type', 'character',
+        'subject_prompt', 'entity_prompt', 'character_prompt',
+    ]);
+    const hasSubjectSignals = !hasShotSignals && hasSubjectSignalsRaw;
+
+    const projectLabel = projectName
+        ? normalizeDisplayText(projectName)
+        : projectId
+            ? `Project ${projectId}`
+            : localFolderLabel || (asset?.__is_local ? 'Local Files' : '');
+
+    const subjectLabel = subjectName
+        ? normalizeDisplayText(subjectName)
+        : subjectId
+            ? `Entity ${subjectId}`
+            : inferredSubject
+                ? normalizeDisplayText(inferredSubject)
+                : '';
+
+    const shotBase = shotNo || shotId || inferredShot;
+    const shotLabel = shotBase
+        ? `Shot ${normalizeDisplayText(shotBase).replace(/^shot\s+/i, '')}`
+        : '';
+
+    const inferredScene = inferSceneLabelFromShotText(sceneNo || sceneId || shotNo || shotId || inferredShot);
+    const sceneBase = sceneName || sceneNo || sceneId || inferredScene;
+    const sceneLabel = sceneBase
+        ? `Scene ${normalizeDisplayText(sceneBase).replace(/^scene\s+/i, '')}`
+        : '';
+
+    const subjectType = normalizeSubjectType(subjectTypeRaw);
+
+    return {
+        projectLabel,
+        subjectLabel,
+        subjectType,
+        sceneLabel,
+        shotLabel,
+        isShotContent: hasShotSignals,
+        isSubjectContent: hasSubjectSignals,
+    };
 };
 
 
@@ -623,39 +858,80 @@ const AssetsLibrary = () => {
         if (groupBy === 'none') return { 'All Assets': filteredAssets };
         
         const groups = {};
-        const globalKey = 'Global / Unsorted';
+        const groupSortMeta = {};
+        const globalKey = t('未分组', 'Global / Unsorted');
         
         filteredAssets.forEach(asset => {
-            const meta = parseMetaForGrouping(asset.meta_info);
+            const context = buildGroupingContext(asset);
             
             let key = globalKey;
-            
-            const pId = pickMetaValue(meta, ['project_id', 'Project_id', 'ProjectId', 'projectId']);
-            const pTitle = pickMetaValue(meta, ['project_title', 'Project_title', 'projectTitle']);
-
-            const eId = pickMetaValue(meta, ['entity_id', 'Entity_id', 'entityId', 'subject_id', 'subjectId']);
-            const eName = pickMetaValue(meta, ['entity_name', 'Entity_name', 'entityName', 'subject_name', 'subjectName']);
-
-            const sId = pickMetaValue(meta, ['shot_id', 'Shot_id', 'shotId']);
-            const sNum = pickMetaValue(meta, ['shot_number', 'Shot_number', 'shotNumber']);
 
             if (groupBy === 'project') {
-                if (pTitle) key = pTitle;
-                else if (pId) key = `Project ${pId}`;
+                if (context.projectLabel) key = context.projectLabel;
             } else if (groupBy === 'subject') {
-                if (eName) key = eName;
-                else if (eId) key = `Entity ${eId}`;
+                if (!context.isShotContent && context.projectLabel && context.subjectLabel) {
+                    const typeLabel = context.subjectType === 'character'
+                        ? t('角色', 'Character')
+                        : context.subjectType === 'environment'
+                            ? t('环境', 'Environment')
+                            : context.subjectType === 'prop'
+                                ? t('道具', 'Prop')
+                                : t('其他', 'Other');
+                    key = `${context.projectLabel} · ${typeLabel}`;
+                }
             } else if (groupBy === 'shot') {
-                if (sNum) key = `Shot ${sNum}`;
-                else if (sId) key = `Shot ${sId}`;
+                if (!context.isSubjectContent && context.projectLabel && context.sceneLabel && context.shotLabel) {
+                    key = `${context.projectLabel} · ${context.sceneLabel} · ${context.shotLabel}`;
+                }
+            }
+
+            if (key === globalKey) {
+                return;
             }
             
             if (!groups[key]) groups[key] = [];
             groups[key].push(asset);
+
+            if (groupBy === 'shot' && !groupSortMeta[key]) {
+                groupSortMeta[key] = {
+                    project: context.projectLabel || '',
+                    scene: context.sceneLabel || '',
+                    shot: context.shotLabel || '',
+                };
+            }
         });
+
+        if (groupBy === 'shot') {
+            const ordered = {};
+            const sortedKeys = Object.keys(groups).sort((a, b) => {
+                const left = groupSortMeta[a] || {};
+                const right = groupSortMeta[b] || {};
+
+                const projectCmp = compareNaturalText(left.project, right.project);
+                if (projectCmp !== 0) return projectCmp;
+
+                const leftSceneNo = extractLastNumber(String(left.scene || '').replace(/^scene\s+/i, ''));
+                const rightSceneNo = extractLastNumber(String(right.scene || '').replace(/^scene\s+/i, ''));
+                if (leftSceneNo !== rightSceneNo) return leftSceneNo - rightSceneNo;
+
+                const sceneCmp = compareNaturalText(left.scene, right.scene);
+                if (sceneCmp !== 0) return sceneCmp;
+
+                const leftShotNo = extractLastNumber(String(left.shot || '').replace(/^shot\s+/i, ''));
+                const rightShotNo = extractLastNumber(String(right.shot || '').replace(/^shot\s+/i, ''));
+                if (leftShotNo !== rightShotNo) return leftShotNo - rightShotNo;
+
+                return compareNaturalText(left.shot, right.shot);
+            });
+
+            sortedKeys.forEach((key) => {
+                ordered[key] = groups[key];
+            });
+            return ordered;
+        }
         
         return groups;
-    }, [filteredAssets, groupBy]);
+    }, [filteredAssets, groupBy, t]);
 
 
     return (
@@ -761,7 +1037,7 @@ const AssetsLibrary = () => {
                 <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-hide">
                     <span className="text-xs font-bold text-muted-foreground uppercase mr-2">{t('分组：', 'Group By:')}</span>
                     {[
-                        { id: 'none', label: t('无', 'None'), icon: Layers },
+                        { id: 'none', label: t('全部', 'All'), icon: Layers },
                         { id: 'project', label: t('项目', 'Project'), icon: Folder },
                         { id: 'subject', label: t('主体', 'Subject'), icon: User },
                         { id: 'shot', label: t('镜头', 'Shot'), icon: Film },

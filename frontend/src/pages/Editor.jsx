@@ -6153,7 +6153,17 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
         
         // User Request: Refs (Video) should NOT do entity identification (only start/end/keyframes).
         const shouldDetectEntities = storageKey !== 'video_ref_image_urls';
-        const autoMatches = shouldDetectEntities ? getEntityMatches().map(e => e.image_url).filter(Boolean) : [];
+        const matchedEntities = shouldDetectEntities ? getEntityMatches() : [];
+        const autoMatches = matchedEntities.map(e => e.image_url).filter(Boolean);
+        const environmentRefSet = new Set(
+            matchedEntities
+                .filter((entity) => {
+                    const entityType = String(entity?.type || '').trim().toLowerCase();
+                    return entityType.includes('environment') || entityType.includes('env') || entityType.includes('scene');
+                })
+                .map((entity) => String(entity?.image_url || '').trim())
+                .filter(Boolean)
+        );
 
            if (isLockedManual) {
                // 用户已手动调整后：完全以用户列表为准，不再自动匹配/注入
@@ -6194,9 +6204,20 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
             // Check if explicitly deleted
             const deleted = tech.deleted_ref_urls || [];
             const isExplicitlyDeleted = deleted.includes(shot.image_url);
+            let hasStartFrame = activeRefs.includes(shot.image_url);
 
-            if (!activeRefs.includes(shot.image_url) && !isExplicitlyDeleted) {
+            if (!hasStartFrame && !isExplicitlyDeleted) {
                 activeRefs.unshift(shot.image_url); // Prepend Start Frame for context
+                hasStartFrame = true;
+            }
+
+            if (hasStartFrame && environmentRefSet.size > 0) {
+                activeRefs = activeRefs.filter((url) => {
+                    const normalized = String(url || '').trim();
+                    if (!normalized) return false;
+                    if (normalized === shot.image_url) return true;
+                    return !environmentRefSet.has(normalized);
+                });
             }
         }
         
@@ -8467,8 +8488,11 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
 
             const asset = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
                 project_id: projectId,
+                entity_id: analyzed?.id,
                 entity_name: analyzed?.name || analyzed?.name_en,
                 subject_name: analyzed?.name || analyzed?.name_en,
+                subject_type: analyzed?.type,
+                entity_type: analyzed?.type,
                 asset_type: 'subject'
             });
 
@@ -8719,8 +8743,11 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
 
             const asset = await generateImage(finalPrompt, provider || null, uniqueRefs.length > 0 ? uniqueRefs : null, {
                 project_id: projectId,
+                entity_id: selectedEntity?.id,
                 entity_name: selectedEntity?.name || selectedEntity?.name_en,
                 subject_name: selectedEntity?.name || selectedEntity?.name_en,
+                subject_type: selectedEntity?.type,
+                entity_type: selectedEntity?.type,
                 asset_type: 'subject'
             });
             await updateEntityImage(asset.url);
@@ -8861,8 +8888,11 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                         // 3. Generate
                         const res = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
                             project_id: projectId,
+                            entity_id: entity?.id,
                             entity_name: entity?.name || entity?.name_en,
                             subject_name: entity?.name || entity?.name_en,
+                            subject_type: entity?.type,
+                            entity_type: entity?.type,
                             asset_type: 'subject'
                         });
                         
@@ -9802,7 +9832,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     );
 };
 
-const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setEditingShot, uiLang = 'zh', focusRequest = null }) => {
+const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setEditingShot, uiLang = 'zh', focusRequest = null, restoreEditingShotId = null }) => {
     const { generationConfig, saveToolConfig, savedToolConfigs, llmConfig } = useStore();
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
     const [scenes, setScenes] = useState([]);
@@ -9858,6 +9888,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         if (!activeEpisode?.id) return '';
         return `aistory.shotGenerationState.${activeEpisode.id}`;
     }, [activeEpisode?.id]);
+    const restoreEditingAttemptedRef = useRef(false);
     const hasHydratedGenerationStateRef = useRef(false);
     const mediaRebindAttemptedRef = useRef('');
     const generationMediaBaselineRef = useRef({});
@@ -10720,6 +10751,22 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             };
         });
     }, [shots, editingShot?.id, setEditingShot]);
+
+    useEffect(() => {
+        if (!restoreEditingShotId) return;
+        if (restoreEditingAttemptedRef.current) return;
+        if (editingShot?.id) {
+            restoreEditingAttemptedRef.current = true;
+            return;
+        }
+        if (!Array.isArray(shots) || shots.length === 0) return;
+
+        const restored = shots.find((item) => String(item?.id) === String(restoreEditingShotId));
+        if (restored) {
+            setEditingShot(restored);
+        }
+        restoreEditingAttemptedRef.current = true;
+    }, [restoreEditingShotId, shots, editingShot?.id, setEditingShot]);
 
 
     const handleDeleteAllShots = async () => {
@@ -13751,22 +13798,32 @@ const ImportModal = ({ isOpen, onClose, onImport, defaultType = 'auto', project,
 
 };
 
-const Editor = ({ projectId, onClose }) => {
+const PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY = 'aistory.projects.return.snapshot';
+
+const Editor = ({
+    projectId,
+    onClose,
+    initialActiveTab = 'overview',
+    initialEpisodeId = null,
+    initialEditingShotId = null,
+    initialEditingShotSceneId = null,
+}) => {
     const params = useParams();
     const id = projectId || params.id;
     const navigate = useNavigate();
 
     const [project, setProject] = useState(null);
     const [episodes, setEpisodes] = useState([]);
-    const [activeEpisodeId, setActiveEpisodeId] = useState(null);
+    const [activeEpisodeId, setActiveEpisodeId] = useState(initialEpisodeId);
     const [isEpisodeMenuOpen, setIsEpisodeMenuOpen] = useState(false);
     const [isAgentOpen, setIsAgentOpen] = useState(false);
-    const [activeTab, setActiveTab] = useState('overview');
+    const [activeTab, setActiveTab] = useState(initialActiveTab || 'overview');
     const [isImportOpen, setIsImportOpen] = useState(false);
     const [isSuperuser, setIsSuperuser] = useState(false);
     const [refreshKey, setRefreshKey] = useState(0);
     const [editingShot, setEditingShot] = useState(null);
     const [shotsFocusRequest, setShotsFocusRequest] = useState(null);
+    const hasAppliedInitialShotFocusRef = useRef(false);
     const [uiLang, setUiLang] = useState(() => {
         try {
             const saved = localStorage.getItem('aistory.ui.lang');
@@ -13795,6 +13852,14 @@ const Editor = ({ projectId, onClose }) => {
             setGlobalUiLang(uiLang);
         } catch (e) {}
     }, [uiLang]);
+
+    useEffect(() => {
+        if (hasAppliedInitialShotFocusRef.current) return;
+        if (String(initialActiveTab || '') !== 'shots') return;
+        if (!initialEditingShotSceneId) return;
+        hasAppliedInitialShotFocusRef.current = true;
+        setShotsFocusRequest({ sceneId: String(initialEditingShotSceneId), nonce: Date.now() });
+    }, [initialActiveTab, initialEditingShotSceneId]);
 
     const loadProjectData = async () => {
          if (!id) return;
@@ -14748,6 +14813,17 @@ const Editor = ({ projectId, onClose }) => {
                     <button
                         onClick={() => {
                             trackMenuAction('editor.action.settings', t('设置', 'Settings'), () => {
+                                try {
+                                    const snapshot = {
+                                        selectedProjectId: id,
+                                        activeTab,
+                                        activeEpisodeId,
+                                        editingShotId: editingShot?.id ?? null,
+                                        editingShotSceneId: editingShot?.scene_id ?? null,
+                                        savedAt: Date.now(),
+                                    };
+                                    sessionStorage.setItem(PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY, JSON.stringify(snapshot));
+                                } catch (e) {}
                                 const returnTo = encodeURIComponent(`${window.location.pathname}${window.location.search}${window.location.hash}`);
                                 window.location.assign(`/settings?tab=api-settings&return_to=${returnTo}`);
                             });
@@ -14795,7 +14871,7 @@ const Editor = ({ projectId, onClose }) => {
                             }
                             setActiveTab('shots');
                         }} uiLang={uiLang} />}
-                        {activeTab === 'shots' && <ShotsView activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} editingShot={editingShot} setEditingShot={setEditingShot} uiLang={uiLang} focusRequest={shotsFocusRequest} />}
+                        {activeTab === 'shots' && <ShotsView activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} editingShot={editingShot} setEditingShot={setEditingShot} uiLang={uiLang} focusRequest={shotsFocusRequest} restoreEditingShotId={initialEditingShotId} />}
                         {activeTab === 'montage' && <VideoStudio activeEpisode={activeEpisode} projectId={id} onLog={addLog} />}
                     </div>
                 </div>

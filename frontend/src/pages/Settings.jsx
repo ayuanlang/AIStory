@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useStore } from '@/lib/store';
 import { Save, Info, Upload, Download, Coins, History, Palette, CheckCircle, ArrowLeft, User, KeyRound } from 'lucide-react';
 import { API_URL } from '@/config';
-import { updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, selectSystemSetting, updateMyProfile, updateMyPassword, uploadMyAvatar, recordSystemLogAction } from '../services/api';
+import { updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, selectSystemSetting, updateMyProfile, updateMyPassword, uploadMyAvatar, recordSystemLogAction, getAutoDownloadLocalPreference, setAutoDownloadLocalPreference } from '../services/api';
 import RechargeModal from '../components/RechargeModal'; // Import RechargeModal
 import { getUiLang, setUiLang as setGlobalUiLang, tUI, UI_LANG_EVENT } from '../lib/uiLang';
 
@@ -70,6 +70,30 @@ const THEMES = {
             '--muted': '260 30% 14%',
             '--border': '260 30% 18%'
         }
+    },
+    emerald: {
+        name: { zh: '祖母绿幕', en: 'Emerald Noir' },
+        description: { zh: '冷静青绿色，清晰层次。', en: 'Calm teal accents with clear layering.' },
+        colors: {
+            '--background': '168 44% 7%',
+            '--card': '168 42% 9%',
+            '--primary': '160 72% 78%',
+            '--secondary': '167 30% 16%',
+            '--muted': '167 26% 13%',
+            '--border': '167 30% 18%'
+        }
+    },
+    ember: {
+        name: { zh: '余烬红', en: 'Ember Red' },
+        description: { zh: '低饱和暖红，电影质感。', en: 'Muted warm reds with cinematic mood.' },
+        colors: {
+            '--background': '6 36% 8%',
+            '--card': '6 34% 10%',
+            '--primary': '12 84% 82%',
+            '--secondary': '8 24% 17%',
+            '--muted': '8 22% 14%',
+            '--border': '8 24% 20%'
+        }
     }
 };
 
@@ -101,7 +125,7 @@ const Settings = () => {
     const [videoModel, setVideoModel] = useState("Runway");
     const [visionModel, setVisionModel] = useState("Grsai-Vision"); // New Vision Model State
     const [promptLanguage, setPromptLanguage] = useState("mixed");
-    const [autoDownloadLocal, setAutoDownloadLocal] = useState(true);
+    const [autoDownloadLocal, setAutoDownloadLocal] = useState(false);
 
     // State for Tool Configs (Active inputs)
     const [imgToolKey, setImgToolKey] = useState("");
@@ -259,6 +283,16 @@ const Settings = () => {
         });
         localStorage.setItem('theme', themeKey);
         showNotification(t('页面风格已切换', 'Theme updated'), 'success');
+    };
+
+    const handleAutoDownloadLocalChange = (checked) => {
+        const next = !!checked;
+        setAutoDownloadLocal(next);
+        setAutoDownloadLocalPreference(next);
+        setGenerationConfig({
+            ...(generationConfig || {}),
+            autoDownloadLocal: next,
+        });
     };
 
     const trackMenuAction = (menuKey, menuLabel, actionFn) => {
@@ -719,10 +753,15 @@ const Settings = () => {
             setCharSupplements(withFallback(generationConfig.characterSupplements, DEFAULT_CHARACTER_SUPPLEMENTS));
             setSceneSupplements(withFallback(generationConfig.sceneSupplements, DEFAULT_SCENE_SUPPLEMENTS));
             setPromptLanguage(generationConfig.prompt_language || "mixed");
+            const userPref = getAutoDownloadLocalPreference();
             setAutoDownloadLocal(
-                Object.prototype.hasOwnProperty.call(generationConfig, 'autoDownloadLocal')
-                    ? !!generationConfig.autoDownloadLocal
-                    : true
+                userPref !== null
+                    ? userPref
+                    : (
+                        Object.prototype.hasOwnProperty.call(generationConfig, 'autoDownloadLocal')
+                            ? !!generationConfig.autoDownloadLocal
+                            : false
+                    )
             );
             
             const iModel = generationConfig.imageModel || "Midjourney";
@@ -740,7 +779,7 @@ const Settings = () => {
         } else {
                setCharSupplements(DEFAULT_CHARACTER_SUPPLEMENTS);
                setSceneSupplements(DEFAULT_SCENE_SUPPLEMENTS);
-               setAutoDownloadLocal(true);
+             setAutoDownloadLocal(getAutoDownloadLocalPreference() ?? false);
              // Even if no generationConfig, we might have defaults set in state (e.g. Midjourney/Runway)
              // and we should load their configs if savedToolConfigs updates
              loadToolConfig(imageModel, 'image');
@@ -1386,6 +1425,23 @@ const Settings = () => {
                         </button>
                     ))}
                 </div>
+
+                <div className="pt-4 border-t border-white/10 space-y-2">
+                    <h3 className="text-sm font-semibold text-white/90">{t('生成偏好', 'Generation Preference')}</h3>
+                    <label className="flex items-center gap-3 text-sm text-white bg-white/5 p-3 rounded-lg border border-white/10">
+                        <input
+                            type="checkbox"
+                            checked={!!autoDownloadLocal}
+                            onChange={(e) => handleAutoDownloadLocalChange(e.target.checked)}
+                        />
+                        <span>
+                            {t('生成成功后自动下载到本地（按当前用户设置）', 'Auto-download generated media to local device (per-user setting)')}
+                        </span>
+                    </label>
+                    <p className="text-[11px] text-muted-foreground">
+                        {t('该开关会立即保存到当前用户本地设置。', 'This toggle is saved immediately to current user local settings.')}
+                    </p>
+                </div>
             </section>
             )}
 
@@ -1646,7 +1702,7 @@ const Settings = () => {
                                     <input
                                         type="checkbox"
                                         checked={!!autoDownloadLocal}
-                                        onChange={(e) => setAutoDownloadLocal(e.target.checked)}
+                                        onChange={(e) => handleAutoDownloadLocalChange(e.target.checked)}
                                     />
                                     <span>
                                         {t('生成成功后自动下载到本地（按当前用户设置）', 'Auto-download generated media to local device (per-user setting)')}

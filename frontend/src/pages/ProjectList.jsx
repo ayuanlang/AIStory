@@ -58,6 +58,7 @@ const getAvatarUrl = (url) => {
 };
 
 const USER_PROFILE_UPDATED_EVENT = 'aistory.user.profile.updated';
+const PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY = 'aistory.projects.return.snapshot';
 
 const sortProjectsNewestFirst = (items = []) => {
     const safeList = Array.isArray(items) ? [...items] : [];
@@ -141,6 +142,42 @@ const THEMES = {
             "--muted": "260 30% 14%",
             "--border": "260 30% 18%"
         }
+    },
+    emerald: {
+        name: {
+            zh: "祖母绿幕",
+            en: "Emerald Noir",
+        },
+        description: {
+            zh: "冷静青绿色，清晰层次。",
+            en: "Calm teal accents with clear layering.",
+        },
+        colors: {
+            "--background": "168 44% 7%",
+            "--card": "168 42% 9%",
+            "--primary": "160 72% 78%",
+            "--secondary": "167 30% 16%",
+            "--muted": "167 26% 13%",
+            "--border": "167 30% 18%"
+        }
+    },
+    ember: {
+        name: {
+            zh: "余烬红",
+            en: "Ember Red",
+        },
+        description: {
+            zh: "低饱和暖红，电影质感。",
+            en: "Muted warm reds with cinematic mood.",
+        },
+        colors: {
+            "--background": "6 36% 8%",
+            "--card": "6 34% 10%",
+            "--primary": "12 84% 82%",
+            "--secondary": "8 24% 17%",
+            "--muted": "8 22% 14%",
+            "--border": "8 24% 20%"
+        }
     }
 };
 
@@ -153,6 +190,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [newTitle, setNewTitle] = useState('');
     const [activeTab, setActiveTab] = useState(initialTab);
     const [selectedProjectId, setSelectedProjectId] = useState(null);
+    const [restoredEditorState, setRestoredEditorState] = useState(null);
     const [currentUser, setCurrentUser] = useState(null); // Simple user state to check permissions if we had endpoint
     const navigate = useNavigate();
 
@@ -216,6 +254,35 @@ const ProjectList = ({ initialTab = 'projects' }) => {
             setActiveTab('projects');
         }
     }, [location.pathname, initialTab]);
+
+    useEffect(() => {
+        if (location.pathname !== '/projects') {
+            return;
+        }
+        try {
+            const raw = sessionStorage.getItem(PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY);
+            if (!raw) return;
+
+            const snapshot = JSON.parse(raw);
+            const projectId = snapshot?.selectedProjectId;
+            if (!projectId) {
+                sessionStorage.removeItem(PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY);
+                return;
+            }
+
+            setActiveTab('projects');
+            setSelectedProjectId(projectId);
+            setRestoredEditorState({
+                activeTab: snapshot?.activeTab || 'overview',
+                activeEpisodeId: snapshot?.activeEpisodeId ?? null,
+                editingShotId: snapshot?.editingShotId ?? null,
+                editingShotSceneId: snapshot?.editingShotSceneId ?? null,
+            });
+            sessionStorage.removeItem(PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY);
+        } catch (e) {
+            sessionStorage.removeItem(PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY);
+        }
+    }, [location.pathname]);
 
     const handleThemeChange = (key, showToast = true) => {
         setCurrentTheme(key);
@@ -437,6 +504,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                 if (disabled) return;
                 trackMenuAction(`project_list.sidebar.${id}`, label, () => {
                     setActiveTab(id);
+                    setRestoredEditorState(null);
                     setSelectedProjectId(null); // Return to list view when switching tabs
                 });
             }}
@@ -453,7 +521,19 @@ const ProjectList = ({ initialTab = 'projects' }) => {
 
     // If a project is selected, show the full-screen Editor immediately
     if (selectedProjectId) {
-        return <Editor projectId={selectedProjectId} onClose={() => setSelectedProjectId(null)} />;
+        return (
+            <Editor
+                projectId={selectedProjectId}
+                onClose={() => {
+                    setSelectedProjectId(null);
+                    setRestoredEditorState(null);
+                }}
+                initialActiveTab={restoredEditorState?.activeTab || 'overview'}
+                initialEpisodeId={restoredEditorState?.activeEpisodeId ?? null}
+                initialEditingShotId={restoredEditorState?.editingShotId ?? null}
+                initialEditingShotSceneId={restoredEditorState?.editingShotSceneId ?? null}
+            />
+        );
     }
 
     return (
@@ -674,7 +754,10 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                 ) : (
                                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
                                         {projects.map(p => (
-                                            <div onClick={() => setSelectedProjectId(p.id)} key={p.id} className="cursor-pointer">
+                                            <div onClick={() => {
+                                                setRestoredEditorState(null);
+                                                setSelectedProjectId(p.id);
+                                            }} key={p.id} className="cursor-pointer">
                                                 <motion.div 
                                                     whileHover={{ y: -8, scale: 1.02 }}
                                                     transition={{ type: "spring", stiffness: 300, damping: 20 }}
