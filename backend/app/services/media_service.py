@@ -372,10 +372,21 @@ class MediaGenerationService:
         duration: int = 5,
         keyframes: Optional[List[str]] = None,
         requested_model: Optional[str] = None,
+        explicit_selection: bool = False,
     ) -> Dict[str, Any]:
         with SessionLocal() as session:
             smart_enabled = self._is_smart_routing_enabled(session, user_id)
             candidates = self._get_system_candidates(session, category)
+
+        if explicit_selection:
+            logger.info(
+                "Smart routing bypassed for explicit selection | category=%s user_id=%s provider=%s model=%s",
+                category,
+                user_id,
+                provider,
+                requested_model,
+            )
+            smart_enabled = False
 
         effective_provider = self._normalize_provider_name(provider, category)
         baseline_config = dict(api_config or {})
@@ -394,10 +405,11 @@ class MediaGenerationService:
         )
 
         retry_limit = 1
-        for c in candidates:
-            if c.get("provider") == effective_provider and c.get("retry_limit") is not None:
-                retry_limit = max(1, int(c.get("retry_limit")))
-                break
+        if not explicit_selection:
+            for c in candidates:
+                if c.get("provider") == effective_provider and c.get("retry_limit") is not None:
+                    retry_limit = max(1, int(c.get("retry_limit")))
+                    break
 
         multi_ref_count = len(reference_image_url) if isinstance(reference_image_url, list) else 0
         attempt_items: List[Dict[str, Any]] = []
@@ -440,8 +452,19 @@ class MediaGenerationService:
             deduped_attempts.append(item)
 
         final_error: Dict[str, Any] = {"error": "Generation failed"}
+        fallback_unlocked = False
 
         for index, attempt in enumerate(deduped_attempts, start=1):
+            if attempt.get("tag") == "priority_fallback" and not fallback_unlocked:
+                logger.info(
+                    "Smart routing skip fallback | category=%s user_id=%s attempt=%s/%s reason=no_explicit_submit_failure",
+                    category,
+                    user_id,
+                    index,
+                    len(deduped_attempts),
+                )
+                continue
+
             selected_provider = self._normalize_provider_name(attempt.get("provider"), category)
             selected_config = dict(attempt.get("config") or {})
             if not selected_provider:
@@ -485,6 +508,8 @@ class MediaGenerationService:
                 return result
 
             final_error = result or {"error": "Generation failed"}
+            if bool((result or {}).get("submit_failed")):
+                fallback_unlocked = True
 
         return final_error
 
@@ -624,6 +649,7 @@ class MediaGenerationService:
             height=height,
             aspect_ratio=aspect_ratio,
             requested_model=(llm_config or {}).get("model"),
+            explicit_selection=bool((llm_config or {}).get("provider") or (llm_config or {}).get("model")),
         )
 
         # Download 
@@ -678,6 +704,7 @@ class MediaGenerationService:
             duration=duration,
             keyframes=keyframes,
             requested_model=(llm_config or {}).get("model"),
+            explicit_selection=bool((llm_config or {}).get("provider") or (llm_config or {}).get("model")),
         )
 
         # Download 
@@ -1741,16 +1768,16 @@ class MediaGenerationService:
                 return {"url": data.get("url"), "metadata": metadata}
             else:
                 print(f"[{log_tag}] Error {resp.status_code}: {resp.text}")
-                return {"error": f"API Error {resp.status_code}", "details": resp.text}
+                return {"error": f"API Error {resp.status_code}", "details": resp.text, "submit_failed": True}
         except requests.exceptions.Timeout as e:
             print(f"[{log_tag}] Timeout: {e}")
-            return {"error": "Upstream request timeout", "details": str(e)}
+            return {"error": "Upstream request timeout", "details": str(e), "submit_failed": True}
         except requests.exceptions.RequestException as e:
             print(f"[{log_tag}] RequestException: {e}")
-            return {"error": "Upstream request failed", "details": str(e)}
+            return {"error": "Upstream request failed", "details": str(e), "submit_failed": True}
         except Exception as e:
             print(f"[{log_tag}] Exception: {e}")
-            return {"error": str(e)}
+            return {"error": str(e), "submit_failed": True}
 
     async def _submit_and_poll_video(self, url, payload, api_key, log_tag, extra_metadata=None, poll_timeout_seconds: int = 600, poll_interval_seconds: int = 2):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
@@ -1766,13 +1793,13 @@ class MediaGenerationService:
             print(f"[{log_tag}] Submission Response: {resp.text[:500]}...") # DEBUG USER REQUEST
             if resp.status_code not in [200, 201]: 
                 print(f"[{log_tag}] Error {resp.status_code}: {resp.text}")
-                return {"error": f"Submission Failed {resp.status_code}", "details": resp.text}
+                return {"error": f"Submission Failed {resp.status_code}", "details": resp.text, "submit_failed": True}
             
             data = resp.json()
             task_id = data.get("id") or data.get("task_id")
             if not task_id and isinstance(data.get("data"), dict):
                 task_id = data.get("data", {}).get("id") or data.get("data", {}).get("task_id")
-            if not task_id: return {"error": "No Task ID"}
+            if not task_id: return {"error": "No Task ID", "submit_failed": True}
             
             print(f"[{log_tag}] Task {task_id} submitted. Polling... timeout={poll_timeout_seconds}s interval={poll_interval_seconds}s")
             
@@ -1804,11 +1831,11 @@ class MediaGenerationService:
                         return {"error": "Generation Failed", "details": p_data.get("error")}
             return {"error": f"Timeout after {poll_timeout_seconds}s"}
         except requests.exceptions.Timeout as e:
-            return {"error": "Upstream request timeout", "details": str(e)}
+            return {"error": "Upstream request timeout", "details": str(e), "submit_failed": True}
         except requests.exceptions.RequestException as e:
-            return {"error": "Upstream request failed", "details": str(e)}
+            return {"error": "Upstream request failed", "details": str(e), "submit_failed": True}
         except Exception as e:
-            return {"error": str(e)}
+            return {"error": str(e), "submit_failed": True}
 
     async def _submit_and_poll_grsai(self, url, payload, api_key, result_url, is_video=False, extra_metadata=None, trace_id: Optional[str] = None):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
@@ -1896,6 +1923,7 @@ class MediaGenerationService:
                     return {
                         "error": "Veo/Grsai 配额或频率受限",
                         "details": "上游返回 429 RESOURCE_EXHAUSTED（请求过于频繁或额度耗尽）。请降低并发、等待冷却或提升配额后重试。",
+                        "submit_failed": True,
                     }
                 if resp.status_code in retryable_statuses and index < len(upstream_candidates) - 1:
                     last_error = f"Submission Failed {resp.status_code}: {resp.text[:300]}"
@@ -1912,18 +1940,18 @@ class MediaGenerationService:
                     resp.status_code,
                     (resp.text or "")[:500],
                 )
-                return {"error": f"Submission Failed {resp.status_code}", "details": resp.text}
+                return {"error": f"Submission Failed {resp.status_code}", "details": resp.text, "submit_failed": True}
 
             try:
                 data = resp.json()
             except Exception:
-                return {"error": "Invalid Grsai response", "details": resp.text[:1000]}
+                return {"error": "Invalid Grsai response", "details": resp.text[:1000], "submit_failed": True}
 
             data_obj = data.get("data")
             if data_obj is None:
                 print(f"[Grsai] API Logic Failure: {data}")
                 msg = data.get("msg") or data.get("message") or "Unknown Error"
-                return {"error": f"API Error {data.get('code')}", "details": msg}
+                return {"error": f"API Error {data.get('code')}", "details": msg, "submit_failed": True}
 
             task_id = None
             if isinstance(data_obj, dict):
@@ -1946,7 +1974,7 @@ class MediaGenerationService:
             if not task_id:
                 print(f"[Grsai] No Task ID in response: {data}")
                 logger.error("[GrsaiTrace][%s] submit missing_task_id | response=%s", trace_id, str(data)[:1000])
-                return {"error": "No Task ID", "details": data}
+                return {"error": "No Task ID", "details": data, "submit_failed": True}
 
             print(f"[Grsai] Task {task_id} submitted. Polling via {poll_url}...")
             logger.info("[GrsaiTrace][%s] polling start | task_id=%s poll_url=%s", trace_id, task_id, poll_url)
@@ -2050,9 +2078,9 @@ class MediaGenerationService:
 
         if last_error:
             logger.error("[GrsaiTrace][%s] all upstream failed | last_error=%s", trace_id, last_error)
-            return {"error": "Grsai request failed", "details": last_error}
+            return {"error": "Grsai request failed", "details": last_error, "submit_failed": True}
         logger.error("[GrsaiTrace][%s] all upstream failed | no last_error", trace_id)
-        return {"error": "Grsai request failed", "details": "All upstream endpoints failed"}
+        return {"error": "Grsai request failed", "details": "All upstream endpoints failed", "submit_failed": True}
 
     # -- Helpers --
     def _download_and_save(self, url: str, filename_base: str = None, user_id: int = 1) -> str:

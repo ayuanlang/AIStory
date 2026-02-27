@@ -108,7 +108,7 @@ def _log_shot_submit_debug(kind: str, req: Any, refs: Any = None, extra: Optiona
         }
         if extra:
             payload.update(extra)
-        logger.info("[ShotSubmitDebug] %s", json.dumps(payload, ensure_ascii=False, default=str))
+        llm_service.log_audit("SHOT_SUBMIT_DEBUG", payload)
     except Exception as exc:
         logger.warning("[ShotSubmitDebug] failed to log payload: %s", exc)
 

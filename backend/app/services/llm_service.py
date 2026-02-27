@@ -103,6 +103,9 @@ class LLMService:
         except Exception as e:
             logger.warning(f"Failed to write llm call audit log ({tag}): {e}")
 
+    def log_audit(self, tag: str, payload: Dict[str, Any]) -> None:
+        self._safe_log_json(tag, payload)
+
     def _normalize_grsai_llm_base_url(self, base_url: str) -> str:
         url = (base_url or "").strip()
         if not url:
