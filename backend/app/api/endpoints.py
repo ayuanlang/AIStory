@@ -70,6 +70,34 @@ IMAGE_JOB_STORE: Dict[str, Dict[str, Any]] = {}
 IMAGE_JOB_LOCK = threading.Lock()
 IMAGE_JOB_TTL_SECONDS = max(300, int(os.getenv("IMAGE_JOB_TTL_SECONDS", "3600")))
 IMAGE_JOB_MAX_ITEMS = max(100, int(os.getenv("IMAGE_JOB_MAX_ITEMS", "500")))
+IMAGE_SUBMIT_IDEMPOTENCY_STORE: Dict[str, Dict[str, Any]] = {}
+IMAGE_SUBMIT_IDEMPOTENCY_TTL_SECONDS = max(30, int(os.getenv("IMAGE_SUBMIT_IDEMPOTENCY_TTL_SECONDS", "120")))
+
+
+def _build_image_idempotency_store_key(user_id: int, idempotency_key: str) -> str:
+    return f"{int(user_id)}::{idempotency_key.strip()}"
+
+
+def _prune_image_submit_idempotency_locked(now: Optional[datetime] = None) -> None:
+    now_dt = now or datetime.utcnow()
+    expired_keys: List[str] = []
+
+    for store_key, record in IMAGE_SUBMIT_IDEMPOTENCY_STORE.items():
+        created_at = _parse_iso_datetime(record.get("created_at"))
+        if not created_at:
+            expired_keys.append(store_key)
+            continue
+
+        if (now_dt - created_at).total_seconds() > IMAGE_SUBMIT_IDEMPOTENCY_TTL_SECONDS:
+            expired_keys.append(store_key)
+            continue
+
+        job_id = str(record.get("job_id") or "").strip()
+        if not job_id or job_id not in IMAGE_JOB_STORE:
+            expired_keys.append(store_key)
+
+    for store_key in expired_keys:
+        IMAGE_SUBMIT_IDEMPOTENCY_STORE.pop(store_key, None)
 
 
 def _is_shot_submit_debug_enabled() -> bool:
@@ -176,6 +204,8 @@ def _prune_image_jobs_locked() -> None:
     overflow_count = len(IMAGE_JOB_STORE) - IMAGE_JOB_MAX_ITEMS
     for job_id, _ in ordered[:overflow_count]:
         IMAGE_JOB_STORE.pop(job_id, None)
+
+    _prune_image_submit_idempotency_locked(now)
 
 
 def _snapshot_image_job_stats() -> Dict[str, Any]:
@@ -9134,8 +9164,27 @@ async def _run_generate_image_job(job_id: str, user_id: int, req_payload: Dict[s
 @router.post("/generate/image/submit")
 async def submit_generate_image_endpoint(
     req: GenerationRequest,
+    request: Request,
     current_user: User = Depends(get_current_user),
 ):
+    idempotency_key = str(request.headers.get("X-Idempotency-Key") or "").strip()
+
+    if idempotency_key:
+        with IMAGE_JOB_LOCK:
+            _prune_image_jobs_locked()
+            store_key = _build_image_idempotency_store_key(current_user.id, idempotency_key)
+            mapped = IMAGE_SUBMIT_IDEMPOTENCY_STORE.get(store_key) or {}
+            existing_job_id = str(mapped.get("job_id") or "").strip()
+            if existing_job_id:
+                existing_job = dict(IMAGE_JOB_STORE.get(existing_job_id) or {})
+                if existing_job:
+                    return {
+                        "job_id": existing_job_id,
+                        "status": existing_job.get("status") or "queued",
+                        "created_at": existing_job.get("created_at") or datetime.utcnow().isoformat(),
+                        "deduplicated": True,
+                    }
+
     job_id = uuid.uuid4().hex
     now = datetime.utcnow().isoformat()
     _set_image_job(
@@ -9149,6 +9198,14 @@ async def submit_generate_image_endpoint(
         result=None,
         error=None,
     )
+
+    if idempotency_key:
+        with IMAGE_JOB_LOCK:
+            store_key = _build_image_idempotency_store_key(current_user.id, idempotency_key)
+            IMAGE_SUBMIT_IDEMPOTENCY_STORE[store_key] = {
+                "job_id": job_id,
+                "created_at": now,
+            }
 
     asyncio.create_task(_run_generate_image_job(job_id, current_user.id, req.model_dump()))
     return {"job_id": job_id, "status": "queued", "created_at": now}

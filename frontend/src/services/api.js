@@ -59,6 +59,61 @@ const buildApiErrorMessage = (error) => {
     return error?.message || 'Request failed';
 };
 
+const IMAGE_SUBMIT_IDEMPOTENCY_WINDOW_MS = 30 * 1000;
+const imageSubmitIdempotencyCache = new Map();
+
+const normalizeRefImageValue = (value) => {
+    if (Array.isArray(value)) {
+        return value
+            .map((item) => String(item || '').trim())
+            .filter(Boolean);
+    }
+    const raw = String(value || '').trim();
+    return raw ? [raw] : [];
+};
+
+const buildImageSubmitSignature = (payload) => {
+    const signatureSource = {
+        prompt: String(payload?.prompt || '').trim(),
+        provider: String(payload?.provider || '').trim(),
+        model: String(payload?.model || '').trim(),
+        ref_image_url: normalizeRefImageValue(payload?.ref_image_url),
+        project_id: payload?.project_id ?? null,
+        shot_id: payload?.shot_id ?? null,
+        shot_number: payload?.shot_number ?? null,
+        shot_name: payload?.shot_name ?? null,
+        entity_name: payload?.entity_name ?? null,
+        subject_name: payload?.subject_name ?? null,
+        asset_type: payload?.asset_type ?? null,
+    };
+    return JSON.stringify(signatureSource);
+};
+
+const getOrCreateImageSubmitIdempotencyKey = (payload, explicitKey = null) => {
+    const custom = String(explicitKey || '').trim();
+    if (custom) return custom;
+
+    const now = Date.now();
+    for (const [signature, info] of imageSubmitIdempotencyCache.entries()) {
+        if (!info || (now - Number(info.createdAt || 0)) > IMAGE_SUBMIT_IDEMPOTENCY_WINDOW_MS) {
+            imageSubmitIdempotencyCache.delete(signature);
+        }
+    }
+
+    const signature = buildImageSubmitSignature(payload);
+    const cached = imageSubmitIdempotencyCache.get(signature);
+    if (cached && (now - Number(cached.createdAt || 0)) <= IMAGE_SUBMIT_IDEMPOTENCY_WINDOW_MS) {
+        return cached.key;
+    }
+
+    const key = `img-${now}-${Math.random().toString(36).slice(2, 12)}`;
+    imageSubmitIdempotencyCache.set(signature, {
+        key,
+        createdAt: now,
+    });
+    return key;
+};
+
 // Add a request interceptor to include the token
 api.interceptors.request.use(
     (config) => {
@@ -535,28 +590,18 @@ const pollImageJobUntilDone = async (jobId, { timeoutMs = 10 * 60 * 1000, pollIn
 
 export const generateImage = async (prompt, provider = null, ref_image_url = null, options = {}) => {
     const payload = { prompt, provider, ref_image_url, ...options };
+    const idempotencyKey = getOrCreateImageSubmitIdempotencyKey(payload, options?.idempotency_key);
     const autoDownloadLocal = Object.prototype.hasOwnProperty.call(options || {}, 'auto_download_local')
         ? options?.auto_download_local !== false
         : shouldAutoDownloadByUserSetting();
 
+    let submitResp;
     try {
-        const submitResp = await api.post('/generate/image/submit', payload);
-        const jobId = submitResp?.data?.job_id;
-        if (!jobId) {
-            throw new Error('Missing image job_id from submit response');
-        }
-        const result = await pollImageJobUntilDone(jobId, {
-            timeoutMs: Number(options?.job_timeout_ms || 10 * 60 * 1000),
-            pollIntervalMs: Number(options?.job_poll_interval_ms || 2000),
+        submitResp = await api.post('/generate/image/submit', payload, {
+            headers: {
+                'X-Idempotency-Key': idempotencyKey,
+            },
         });
-        if (autoDownloadLocal && result?.url) {
-            try {
-                await downloadMediaToLocal(result.url, `generated_image_${Date.now()}.png`);
-            } catch (downloadError) {
-                console.warn('[generateImage] auto local download failed:', downloadError);
-            }
-        }
-        return result;
     } catch (error) {
         const status = Number(error?.response?.status || 0);
         const shouldFallback = status === 404 || status === 405 || status === 501;
@@ -574,6 +619,26 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
         }
         return response.data;
     }
+
+    const jobId = submitResp?.data?.job_id;
+    if (!jobId) {
+        throw new Error('Missing image job_id from submit response');
+    }
+
+    const result = await pollImageJobUntilDone(jobId, {
+        timeoutMs: Number(options?.job_timeout_ms || 10 * 60 * 1000),
+        pollIntervalMs: Number(options?.job_poll_interval_ms || 2000),
+    });
+
+    if (autoDownloadLocal && result?.url) {
+        try {
+            await downloadMediaToLocal(result.url, `generated_image_${Date.now()}.png`);
+        } catch (downloadError) {
+            console.warn('[generateImage] auto local download failed:', downloadError);
+        }
+    }
+
+    return result;
 }
 
 export const generateVideo = async (prompt, provider = null, ref_image_url = null, last_frame_url = null, duration = 5, options = {}, keyframes = []) => {
