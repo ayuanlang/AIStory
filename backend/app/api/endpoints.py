@@ -72,6 +72,37 @@ IMAGE_JOB_TTL_SECONDS = max(300, int(os.getenv("IMAGE_JOB_TTL_SECONDS", "3600"))
 IMAGE_JOB_MAX_ITEMS = max(100, int(os.getenv("IMAGE_JOB_MAX_ITEMS", "500")))
 IMAGE_SUBMIT_IDEMPOTENCY_STORE: Dict[str, Dict[str, Any]] = {}
 IMAGE_SUBMIT_IDEMPOTENCY_TTL_SECONDS = max(30, int(os.getenv("IMAGE_SUBMIT_IDEMPOTENCY_TTL_SECONDS", "120")))
+IMAGE_JOB_FILE_DIR = os.path.join(settings.UPLOAD_DIR, "_image_jobs")
+
+
+def _image_job_file_path(job_id: str) -> str:
+    safe_job_id = re.sub(r"[^a-zA-Z0-9_-]", "", str(job_id or "").strip())
+    return os.path.join(IMAGE_JOB_FILE_DIR, f"{safe_job_id}.json")
+
+
+def _write_image_job_file(job_id: str, payload: Dict[str, Any]) -> None:
+    try:
+        os.makedirs(IMAGE_JOB_FILE_DIR, exist_ok=True)
+        path = _image_job_file_path(job_id)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+    except Exception as e:
+        logger.warning("failed to persist image job file job_id=%s err=%s", job_id, e)
+
+
+def _read_image_job_file(job_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        path = _image_job_file_path(job_id)
+        if not os.path.exists(path):
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            data["job_id"] = data.get("job_id") or str(job_id)
+            return data
+    except Exception as e:
+        logger.warning("failed to read image job file job_id=%s err=%s", job_id, e)
+    return None
 
 
 def _build_image_idempotency_store_key(user_id: int, idempotency_key: str) -> str:
@@ -8896,6 +8927,120 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
         print(f"Asset reg failed: {e}")
 
 
+def _extract_provider_model_from_result(result: Any, req: Any) -> Tuple[Optional[str], Optional[str]]:
+    provider = None
+    model = None
+    if isinstance(result, dict):
+        meta = result.get("metadata")
+        if isinstance(meta, dict):
+            provider = str(meta.get("provider") or "").strip() or None
+            model = str(meta.get("model") or "").strip() or None
+
+    if not provider:
+        provider = str(getattr(req, "provider", None) or "").strip() or None
+    if not model:
+        model = str(getattr(req, "model", None) or "").strip() or None
+    return provider, model
+
+
+def _resolve_latest_asset_provider_model(
+    db: Session,
+    user_id: int,
+    shot_id: Optional[int],
+    media_type: str,
+    asset_type: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[str]]:
+    if not shot_id:
+        return None, None
+
+    normalized_media_type = str(media_type or "").strip().lower()
+    if normalized_media_type not in {"image", "video"}:
+        return None, None
+
+    normalized_asset_type = str(asset_type or "").strip().lower() or None
+
+    candidates = (
+        db.query(Asset)
+        .filter(Asset.user_id == user_id, Asset.type == normalized_media_type)
+        .order_by(Asset.id.desc())
+        .limit(300)
+        .all()
+    )
+
+    shot_id_str = str(shot_id)
+    for asset in candidates:
+        meta = asset.meta_info if isinstance(asset.meta_info, dict) else {}
+        if str(meta.get("shot_id") or "").strip() != shot_id_str:
+            continue
+
+        previous_asset_type = str(meta.get("asset_type") or meta.get("frame_type") or "").strip().lower() or None
+        if normalized_asset_type and previous_asset_type and previous_asset_type != normalized_asset_type:
+            continue
+
+        prev_provider = str(meta.get("provider") or "").strip() or None
+        prev_model = str(meta.get("model") or "").strip() or None
+        return prev_provider, prev_model
+
+    return None, None
+
+
+def _log_api_switch_regenerate_if_needed(
+    db: Session,
+    current_user: User,
+    req: Any,
+    result: Any,
+    media_type: str,
+) -> None:
+    try:
+        shot_id_raw = getattr(req, "shot_id", None)
+        shot_id = int(shot_id_raw) if shot_id_raw else None
+    except Exception:
+        return
+
+    if not shot_id:
+        return
+
+    current_provider, current_model = _extract_provider_model_from_result(result, req)
+    if not current_provider and not current_model:
+        return
+
+    req_asset_type = str(getattr(req, "asset_type", None) or "").strip().lower() or None
+    prev_provider, prev_model = _resolve_latest_asset_provider_model(
+        db=db,
+        user_id=current_user.id,
+        shot_id=shot_id,
+        media_type=media_type,
+        asset_type=req_asset_type,
+    )
+
+    if not prev_provider and not prev_model:
+        return
+
+    if (prev_provider or "") == (current_provider or "") and (prev_model or "") == (current_model or ""):
+        return
+
+    action = "SHOT_REGENERATE_IMAGE_API_SWITCH" if str(media_type).lower() == "image" else "SHOT_REGENERATE_VIDEO_API_SWITCH"
+    detail_parts = [
+        f"shot_id={shot_id}",
+        f"asset_type={req_asset_type or 'unknown'}",
+        f"from_provider={prev_provider or 'unknown'}",
+        f"from_model={prev_model or 'unknown'}",
+        f"to_provider={current_provider or 'unknown'}",
+        f"to_model={current_model or 'unknown'}",
+    ]
+    project_id = getattr(req, "project_id", None)
+    if project_id is not None:
+        detail_parts.append(f"project_id={project_id}")
+
+    log_action(
+        db,
+        user_id=current_user.id,
+        user_name=current_user.username,
+        action=action,
+        details="; ".join(detail_parts),
+    )
+
+
 def _bind_generated_media_to_shot(db: Session, current_user: User, req: Any, media_url: Optional[str]) -> None:
     if not media_url:
         return
@@ -9092,6 +9237,14 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
              
              raise HTTPException(status_code=400, detail=detail)
 
+        _log_api_switch_regenerate_if_needed(
+            db=db,
+            current_user=current_user,
+            req=req,
+            result=result,
+            media_type="image",
+        )
+
         # Billing Deduct
         billing_service.deduct_credits(db, current_user.id, "image_gen", req.provider, req.model, {"item": "image"})
         
@@ -9118,6 +9271,7 @@ def _set_image_job(job_id: str, **fields) -> None:
         current.update(fields)
         current["job_id"] = job_id
         IMAGE_JOB_STORE[job_id] = current
+        _write_image_job_file(job_id, current)
 
 
 async def _run_generate_image_job(job_id: str, user_id: int, req_payload: Dict[str, Any]) -> None:
@@ -9218,6 +9372,13 @@ def get_generate_image_job_status(
 ):
     with IMAGE_JOB_LOCK:
         job = dict(IMAGE_JOB_STORE.get(job_id) or {})
+
+    if not job:
+        file_job = _read_image_job_file(job_id)
+        if file_job:
+            with IMAGE_JOB_LOCK:
+                IMAGE_JOB_STORE[job_id] = dict(file_job)
+            job = dict(file_job)
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -9508,6 +9669,14 @@ async def generate_video_endpoint(
              billing_service.log_failed_transaction(db, current_user.id, "video_gen", req.provider, req.model, detail)
              
              raise HTTPException(status_code=400, detail=detail)
+
+        _log_api_switch_regenerate_if_needed(
+            db=db,
+            current_user=current_user,
+            req=req,
+            result=result,
+            media_type="video",
+        )
 
         # Register Asset
         if result.get("url"):
