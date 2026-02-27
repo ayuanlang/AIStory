@@ -137,6 +137,43 @@ def _prune_image_jobs_locked() -> None:
         IMAGE_JOB_STORE.pop(job_id, None)
 
 
+def _snapshot_image_job_stats() -> Dict[str, Any]:
+    with IMAGE_JOB_LOCK:
+        _prune_image_jobs_locked()
+        jobs = list(IMAGE_JOB_STORE.values())
+
+    status_counts: Dict[str, int] = {}
+    created_times: List[datetime] = []
+    approx_bytes = 0
+
+    for job in jobs:
+        status = str(job.get("status") or "unknown").lower()
+        status_counts[status] = status_counts.get(status, 0) + 1
+
+        created_at = _parse_iso_datetime(job.get("created_at"))
+        if created_at:
+            created_times.append(created_at)
+
+        try:
+            approx_bytes += len(json.dumps(job, ensure_ascii=False, default=str))
+        except Exception:
+            approx_bytes += 0
+
+    oldest_created_at = min(created_times).isoformat() if created_times else None
+    newest_created_at = max(created_times).isoformat() if created_times else None
+
+    return {
+        "store_items": len(jobs),
+        "status_counts": status_counts,
+        "oldest_created_at": oldest_created_at,
+        "newest_created_at": newest_created_at,
+        "approx_store_bytes": approx_bytes,
+        "approx_store_mb": round(approx_bytes / (1024 * 1024), 3),
+        "ttl_seconds": IMAGE_JOB_TTL_SECONDS,
+        "max_items": IMAGE_JOB_MAX_ITEMS,
+    }
+
+
 def _vendor_failed_message(provider: Optional[str], reason: Any) -> str:
     vendor = str(provider or "").strip() or "unknown"
     detail = str(reason or "unknown error").strip()
@@ -7884,6 +7921,26 @@ def broadcast_email_to_all_users(
         "failed": failed,
         "invalid": invalid_count,
         "errors": errors,
+    }
+
+
+@router.get("/admin/runtime-stats")
+def get_runtime_stats(current_user: User = Depends(get_current_user)):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    image_job_stats = _snapshot_image_job_stats()
+
+    return {
+        "service": "aistory-backend",
+        "pid": os.getpid(),
+        "timestamp": datetime.utcnow().isoformat(),
+        "render": {
+            "service_id": os.getenv("RENDER_SERVICE_ID", ""),
+            "instance_id": os.getenv("RENDER_INSTANCE_ID", ""),
+            "git_commit": os.getenv("RENDER_GIT_COMMIT", ""),
+        },
+        "image_jobs": image_job_stats,
     }
 
 
