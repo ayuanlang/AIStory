@@ -1120,6 +1120,7 @@ class MediaGenerationService:
             normalized_ar = self._normalize_aspect_ratio_value(aspect_ratio)
             if normalized_ar:
                 payload["aspectRatio"] = normalized_ar
+                base_metadata["submit_aspect_ratio"] = normalized_ar
 
             if ref_image:
                 # Force base64 conversion for Image references

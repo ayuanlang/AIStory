@@ -9036,6 +9036,20 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
             user_credits=(current_user.credits or 0),
             filename_base=_build_generation_filename_base(req, db),
         )
+        result_meta = result.get("metadata") if isinstance(result, dict) else {}
+        if not isinstance(result_meta, dict):
+            result_meta = {}
+        _log_shot_submit_debug(
+            "image_submit_result",
+            req,
+            refs=req.ref_image_url,
+            extra={
+                "user_id": current_user.id,
+                "submitted_provider": result_meta.get("provider"),
+                "submitted_model": result_meta.get("model"),
+                "submitted_aspect_ratio": result_meta.get("submit_aspect_ratio"),
+            },
+        )
         if "error" in result:
              # Include details if available
              detail = result["error"]
