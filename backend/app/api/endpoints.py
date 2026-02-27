@@ -6598,6 +6598,7 @@ def _send_email_via_runtime_smtp(
 
     frontend_base_url_display = frontend_base_url or "(not configured)"
     final_text_content = (
+        f"Frontend Base URL: {frontend_base_url_display}\n\n"
         f"{str(content or '')}\n\n"
         f"Frontend Base URL:\n{frontend_base_url_display}\n"
     )
@@ -6614,16 +6615,54 @@ def _send_email_via_runtime_smtp(
         "<hr style=\"border:none;border-top:1px solid #e5e7eb;margin:16px 0;\">"
         f"<p style=\"color:#6b7280;font-size:12px;\">Frontend Base URL: {footer_line}</p>"
     )
+    header_html = (
+        "<div style=\"margin:0 0 12px 0;padding:10px 12px;border:1px solid #e5e7eb;"
+        "background:#f9fafb;border-radius:6px;color:#111827;font-size:13px;\">"
+        f"Frontend Base URL: {footer_line}"
+        "</div>"
+    )
     if raw_html_content:
-        html_body = f"{raw_html_content}{footer_html}"
+        body_close_idx = raw_html_content.lower().rfind("</body>")
+        html_close_idx = raw_html_content.lower().rfind("</html>")
+        if body_close_idx != -1:
+            html_body = (
+                f"{raw_html_content[:body_close_idx]}"
+                f"{header_html}{footer_html}"
+                f"{raw_html_content[body_close_idx:]}"
+            )
+        elif html_close_idx != -1:
+            html_body = (
+                f"{raw_html_content[:html_close_idx]}"
+                f"{header_html}{footer_html}"
+                f"{raw_html_content[html_close_idx:]}"
+            )
+        else:
+            html_body = f"{header_html}{raw_html_content}{footer_html}"
     else:
         html_text = html.escape(str(content or ""))
         html_body = (
+            f"{header_html}"
             f"<div style=\"white-space:pre-wrap;font-size:14px;line-height:1.6;color:#111827;\">{html_text}</div>"
             f"{footer_html}"
         )
 
-    logger.info("SMTP email footer injected | to=%s frontend_base_url=%s", to_email, frontend_base_url_display)
+    text_preview = final_text_content[:300].replace("\n", "\\n")
+    html_preview = html_body[:300].replace("\n", " ") if html_body else ""
+    logger.warning("SMTP email footer injected | to=%s frontend_base_url=%s", to_email, frontend_base_url_display)
+    logger.warning(
+        "SMTP payload preview | to=%s text_len=%s html_len=%s text_preview=%s html_preview=%s",
+        to_email,
+        len(final_text_content or ""),
+        len(html_body or ""),
+        text_preview,
+        html_preview,
+    )
+    print(
+        "[SMTP_DEBUG] "
+        f"to={to_email} frontend_base_url={frontend_base_url_display} "
+        f"text_len={len(final_text_content or '')} html_len={len(html_body or '')} "
+        f"text_preview={text_preview} html_preview={html_preview}"
+    )
 
     message = EmailMessage()
     message["Subject"] = subject
