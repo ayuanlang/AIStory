@@ -41,6 +41,10 @@
   - **示例**：`CHAR:[@Kael] stands in ENV:[Dark Alley], holding PROP:[Plasma Revolver].`
   - **类型错配判定**：若把环境/道具写成 `CHAR:`，或把角色写成 `ENV:`/`PROP:`，判定为不合规并必须重写。
 - **外观锁定 (Appearance Lockdown)**：严禁描述角色的具体外貌（如发型、肤色、面部特征）及服装细节（如颜色、款式）。这些元素完全由 Reference Image 控制。prompt 中仅需提及 `CHAR:[@Character Name]` 并专注于其动作、表情与光影互动。
+- **生图镜头参数强化 (Image Prompt Lens/Noise/Anti-Copy, 强制)**：在用于图片生成的提示词（尤其 `Start Frame` / `End Frame` / `Keyframes`）中必须额外满足：
+  - **焦距必写**：必须明确镜头焦距或等效镜头描述（如 `24mm wide`, `35mm`, `50mm`, `85mm portrait`, `telephoto compression`），禁止只写泛化词汇。
+  - **噪点策略必写**：必须给出噪点/颗粒控制（如 `clean digital look`, `fine film grain`, `low noise in shadows`, `avoid heavy chroma noise`），确保暗部可读与质感稳定。
+  - **参考图防复制粘贴**：明确要求“继承身份锚点但不做像素级复刻”，并优先使用以下英文模板：`Use reference images for identity and key asset consistency only. Recompose camera angle, framing, pose, lighting, and background layout for a new shot. Do not replicate the reference composition or pixel arrangement.`
 - **分镜对应**：分镜需与 Scene 一一对应，一个 Scene 可以拆分为多个 Shot，根据视觉需要按Beat为单位拆分或合并，长度符合时长限制。
 - **时长限制 (Duration Management: The 4-10s Control)**：
   - **主流模型适配 (Mainstream Adaptation)**：针对主流视频生成模型，**最佳生成质感时长为 5s - 8s**。时长过短（<4s）可能导致生成失败或连贯性差。
@@ -312,6 +316,7 @@
   - `{Camera Position: exact placement relative to [Environment Anchor]}`
   - `{Shooting Direction: front/reverse/side + facing target/vector}`
   - `{Camera: Focal Length, Angle, Stability, Framing}`
+  - `{Image Fidelity: Noise/Grain Strategy + Anti-Copy Constraint from references}`
   - `{Lighting: Style, Source}`
   - `{Composition: Placement, Depth}`
 - **特别重要：执行顺序调整 (Critical Execution Order)**：
@@ -366,7 +371,8 @@
   - **角色朝向显式化 (Facing Declaration, 强制)**：在 Start Frame 中，每个可见核心角色都必须明确写出其相对镜头朝向；不得省略。
     - 可用枚举：`Facing Camera`（正对镜头）/ `Back to Lens`（背对镜头）/ `Profile Left`（左侧对）/ `Profile Right`（右侧对）/ `3/4 View Left` / `3/4 View Right`。
     - 禁止模糊词：如 `facing sideways`、`turned a bit`、`angled`、`partially facing` 等不可判定表达。
-  - **{Camera Description}**: 必须包含 **Framing** (景别) 和 **Angle** (角度)。
+  - **{Camera Description}**: 必须包含 **Focal Length** (焦距), **Framing** (景别) 和 **Angle** (角度)。
+  - **{Image Fidelity}**: 必须包含 **Noise/Grain 控制** 与 **Anti-Copy 约束**（继承 reference 的身份锚点，但重构构图/光线/姿态，禁止复制粘贴参考图构图）。
   - **光影与色调 (Lighting & Color)**：严格继承 `[Global Style]` 的视觉基调。必须明确描述**光源性质**（Hard/Soft）、**光影对比度**（High key/Low key/Chiaroscuro）以及**主色调**（Color Palette）。例如：若风格为 "Neon Noir"，则描述 "Harsh neon side lighting, deep shadows, wet pavement reflections, cyan and magenta contrast"。
   - **构图法则 (Composition Technique)**：必须指定一种经典的构图方式以增强形式感。可选技法包括：**Symmetrical Composition** (对称), **Rule of Thirds** (三分法), **Leading Lines** (引导线), **Center Framed** (中心), **Frame within a Frame** (框中框), **Triangular** (三角), **Negative Space** (留白)。
   - **构图景深与主体状态 (Composition & Subject Status)**：**Critical**: 不要使用“距离3米”等物理数值（AI对此不敏感）。必须使用**视觉层级 (Visual Layers)** 和 **屏幕占比 (Screen Space)** 来定义物体位置。

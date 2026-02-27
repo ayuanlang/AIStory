@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { API_URL } from '../config';
+import { API_URL, BASE_URL } from '../config';
 
 // Use API_URL from config which supports production env vars
 export const api = axios.create({
@@ -456,6 +456,49 @@ export const deleteAllEntities = async (projectId) => {
 // Generation
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const resolveMediaDownloadUrl = (url) => {
+    const raw = String(url || '').trim();
+    if (!raw) return '';
+    if (/^https?:\/\//i.test(raw)) return raw;
+    if (raw.startsWith('/')) {
+        const prefix = String(BASE_URL || '').trim();
+        if (prefix) {
+            return `${prefix}${raw}`;
+        }
+        return `${window.location.origin}${raw}`;
+    }
+    return raw;
+};
+
+const inferFilenameFromUrl = (url, fallbackName) => {
+    try {
+        const pathname = new URL(url).pathname || '';
+        const name = pathname.split('/').pop();
+        if (name && name.includes('.')) return name;
+    } catch {
+        // ignore
+    }
+    return fallbackName;
+};
+
+const downloadMediaToLocal = async (url, fallbackName) => {
+    const downloadUrl = resolveMediaDownloadUrl(url);
+    if (!downloadUrl) return;
+    const response = await fetch(downloadUrl, { credentials: 'include' });
+    if (!response.ok) {
+        throw new Error(`Download failed: ${response.status}`);
+    }
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = inferFilenameFromUrl(downloadUrl, fallbackName);
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(objectUrl);
+};
+
 const pollImageJobUntilDone = async (jobId, { timeoutMs = 10 * 60 * 1000, pollIntervalMs = 2000 } = {}) => {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
@@ -478,6 +521,7 @@ const pollImageJobUntilDone = async (jobId, { timeoutMs = 10 * 60 * 1000, pollIn
 
 export const generateImage = async (prompt, provider = null, ref_image_url = null, options = {}) => {
     const payload = { prompt, provider, ref_image_url, ...options };
+    const autoDownloadLocal = options?.auto_download_local !== false;
 
     try {
         const submitResp = await api.post('/generate/image/submit', payload);
@@ -485,10 +529,18 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
         if (!jobId) {
             throw new Error('Missing image job_id from submit response');
         }
-        return await pollImageJobUntilDone(jobId, {
+        const result = await pollImageJobUntilDone(jobId, {
             timeoutMs: Number(options?.job_timeout_ms || 10 * 60 * 1000),
             pollIntervalMs: Number(options?.job_poll_interval_ms || 2000),
         });
+        if (autoDownloadLocal && result?.url) {
+            try {
+                await downloadMediaToLocal(result.url, `generated_image_${Date.now()}.png`);
+            } catch (downloadError) {
+                console.warn('[generateImage] auto local download failed:', downloadError);
+            }
+        }
+        return result;
     } catch (error) {
         const status = Number(error?.response?.status || 0);
         const shouldFallback = status === 404 || status === 405 || status === 501;
@@ -497,12 +549,26 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
         }
 
         const response = await api.post('/generate/image', payload);
+        if (autoDownloadLocal && response?.data?.url) {
+            try {
+                await downloadMediaToLocal(response.data.url, `generated_image_${Date.now()}.png`);
+            } catch (downloadError) {
+                console.warn('[generateImage] auto local download failed:', downloadError);
+            }
+        }
         return response.data;
     }
 }
 
 export const generateVideo = async (prompt, provider = null, ref_image_url = null, last_frame_url = null, duration = 5, options = {}, keyframes = []) => {
     const response = await api.post('/generate/video', { prompt, provider, ref_image_url, last_frame_url, duration, keyframes, ...options });
+    if (options?.auto_download_local !== false && response?.data?.url) {
+        try {
+            await downloadMediaToLocal(response.data.url, `generated_video_${Date.now()}.mp4`);
+        } catch (downloadError) {
+            console.warn('[generateVideo] auto local download failed:', downloadError);
+        }
+    }
     return response.data;
 }
 

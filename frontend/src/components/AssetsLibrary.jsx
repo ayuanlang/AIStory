@@ -4,7 +4,7 @@ import {
     Image, Video, Upload, Link as LinkIcon, Plus, X, 
     MoreVertical, Trash2, Edit2, Info, Maximize2,
     Folder, User, Film, Globe, Layers, ArrowDown, ArrowUp,
-    Sparkles, Copy, Loader2, CheckCircle, Settings, Calendar, AlertTriangle
+    Sparkles, Copy, Loader2, CheckCircle, Settings, Calendar, AlertTriangle, FolderOpen
 } from 'lucide-react';
 import { fetchAssets, createAsset, uploadAsset, deleteAsset, deleteAssetsBatch, updateAsset, analyzeAssetImage } from '../services/api';
 import { useLog } from '../context/LogContext';
@@ -158,6 +158,9 @@ const AssetsLibrary = () => {
     const [loading, setLoading] = useState(false);
     const [selectedAsset, setSelectedAsset] = useState(null); 
     const [isUploadOpen, setIsUploadOpen] = useState(false);
+    const [localAssets, setLocalAssets] = useState([]);
+    const localObjectUrlsRef = React.useRef(new Set());
+    const localDirInputRef = React.useRef(null);
     
     // Manage Mode State
     const [isManageMode, setIsManageMode] = useState(false);
@@ -181,7 +184,104 @@ const AssetsLibrary = () => {
 
     useEffect(() => {
         loadAssets();
+        return () => {
+            localObjectUrlsRef.current.forEach((url) => {
+                try { URL.revokeObjectURL(url); } catch {}
+            });
+            localObjectUrlsRef.current.clear();
+        };
     }, []);
+
+    const clearLocalAssets = React.useCallback(() => {
+        localObjectUrlsRef.current.forEach((url) => {
+            try { URL.revokeObjectURL(url); } catch {}
+        });
+        localObjectUrlsRef.current.clear();
+        setLocalAssets([]);
+    }, []);
+
+    const buildLocalAsset = React.useCallback((file, relativePath = '') => {
+        const category = file.type?.startsWith('video') ? 'video' : (file.type?.startsWith('image') ? 'image' : 'unknown');
+        if (category === 'unknown') return null;
+
+        const objectUrl = URL.createObjectURL(file);
+        localObjectUrlsRef.current.add(objectUrl);
+        const now = new Date().toISOString();
+        const rel = String(relativePath || file.webkitRelativePath || file.name || '').trim();
+        const idSeed = `${rel}|${file.size}|${file.lastModified}|${file.type}`;
+
+        return {
+            id: `local:${idSeed}`,
+            url: objectUrl,
+            type: category,
+            filename: file.name,
+            created_at: now,
+            remark: rel || 'Local file',
+            meta_info: {
+                source: 'local-directory',
+                local_path: rel,
+                mime_type: file.type,
+                size_bytes: file.size,
+            },
+            __is_local: true,
+        };
+    }, []);
+
+    const loadLocalAssetsFromFiles = React.useCallback((fileList) => {
+        const files = Array.from(fileList || []);
+        if (!files.length) {
+            addLog('No local files selected.');
+            return;
+        }
+
+        clearLocalAssets();
+        const parsed = files
+            .map((file) => buildLocalAsset(file, file.webkitRelativePath || file.name))
+            .filter(Boolean);
+        setLocalAssets(parsed);
+        addLog(`Loaded ${parsed.length} local assets from selected directory.`);
+    }, [addLog, buildLocalAsset, clearLocalAssets]);
+
+    const pickLocalDirectory = async () => {
+        try {
+            if (window.showDirectoryPicker) {
+                const dirHandle = await window.showDirectoryPicker();
+                clearLocalAssets();
+                const collected = [];
+
+                const walk = async (handle, basePath = '') => {
+                    for await (const [name, entry] of handle.entries()) {
+                        const nextPath = basePath ? `${basePath}/${name}` : name;
+                        if (entry.kind === 'directory') {
+                            await walk(entry, nextPath);
+                        } else if (entry.kind === 'file') {
+                            const file = await entry.getFile();
+                            const item = buildLocalAsset(file, nextPath);
+                            if (item) collected.push(item);
+                        }
+                    }
+                };
+
+                await walk(dirHandle);
+                setLocalAssets(collected);
+                addLog(`Loaded ${collected.length} local assets from selected directory.`);
+                return;
+            }
+
+            if (localDirInputRef.current) {
+                localDirInputRef.current.value = '';
+                localDirInputRef.current.click();
+                return;
+            }
+
+            addLog('Local directory picker is not supported by this browser.', 'error');
+        } catch (e) {
+            if (String(e?.name || '').toLowerCase() === 'aborterror') {
+                return;
+            }
+            addLog(`Failed to read local directory: ${e.message}`, 'error');
+        }
+    };
 
     const loadAssets = async () => {
         setLoading(true);
@@ -207,6 +307,19 @@ const AssetsLibrary = () => {
 
     const handleDelete = async (id, e) => {
         e.stopPropagation();
+
+        if (String(id).startsWith('local:')) {
+            const target = localAssets.find((a) => a.id === id);
+            if (target?.url && String(target.url).startsWith('blob:')) {
+                try { URL.revokeObjectURL(target.url); } catch {}
+                localObjectUrlsRef.current.delete(target.url);
+            }
+            setLocalAssets((prev) => prev.filter((a) => a.id !== id));
+            if (selectedAsset?.id === id) setSelectedAsset(null);
+            addLog(`Removed local asset ${id}.`);
+            return;
+        }
+
         if (!await confirmUiMessage("Are you sure you want to delete this asset?")) return;
         try {
             await deleteAsset(id);
@@ -229,8 +342,26 @@ const AssetsLibrary = () => {
     const runBatchDelete = async (idsToDelete) => {
         try {
             const idsList = Array.isArray(idsToDelete) ? idsToDelete : Array.from(idsToDelete);
-            await deleteAssetsBatch(idsList);
-            setAssets(prev => prev.filter(a => !idsList.includes(a.id)));
+            const localIds = idsList.filter((id) => String(id).startsWith('local:'));
+            const remoteIds = idsList.filter((id) => !String(id).startsWith('local:'));
+
+            if (remoteIds.length > 0) {
+                await deleteAssetsBatch(remoteIds);
+                setAssets(prev => prev.filter(a => !remoteIds.includes(a.id)));
+            }
+
+            if (localIds.length > 0) {
+                setLocalAssets((prev) => {
+                    prev.forEach((item) => {
+                        if (localIds.includes(item.id) && item.url && String(item.url).startsWith('blob:')) {
+                            try { URL.revokeObjectURL(item.url); } catch {}
+                            localObjectUrlsRef.current.delete(item.url);
+                        }
+                    });
+                    return prev.filter((a) => !localIds.includes(a.id));
+                });
+            }
+
             setSelectedIds(prev => {
                 const newSet = new Set(prev);
                 idsList.forEach(id => newSet.delete(id));
@@ -277,7 +408,8 @@ const AssetsLibrary = () => {
     };
 
     const filteredAssets = React.useMemo(() => {
-        const list = assets.filter(a => {
+        const mergedAssets = [...assets, ...localAssets];
+        const list = mergedAssets.filter(a => {
             if (filter === 'all') return true;
             return getAssetCategory(a.type) === filter;
         });
@@ -289,7 +421,7 @@ const AssetsLibrary = () => {
              const dateB = new Date(b.created_at || 0).getTime();
              return sortOrder === 'desc' ? dateB - dateA : dateA - dateB;
         });
-    }, [assets, filter, sortOrder]);
+    }, [assets, localAssets, filter, sortOrder]);
 
 
     const [isScanning, setIsScanning] = useState(false);
@@ -417,6 +549,23 @@ const AssetsLibrary = () => {
                     </div>
                     
                     <div className="flex items-center gap-3">
+                        <input
+                            ref={localDirInputRef}
+                            type="file"
+                            className="hidden"
+                            multiple
+                            webkitdirectory=""
+                            directory=""
+                            onChange={(e) => loadLocalAssetsFromFiles(e.target.files)}
+                        />
+                        <button onClick={pickLocalDirectory} className="flex items-center gap-2 px-4 py-2 bg-card border border-white/10 text-white rounded-lg hover:bg-white/5 transition-colors">
+                            <FolderOpen size={18} /> {t('读取本地目录', 'Read Local Folder')}
+                        </button>
+                        {localAssets.length > 0 && (
+                            <button onClick={clearLocalAssets} className="flex items-center gap-2 px-3 py-2 bg-card border border-white/10 text-muted-foreground rounded-lg hover:text-white hover:bg-white/5 transition-colors">
+                                <X size={16} /> {t('清空本地', 'Clear Local')}
+                            </button>
+                        )}
                         <button onClick={() => setIsManageMode(true)} className="flex items-center gap-2 px-4 py-2 bg-card border border-white/10 text-white rounded-lg hover:bg-white/5 transition-colors"><Settings size={18} /> {t('管理', 'Manage')}</button>
                         <button onClick={() => setIsUploadOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-primary text-black rounded-lg hover:bg-primary/90 transition-colors font-bold"><Plus size={18} /> {t('添加素材', 'Add Asset')}</button>
                     </div>

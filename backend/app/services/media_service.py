@@ -471,7 +471,7 @@ class MediaGenerationService:
                 continue
 
             logger.info(
-                "Smart routing attempt | category=%s user_id=%s attempt=%s/%s provider=%s model=%s tag=%s smart_enabled=%s",
+                "Smart routing attempt | category=%s user_id=%s attempt=%s/%s provider=%s model=%s tag=%s smart_enabled=%s fallback_triggered=%s",
                 category,
                 user_id,
                 index,
@@ -480,6 +480,7 @@ class MediaGenerationService:
                 selected_config.get("model"),
                 attempt.get("tag"),
                 smart_enabled,
+                fallback_unlocked,
             )
 
             result = await self._execute_generation_by_provider(
@@ -509,6 +510,14 @@ class MediaGenerationService:
 
             final_error = result or {"error": "Generation failed"}
             if bool((result or {}).get("submit_failed")):
+                if not fallback_unlocked:
+                    logger.info(
+                        "Smart routing fallback triggered | category=%s user_id=%s trigger_attempt=%s provider=%s reason=submit_failed",
+                        category,
+                        user_id,
+                        index,
+                        selected_provider,
+                    )
                 fallback_unlocked = True
 
         return final_error
