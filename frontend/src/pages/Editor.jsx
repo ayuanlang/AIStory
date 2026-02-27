@@ -14718,22 +14718,26 @@ const Editor = ({ projectId, onClose }) => {
                         <ArrowLeft className="w-4 h-4" />
                         <span className="text-xs font-medium hidden sm:block">{t('返回项目', 'Back to Projects')}</span>
                     </button>
-                    <button 
-                        onClick={() => trackMenuAction('editor.action.import', t('导入内容', 'Import Content'), () => setIsImportOpen(true))}
-                        className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1.5" 
-                        title={t('导入内容', 'Import Content')}
-                    >
-                        <Upload className="w-4 h-4" />
-                        <span className="text-xs font-medium hidden sm:block">{t('导入', 'Import')}</span>
-                    </button>
-                    <button 
-                        onClick={() => trackMenuAction('editor.action.export', t('导出项目', 'Export Project'), handleExport)}
-                        className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1.5" 
-                        title={t('导出项目', 'Export Project')}
-                    >
-                        <Download className="w-4 h-4" />
-                        <span className="text-xs font-medium hidden sm:block">{t('导出', 'Export')}</span>
-                    </button>
+                    {isSuperuser && (
+                        <>
+                            <button 
+                                onClick={() => trackMenuAction('editor.action.import', t('导入内容', 'Import Content'), () => setIsImportOpen(true))}
+                                className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1.5" 
+                                title={t('导入内容', 'Import Content')}
+                            >
+                                <Upload className="w-4 h-4" />
+                                <span className="text-xs font-medium hidden sm:block">{t('导入', 'Import')}</span>
+                            </button>
+                            <button 
+                                onClick={() => trackMenuAction('editor.action.export', t('导出项目', 'Export Project'), handleExport)}
+                                className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1.5" 
+                                title={t('导出项目', 'Export Project')}
+                            >
+                                <Download className="w-4 h-4" />
+                                <span className="text-xs font-medium hidden sm:block">{t('导出', 'Export')}</span>
+                            </button>
+                        </>
+                    )}
                     <button
                         onClick={() => {
                             trackMenuAction('editor.action.settings', t('设置', 'Settings'), () => {
