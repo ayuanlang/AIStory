@@ -511,6 +511,20 @@ class MediaGenerationService:
 
             if result and not result.get("error"):
                 metadata = result.get("metadata") or {}
+                fallback_used = bool(fallback_unlocked) or attempt.get("tag") == "priority_fallback"
+                logger.info(
+                    "Smart routing success | category=%s user_id=%s attempt=%s/%s provider=%s model=%s tag=%s fallback_used=%s initial_provider=%s initial_model=%s",
+                    category,
+                    user_id,
+                    index,
+                    len(deduped_attempts),
+                    selected_provider,
+                    selected_config.get("model"),
+                    attempt.get("tag"),
+                    fallback_used,
+                    effective_provider,
+                    baseline_config.get("model"),
+                )
                 metadata["smart_routing"] = {
                     "enabled": smart_enabled,
                     "attempt": index,
