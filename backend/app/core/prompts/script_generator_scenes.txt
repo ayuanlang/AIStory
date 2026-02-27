@@ -65,6 +65,10 @@ Constraints:
   - Do NOT perform environment asset engineering in this stage.
   - Do NOT generate Front/Reverse variants, `REUSE/VARIANT_OF`, `Base Environment Reference`, or `Environment Delta`.
   - Only provide story-level location (`environment_name`) and dramatic progression.
+- Motion-Axis Space Budget (Mandatory): when a scene's dramatic axis is a movement axis (continuous directional displacement), `core_scene_info` / `original_script_text` / state handoff must reflect physically traversable movement space.
+  - Explicitly state start position, movement path, and end position (Entry -> Path -> Exit).
+  - Do not design blocking that is physically cut off by fixed obstacles unless the obstacle itself is a deliberate conflict point.
+  - For chase/sprint/multi-character parallel movement, provide sufficient spatial redundancy in writing (clear corridor/open area), not just "cut by camera".
 
 - Scene/Beat supplement (copied requirements; keep wording as-is):
   - **{Beats} (节拍流)**：按时间顺序排列的动作单元。
@@ -77,6 +81,7 @@ Constraints:
       3) **角色-镜头关系**（subject-camera relation：角色位于前景/中景/后景、镜头左/右、朝镜头/背镜头/侧对镜头、接近/远离镜头）；
       4) **镜头画面参数**（camera framing：至少给出景别与镜高/俯仰之一）。
       若机位或朝向改变，必须在 Beat 内写明“机位变化触发原因 + 变化后新视角”。
+    - **运动轴线空间约束 (Motion-Axis Space Constraint)**：当 Beat 体现沿轴线位移（推进/后撤/追逐/绕行）时，必须写明可通行路径与位移闭环（起点→路径→终点），禁止用抽象描述跳过物理可达性。
     - **左右判定基准强制 (Left/Right Reference Lock)**：Beat 中“左/右/前/后”默认以当前镜头观察方向为基准，不得混用角色自身体向；如需使用角色自身体向，必须显式标注“角色视角”。
     - **主体关系强制 (Subject-to-Subject Mandate)**：每个 Beat 必须明确角色之间的相对关系，至少覆盖：位置关系、朝向关系、视线关系、接触关系。
     - **状态过渡强制 (Transition-to-New-State Mandate)**：凡位置/朝向/视线/接触任一项发生变化，必须描述从旧状态到新状态的过渡过程（动作路径、顺序与触发原因），禁止只给结果态。
