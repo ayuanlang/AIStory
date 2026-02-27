@@ -6602,7 +6602,7 @@ def _send_email_via_runtime_smtp(
         f"Frontend Base URL:\n{frontend_base_url_display}\n"
     )
 
-    html_body = str(html_content or "").strip()
+    raw_html_content = str(html_content or "").strip()
     safe_url = html.escape(frontend_base_url_display, quote=True)
     if frontend_base_url:
         footer_line = (
@@ -6614,7 +6614,16 @@ def _send_email_via_runtime_smtp(
         "<hr style=\"border:none;border-top:1px solid #e5e7eb;margin:16px 0;\">"
         f"<p style=\"color:#6b7280;font-size:12px;\">Frontend Base URL: {footer_line}</p>"
     )
-    html_body = f"{html_body}{footer_html}" if html_body else footer_html
+    if raw_html_content:
+        html_body = f"{raw_html_content}{footer_html}"
+    else:
+        html_text = html.escape(str(content or ""))
+        html_body = (
+            f"<div style=\"white-space:pre-wrap;font-size:14px;line-height:1.6;color:#111827;\">{html_text}</div>"
+            f"{footer_html}"
+        )
+
+    logger.info("SMTP email footer injected | to=%s frontend_base_url=%s", to_email, frontend_base_url_display)
 
     message = EmailMessage()
     message["Subject"] = subject
