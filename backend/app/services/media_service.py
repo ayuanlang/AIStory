@@ -521,14 +521,21 @@ class MediaGenerationService:
                 return result
 
             final_error = result or {"error": "Generation failed"}
-            if bool((result or {}).get("submit_failed")):
+            has_error = bool((result or {}).get("error"))
+            fallback_triggered_now = bool((result or {}).get("submit_failed"))
+            if has_error and attempt.get("tag") in {"active_retry", "multi_ref_default"}:
+                fallback_triggered_now = True
+
+            if fallback_triggered_now:
                 if not fallback_unlocked:
+                    reason = "submit_failed" if bool((result or {}).get("submit_failed")) else "execution_failed"
                     logger.info(
-                        "Smart routing fallback triggered | category=%s user_id=%s trigger_attempt=%s provider=%s reason=submit_failed",
+                        "Smart routing fallback triggered | category=%s user_id=%s trigger_attempt=%s provider=%s reason=%s",
                         category,
                         user_id,
                         index,
                         selected_provider,
+                        reason,
                     )
                 fallback_unlocked = True
 
