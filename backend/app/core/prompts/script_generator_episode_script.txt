@@ -31,6 +31,8 @@ Rules:
 - Default Aesthetic Policy (when no specific style constraint is provided): maintain a modern, premium, cinematic visual tone; write characters as attractive/charismatic with tasteful sensual tension (non-explicit), and keep props/sets refined, detailed, and aesthetically pleasing.
 - Use cinematic, filmable writing: clear scene progression, time of day, actions, dialogue, and emotional beats.
 - Environment Description Boundary (Mandatory): do NOT describe environment visual details/layout/decor/lighting style. Keep only minimal scene label context (e.g., location/time) needed for story continuity.
+- Scene-Environment Authority (Mandatory): treat scene-level environment as authoritative for downstream shot generation. This stage defines only minimal narrative location labels and state handoff; do NOT redesign or rename environment variants for shot stage.
+- Environment Change Fallback (Mandatory): if a beat implies background-set shift / axis reversal / observer-direction rebuild beyond current scene environment semantics, mark it as a new scene boundary in this draft (new `scene_id` + new handoff), instead of letting downstream shots patch environment ad hoc.
 - Do NOT separate dialogue and action into different blocks. Write them interleaved in time order, character-driven.
 - Keep the draft production-friendly: each scene should be readable and not overly long.
 - Hierarchical continuity contract (mandatory):
