@@ -115,6 +115,11 @@
     - **Purpose**: 让分镜生成时即便脱离了 JSON 也能快速理解画面背景，确保动作与环境的物理交互合理。
 3.  **{Axis} (轴线)**：简述主要人物的运动轨迹（从哪里走到哪里）。
   - **Axis Trigger Rule**：当 Axis 相对上一段发生“跨线、反向、观察方向切换”时，视为新 Scene 起点，不得继续沿用上一 Scene 的 Environment。
+  - **运动轴线空间预算 (Motion-Axis Space Budget, Mandatory)**：当 Axis 属于“运动轴线（角色沿某方向持续位移）”而非静态对峙轴线时，Environment 设计必须优先保障运动通道：
+    1) 在 `Stage` 与 `Environment Context` 中显式声明“主运动方向 + 可通行走廊/空地”；
+    2) 沿主运动方向禁止被固定障碍切断（柱体、不可移动家具、台阶/坑洞、狭窄死角）；
+    3) 必须给出可执行的 `Entry State -> Exit State` 位移闭环（起点、路径、终点可落位）；
+    4) 若剧情需要追逐/冲刺/多人并行位移，必须提升空间冗余（更长路径或更宽活动面），不得用“镜头切换”替代物理可达性。
   - **观察者视角绑定 (Observer View Binding, Mandatory)**：Axis 不仅描述角色路径，还必须给出“观察者（镜头）相对轴线”的站位与看向（轴线左侧/右侧、沿轴/逆轴），用于统一后续 Beat 的左右/前后判定。
 4.  **{Beats} (节拍流)**：按时间顺序排列的动作单元。
     - **Spatial Activation (空间激活)**：Beats 动作必须**主动发生在该物理空间中**，并与环境产生交互（如倚靠、穿越、拿起）。严禁“真空表演”。
@@ -372,5 +377,6 @@
 22. **Env/Prop No-@ Check**: 所有环境/道具引用是否保持 `[Name]`（无 `@`），且未被误标为主体？
 23. **Entity Typing Check**: 所有实体引用是否满足 `CHAR/ENV/PROP` 类型前缀语义，且不存在类型错配？
 24. **Anchor Description Language Check**: 所有 `anchor_description` 是否为英文短语（无中文、无中英混写）？
-21. **Delta Order Check**: `Environment Delta` 是否严格按白名单顺序输出（Camera Position/Direction → Axis Side → Background Set Change → Lighting Direction Change → Framing Change → Dynamic Parts State）？
-22. **REUSE Minimal Check**: `REUSE` 行是否使用极简模板（默认六项全 `None`），且仅在可变部件状态变化时允许 `Dynamic Parts State` 非 `None`？
+25. **Motion-Axis Space Check**: 若 `Axis` 为运动轴线，是否已显式给出主运动方向与可通行路径，并确保 `Entry State -> Exit State` 在环境中物理可达（无固定障碍切断）？
+26. **Delta Order Check**: `Environment Delta` 是否严格按白名单顺序输出（Camera Position/Direction → Axis Side → Background Set Change → Lighting Direction Change → Framing Change → Dynamic Parts State）？
+27. **REUSE Minimal Check**: `REUSE` 行是否使用极简模板（默认六项全 `None`），且仅在可变部件状态变化时允许 `Dynamic Parts State` 非 `None`？
