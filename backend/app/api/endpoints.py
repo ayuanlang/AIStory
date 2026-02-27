@@ -1651,17 +1651,20 @@ async def process_agent_command(
 # --- Projects ---
 class ProjectCreate(BaseModel):
     title: str
+    description: Optional[str] = None
     global_info: dict = {}
     aspectRatio: Optional[str] = None
 
 class ProjectUpdate(BaseModel):
     title: Optional[str] = None
+    description: Optional[str] = None
     global_info: Optional[dict] = None
     aspectRatio: Optional[str] = None
 
 class ProjectOut(BaseModel):
     id: int
     title: str
+    description: Optional[str] = None
     owner_id: int
     global_info: dict
     aspectRatio: Optional[str] = None
@@ -2071,6 +2074,12 @@ def create_project(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    description = (project.description or "").strip()
+    if description:
+        if not project.global_info:
+            project.global_info = {}
+        project.global_info["notes"] = description
+
     # If aspectRatio is provided, merge it into global_info
     if project.aspectRatio:
         if not project.global_info:
@@ -2085,6 +2094,7 @@ def create_project(
     db_project.cover_image = None
     # Extract aspectRatio for response from global_info
     db_project.aspectRatio = db_project.global_info.get('aspectRatio') if db_project.global_info else None
+    db_project.description = (db_project.global_info or {}).get("notes")
     db_project.is_owner = True
     return db_project
 
@@ -2740,6 +2750,7 @@ def read_projects(
         # Populate alias field
         if p.global_info:
              p.aspectRatio = p.global_info.get('aspectRatio')
+        p.description = (p.global_info or {}).get("notes")
         
         # Debug logging
         # logger.info(f"Project {p.id}: Cover={p.cover_image}")
@@ -2758,6 +2769,7 @@ def read_project(
     project.cover_image = get_project_cover_image(db, project.id)
     if project.global_info:
         project.aspectRatio = project.global_info.get('aspectRatio')
+    project.description = (project.global_info or {}).get("notes")
     _attach_project_flags(project, current_user)
     return project
 
@@ -2772,7 +2784,7 @@ def update_project(
     
     if project_in.title is not None:
         project.title = project_in.title
-    
+
     # Merge global_info updates - handle aspectRatio specially if provided separately
     new_global_info = project_in.global_info # dict or None
     if new_global_info is None:
@@ -2790,12 +2802,18 @@ def update_project(
          if project_in.aspectRatio is not None:
              new_global_info['aspectRatio'] = project_in.aspectRatio
          project.global_info = new_global_info
+
+    if project_in.description is not None:
+        current_info = dict(project.global_info) if project.global_info else {}
+        current_info['notes'] = project_in.description
+        project.global_info = current_info
     
     db.commit()
     db.refresh(project)
     project.cover_image = get_project_cover_image(db, project.id)
     if project.global_info:
         project.aspectRatio = project.global_info.get('aspectRatio')
+    project.description = (project.global_info or {}).get("notes")
     _attach_project_flags(project, current_user)
     return project
 

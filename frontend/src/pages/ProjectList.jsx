@@ -188,6 +188,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [projects, setProjects] = useState([]);
     const [isCreating, setIsCreating] = useState(false);
     const [newTitle, setNewTitle] = useState('');
+    const [newDescription, setNewDescription] = useState('');
     const [activeTab, setActiveTab] = useState(initialTab);
     const [selectedProjectId, setSelectedProjectId] = useState(null);
     const [restoredEditorState, setRestoredEditorState] = useState(null);
@@ -337,9 +338,14 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     };
 
     const handleCreate = async () => {
-        if (!newTitle) return;
-        await createProject({ title: newTitle });
+        const title = String(newTitle || '').trim();
+        if (!title) return;
+        await createProject({
+            title,
+            description: String(newDescription || ''),
+        });
         setNewTitle('');
+        setNewDescription('');
         setIsCreating(false);
         loadProjects();
     };
@@ -652,7 +658,11 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                             />
                                         </div>
                                         <button 
-                                            onClick={() => setIsCreating(true)}
+                                            onClick={() => {
+                                                setNewTitle('');
+                                                setNewDescription('');
+                                                setIsCreating(true);
+                                            }}
                                             className="flex items-center gap-2 px-5 py-2.5 bg-primary text-primary-foreground rounded-full hover:bg-primary/90 shadow-lg shadow-primary/20 transition-all hover:scale-105 font-medium"
                                         >
                                             <Plus className="w-4 h-4" /> {t('新建项目', 'New Project')}
@@ -729,8 +739,18 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                                 autoFocus
                                             />
                                             <button onClick={handleCreate} className="px-6 py-2.5 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700">{t('创建', 'Create')}</button>
-                                            <button onClick={() => setIsCreating(false)} className="px-6 py-2.5 bg-secondary text-secondary-foreground rounded-lg font-medium hover:bg-secondary/80">{t('取消', 'Cancel')}</button>
+                                            <button onClick={() => {
+                                                setIsCreating(false);
+                                                setNewDescription('');
+                                            }} className="px-6 py-2.5 bg-secondary text-secondary-foreground rounded-lg font-medium hover:bg-secondary/80">{t('取消', 'Cancel')}</button>
                                         </div>
+                                        <label className="block text-sm font-medium mt-4 mb-2">{t('项目描述（可选）', 'Project Description (Optional)')}</label>
+                                        <textarea
+                                            className="w-full px-4 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/20 outline-none resize-y min-h-[84px]"
+                                            value={newDescription}
+                                            onChange={e => setNewDescription(e.target.value)}
+                                            placeholder={t('可留空。用于记录项目背景、目标或备注', 'Can be left empty. Add context, goals, or notes for this project')}
+                                        />
                                     </motion.div>
                                 )}
 
@@ -745,7 +765,11 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                             {t('你的工作室还是空的。创建第一个剧本，开始生成分镜。', 'Your studio is empty. Create your first screenplay to begin generating shots.')}
                                         </p>
                                         <button 
-                                            onClick={() => setIsCreating(true)}
+                                            onClick={() => {
+                                                setNewTitle('');
+                                                setNewDescription('');
+                                                setIsCreating(true);
+                                            }}
                                             className="px-8 py-3 rounded-full bg-primary/20 border border-primary/50 text-white font-medium hover:bg-primary/30 transition-all hover:scale-105"
                                         >
                                             {t('创建第一个项目', 'Create First Project')}
@@ -825,7 +849,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                                         {/* Description & Footer - Reveal on Hover */}
                                                         <div className="max-h-0 opacity-0 group-hover:max-h-32 group-hover:opacity-100 overflow-hidden transition-all duration-500 ease-in-out">
                                                             <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed opacity-80 mt-2">
-                                                                {p.global_info?.notes || t('暂无描述。', 'No description added.')}
+                                                                {p.description || p.global_info?.notes || t('暂无描述。', 'No description added.')}
                                                             </p>
                                                             <p className="text-[11px] text-muted-foreground/80 mt-2 mb-4">
                                                                 {getProjectShareCountText(p)}
