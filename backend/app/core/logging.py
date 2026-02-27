@@ -112,6 +112,12 @@ def _is_polling_log_suppressed(method: str, path: str) -> bool:
     key = f"{method} {path}"
     suppressed_patterns = [
         r"^GET /api/v1/episodes/\d+/shots$",
+        r"^GET /api/v1/projects/\d+/script_generator/episodes/scripts/status$",
+        r"^GET /api/v1/episodes/\d+/scenes/ai_shots/batch/status$",
+        r"^GET /api/v1/episodes/\d+/script_generator/scenes/status$",
+        r"^GET /api/v1/episodes/\d+/shots/batch-media/status$",
+        r"^GET /api/v1/billing/recharge/status/[^/]+$",
+        r"^GET /api/v1/generate/image/jobs/[^/]+$",
     ]
     return any(re.search(pattern, key) for pattern in suppressed_patterns)
 
