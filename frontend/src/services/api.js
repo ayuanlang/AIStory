@@ -765,6 +765,11 @@ export const getAdminStorageUsage = async () => {
     return response.data;
 };
 
+export const fetchUnreferencedAssetIds = async () => {
+    const response = await api.get('/assets/unreferenced-ids');
+    return response.data;
+}
+
 export const getEffectiveSettingSnapshot = async (params = {}) => {
     const response = await api.get('/settings/effective', { params });
     return response.data;

@@ -4,9 +4,9 @@ import {
     Image, Video, Upload, Link as LinkIcon, Plus, X, 
     MoreVertical, Trash2, Edit2, Info, Maximize2,
     Folder, User, Film, Globe, Layers, ArrowDown, ArrowUp,
-    Sparkles, Copy, Loader2, CheckCircle, Settings, Calendar, AlertTriangle, FolderOpen
+    Sparkles, Copy, Loader2, CheckCircle, Settings, Calendar, AlertTriangle, FolderOpen, Download
 } from 'lucide-react';
-import { fetchAssets, createAsset, uploadAsset, deleteAsset, deleteAssetsBatch, updateAsset, analyzeAssetImage } from '../services/api';
+import { fetchAssets, createAsset, uploadAsset, deleteAsset, deleteAssetsBatch, updateAsset, analyzeAssetImage, fetchUnreferencedAssetIds } from '../services/api';
 import { useLog } from '../context/LogContext';
 import { API_URL, BASE_URL } from '../config';
 import RefineControl from './RefineControl.jsx';
@@ -41,13 +41,54 @@ const inferDownloadName = (asset, index = 0) => {
     return `asset_${String(index + 1).padStart(3, '0')}.${fallbackExt}`;
 };
 
+
 const LOCAL_DIR_RESTORE_HINT_KEY = 'assets_local_dir_restore_hint_v1';
+
+const isKnownBrokenLegacyUrl = (url) => {
+    const raw = String(url || '').trim();
+    if (!raw) return false;
+    return /^https?:\/\/file\d+\.aitohumanize\.com\/file\//i.test(raw);
+};
+
+const parseMetaForGrouping = (rawMeta) => {
+    let meta = rawMeta;
+    for (let i = 0; i < 3; i++) {
+        if (typeof meta !== 'string') break;
+        try {
+            meta = JSON.parse(meta);
+        } catch {
+            break;
+        }
+    }
+
+    if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return {};
+
+    const merged = { ...meta };
+    ['meta_info', 'metadata', 'extra', 'details'].forEach((k) => {
+        const nested = meta?.[k];
+        if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+            Object.assign(merged, nested);
+        }
+    });
+    return merged;
+};
+
+const pickMetaValue = (meta, keys = []) => {
+    for (const key of keys) {
+        const value = meta?.[key];
+        if (value === null || value === undefined) continue;
+        const text = String(value).trim();
+        if (!text || text.toLowerCase() === 'null' || text.toLowerCase() === 'undefined') continue;
+        return text;
+    }
+    return '';
+};
 
 
 const AssetItem = React.memo(({ asset, onClick, onDelete, isManageMode, isSelected, onToggleSelect, onReportError, t }) => {
     const videoRef = React.useRef(null);
     const [isPlaying, setIsPlaying] = useState(false);
-    const [isError, setIsError] = useState(false);
+    const [isError, setIsError] = useState(() => isKnownBrokenLegacyUrl(asset?.url));
     const category = getAssetCategory(asset.type);
 
     React.useEffect(() => {
@@ -484,6 +525,26 @@ const AssetsLibrary = () => {
         addLog(`Selected ${oldAssets.length} assets older than 7 days.`);
     };
 
+    const handleSelectUnreferenced = async () => {
+        try {
+            const payload = await fetchUnreferencedAssetIds();
+            const unreferencedIds = new Set((payload?.unreferenced_ids || []).map((id) => Number(id)));
+            const targets = filteredAssets.filter((asset) => !String(asset.id).startsWith('local:') && unreferencedIds.has(Number(asset.id)));
+
+            if (targets.length === 0) {
+                addLog('No unreferenced assets found in current view.');
+                return;
+            }
+
+            const newSet = new Set(selectedIds);
+            targets.forEach((asset) => newSet.add(asset.id));
+            setSelectedIds(newSet);
+            addLog(`Selected ${targets.length} unreferenced assets (not used by current subject/shot image/video).`);
+        } catch (e) {
+            addLog(`Failed to select unreferenced assets: ${e.message}`, 'error');
+        }
+    };
+
     const filteredAssets = React.useMemo(() => {
         const mergedAssets = [...assets, ...localAssets];
         const list = mergedAssets.filter(a => {
@@ -565,25 +626,18 @@ const AssetsLibrary = () => {
         const globalKey = 'Global / Unsorted';
         
         filteredAssets.forEach(asset => {
-            // Robust parsing of meta if it's somehow a double-encoded string or object
-            let meta = asset.meta_info;
-            if (typeof meta === 'string') {
-                try { meta = JSON.parse(meta); } catch {}
-            }
-            if (!meta || typeof meta !== 'object') meta = {};
+            const meta = parseMetaForGrouping(asset.meta_info);
             
             let key = globalKey;
             
-            // Normalize keys to lowercase just in case
-            // Some databases might return different casing
-            const pId = meta.project_id || meta.Project_id || meta.ProjectId;
-            const pTitle = meta.project_title || meta.Project_title;
-            
-            const eId = meta.entity_id || meta.Entity_id;
-            const eName = meta.entity_name || meta.Entity_name;
-            
-            const sId = meta.shot_id || meta.Shot_id;
-            const sNum = meta.shot_number || meta.Shot_number;
+            const pId = pickMetaValue(meta, ['project_id', 'Project_id', 'ProjectId', 'projectId']);
+            const pTitle = pickMetaValue(meta, ['project_title', 'Project_title', 'projectTitle']);
+
+            const eId = pickMetaValue(meta, ['entity_id', 'Entity_id', 'entityId', 'subject_id', 'subjectId']);
+            const eName = pickMetaValue(meta, ['entity_name', 'Entity_name', 'entityName', 'subject_name', 'subjectName']);
+
+            const sId = pickMetaValue(meta, ['shot_id', 'Shot_id', 'shotId']);
+            const sNum = pickMetaValue(meta, ['shot_number', 'Shot_number', 'shotNumber']);
 
             if (groupBy === 'project') {
                 if (pTitle) key = pTitle;
@@ -676,6 +730,9 @@ const AssetsLibrary = () => {
                              )}
                              <button onClick={handleSelectOld} className="px-3 py-1.5 text-xs bg-card border border-white/10 hover:bg-white/5 rounded flex items-center gap-2 transition-colors" title={t('选择 7 天前的文件', 'Select files > 7 days old')}>
                                  <Calendar size={14} /> {t('选择旧文件', 'Select Old')}
+                             </button>
+                             <button onClick={handleSelectUnreferenced} className="px-3 py-1.5 text-xs bg-card border border-white/10 hover:bg-white/5 rounded flex items-center gap-2 transition-colors" title={t('选中未被 subject 当前图和 shot 当前图片/视频引用的素材', 'Select assets not referenced by subject current image or shot current image/video')}>
+                                 <LinkIcon size={14} /> {t('选中未引用', 'Select Unreferenced')}
                              </button>
                              <button onClick={handleDeleteFiltered} className="px-3 py-1.5 text-xs bg-card border border-white/10 hover:bg-white/5 rounded flex items-center gap-2 transition-colors" title={t('删除当前可见项', 'Delete All Visible')}>
                                  <Layers size={14} /> {t('筛选结果', 'Filtered')}

@@ -7211,6 +7211,202 @@ class AssetRebindShotMediaRequest(BaseModel):
     limit: int = 2000
     dry_run: bool = False
 
+
+def _url_reference_tokens(raw_url: Any) -> set[str]:
+    tokens: set[str] = set()
+    raw = str(raw_url or "").strip()
+    if not raw:
+        return tokens
+
+    tokens.add(raw)
+    try:
+        parsed = urllib.parse.urlparse(raw)
+        path = urllib.parse.unquote(parsed.path or "").strip()
+    except Exception:
+        path = raw
+
+    if path:
+        tokens.add(path)
+        stripped = path.lstrip("/")
+        if stripped:
+            tokens.add(stripped)
+
+        if "/uploads/" in path:
+            suffix = path.split("/uploads/", 1)[1].lstrip("/")
+            if suffix:
+                tokens.add(suffix)
+                tokens.add(f"uploads/{suffix}")
+                tokens.add(f"/uploads/{suffix}")
+
+        if stripped.startswith("uploads/"):
+            suffix = stripped.split("uploads/", 1)[1].lstrip("/")
+            if suffix:
+                tokens.add(suffix)
+                tokens.add(f"uploads/{suffix}")
+                tokens.add(f"/uploads/{suffix}")
+
+        base_name = os.path.basename(path)
+        if base_name:
+            tokens.add(base_name)
+
+    return {str(item).strip() for item in tokens if str(item or "").strip()}
+
+
+def _resolve_accessible_project_ids_for_user(db: Session, current_user: User) -> List[int]:
+    owner_ids = [
+        pid for (pid,) in db.query(Project.id).filter(Project.owner_id == current_user.id).all()
+        if pid is not None
+    ]
+    shared_ids = [
+        pid for (pid,) in db.query(ProjectShare.project_id).filter(ProjectShare.user_id == current_user.id).all()
+        if pid is not None
+    ]
+    return sorted(set([int(pid) for pid in owner_ids + shared_ids]))
+
+
+@router.get("/assets/unreferenced-ids", response_model=dict)
+def get_unreferenced_asset_ids(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    assets = db.query(Asset).filter(Asset.user_id == current_user.id).all()
+    if not assets:
+        return {"unreferenced_ids": [], "referenced_ids": [], "total_assets": 0}
+
+    accessible_project_ids = _resolve_accessible_project_ids_for_user(db, current_user)
+    referenced_tokens: set[str] = set()
+
+    if accessible_project_ids:
+        for (img_url,) in db.query(Entity.image_url).filter(Entity.project_id.in_(accessible_project_ids)).all():
+            referenced_tokens.update(_url_reference_tokens(img_url))
+
+        direct_shot_rows = db.query(
+            Shot.image_url,
+            Shot.video_url,
+            Shot.technical_notes,
+            Shot.start_frame,
+            Shot.keyframes,
+        ).filter(
+            Shot.project_id.in_(accessible_project_ids)
+        ).all()
+
+        joined_shot_rows = (
+            db.query(
+                Shot.image_url,
+                Shot.video_url,
+                Shot.technical_notes,
+                Shot.start_frame,
+                Shot.keyframes,
+            )
+            .join(Scene, Scene.id == Shot.scene_id)
+            .join(Episode, Episode.id == Scene.episode_id)
+            .filter(Episode.project_id.in_(accessible_project_ids))
+            .all()
+        )
+
+        seen_row_keys: set[tuple[str, str, str]] = set()
+        for img_url, vid_url, technical_notes, start_frame, keyframes_raw in direct_shot_rows + joined_shot_rows:
+            row_key = (str(img_url or ""), str(vid_url or ""), str(technical_notes or ""))
+            if row_key in seen_row_keys:
+                continue
+            seen_row_keys.add(row_key)
+
+            referenced_tokens.update(_url_reference_tokens(img_url))
+            referenced_tokens.update(_url_reference_tokens(vid_url))
+            referenced_tokens.update(_url_reference_tokens(start_frame))
+            referenced_tokens.update(_url_reference_tokens(keyframes_raw))
+            if technical_notes:
+                try:
+                    notes = technical_notes
+                    if isinstance(notes, str):
+                        notes = json.loads(notes)
+                    if isinstance(notes, dict):
+                        referenced_tokens.update(_url_reference_tokens(notes.get("end_frame_url")))
+                        referenced_tokens.update(_url_reference_tokens(notes.get("endFrameUrl")))
+                        referenced_tokens.update(_url_reference_tokens(notes.get("last_frame_url")))
+                        referenced_tokens.update(_url_reference_tokens(notes.get("start_frame_url")))
+                        referenced_tokens.update(_url_reference_tokens(notes.get("startFrameUrl")))
+
+                        keyframes = notes.get("keyframes")
+                        if isinstance(keyframes, list):
+                            for item in keyframes:
+                                referenced_tokens.update(_url_reference_tokens(item))
+                        elif isinstance(keyframes, str):
+                            referenced_tokens.update(_url_reference_tokens(keyframes))
+
+                        for list_key in ("video_ref_image_urls", "ref_image_urls", "end_ref_image_urls"):
+                            refs = notes.get(list_key)
+                            if isinstance(refs, list):
+                                for item in refs:
+                                    referenced_tokens.update(_url_reference_tokens(item))
+                except Exception:
+                    pass
+
+    referenced_ids: List[int] = []
+    unreferenced_ids: List[int] = []
+
+    def _meta_dict(raw_meta: Any) -> Dict[str, Any]:
+        if isinstance(raw_meta, dict):
+            meta = dict(raw_meta)
+        elif isinstance(raw_meta, str):
+            try:
+                parsed = json.loads(raw_meta)
+                meta = parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                meta = {}
+        else:
+            meta = {}
+
+        nested = meta.get("metadata")
+        if isinstance(nested, dict):
+            merged = dict(meta)
+            merged.update(nested)
+            return merged
+        return meta
+
+    def _has_value(value: Any) -> bool:
+        if value is None:
+            return False
+        raw = str(value).strip().lower()
+        return raw not in {"", "null", "none", "undefined"}
+
+    def _is_model_generated_asset(meta: Dict[str, Any]) -> bool:
+        if _has_value(meta.get("provider")) or _has_value(meta.get("model")):
+            return True
+
+        source = str(meta.get("source") or "").strip().lower()
+        if source in {
+            "ai_generation",
+            "generated",
+            "model_generation",
+            "image_gen",
+            "video_gen",
+        }:
+            return True
+
+        return False
+
+    generated_assets_count = 0
+
+    for asset in assets:
+        meta = _meta_dict(asset.meta_info)
+        if not _is_model_generated_asset(meta):
+            continue
+
+        generated_assets_count += 1
+        asset_tokens = _url_reference_tokens(asset.url)
+        if asset_tokens and asset_tokens.intersection(referenced_tokens):
+            referenced_ids.append(asset.id)
+        else:
+            unreferenced_ids.append(asset.id)
+
+    return {
+        "unreferenced_ids": sorted(unreferenced_ids),
+        "referenced_ids": sorted(referenced_ids),
+        "total_assets": len(assets),
+        "generated_assets": generated_assets_count,
+    }
+
 @router.get("/assets/", response_model=List[dict])
 def get_assets(
     type: Optional[str] = None,
