@@ -108,6 +108,14 @@ def get_function_name(method: str, path: str):
     return None
 
 
+def _is_polling_log_suppressed(method: str, path: str) -> bool:
+    key = f"{method} {path}"
+    suppressed_patterns = [
+        r"^GET /api/v1/episodes/\d+/shots$",
+    ]
+    return any(re.search(pattern, key) for pattern in suppressed_patterns)
+
+
 def _safe_int(value) -> Optional[int]:
     try:
         if value is None:
@@ -161,6 +169,7 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         method = request.method
         path = request.url.path
         func_name = get_function_name(method, path)
+        is_polling_suppressed = _is_polling_log_suppressed(method, path)
         noise_prefixes = (
             "/uploads/",
             "/docs",
@@ -206,6 +215,9 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         # 4. Log every API endpoint call with key access factors and result status.
         # Skip noisy static /uploads requests.
         if not is_noise:
+            if is_polling_suppressed and 200 <= response.status_code < 400:
+                return response
+
             action = func_name or f"API Call: {method} {path}"
             content_length = request.headers.get("content-length")
             size_part = f" | ReqBytes: {content_length}" if content_length else ""
