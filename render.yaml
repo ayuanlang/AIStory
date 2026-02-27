@@ -38,7 +38,7 @@ services:
       - key: GZIP_MINIMUM_SIZE
         value: "1024"
       - key: WEB_CONCURRENCY
-        value: "1"
+        value: "2"
       - key: GUNICORN_TIMEOUT
         value: "180"
       - key: GUNICORN_KEEPALIVE
