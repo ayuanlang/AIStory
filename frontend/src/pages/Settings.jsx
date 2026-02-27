@@ -101,6 +101,7 @@ const Settings = () => {
     const [videoModel, setVideoModel] = useState("Runway");
     const [visionModel, setVisionModel] = useState("Grsai-Vision"); // New Vision Model State
     const [promptLanguage, setPromptLanguage] = useState("mixed");
+    const [autoDownloadLocal, setAutoDownloadLocal] = useState(true);
 
     // State for Tool Configs (Active inputs)
     const [imgToolKey, setImgToolKey] = useState("");
@@ -718,6 +719,11 @@ const Settings = () => {
             setCharSupplements(withFallback(generationConfig.characterSupplements, DEFAULT_CHARACTER_SUPPLEMENTS));
             setSceneSupplements(withFallback(generationConfig.sceneSupplements, DEFAULT_SCENE_SUPPLEMENTS));
             setPromptLanguage(generationConfig.prompt_language || "mixed");
+            setAutoDownloadLocal(
+                Object.prototype.hasOwnProperty.call(generationConfig, 'autoDownloadLocal')
+                    ? !!generationConfig.autoDownloadLocal
+                    : true
+            );
             
             const iModel = generationConfig.imageModel || "Midjourney";
             const vModel = generationConfig.videoModel || "Runway";
@@ -734,6 +740,7 @@ const Settings = () => {
         } else {
                setCharSupplements(DEFAULT_CHARACTER_SUPPLEMENTS);
                setSceneSupplements(DEFAULT_SCENE_SUPPLEMENTS);
+               setAutoDownloadLocal(true);
              // Even if no generationConfig, we might have defaults set in state (e.g. Midjourney/Runway)
              // and we should load their configs if savedToolConfigs updates
              loadToolConfig(imageModel, 'image');
@@ -1018,7 +1025,8 @@ const Settings = () => {
             prompt_language: promptLanguage,
             imageModel,
             videoModel,
-            visionModel
+            visionModel,
+            autoDownloadLocal,
         });
 
         // Save tool credentials locally
@@ -1632,6 +1640,20 @@ const Settings = () => {
                                 </label>
                                 <p className="text-[11px] text-muted-foreground">
                                     {t('开启后：多参考图（>4）会临时切到后台配置的多图默认 API；达到重试上限后按同类别优先级自动回退。此行为仅作用于当前调用，不会改变你的默认激活 API。', 'When enabled: multi-reference image jobs (>4 refs) temporarily use the admin-configured multi-ref default API; after retry limit it falls back by same-category priority. This applies per call and does not persistently change your active API.')}
+                                </p>
+
+                                <label className="flex items-center gap-3 text-sm text-white bg-white/5 p-3 rounded-lg border border-white/10">
+                                    <input
+                                        type="checkbox"
+                                        checked={!!autoDownloadLocal}
+                                        onChange={(e) => setAutoDownloadLocal(e.target.checked)}
+                                    />
+                                    <span>
+                                        {t('生成成功后自动下载到本地（按当前用户设置）', 'Auto-download generated media to local device (per-user setting)')}
+                                    </span>
+                                </label>
+                                <p className="text-[11px] text-muted-foreground">
+                                    {t('关闭后，生成结果仍会保存到资产库，但不会自动触发浏览器下载。', 'When disabled, generated media is still saved to asset library, but browser auto-download is not triggered.')}
                                 </p>
                             </div>
 

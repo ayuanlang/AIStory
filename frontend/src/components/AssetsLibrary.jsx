@@ -33,6 +33,14 @@ const getAssetCategory = (type) => {
     return t; // fallback
 };
 
+const inferDownloadName = (asset, index = 0) => {
+    const existing = String(asset?.filename || '').trim();
+    if (existing) return existing;
+    const category = getAssetCategory(asset?.type);
+    const fallbackExt = category === 'video' ? 'mp4' : 'png';
+    return `asset_${String(index + 1).padStart(3, '0')}.${fallbackExt}`;
+};
+
 const LOCAL_DIR_RESTORE_HINT_KEY = 'assets_local_dir_restore_hint_v1';
 
 
@@ -168,6 +176,7 @@ const AssetsLibrary = () => {
     // Manage Mode State
     const [isManageMode, setIsManageMode] = useState(false);
     const [selectedIds, setSelectedIds] = useState(new Set());
+    const [isDownloadingSelected, setIsDownloadingSelected] = useState(false);
     const brokenAssetsRef = React.useRef(new Set());
 
     const handleReportError = React.useCallback((id) => {
@@ -391,6 +400,61 @@ const AssetsLibrary = () => {
         if (selectedIds.size === 0) return;
         if (!await confirmUiMessage(`Delete ${selectedIds.size} selected assets? Files will be removed.`)) return;
         await runBatchDelete(selectedIds);
+    };
+
+    const handleDownloadSelected = async () => {
+        const ids = Array.from(selectedIds || []);
+        if (ids.length === 0) return;
+
+        const allAssets = [...assets, ...localAssets];
+        const selectedAssets = allAssets.filter((item) => ids.includes(item.id));
+        if (selectedAssets.length === 0) return;
+
+        setIsDownloadingSelected(true);
+        let successCount = 0;
+        let failCount = 0;
+
+        for (let i = 0; i < selectedAssets.length; i++) {
+            const asset = selectedAssets[i];
+            const src = getFullUrl(asset.url);
+            if (!src) {
+                failCount += 1;
+                continue;
+            }
+
+            const filename = inferDownloadName(asset, i);
+            try {
+                const response = await fetch(src, { credentials: 'include' });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const blob = await response.blob();
+                const objectUrl = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = objectUrl;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(objectUrl);
+                successCount += 1;
+            } catch (e) {
+                try {
+                    const a = document.createElement('a');
+                    a.href = src;
+                    a.download = filename;
+                    a.target = '_blank';
+                    a.rel = 'noopener noreferrer';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    successCount += 1;
+                } catch {
+                    failCount += 1;
+                }
+            }
+        }
+
+        setIsDownloadingSelected(false);
+        addLog(`Download selected complete. success=${successCount}, failed=${failCount}`);
     };
 
     const handleDeleteFiltered = async () => {
@@ -622,6 +686,13 @@ const AssetsLibrary = () => {
                                  className={`px-3 py-1.5 text-xs bg-red-500 text-white rounded flex items-center gap-2 transition-colors ${selectedIds.size===0 ? 'opacity-50 cursor-not-allowed' : 'hover:bg-red-600'}`}
                              >
                                  <Trash2 size={14} /> {t('删除', 'Delete')} ({selectedIds.size})
+                             </button>
+                             <button
+                                 onClick={handleDownloadSelected}
+                                 disabled={selectedIds.size === 0 || isDownloadingSelected}
+                                 className={`px-3 py-1.5 text-xs bg-primary text-black rounded flex items-center gap-2 transition-colors ${selectedIds.size===0 || isDownloadingSelected ? 'opacity-50 cursor-not-allowed' : 'hover:bg-primary/90'}`}
+                             >
+                                 {isDownloadingSelected ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} {t('下载所选', 'Download Selected')} ({selectedIds.size})
                              </button>
                              <div className="h-6 w-px bg-white/10 mx-2"></div>
                              <button onClick={() => { setIsManageMode(false); setSelectedIds(new Set()); }} className="p-1.5 hover:bg-white/10 rounded transition-colors"><X size={18}/></button>

@@ -456,6 +456,20 @@ export const deleteAllEntities = async (projectId) => {
 // Generation
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const shouldAutoDownloadByUserSetting = () => {
+    try {
+        const raw = localStorage.getItem('generationConfig');
+        if (!raw) return true;
+        const parsed = JSON.parse(raw);
+        if (parsed && Object.prototype.hasOwnProperty.call(parsed, 'autoDownloadLocal')) {
+            return !!parsed.autoDownloadLocal;
+        }
+    } catch {
+        // ignore parsing issues and fallback to default enabled behavior
+    }
+    return true;
+};
+
 const resolveMediaDownloadUrl = (url) => {
     const raw = String(url || '').trim();
     if (!raw) return '';
@@ -521,7 +535,9 @@ const pollImageJobUntilDone = async (jobId, { timeoutMs = 10 * 60 * 1000, pollIn
 
 export const generateImage = async (prompt, provider = null, ref_image_url = null, options = {}) => {
     const payload = { prompt, provider, ref_image_url, ...options };
-    const autoDownloadLocal = options?.auto_download_local !== false;
+    const autoDownloadLocal = Object.prototype.hasOwnProperty.call(options || {}, 'auto_download_local')
+        ? options?.auto_download_local !== false
+        : shouldAutoDownloadByUserSetting();
 
     try {
         const submitResp = await api.post('/generate/image/submit', payload);
@@ -562,7 +578,10 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
 
 export const generateVideo = async (prompt, provider = null, ref_image_url = null, last_frame_url = null, duration = 5, options = {}, keyframes = []) => {
     const response = await api.post('/generate/video', { prompt, provider, ref_image_url, last_frame_url, duration, keyframes, ...options });
-    if (options?.auto_download_local !== false && response?.data?.url) {
+    const autoDownloadLocal = Object.prototype.hasOwnProperty.call(options || {}, 'auto_download_local')
+        ? options?.auto_download_local !== false
+        : shouldAutoDownloadByUserSetting();
+    if (autoDownloadLocal && response?.data?.url) {
         try {
             await downloadMediaToLocal(response.data.url, `generated_video_${Date.now()}.mp4`);
         } catch (downloadError) {
@@ -675,6 +694,11 @@ export const getAdminLlmLogView = async (params = {}) => {
     const response = await api.get('/admin/llm-logs/view', { params });
     return response.data;
 }
+
+export const getAdminStorageUsage = async () => {
+    const response = await api.get('/admin/storage-usage');
+    return response.data;
+};
 
 export const getEffectiveSettingSnapshot = async (params = {}) => {
     const response = await api.get('/settings/effective', { params });

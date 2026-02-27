@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { api, getPricingRules, createPricingRule, updatePricingRule, deletePricingRule, getTransactions, updateUserCredits, syncPricingRules, getBillingOptions, getSystemSettingsManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, exportSystemSettingsManage, importSystemSettingsManage, getAdminLlmLogFiles, getAdminLlmLogView } from '../services/api';
+import { api, getPricingRules, createPricingRule, updatePricingRule, deletePricingRule, getTransactions, updateUserCredits, syncPricingRules, getBillingOptions, getSystemSettingsManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, exportSystemSettingsManage, importSystemSettingsManage, getAdminLlmLogFiles, getAdminLlmLogView, getAdminStorageUsage } from '../services/api';
 import Footer from '../components/Footer';
-import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft } from 'lucide-react';
+import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive } from 'lucide-react';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
 import { getUiLang, tUI } from '../lib/uiLang';
 
@@ -91,6 +91,9 @@ const UserAdmin = () => {
     const [llmLogContent, setLlmLogContent] = useState('');
     const [isLlmLogsLoading, setIsLlmLogsLoading] = useState(false);
     const [llmLogsError, setLlmLogsError] = useState('');
+    const [storageUsage, setStorageUsage] = useState(null);
+    const [isStorageUsageLoading, setIsStorageUsageLoading] = useState(false);
+    const [storageUsageError, setStorageUsageError] = useState('');
 
     // ... existing code ...
 
@@ -131,6 +134,12 @@ const UserAdmin = () => {
     useEffect(() => {
         if (activeTab === 'llm_logs') {
             fetchLlmLogs();
+        }
+    }, [activeTab]);
+
+    useEffect(() => {
+        if (activeTab === 'storage_usage') {
+            fetchStorageUsage();
         }
     }, [activeTab]);
 
@@ -430,6 +439,21 @@ const UserAdmin = () => {
             setLlmLogContent('');
         } finally {
             setIsLlmLogsLoading(false);
+        }
+    };
+
+    const fetchStorageUsage = async () => {
+        setIsStorageUsageLoading(true);
+        setStorageUsageError('');
+        try {
+            const payload = await getAdminStorageUsage();
+            setStorageUsage(payload || null);
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e.message || 'Failed to load storage usage';
+            setStorageUsageError(detail);
+            setStorageUsage(null);
+        } finally {
+            setIsStorageUsageLoading(false);
         }
     };
 
@@ -869,6 +893,7 @@ const UserAdmin = () => {
                         <TabButton id="pricing" label={t('定价', 'Pricing')} icon={DollarSign} />
                         <TabButton id="transactions" label={t('记录', 'History')} icon={Activity} />
                         <TabButton id="system_api" label={t('系统 API', 'System API')} icon={Key} />
+                        <TabButton id="storage_usage" label={t('磁盘统计', 'Storage Usage')} icon={HardDrive} />
                         <TabButton id="llm_logs" label={t('LLM 日志', 'LLM Logs')} icon={List} />
                         <TabButton id="payment" label={t('支付', 'Payment')} icon={CreditCard} />
                         <TabButton id="smtp" label={t('邮件 SMTP', 'Email SMTP')} icon={Mail} />
@@ -1917,6 +1942,70 @@ const UserAdmin = () => {
                             <pre className="w-full min-h-[420px] max-h-[620px] overflow-auto bg-black/40 border border-gray-700 rounded p-3 text-xs text-gray-100 whitespace-pre-wrap break-all font-mono">
                                 {isLlmLogsLoading ? 'Loading LLM logs...' : (llmLogContent || 'No content')}
                             </pre>
+                        </div>
+                    )}
+
+                    {activeTab === 'storage_usage' && (
+                        <div className="space-y-4">
+                            <div className="flex items-center justify-between gap-3">
+                                <h3 className="text-lg font-bold">{t('用户磁盘使用统计', 'Per-User Storage Usage')}</h3>
+                                <button
+                                    onClick={fetchStorageUsage}
+                                    disabled={isStorageUsageLoading}
+                                    className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded flex items-center gap-2 disabled:opacity-50"
+                                >
+                                    <RefreshCw size={16} className={isStorageUsageLoading ? 'animate-spin' : ''} /> {t('刷新', 'Refresh')}
+                                </button>
+                            </div>
+
+                            {storageUsageError ? (
+                                <div className="text-sm text-red-300 bg-red-500/10 border border-red-500/30 rounded p-3">{storageUsageError}</div>
+                            ) : null}
+
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                <div className="bg-black/30 border border-white/10 rounded-lg p-3">
+                                    <div className="text-xs text-gray-400">{t('总占用', 'Total Size')}</div>
+                                    <div className="text-lg font-bold">{formatBytes(storageUsage?.total_bytes || 0)}</div>
+                                </div>
+                                <div className="bg-black/30 border border-white/10 rounded-lg p-3">
+                                    <div className="text-xs text-gray-400">{t('总文件数', 'Total Files')}</div>
+                                    <div className="text-lg font-bold">{Number(storageUsage?.total_files || 0)}</div>
+                                </div>
+                                <div className="bg-black/30 border border-white/10 rounded-lg p-3">
+                                    <div className="text-xs text-gray-400">{t('上传根目录', 'Upload Root')}</div>
+                                    <div className="text-xs break-all text-gray-200">{storageUsage?.upload_root || '-'}</div>
+                                </div>
+                            </div>
+
+                            <div className="overflow-x-auto border border-white/10 rounded-lg">
+                                <table className="w-full text-sm">
+                                    <thead className="bg-black/40">
+                                        <tr className="text-left text-gray-300">
+                                            <th className="px-3 py-2">{t('用户ID', 'User ID')}</th>
+                                            <th className="px-3 py-2">{t('用户名', 'Username')}</th>
+                                            <th className="px-3 py-2">Email</th>
+                                            <th className="px-3 py-2 text-right">{t('文件数', 'Files')}</th>
+                                            <th className="px-3 py-2 text-right">{t('占用', 'Size')}</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {(storageUsage?.users || []).map((row) => (
+                                            <tr key={row.user_id} className="border-t border-white/5">
+                                                <td className="px-3 py-2">{row.user_id}</td>
+                                                <td className="px-3 py-2">{row.username}</td>
+                                                <td className="px-3 py-2 text-gray-300">{row.email || '-'}</td>
+                                                <td className="px-3 py-2 text-right">{Number(row.file_count || 0)}</td>
+                                                <td className="px-3 py-2 text-right font-mono">{formatBytes(row.bytes || 0)}</td>
+                                            </tr>
+                                        ))}
+                                        {!isStorageUsageLoading && (!storageUsage?.users || storageUsage.users.length === 0) && (
+                                            <tr>
+                                                <td colSpan={5} className="px-3 py-6 text-center text-gray-400">{t('暂无数据', 'No data')}</td>
+                                            </tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
                     )}
 

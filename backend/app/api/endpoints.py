@@ -6974,6 +6974,21 @@ class LLMLogViewOut(BaseModel):
     content: str
 
 
+class AdminStorageUsageUserOut(BaseModel):
+    user_id: int
+    username: str
+    email: Optional[str] = None
+    file_count: int
+    bytes: int
+
+
+class AdminStorageUsageOut(BaseModel):
+    upload_root: str
+    total_bytes: int
+    total_files: int
+    users: List[AdminStorageUsageUserOut]
+
+
 @router.get("/admin/llm-logs/files", response_model=List[LLMLogFileOut])
 def list_llm_log_files(
     current_user: User = Depends(get_current_user)
@@ -7036,6 +7051,83 @@ def view_llm_log_file(
         size_bytes=int(stat.st_size),
         modified_at=datetime.fromtimestamp(stat.st_mtime).isoformat(),
         content="".join(line_buffer),
+    )
+
+
+@router.get("/admin/storage-usage", response_model=AdminStorageUsageOut)
+def get_admin_storage_usage(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Only superuser can view storage usage")
+
+    upload_root = Path(settings.UPLOAD_DIR)
+    if not upload_root.is_absolute():
+        upload_root = (Path(settings.BASE_DIR) / upload_root).resolve()
+
+    if not upload_root.exists() or not upload_root.is_dir():
+        return AdminStorageUsageOut(
+            upload_root=str(upload_root),
+            total_bytes=0,
+            total_files=0,
+            users=[],
+        )
+
+    user_rows = db.query(User.id, User.username, User.email).all()
+    user_map = {int(row.id): {"username": row.username, "email": row.email} for row in user_rows}
+
+    usage_by_user: Dict[int, Dict[str, int]] = {}
+    total_files = 0
+    total_bytes = 0
+
+    for child in upload_root.iterdir():
+        if not child.is_dir():
+            continue
+        try:
+            user_id = int(child.name)
+        except Exception:
+            continue
+
+        file_count = 0
+        bytes_used = 0
+        for root, _, files in os.walk(child):
+            for filename in files:
+                path = Path(root) / filename
+                try:
+                    stat = path.stat()
+                except Exception:
+                    continue
+                file_count += 1
+                bytes_used += int(stat.st_size)
+
+        usage_by_user[user_id] = {
+            "file_count": file_count,
+            "bytes": bytes_used,
+        }
+        total_files += file_count
+        total_bytes += bytes_used
+
+    users_out: List[AdminStorageUsageUserOut] = []
+    for uid, stats in usage_by_user.items():
+        info = user_map.get(uid) or {}
+        users_out.append(
+            AdminStorageUsageUserOut(
+                user_id=uid,
+                username=str(info.get("username") or f"user_{uid}"),
+                email=info.get("email"),
+                file_count=int(stats.get("file_count") or 0),
+                bytes=int(stats.get("bytes") or 0),
+            )
+        )
+
+    users_out.sort(key=lambda item: item.bytes, reverse=True)
+
+    return AdminStorageUsageOut(
+        upload_root=str(upload_root),
+        total_bytes=int(total_bytes),
+        total_files=int(total_files),
+        users=users_out,
     )
 
 # --- Assets ---
