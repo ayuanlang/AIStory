@@ -36,7 +36,8 @@ if not _llm_call_logger.handlers:
         logger.warning(f"Failed to initialize llm_call_audit logger: {e}")
 
 # Some providers (e.g., Ark/Doubao) can take several minutes for large prompts.
-DEFAULT_LLM_TIMEOUT_SECONDS = 600
+# Default timeout set to 300s, with env override support.
+DEFAULT_LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "300"))
 
 SYSTEM_PROMPT = """
 You are an AI assistant for a Storyboard Editor application.

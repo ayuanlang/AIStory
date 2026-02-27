@@ -4,10 +4,10 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { apiLogin, forgotPassword, registerUser, resetPassword, sendEmailVerificationCode, confirmEmailVerificationCode } from '../services/api';
 import { useStore } from '../lib/store';
 import { Lock, Mail, User, AlertCircle, Sparkles, ArrowRight } from 'lucide-react';
-import { getUiLang, tUI } from '../lib/uiLang';
+import { getUiLang, setUiLang, tUI, UI_LANG_EVENT, UI_LANG_KEY } from '../lib/uiLang';
 
 const Auth = () => {
-    const uiLang = getUiLang();
+    const [uiLang, setUiLangState] = useState(getUiLang());
     const t = (zh, en) => tUI(uiLang, zh, en);
     const [mode, setMode] = useState('login');
     const [formData, setFormData] = useState({
@@ -24,6 +24,24 @@ const Auth = () => {
     const navigate = useNavigate();
     const location = useLocation();
     const { refreshSettings } = useStore();
+
+    useEffect(() => {
+        const syncLang = () => {
+            const next = getUiLang();
+            setUiLangState((prev) => (prev === next ? prev : next));
+        };
+
+        const onStorage = (e) => {
+            if (e.key === UI_LANG_KEY) syncLang();
+        };
+
+        window.addEventListener('storage', onStorage);
+        window.addEventListener(UI_LANG_EVENT, syncLang);
+        return () => {
+            window.removeEventListener('storage', onStorage);
+            window.removeEventListener(UI_LANG_EVENT, syncLang);
+        };
+    }, []);
 
     useEffect(() => {
         const params = new URLSearchParams(location.search);
@@ -155,6 +173,22 @@ const Auth = () => {
                         {mode === 'forgot' && t('输入注册邮箱，我们会发送重置链接。', 'Enter your email and we will send a reset link.')}
                         {mode === 'reset' && t('输入重置令牌与新密码。', 'Enter your reset token and new password.')}
                                     </p>
+                                </div>
+                                <div className="inline-flex items-center rounded-md border bg-muted/40 p-1 text-xs">
+                                    <button
+                                        type="button"
+                                        onClick={() => setUiLang('zh')}
+                                        className={`rounded px-2 py-1 font-medium transition ${uiLang === 'zh' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                                    >
+                                        中文
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setUiLang('en')}
+                                        className={`rounded px-2 py-1 font-medium transition ${uiLang === 'en' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                                    >
+                                        EN
+                                    </button>
                                 </div>
                             </div>
 
