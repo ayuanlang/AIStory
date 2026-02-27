@@ -61,6 +61,8 @@ const UserAdmin = () => {
     const [isSmtpBroadcastLoading, setIsSmtpBroadcastLoading] = useState(false);
     const [isGrsaiDiagLoading, setIsGrsaiDiagLoading] = useState(false);
     const [grsaiDiagResult, setGrsaiDiagResult] = useState(null);
+    const [isRuntimeStatsLoading, setIsRuntimeStatsLoading] = useState(false);
+    const [runtimeStats, setRuntimeStats] = useState(null);
     const [systemApiRows, setSystemApiRows] = useState([]);
     const [isSystemApiLoading, setIsSystemApiLoading] = useState(false);
     const [isSystemApiImporting, setIsSystemApiImporting] = useState(false);
@@ -572,6 +574,21 @@ const UserAdmin = () => {
             });
         } finally {
             setIsGrsaiDiagLoading(false);
+        }
+    };
+
+    const handleLoadRuntimeStats = async () => {
+        setIsRuntimeStatsLoading(true);
+        try {
+            const res = await api.get('/admin/runtime-stats');
+            setRuntimeStats(res?.data || null);
+        } catch (e) {
+            console.error('Failed to load runtime stats', e);
+            setRuntimeStats({
+                error: e?.response?.data?.detail || e?.message || 'Failed to load runtime stats',
+            });
+        } finally {
+            setIsRuntimeStatsLoading(false);
         }
     };
 
@@ -1151,6 +1168,70 @@ const UserAdmin = () => {
                                                     HTTPS_PROXY: {grsaiDiagResult.proxy_env.HTTPS_PROXY || '(empty)'}<br />
                                                     NO_PROXY: {grsaiDiagResult.proxy_env.NO_PROXY || '(empty)'}
                                                 </div>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="border-t border-white/10 pt-5 space-y-3">
+                                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                                        <h3 className="text-sm font-bold text-white">{t('运行时内存监控（Render）', 'Runtime Memory Monitor (Render)')}</h3>
+                                        <button
+                                            onClick={handleLoadRuntimeStats}
+                                            disabled={isRuntimeStatsLoading}
+                                            className="bg-white/10 text-white px-4 py-2 rounded-lg font-medium hover:bg-white/20 disabled:opacity-50 flex items-center gap-2"
+                                        >
+                                            {isRuntimeStatsLoading ? <RefreshCw className="animate-spin" size={16}/> : <Activity size={16}/>}
+                                            {t('刷新监控', 'Refresh Stats')}
+                                        </button>
+                                    </div>
+
+                                    {!runtimeStats && (
+                                        <p className="text-xs text-gray-400">
+                                            {t('显示服务实例、图片任务缓存条目数、状态分布与估算内存占用。', 'Shows service instance info, image job cache size, status distribution, and estimated memory usage.')}
+                                        </p>
+                                    )}
+
+                                    {!!runtimeStats && (
+                                        <div className="bg-black/20 border border-white/10 rounded-lg p-3 space-y-3 text-sm">
+                                            {runtimeStats.error ? (
+                                                <div className="text-red-300 text-xs">{String(runtimeStats.error)}</div>
+                                            ) : (
+                                                <>
+                                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs text-gray-300">
+                                                        <div>PID: {runtimeStats?.pid ?? '-'}</div>
+                                                        <div>Commit: {runtimeStats?.render?.git_commit || '-'}</div>
+                                                        <div>Instance: {runtimeStats?.render?.instance_id || '-'}</div>
+                                                        <div>Service: {runtimeStats?.render?.service_id || '-'}</div>
+                                                    </div>
+                                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs text-gray-200">
+                                                        <div>
+                                                            {t('缓存条目', 'Cache Items')}: <span className="font-semibold">{runtimeStats?.image_jobs?.store_items ?? 0}</span>
+                                                        </div>
+                                                        <div>
+                                                            {t('估算内存(MB)', 'Estimated MB')}: <span className="font-semibold">{runtimeStats?.image_jobs?.approx_store_mb ?? 0}</span>
+                                                        </div>
+                                                        <div>
+                                                            TTL(s): <span className="font-semibold">{runtimeStats?.image_jobs?.ttl_seconds ?? '-'}</span>
+                                                        </div>
+                                                    </div>
+                                                    <div className="text-xs text-gray-400">
+                                                        max_items: {runtimeStats?.image_jobs?.max_items ?? '-'}
+                                                        {' | '}
+                                                        oldest: {runtimeStats?.image_jobs?.oldest_created_at || '-'}
+                                                        {' | '}
+                                                        newest: {runtimeStats?.image_jobs?.newest_created_at || '-'}
+                                                    </div>
+                                                    <div className="text-xs text-gray-300">
+                                                        {t('状态分布', 'Status Counts')}:
+                                                        {' '}
+                                                        {runtimeStats?.image_jobs?.status_counts
+                                                            ? Object.entries(runtimeStats.image_jobs.status_counts)
+                                                                .map(([k, v]) => `${k}:${v}`)
+                                                                .join(' | ')
+                                                            : '-'}
+                                                    </div>
+                                                </>
                                             )}
                                         </div>
                                     )}
