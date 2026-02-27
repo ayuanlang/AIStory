@@ -8995,12 +8995,13 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
         if isinstance(tech, dict):
             vis = tech.get("visual_standard", {})
             if isinstance(vis, dict):
-                aspect_ratio = vis.get("aspect_ratio")
+                aspect_ratio = vis.get("aspect_ratio") or vis.get("aspectRatio")
                 width = vis.get("h_resolution") or vis.get("width")
                 height = vis.get("v_resolution") or vis.get("height")
         
         # Fallback top-level checks
-        if not aspect_ratio: aspect_ratio = episode_info.get("aspect_ratio")
+        if not aspect_ratio:
+            aspect_ratio = episode_info.get("aspect_ratio") or episode_info.get("aspectRatio")
         if not width: width = episode_info.get("h_resolution") or episode_info.get("width")
         if not height: height = episode_info.get("v_resolution") or episode_info.get("height")
 
@@ -9394,11 +9395,11 @@ async def generate_video_endpoint(
         if isinstance(tech, dict):
             vis = tech.get("visual_standard", {})
             if isinstance(vis, dict):
-                aspect_ratio = vis.get("aspect_ratio")
+                aspect_ratio = vis.get("aspect_ratio") or vis.get("aspectRatio")
         
         if not aspect_ratio:
              # Fallback check
-             aspect_ratio = episode_info.get("aspect_ratio")
+             aspect_ratio = episode_info.get("aspect_ratio") or episode_info.get("aspectRatio")
 
         logger.info(f"[GenerateVideo] Extracted Aspect Ratio: {aspect_ratio}")
         _log_shot_submit_debug(

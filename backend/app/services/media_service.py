@@ -141,6 +141,17 @@ class MediaGenerationService:
             return f"{normalized}/contents/generations/tasks"
         return normalized
 
+    def _normalize_aspect_ratio_value(self, aspect_ratio: Optional[str]) -> Optional[str]:
+        raw = str(aspect_ratio or "").strip()
+        if not raw:
+            return None
+        lowered = raw.lower()
+        if lowered in {"adaptive", "auto"}:
+            return "16:9"
+        if raw == "2.35:1":
+            return "21:9"
+        return raw
+
     def _repair_invalid_user_config_rows(self, session, user_id: int, category: Optional[str] = None) -> None:
         q = session.query(
             APISetting.id,
@@ -1105,6 +1116,10 @@ class MediaGenerationService:
             final_model = model or "sora-image"
             payload = {"model": final_model, "prompt": prompt, "webHook": "-1", "shutProgress": False}
             base_metadata = {"provider": "grsai", "model": final_model, "prompt": prompt}
+
+            normalized_ar = self._normalize_aspect_ratio_value(aspect_ratio)
+            if normalized_ar:
+                payload["aspectRatio"] = normalized_ar
 
             if ref_image:
                 # Force base64 conversion for Image references
