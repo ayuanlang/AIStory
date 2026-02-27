@@ -68,6 +68,73 @@ logger = logging.getLogger("api_logger")
 
 IMAGE_JOB_STORE: Dict[str, Dict[str, Any]] = {}
 IMAGE_JOB_LOCK = threading.Lock()
+IMAGE_JOB_TTL_SECONDS = max(300, int(os.getenv("IMAGE_JOB_TTL_SECONDS", "3600")))
+IMAGE_JOB_MAX_ITEMS = max(100, int(os.getenv("IMAGE_JOB_MAX_ITEMS", "500")))
+
+
+def _parse_iso_datetime(value: Any) -> Optional[datetime]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except Exception:
+        return None
+
+
+def _job_sort_key(item: Dict[str, Any]) -> datetime:
+    for field in ("created_at", "started_at", "finished_at"):
+        parsed = _parse_iso_datetime(item.get(field))
+        if parsed:
+            return parsed
+    return datetime.utcnow()
+
+
+def _compact_job_result(result: Any) -> Any:
+    if not isinstance(result, dict):
+        return result
+
+    compact: Dict[str, Any] = {}
+    for key in ("url", "type", "provider", "model", "error"):
+        if key in result:
+            compact[key] = result.get(key)
+
+    metadata = result.get("metadata")
+    if isinstance(metadata, dict):
+        compact_meta = {}
+        for key in ("provider", "model", "task_id", "job_id", "status"):
+            if key in metadata:
+                compact_meta[key] = metadata.get(key)
+        if compact_meta:
+            compact["metadata"] = compact_meta
+
+    return compact or {"url": result.get("url")}
+
+
+def _prune_image_jobs_locked() -> None:
+    now = datetime.utcnow()
+    expired_ids = []
+
+    for job_id, job in IMAGE_JOB_STORE.items():
+        status = str(job.get("status") or "").lower()
+        if status not in {"succeeded", "failed", "canceled", "cancelled", "error"}:
+            continue
+
+        finished_at = _parse_iso_datetime(job.get("finished_at")) or _job_sort_key(job)
+        age_seconds = (now - finished_at).total_seconds()
+        if age_seconds > IMAGE_JOB_TTL_SECONDS:
+            expired_ids.append(job_id)
+
+    for job_id in expired_ids:
+        IMAGE_JOB_STORE.pop(job_id, None)
+
+    if len(IMAGE_JOB_STORE) <= IMAGE_JOB_MAX_ITEMS:
+        return
+
+    ordered = sorted(IMAGE_JOB_STORE.items(), key=lambda pair: _job_sort_key(pair[1]))
+    overflow_count = len(IMAGE_JOB_STORE) - IMAGE_JOB_MAX_ITEMS
+    for job_id, _ in ordered[:overflow_count]:
+        IMAGE_JOB_STORE.pop(job_id, None)
 
 
 def _vendor_failed_message(provider: Optional[str], reason: Any) -> str:
@@ -8798,8 +8865,12 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
 
 def _set_image_job(job_id: str, **fields) -> None:
     with IMAGE_JOB_LOCK:
+        _prune_image_jobs_locked()
         current = IMAGE_JOB_STORE.get(job_id, {})
+        if "result" in fields:
+            fields["result"] = _compact_job_result(fields.get("result"))
         current.update(fields)
+        current["job_id"] = job_id
         IMAGE_JOB_STORE[job_id] = current
 
 

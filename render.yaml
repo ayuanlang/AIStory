@@ -38,19 +38,19 @@ services:
       - key: GZIP_MINIMUM_SIZE
         value: "1024"
       - key: WEB_CONCURRENCY
-        value: "3"
+        value: "1"
       - key: GUNICORN_TIMEOUT
         value: "180"
       - key: GUNICORN_KEEPALIVE
         value: "15"
       - key: GUNICORN_MAX_REQUESTS
-        value: "2000"
+        value: "1000"
       - key: GUNICORN_MAX_REQUESTS_JITTER
         value: "200"
       - key: DB_POOL_SIZE
-        value: "20"
+        value: "5"
       - key: DB_MAX_OVERFLOW
-        value: "40"
+        value: "10"
       - key: DB_POOL_TIMEOUT
         value: "30"
       - key: DB_POOL_RECYCLE
