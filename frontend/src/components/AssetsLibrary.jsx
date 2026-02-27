@@ -33,6 +33,8 @@ const getAssetCategory = (type) => {
     return t; // fallback
 };
 
+const LOCAL_DIR_RESTORE_HINT_KEY = 'assets_local_dir_restore_hint_v1';
+
 
 const AssetItem = React.memo(({ asset, onClick, onDelete, isManageMode, isSelected, onToggleSelect, onReportError, t }) => {
     const videoRef = React.useRef(null);
@@ -159,6 +161,7 @@ const AssetsLibrary = () => {
     const [selectedAsset, setSelectedAsset] = useState(null); 
     const [isUploadOpen, setIsUploadOpen] = useState(false);
     const [localAssets, setLocalAssets] = useState([]);
+    const [showLocalRestoreHint, setShowLocalRestoreHint] = useState(false);
     const localObjectUrlsRef = React.useRef(new Set());
     const localDirInputRef = React.useRef(null);
     
@@ -184,6 +187,12 @@ const AssetsLibrary = () => {
 
     useEffect(() => {
         loadAssets();
+        try {
+            const remembered = localStorage.getItem(LOCAL_DIR_RESTORE_HINT_KEY);
+            if (remembered === '1') {
+                setShowLocalRestoreHint(true);
+            }
+        } catch {}
         return () => {
             localObjectUrlsRef.current.forEach((url) => {
                 try { URL.revokeObjectURL(url); } catch {}
@@ -239,6 +248,8 @@ const AssetsLibrary = () => {
             .map((file) => buildLocalAsset(file, file.webkitRelativePath || file.name))
             .filter(Boolean);
         setLocalAssets(parsed);
+        try { localStorage.setItem(LOCAL_DIR_RESTORE_HINT_KEY, '1'); } catch {}
+        setShowLocalRestoreHint(false);
         addLog(`Loaded ${parsed.length} local assets from selected directory.`);
     }, [addLog, buildLocalAsset, clearLocalAssets]);
 
@@ -264,6 +275,8 @@ const AssetsLibrary = () => {
 
                 await walk(dirHandle);
                 setLocalAssets(collected);
+                try { localStorage.setItem(LOCAL_DIR_RESTORE_HINT_KEY, '1'); } catch {}
+                setShowLocalRestoreHint(false);
                 addLog(`Loaded ${collected.length} local assets from selected directory.`);
                 return;
             }
@@ -635,6 +648,22 @@ const AssetsLibrary = () => {
                     ))}
                 </div>
             </div>
+
+            {showLocalRestoreHint && localAssets.length === 0 && (
+                <div className="mb-4 p-3 rounded-lg border border-white/10 bg-card/50 flex items-center justify-between gap-3">
+                    <div className="text-xs text-muted-foreground">
+                        {t('检测到你之前使用过本地目录。可一键重新读取本地素材。', 'Detected previous local folder usage. Re-mount local media with one click.')}
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <button onClick={pickLocalDirectory} className="px-3 py-1.5 text-xs bg-white text-black rounded hover:bg-white/90 transition-colors">
+                            {t('重新读取', 'Re-mount')}
+                        </button>
+                        <button onClick={() => setShowLocalRestoreHint(false)} className="px-2 py-1.5 text-xs text-muted-foreground hover:text-white transition-colors">
+                            {t('关闭', 'Dismiss')}
+                        </button>
+                    </div>
+                </div>
+            )}
 
             {/* Grid */}
             <div className="flex-1 overflow-y-auto min-h-0 pr-2">
