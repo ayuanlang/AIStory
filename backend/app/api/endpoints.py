@@ -38,6 +38,7 @@ import asyncio
 import urllib.parse
 import socket
 import time
+import html
 from pathlib import Path
 from collections import deque
 import threading
@@ -6580,6 +6581,7 @@ def _send_email_via_runtime_smtp(
     smtp_port = int(smtp_cfg.get("port") or 587)
     smtp_use_ssl = bool(smtp_cfg.get("use_ssl", False))
     smtp_use_tls = bool(smtp_cfg.get("use_tls", True))
+    frontend_base_url = str(smtp_cfg.get("frontend_base_url") or "").strip()
 
     missing_fields = []
     if not smtp_host:
@@ -6594,12 +6596,28 @@ def _send_email_via_runtime_smtp(
             raise RuntimeError(message)
         return
 
+    final_text_content = str(content or "")
+    if frontend_base_url:
+        final_text_content = (
+            f"{final_text_content}\n\n"
+            f"Frontend Base URL:\n{frontend_base_url}\n"
+        )
+
+    html_body = str(html_content or "").strip()
+    if frontend_base_url:
+        safe_url = html.escape(frontend_base_url, quote=True)
+        footer_html = (
+            "<hr style=\"border:none;border-top:1px solid #e5e7eb;margin:16px 0;\">"
+            f"<p style=\"color:#6b7280;font-size:12px;\">Frontend Base URL: "
+            f"<a href=\"{safe_url}\" target=\"_blank\" rel=\"noopener noreferrer\">{safe_url}</a></p>"
+        )
+        html_body = f"{html_body}{footer_html}" if html_body else footer_html
+
     message = EmailMessage()
     message["Subject"] = subject
     message["From"] = from_email
     message["To"] = to_email
-    message.set_content(content)
-    html_body = str(html_content or "").strip()
+    message.set_content(final_text_content)
     if html_body:
         message.add_alternative(html_body, subtype="html")
 
