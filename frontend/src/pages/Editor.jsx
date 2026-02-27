@@ -11183,7 +11183,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     }, [entities]);
 
     // Initialize Reference Images in technical_notes if empty
-    // Also perform Entity Feature Injection (Auto-Expand) on load
     useEffect(() => {
         if (editingShot && entities.length > 0) {
             let updates = {};
@@ -11202,30 +11201,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     }
                 }
             } catch (e) { console.error("Error init ref images", e); }
-
-            // 2. Feature Injection (Start Frame)
-            const startPrompt = editingShot.start_frame || '';
-            const { text: newStart, modified: modStart } = injectEntityFeatures(startPrompt);
-            if (modStart) {
-                updates.start_frame = newStart;
-                hasUpdates = true;
-            }
-
-            // 3. Feature Injection (End Frame)
-            const endPrompt = editingShot.end_frame || '';
-            const { text: newEnd, modified: modEnd } = injectEntityFeatures(endPrompt);
-            if (modEnd) {
-                updates.end_frame = newEnd;
-                hasUpdates = true;
-            }
-
-            // 4. Feature Injection (Video Prompt)
-            const videoPrompt = editingShot.prompt || editingShot.video_content || '';
-            const { text: newVideo, modified: modVideo } = injectEntityFeatures(videoPrompt);
-            if (modVideo) {
-                updates.prompt = newVideo;
-                hasUpdates = true;
-            }
 
             if (hasUpdates) {
                 setEditingShot(prev => ({ ...prev, ...updates }));
@@ -11569,19 +11544,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         setShotGeneratingState(targetShotId, 'start', true);
         abortGenerationRef.current = false; 
 
-        // 1. Feature Injection
-        let prompt = promptOverride || editingShot.start_frame || editingShot.video_content || "A cinematic shot";
+        const rawPrompt = promptOverride || editingShot.start_frame || editingShot.video_content || "A cinematic shot";
         
         const techNotes = JSON.parse(editingShot.technical_notes || '{}');
         const isManual = techNotes.manual_start_frame === true;
 
-        // Apply injection logic ONLY if the prompt hasn't been manually edited by the user
-        const { text: injectedPrompt, modified } = injectEntityFeatures(prompt, isManual);
-        if (modified) {
-            // Update local State & use new prompt
-            setEditingShot(prev => (prev && prev.id === targetShotId ? { ...prev, start_frame: injectedPrompt } : prev));
-            prompt = injectedPrompt; // Use for generation
-        }
+        const { text: submitPrompt } = injectEntityFeatures(rawPrompt, isManual);
 
         onLog?.('Generating Start Frame...', 'info');
         
@@ -11613,7 +11581,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     const tech = JSON.parse(noteStr);
                     
                     // Always calculate auto-suggested refs first (with new robust logic)
-                    const autoMatches = getSuggestedRefImages(editingShot, prompt, true);
+                    const autoMatches = getSuggestedRefImages(editingShot, rawPrompt, true);
 
                     if (Array.isArray(tech.ref_image_urls)) {
                         // Manual Mode: Merge saved list with NEW auto-matches (respecting deletions)
@@ -11650,7 +11618,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
                 // NEW: Inject Global Context
                 const globalCtx = getGlobalContextStr();
-                const finalPrompt = isManual ? prompt : (prompt + globalCtx);
+                const finalPrompt = isManual ? submitPrompt : (submitPrompt + globalCtx);
 
                 const res = await generateImage(finalPrompt, null, refs.length > 0 ? refs : null, {
                     project_id: projectId,
@@ -11661,7 +11629,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 });
                 if (res && res.url) {
                     // Save original prompt to DB (user view), but image was generated with context
-                    const newData = { image_url: res.url, start_frame: prompt };
+                    const newData = { image_url: res.url, start_frame: rawPrompt };
                     await onUpdateShot(targetShotId, newData);
                     setEditingShot(prev => (prev && prev.id === targetShotId ? { ...prev, ...newData } : prev)); 
                     onLog?.('Start Frame Generated', 'success');
@@ -11687,17 +11655,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         setShotGeneratingState(targetShotId, 'end', true);
         abortGenerationRef.current = false;
 
-        // 1. Feature Injection for End Frame
-        let prompt = promptOverride || editingShot.end_frame || "End frame";
+        const rawPrompt = promptOverride || editingShot.end_frame || "End frame";
         
         const techNotes = JSON.parse(editingShot.technical_notes || '{}');
         const isManual = techNotes.manual_end_frame === true;
 
-        const { text: injectedPrompt, modified } = injectEntityFeatures(prompt, isManual);
-        if (modified) {
-            setEditingShot(prev => (prev && prev.id === targetShotId ? { ...prev, end_frame: injectedPrompt } : prev));
-            prompt = injectedPrompt;
-        }
+        const { text: submitPrompt } = injectEntityFeatures(rawPrompt, isManual);
 
         onLog?.('Generating End Frame...', 'info');
 
@@ -11726,7 +11689,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 if (Array.isArray(tech.end_ref_image_urls)) {
                     refs.push(...tech.end_ref_image_urls);
                 } else {
-                    const suggested = getSuggestedRefImages(editingShot, prompt, true);
+                    const suggested = getSuggestedRefImages(editingShot, rawPrompt, true);
                     refs.push(...suggested);
                 }
                 
@@ -11741,7 +11704,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 
                 // NEW: Inject Global Context
                 const globalCtx = getGlobalContextStr();
-                const finalPrompt = isManual ? prompt : (prompt + globalCtx);
+                const finalPrompt = isManual ? submitPrompt : (submitPrompt + globalCtx);
 
                 const res = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
                     project_id: projectId,
@@ -11753,7 +11716,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 if (res && res.url) {
                     tech.end_frame_url = res.url;
                     tech.video_gen_mode = 'start_end'; // Auto-switch to Start+End
-                    const newData = { technical_notes: JSON.stringify(tech), end_frame: prompt };
+                    const newData = { technical_notes: JSON.stringify(tech), end_frame: rawPrompt };
                     await onUpdateShot(targetShotId, newData);
                     setEditingShot(prev => (prev && prev.id === targetShotId ? { ...prev, ...newData } : prev));
                     onLog?.('End Frame Generated', 'success');
@@ -11783,17 +11746,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
         setShotGeneratingState(targetShotId, 'video', true);
 
-        // 1. Feature Injection for Video Prompt
-        let prompt = promptOverride || editingShot.prompt || editingShot.video_content || "Video motion";
+        const rawPrompt = promptOverride || editingShot.prompt || editingShot.video_content || "Video motion";
         
         const techNotes = JSON.parse(editingShot.technical_notes || '{}');
         const isManual = techNotes.manual_video_prompt === true;
 
-        const { text: injectedPrompt, modified } = injectEntityFeatures(prompt, isManual);
-        if (modified) {
-            setEditingShot(prev => (prev && prev.id === targetShotId ? { ...prev, prompt: injectedPrompt } : prev));
-            prompt = injectedPrompt;
-        }
+        const { text: submitPrompt } = injectEntityFeatures(rawPrompt, isManual);
 
         onLog?.('Generating Video...', 'info');
         try {
@@ -11883,7 +11841,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
             // NEW: Inject Global Context
             const globalCtx = getGlobalContextStr();
-            const finalPrompt = isManual ? prompt : (prompt + globalCtx);
+            const finalPrompt = isManual ? submitPrompt : (submitPrompt + globalCtx);
 
             const res = await generateVideo(finalPrompt, null, finalStartRef, finalEndRef, durParam, {
                 project_id: projectId,
@@ -11893,7 +11851,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 asset_type: 'video',
             }, keyframes);
             if (res && res.url) {
-                const newData = { video_url: res.url, prompt: prompt };
+                const newData = { video_url: res.url, prompt: rawPrompt };
                 
                 // 1. Force Local State Update IMMEDIATELY (Optimistic/Local)
                 setEditingShot(prev => {

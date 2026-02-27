@@ -9342,6 +9342,104 @@ def _parse_shot_tech(shot: Shot) -> Dict[str, Any]:
     return {}
 
 
+def _normalize_entity_anchor_token(value: Any) -> str:
+    return (
+        str(value or "")
+        .replace("（", "(")
+        .replace("）", ")")
+        .replace("【", "[")
+        .replace("】", "]")
+        .replace("‘", "")
+        .replace("’", "")
+        .replace("“", "")
+        .replace("”", "")
+        .replace("\"", "")
+        .replace("'", "")
+        .strip()
+        .lower()
+    )
+
+
+def _build_project_entity_lookup(db: Session, project_id: int) -> Dict[str, Dict[str, Any]]:
+    rows = db.query(Entity).filter(Entity.project_id == project_id).all()
+    lookup: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        anchor = str(row.anchor_description or row.description or "").strip()
+        image_url = str(row.image_url or "").strip()
+        payload = {
+            "anchor": anchor,
+            "image_url": image_url,
+            "entity_id": row.id,
+        }
+        keys = {
+            _normalize_entity_anchor_token(row.name),
+            _normalize_entity_anchor_token(row.name_en),
+        }
+        for key in list(keys):
+            if not key:
+                continue
+            lookup[key] = payload
+    return lookup
+
+
+def _inject_shot_prompt_anchors(prompt: str, entity_lookup: Dict[str, Dict[str, Any]], global_style: str = "") -> str:
+    text = str(prompt or "")
+    if not text:
+        return text
+
+    regex = re.compile(r"[\[【](.*?)[\]】]")
+
+    def _replace(match: re.Match) -> str:
+        token = str(match.group(1) or "").strip()
+        normalized = _normalize_entity_anchor_token(re.sub(r"^(CHAR|ENV|PROP)\s*:\s*", "", token, flags=re.IGNORECASE).lstrip("@"))
+        tail = text[match.end():]
+        if re.match(r"^\s*[\(（]", tail):
+            return match.group(0)
+
+        if normalized in {"global style", "global_style"} and global_style:
+            return f"{match.group(0)}({global_style})"
+
+        row = entity_lookup.get(normalized)
+        if row and row.get("anchor"):
+            return f"{match.group(0)}({row['anchor']})"
+        return match.group(0)
+
+    return regex.sub(_replace, text)
+
+
+def _collect_prompt_entity_ref_images(prompt: str, entity_lookup: Dict[str, Dict[str, Any]]) -> List[str]:
+    text = str(prompt or "")
+    if not text:
+        return []
+
+    refs: List[str] = []
+    regex = re.compile(r"(?:CHAR|ENV|PROP)?\s*:\s*[\[【](.*?)[\]】]|[\[【](.*?)[\]】]", re.IGNORECASE)
+    for m in regex.finditer(text):
+        raw_name = m.group(1) or m.group(2) or ""
+        normalized = _normalize_entity_anchor_token(re.sub(r"^(CHAR|ENV|PROP)\s*:\s*", "", raw_name, flags=re.IGNORECASE).lstrip("@"))
+        if not normalized:
+            continue
+        row = entity_lookup.get(normalized)
+        image_url = str((row or {}).get("image_url") or "").strip()
+        if image_url:
+            refs.append(image_url)
+    return [x for x in dict.fromkeys(refs) if x]
+
+
+def _find_previous_shot_end_frame_url(db: Session, episode_id: int, shot_id: int) -> Optional[str]:
+    prev_shot = (
+        db.query(Shot)
+        .filter(Shot.episode_id == episode_id, Shot.id < shot_id)
+        .order_by(Shot.id.desc())
+        .first()
+    )
+    if not prev_shot:
+        return None
+    prev_tech = _parse_shot_tech(prev_shot)
+    prev_end = str(prev_tech.get("end_frame_url") or "").strip()
+    return prev_end or None
+
+
 def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], user_id: int) -> None:
     db = SessionLocal()
     try:
@@ -9349,6 +9447,11 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
         user = db.query(User).filter(User.id == user_id).first()
         if not episode or not user:
             return
+
+        episode_info = episode.episode_info if isinstance(episode.episode_info, dict) else {}
+        e_global_info = episode_info.get("e_global_info", {}) if isinstance(episode_info, dict) else {}
+        global_style = str((e_global_info or {}).get("Global_Style") or "").strip()
+        entity_lookup = _build_project_entity_lookup(db, int(episode.project_id))
 
         mode = str((request_payload or {}).get("mode") or "keyframes").strip().lower()
         overwrite_existing = bool((request_payload or {}).get("overwrite_existing"))
@@ -9399,10 +9502,26 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                 need_end = overwrite_existing or not end_frame_url
 
                 if need_start:
-                    start_prompt = str(shot.start_frame or shot.video_content or "").strip()
-                    if start_prompt:
+                    start_prompt_raw = str(shot.start_frame or shot.video_content or "").strip()
+                    if start_prompt_raw:
+                        start_prompt = _inject_shot_prompt_anchors(start_prompt_raw, entity_lookup, global_style)
+                        auto_matches = _collect_prompt_entity_ref_images(start_prompt_raw, entity_lookup)
+                        start_refs: List[str] = []
+                        if isinstance(tech.get("ref_image_urls"), list):
+                            saved_refs = [str(x).strip() for x in tech.get("ref_image_urls") or [] if str(x).strip()]
+                            deleted_refs = {str(x).strip() for x in tech.get("deleted_ref_urls") or [] if str(x).strip()}
+                            new_auto = [url for url in auto_matches if url not in saved_refs and url not in deleted_refs]
+                            start_refs = saved_refs + new_auto
+                        else:
+                            start_refs = list(auto_matches)
+                            prev_end = _find_previous_shot_end_frame_url(db, episode_id, int(shot.id))
+                            if prev_end and prev_end not in start_refs:
+                                start_refs.insert(0, prev_end)
+
+                        start_refs = [x for x in dict.fromkeys([str(x).strip() for x in start_refs if str(x).strip()]) if x]
                         start_req = GenerationRequest(
                             prompt=start_prompt,
+                            ref_image_url=start_refs if start_refs else None,
                             project_id=episode.project_id,
                             shot_id=shot.id,
                             shot_number=shot.shot_id,
@@ -9413,11 +9532,21 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                         shot = db.query(Shot).filter(Shot.id == shot.id).first() or shot
 
                 if need_end:
-                    end_prompt = str(shot.end_frame or "").strip()
-                    if end_prompt:
-                        refs = []
-                        if str(shot.image_url or "").strip():
-                            refs = [shot.image_url]
+                    end_prompt_raw = str(shot.end_frame or "").strip()
+                    if end_prompt_raw:
+                        end_prompt = _inject_shot_prompt_anchors(end_prompt_raw, entity_lookup, global_style)
+                        refs: List[str] = []
+                        if isinstance(tech.get("end_ref_image_urls"), list):
+                            refs.extend([str(x).strip() for x in tech.get("end_ref_image_urls") or [] if str(x).strip()])
+                        else:
+                            refs.extend(_collect_prompt_entity_ref_images(end_prompt_raw, entity_lookup))
+
+                        deleted_refs = {str(x).strip() for x in tech.get("deleted_ref_urls") or [] if str(x).strip()}
+                        start_image = str(shot.image_url or "").strip()
+                        if start_image and start_image not in refs and start_image not in deleted_refs:
+                            refs.insert(0, start_image)
+
+                        refs = [x for x in dict.fromkeys([str(x).strip() for x in refs if str(x).strip()]) if x]
                         end_req = GenerationRequest(
                             prompt=end_prompt,
                             ref_image_url=refs if refs else None,
@@ -9435,13 +9564,51 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                 if mode == "videos":
                     need_video = overwrite_existing or not str(shot.video_url or "").strip()
                     if need_video:
-                        video_prompt = str(shot.video_content or shot.prompt or "").strip() or "Video motion"
-                        refs = []
-                        if str(shot.image_url or "").strip():
-                            refs.append(shot.image_url)
-                        if end_frame_url:
-                            refs.append(end_frame_url)
-                        refs = [x for x in dict.fromkeys(refs) if x]
+                        video_prompt_raw = str(shot.video_content or shot.prompt or "").strip() or "Video motion"
+                        video_prompt = _inject_shot_prompt_anchors(video_prompt_raw, entity_lookup, global_style)
+
+                        def _resolve_video_mode(payload: Dict[str, Any]) -> str:
+                            if payload.get("video_mode_unified"):
+                                return str(payload.get("video_mode_unified"))
+                            if str(payload.get("video_ref_submit_mode") or "") == "refs_video":
+                                return "refs_video"
+                            return str(payload.get("video_gen_mode") or "start")
+
+                        video_mode = _resolve_video_mode(tech)
+                        video_ref_submit_mode = "refs_video" if video_mode == "refs_video" else "auto"
+
+                        refs: List[str] = []
+                        if video_ref_submit_mode == "refs_video":
+                            if isinstance(tech.get("video_ref_image_urls"), list):
+                                refs.extend([str(x).strip() for x in tech.get("video_ref_image_urls") or [] if str(x).strip()])
+                        elif isinstance(tech.get("video_ref_image_urls"), list):
+                            refs.extend([str(x).strip() for x in tech.get("video_ref_image_urls") or [] if str(x).strip()])
+                        else:
+                            shot_mode = str(tech.get("video_gen_mode") or "").strip().lower()
+                            if not shot_mode:
+                                end_prompt_len = len(str(shot.end_frame or "").strip())
+                                shot_mode = "start_end" if end_frame_url and end_prompt_len >= 3 else "start"
+
+                            if shot_mode != "end" and str(shot.image_url or "").strip():
+                                refs.append(str(shot.image_url).strip())
+
+                            keyframes = tech.get("keyframes")
+                            if isinstance(keyframes, list):
+                                refs.extend([str(x).strip() for x in keyframes if str(x).strip()])
+
+                            if shot_mode == "start_end" and end_frame_url:
+                                refs.append(end_frame_url)
+
+                        refs = [x for x in dict.fromkeys([str(x).strip() for x in refs if str(x).strip()]) if x]
+
+                        final_start_ref = None
+                        final_end_ref = None
+                        if video_ref_submit_mode == "refs_video":
+                            final_start_ref = refs[0] if refs else None
+                        elif refs:
+                            final_start_ref = refs[0]
+                            if len(refs) > 1:
+                                final_end_ref = refs[-1]
 
                         duration_val = 5.0
                         try:
@@ -9451,8 +9618,8 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
 
                         video_req = VideoGenerationRequest(
                             prompt=video_prompt,
-                            ref_image_url=refs if refs else None,
-                            last_frame_url=end_frame_url or None,
+                            ref_image_url=final_start_ref,
+                            last_frame_url=final_end_ref,
                             duration=duration_val,
                             project_id=episode.project_id,
                             shot_id=shot.id,
