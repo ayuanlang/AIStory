@@ -3421,6 +3421,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
     const [mergedContent, setMergedContent] = useState('');
     const [rawContent, setRawContent] = useState('');
     const [llmResultContent, setLlmResultContent] = useState('');
+    const [llmRawResultContent, setLlmRawResultContent] = useState('');
     const [analysisRuntimeMeta, setAnalysisRuntimeMeta] = useState(null);
     const [isRawMode, setIsRawMode] = useState(false);
     const [analysisAttentionNotes, setAnalysisAttentionNotes] = useState('');
@@ -3432,6 +3433,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
     const [isLoadingSubjectAssets, setIsLoadingSubjectAssets] = useState(false);
     const [isSavingReuseSubjects, setIsSavingReuseSubjects] = useState(false);
     const [analysisFlowStatus, setAnalysisFlowStatus] = useState({ phase: 'idle', message: '' });
+    const [subjectConsistencyReport, setSubjectConsistencyReport] = useState(null);
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
 
     const showAnalysisWarningStatus = useCallback((warnings = []) => {
@@ -3564,7 +3566,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         return '';
     };
 
-    const llmJsonResultContent = useMemo(() => extractJsonFromLlmText(llmResultContent), [llmResultContent]);
+    const llmJsonResultContent = useMemo(() => extractJsonFromLlmText(llmRawResultContent || llmResultContent), [llmRawResultContent, llmResultContent]);
 
     const extractJsonObjectsFromText = (text) => {
         if (!text || typeof text !== 'string') return [];
@@ -3666,6 +3668,70 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             }
         }
         return null;
+    };
+
+    const normalizeSubjectName = (value) => {
+        let text = String(value || '').trim();
+        if (!text) return '';
+        text = text.replace(/^CHAR:\s*/i, '');
+        text = text.replace(/^\[/, '').replace(/\]$/, '');
+        text = text.replace(/^@/, '').trim();
+        return text;
+    };
+
+    const extractSubjectsFromMarkdownTable = (markdownText) => {
+        const parsed = parseMarkdownTable(markdownText);
+        if (!parsed) return [];
+
+        const found = new Set();
+        const patterns = [/CHAR:\s*\[@([^\]]+)\]/gi, /\[@([^\]]+)\]/gi];
+
+        for (const row of parsed.rows || []) {
+            for (const cell of row || []) {
+                const cellText = String(cell || '');
+                for (const pattern of patterns) {
+                    pattern.lastIndex = 0;
+                    let match;
+                    while ((match = pattern.exec(cellText)) !== null) {
+                        const normalized = normalizeSubjectName(match[1]);
+                        if (normalized) found.add(normalized);
+                    }
+                }
+            }
+        }
+
+        return Array.from(found);
+    };
+
+    const runSubjectConsistencyCheck = () => {
+        const markdownSubjects = extractSubjectsFromMarkdownTable(llmMarkdownTableText || llmResultContent);
+        const entitiesPayload = getEntitiesPayloadFromJsonText(llmRawResultContent || llmResultContent);
+
+        if (!entitiesPayload) {
+            setSubjectConsistencyReport({ ok: false, message: t('未检测到可解析的实体 JSON。', 'No parseable entities JSON detected.'), missing: [], extra: [], markdownSubjects, jsonSubjects: [] });
+            if (onLog) onLog('Subject consistency check failed: no entities JSON.', 'warning');
+            return;
+        }
+
+        const jsonSubjects = Array.from(new Set((entitiesPayload.characters || [])
+            .map(c => normalizeSubjectName(c?.name || c?.name_en || ''))
+            .filter(Boolean)));
+
+        const markdownSet = new Set(markdownSubjects);
+        const jsonSet = new Set(jsonSubjects);
+
+        const missing = markdownSubjects.filter(name => !jsonSet.has(name));
+        const extra = jsonSubjects.filter(name => !markdownSet.has(name));
+        const ok = missing.length === 0;
+        const message = ok
+            ? t('一致：Markdown 中提到的 subject 均存在于 JSON characters。', 'Consistent: all markdown-mentioned subjects exist in JSON characters.')
+            : t('不一致：存在 Markdown 中提到但 JSON 缺失的 subject。', 'Inconsistent: some subjects mentioned in markdown are missing in JSON characters.');
+
+        setSubjectConsistencyReport({ ok, message, missing, extra, markdownSubjects, jsonSubjects });
+        if (onLog) {
+            if (ok) onLog(`Subject consistency check passed (${markdownSubjects.length} matched).`, 'success');
+            else onLog(`Subject consistency check failed: missing [${missing.join(', ')}]`, 'warning');
+        }
     };
 
     const doImportText = async (text, importType = 'auto') => {
@@ -3820,7 +3886,9 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         const stored = (typeof storedNewField === 'string' && storedNewField.length > 0)
             ? storedNewField
             : (typeof storedLegacy === 'string' ? storedLegacy : (storedLegacy ? JSON.stringify(storedLegacy, null, 2) : ''));
-        setLlmResultContent(normalizeLlmMarkdownTable(typeof stored === 'string' ? stored : ''));
+        const storedText = typeof stored === 'string' ? stored : '';
+        setLlmRawResultContent(storedText);
+        setLlmResultContent(normalizeLlmMarkdownTable(storedText));
 
         if (!activeEpisode?.script_content) {
             setSegments([]);
@@ -4046,16 +4114,17 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         try {
             const eps = await fetchEpisodes(projectId);
             const fresh = (eps || []).find(e => e.id === activeEpisode.id);
-            const dbText = normalizeLlmMarkdownTable(fresh?.ai_scene_analysis_result || '');
+            const dbText = fresh?.ai_scene_analysis_result || '';
 
             // Only update if user hasn't diverged from last loaded content.
-            const current = llmResultContent || '';
+            const current = llmRawResultContent || '';
             const lastLoaded = lastLoadedAnalysisRef.current;
             const userHasEdited = lastLoaded !== null && current !== lastLoaded;
 
             if (!userHasEdited) {
                 if (dbText && dbText !== current) {
-                    setLlmResultContent(dbText);
+                    setLlmRawResultContent(dbText);
+                    setLlmResultContent(normalizeLlmMarkdownTable(dbText));
                 }
                 lastLoadedAnalysisRef.current = dbText;
             }
@@ -4063,12 +4132,13 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             // non-fatal
             console.warn('[ScriptEditor] Failed to refresh analysis from DB', e);
         }
-    }, [projectId, activeEpisode?.id, llmResultContent, normalizeLlmMarkdownTable]);
+    }, [projectId, activeEpisode?.id, llmRawResultContent, normalizeLlmMarkdownTable]);
 
     useEffect(() => {
         // On episode change/remount, prefer parent-provided field; fallback to DB refresh.
-        const initial = normalizeLlmMarkdownTable(activeEpisode?.ai_scene_analysis_result || '');
-        setLlmResultContent(initial);
+        const initial = activeEpisode?.ai_scene_analysis_result || '';
+        setLlmRawResultContent(initial);
+        setLlmResultContent(normalizeLlmMarkdownTable(initial));
         setAnalysisRuntimeMeta(null);
         lastLoadedAnalysisRef.current = initial;
         if (!initial) {
@@ -5030,16 +5100,16 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 }
             }
 
-            const normalizedMarkdown = normalizeLlmMarkdownTable(analyzedText);
-            setLlmResultContent(normalizedMarkdown);
-            lastLoadedAnalysisRef.current = normalizedMarkdown;
+            setLlmRawResultContent(analyzedText);
+            setLlmResultContent(normalizeLlmMarkdownTable(analyzedText));
+            lastLoadedAnalysisRef.current = analyzedText;
 
             // Persist LLM raw output into dedicated DB field (DO NOT overwrite script_content)
             // If backend already saved it (via episode_id), skip the extra PUT to avoid large payload twice.
             const savedByBackend = !!(result?.meta?.saved_to_episode);
             if (!savedByBackend) {
                 if (onLog) onLog("Analysis complete. Saving LLM result (separate field)...", "process");
-                await persistLlmResultContent(normalizedMarkdown);
+                await persistLlmResultContent(analyzedText);
             } else {
                 if (onLog) onLog("Analysis complete. Saved to DB by backend.", "success");
                 // Parent episode state may be stale; re-load from DB so the Script tab stays consistent
@@ -5140,15 +5210,15 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 }
             }
 
-            const normalizedMarkdown = normalizeLlmMarkdownTable(analyzedText || "");
-            setLlmResultContent(normalizedMarkdown);
-            lastLoadedAnalysisRef.current = normalizedMarkdown;
+            setLlmRawResultContent(analyzedText || "");
+            setLlmResultContent(normalizeLlmMarkdownTable(analyzedText || ""));
+            lastLoadedAnalysisRef.current = analyzedText || "";
 
             // Persist the LLM output into dedicated DB field (unless backend already saved it)
             const savedByBackend = !!(result?.meta?.saved_to_episode);
             if (!savedByBackend) {
                 if (onLog) onLog("Advanced analysis complete. Saving LLM result (separate field)...", "process");
-                await persistLlmResultContent(normalizedMarkdown);
+                await persistLlmResultContent(analyzedText || "");
             } else {
                 if (onLog) onLog("Advanced analysis complete. Saved to DB by backend.", "success");
                 await refreshAnalysisFromDB();
@@ -5445,11 +5515,22 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                                     )}
                                 </div>
                                 <button
-                                    onClick={() => doImportText(llmMarkdownTableText || llmResultContent, 'auto')}
+                                    onClick={() => doImportText(llmRawResultContent || llmResultContent || '', 'auto')}
                                     className="px-3 py-1.5 rounded-md text-[10px] font-bold bg-white/5 hover:bg-white/10 border border-white/10 text-white/80"
-                                    title={t('从 LLM markdown/table 结果导入', 'Import from LLM markdown/table result')}
+                                    title={t('按 LLM 原始返回结果导入', 'Import from LLM raw response')}
                                 >
                                     {t('导入 LLM 返回结果', 'Import LLM Result')}
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        const textToCopy = llmMarkdownTableText || llmResultContent || '';
+                                        navigator.clipboard.writeText(textToCopy);
+                                        if (onLog) onLog(t('LLM 返回结果已复制到剪贴板。', 'LLM result copied to clipboard.'), 'success');
+                                    }}
+                                    className="px-3 py-1.5 rounded-md text-[10px] font-bold bg-white/5 hover:bg-white/10 border border-white/10 text-white/80"
+                                    title={t('复制当前 LLM 返回结果', 'Copy current LLM result')}
+                                >
+                                    {t('复制', 'Copy')}
                                 </button>
                             </div>
                             <div className="h-44 overflow-auto custom-scrollbar px-6 pb-6">
@@ -5493,7 +5574,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                                 <div className="flex items-center gap-2">
                                     <button
                                         onClick={() => {
-                                            const payload = getEGlobalInfoPayloadFromJsonText(llmResultContent);
+                                            const payload = getEGlobalInfoPayloadFromJsonText(llmRawResultContent || llmResultContent);
                                             if (!payload) {
                                                 if (onLog) onLog('No e_global_info found in JSON.', 'warning');
                                                 return;
@@ -5507,7 +5588,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                                     </button>
                                     <button
                                         onClick={() => {
-                                            const payload = getEntitiesPayloadFromJsonText(llmResultContent);
+                                            const payload = getEntitiesPayloadFromJsonText(llmRawResultContent || llmResultContent);
                                             if (!payload) {
                                                 if (onLog) onLog('No entities JSON (characters/props/environments) found.', 'warning');
                                                 return;
@@ -5519,12 +5600,37 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                                     >
                                         {t('导入实体', 'Import Entities')}
                                     </button>
+                                    <button
+                                        onClick={runSubjectConsistencyCheck}
+                                        className="px-2.5 py-1.5 rounded-md text-[10px] font-bold bg-white/5 hover:bg-white/10 border border-white/10 text-white/80"
+                                        title={t('检查 Markdown 表格中的 subject 与 JSON characters 是否一致', 'Check consistency between markdown subjects and JSON characters')}
+                                    >
+                                        {t('检查 Subject 一致性', 'Check Subject Consistency')}
+                                    </button>
                                 </div>
                             </div>
                             <textarea
                                 className="w-full h-44 px-6 pb-6 bg-transparent text-white/90 font-mono text-xs leading-relaxed focus:outline-none custom-scrollbar resize-none"
                                 placeholder="未检测到可解析的 JSON（如果 LLM 返回了 ```json ...``` 或纯 JSON，这里会显示）。"
                                 value={llmJsonResultContent}
+                                readOnly
+                            />
+                            {subjectConsistencyReport && (
+                                <div className={`px-6 pb-3 text-xs ${subjectConsistencyReport.ok ? 'text-emerald-300' : 'text-amber-300'}`}>
+                                    <div>{subjectConsistencyReport.message}</div>
+                                    {subjectConsistencyReport.missing?.length > 0 && (
+                                        <div className="mt-1">{t('Markdown 提到但 JSON 缺失：', 'Mentioned in markdown but missing in JSON:')} {subjectConsistencyReport.missing.join(', ')}</div>
+                                    )}
+                                    {subjectConsistencyReport.extra?.length > 0 && (
+                                        <div className="mt-1 text-white/60">{t('JSON 有但 Markdown 未提到：', 'Present in JSON but not mentioned in markdown:')} {subjectConsistencyReport.extra.join(', ')}</div>
+                                    )}
+                                </div>
+                            )}
+                            <div className="px-6 pb-2 text-[10px] text-muted-foreground uppercase font-bold tracking-wide">{t('LLM 原文', 'LLM Raw Response')}</div>
+                            <textarea
+                                className="w-full h-32 px-6 pb-6 bg-transparent text-white/70 font-mono text-[11px] leading-relaxed focus:outline-none custom-scrollbar resize-none border-t border-white/5"
+                                placeholder={t('原始 LLM 返回文本会显示在这里。', 'Original LLM response text is shown here.')}
+                                value={llmRawResultContent || llmResultContent || ''}
                                 readOnly
                             />
                         </div>
