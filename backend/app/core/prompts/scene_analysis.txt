@@ -47,7 +47,7 @@
   - **唯一性原则 (Uniqueness Principle)**：原则上每个 Scene 必须生成独立的 Environment 资产。
     - **复用限制**：仅当空间结构、视角、光影、氛围**完全一致**（如连续时间流逝或闪回后返回同一时刻）时，才允许复用同一 Environment。否则，即使是同一地点，若有新的 Dramatic Need 或视角微调，也请新建 Environment (可使用 visual_dependencies 保持一致)。
   - **视角独立性 (Perspective Independence)**：不同视角的同一地点（如“门内向外看”与“门外向内看”，或“正打”与“反打”背景差异巨大时），**必须拆分为独立的 Environment 资产**。
-    - 这些变体资产在 Part 3 JSON 中应作为独立条目存在。
+    - 这些变体资产在 Part 2 JSON 中应作为独立条目存在。
     - 必须使用 `visual_dependencies` 字段关联主环境，确保设计风格一致。
   - **二维背景一致性优先 (2D Background Consistency First)**：即使现实拍摄可在同一场地切镜头，AI 生成时若出现以下任一情况，必须拆分成新的 Scene 与 Environment：
     1) 轴线反转（180°跨线）导致前后景关系翻转；
@@ -104,14 +104,14 @@
   - **动态部件管控 (Dynamic Parts Control)**：必须根据情节逻辑，显式描述环境中可变部件（门/窗/灯/屏幕）的**当前状态**（Open/Closed/On/Off）。例如：若情节涉及“秘密交谈”，需明确“门紧闭”；若为“午夜”，需明确“主灯关闭，仅保留台灯”。
 
 #### 2. 核心场景信息结构 (Core Scene Info Key Elements)
-为了无缝对接分镜生成（Shot Generation），**Core Scene Info** 必须包含以下结构化内容（Part 2 表格中使用）：
+为了无缝对接分镜生成（Shot Generation），**Core Scene Info** 必须包含以下结构化内容（Part 1 表格中使用）：
 1.  **{Stage} (核心舞台)**：**必须是 Environment 中具体的一部分合适空间**（不只是一个抽象的点，而是具备执行表演条件的三维区域）。它是本场戏核心动作发生的具体物理区域（e.g., "Kitchen Island active area", "Open space in front of the Sofa"）。
     - **Function**: 作为构建环境的基石。所有的调度（Blocking）都以此为中心展开。
     - **Consistency**: **必须确保该舞台在对应的 Environment 描述中是视觉中心**。所有人物位置描述必须以此为参照（e.g., "A leaning on Stage", "B circling around Stage"）。
 2.  **{Environment Context} (环境物理概览)**：
     - **Content**: 必须包含对该物理空间的一句话描述，明确其物理材质、构造（如墙壁/地面）、光影氛围以及核心陈设（e.g., "废弃的工业仓库，水泥地面布满积水，高窗投下冷调月光，中央堆放着生锈的货架"）。
     - **Independence (独立性)**: **严禁使用参照性描述**（如“同 Scene 1”、“与上场一致”）。必须完整、独立地重新描写视觉特征，即使是同一场景也需复述，确保单行数据自含 (Self-Contained)。
-    - **Consistency Constraint**: **该物理概览的描写必须与 Part 3 JSON 中 Environment Prompt 的核心视觉特征严格一致**，严禁出现冲突（如 Environment 写“晴天”，此处写“雨夜”；Environment 写“木地板”，此处写“瓷砖”）。
+    - **Consistency Constraint**: **该物理概览的描写必须与 Part 2 JSON 中 Environment Prompt 的核心视觉特征严格一致**，严禁出现冲突（如 Environment 写“晴天”，此处写“雨夜”；Environment 写“木地板”，此处写“瓷砖”）。
     - **Purpose**: 让分镜生成时即便脱离了 JSON 也能快速理解画面背景，确保动作与环境的物理交互合理。
 3.  **{Axis} (轴线)**：简述主要人物的运动轨迹（从哪里走到哪里）。
   - **Axis Trigger Rule**：当 Axis 相对上一段发生“跨线、反向、观察方向切换”时，视为新 Scene 起点，不得继续沿用上一 Scene 的 Environment。
@@ -167,13 +167,13 @@
 
 #### 3. 实体完备性 (Entity Completeness)
 - **Depth Layering Mandate (场景级景深强制)**：
-  - 在 **Part 2 Markdown** 表格的 Core Scene Info 中，必须明确该 Scene 整体启用了哪些物理层级空间。
+  - 在 **Part 1 Markdown** 表格的 Core Scene Info 中，必须明确该 Scene 整体启用了哪些物理层级空间。
   - **{Layout}** 字段需明确：前景 (FG) 是否有遮挡/边框？中景 (MG) 是核心活动区？后景 (BG) 是否有纵深细节？
 - **Linked Characters**：必须列出场内主要角色。任何与主角色有**动作交互**或**对白交流**的人物，都必须被识别为独立资产并提取。
 - **身份形态拆分强制 (Identity-Form Split Mandate)**：当同一“人物设定”在画面中出现**形象完全不同**的形态时，必须拆分为两个独立角色资产（两个 `characters` 条目），严禁混为一个角色。
   - 触发条件包括但不限于：**分身/复制体**、**易容/伪装前后**、**明显年龄阶段差异**（如少年态 vs 成年态）、**特殊状态形态**（如觉醒态/黑化态/异化态/机甲态）。
   - 这些形态即使共享同一剧情身份，也必须以可区分命名分别建模（例如：`CHAR:[@Lin_Adult]` 与 `CHAR:[@Lin_Teen]`、`CHAR:[@AgentK_Normal]` 与 `CHAR:[@AgentK_Disguised]`）。
-  - 在 Beats、Linked Characters、Part 3A JSON 中必须全程使用对应实体名，禁止跨形态混用同一名字导致锚定漂移。
+  - 在 Beats、Linked Characters、Part 2A JSON 中必须全程使用对应实体名，禁止跨形态混用同一名字导致锚定漂移。
 - **Key Props（宁缺毋滥硬规则）**：
   - 仅提取“剧情关键道具”，应尽量同时满足：
     1) **剧情意义明确**：推动冲突/转折/信息揭示/决策；
@@ -252,45 +252,16 @@
 
 ### 三、输出模版说明 (Output Templates)
 
-必须严格按照以下三部分顺序输出，不得包含多余的 conversational text。
+必须严格按照以下四部分顺序输出，不得包含多余的 conversational text。
 并且必须满足“Final Answer Only”：仅输出最终结果内容，不得包含任何推理过程或解释性前后缀。
 
 **输出前自检（强制）**：
 1) 删除所有思维链/推理过程语句；
 2) 删除 `<think>` 标签及其内容；
 3) 删除代码围栏；
-4) 确认输出仅包含 Part 1 / Part 2 / Part 3 的最终内容。
+4) 确认输出仅包含 Part 1 / Subject Index / Part 2 / Final Consistency Report 的最终内容。
 
-#### Part 1: Global Info (JSON)
-(必须保留以下字段结构)
-```json
-{
-  "e_global_info": {
-    "script_title": "Title",
-    "series_episode": "EPISODE X",
-    "series_episode_id": "EPxx",
-    "base_positioning": "Cinematic",
-    "type": "Live-Action Drama",
-    "Global_Style": "Short descriptive style tag",
-    "tech_params": {
-      "visual_standard": {
-        "horizontal_resolution": "3840",
-        "vertical_resolution": "2160",
-        "frame_rate": "24",
-        "aspect_ratio": "16:9",
-        "quality": "High"
-      }
-    },
-    "tone": "Tone keywords",
-    "lighting": "Lighting keywords",
-    "language": "<same as input language>",
-    "borrowed_films": ["Ref Film 1", "Ref Film 2"],
-    "notes": "Brief notes"
-  }
-}
-```
-
-#### Part 2: Scenes Table (Markdown)
+#### Part 1: Scenes Table (Markdown)
 **核心变化**：Core Scene Info 必须高度结构化，至少包含 `{Stage}`, `{Environment Context}`, `{Layout}`, `{Axis}`, `{Observer View}`, `{Beats}`。
 **AI分场硬规则**：凡是会造成二维背景显著变化的镜头切换，必须新起一行 Scene（即使原剧本未换地点）。
 
@@ -307,15 +278,32 @@
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | EP01 | EP01_SC01 | 1 | {Name} | {Times} | **{Stage} (核心舞台)**: 中文描述。<br>**{Environment Context}**: 中文描述。<br>**{Layout}**: 中文描述。<br>**{Axis}**: 中文描述（含观察方向与是否跨线）。<br>**{Observer View}**: 机位站位 + 朝向 + 轴线侧（e.g., 沿轴正向看向{Stage}）。<br>**{Split Reason}**: 拆分原因。<br>**{Beats}**:<br>1. {镜头} 机位在ENV:[Bed]脚端左侧，朝向{Stage}；{空间} CHAR:[@Char A]在ENV:[Bed]右侧边缘坐姿；{角色-镜头关系} CHAR:[@Char A]位于中景偏右；{主体关系} CHAR:[@Char A]侧对CHAR:[@Char B]并看向其胸前，未接触；{动作变化过程} CHAR:[@Char A]前倾半步并抬手；-> {新状态} 与CHAR:[@Char B]近距对峙。 | {Original} | `{Env Name}` | `NEW / REUSE / VARIANT_OF` | `{Base Env Name / Ref ID}` | `仅写相对变化项；REUSE=No visual delta` | {Entry Snapshot} | {Exit Snapshot} | `CHAR:[@Char A]`, `CHAR:[@Char B]` | `PROP:[Prop]` |
 
-#### Part 3: Entities JSON (Strict Schema)
+#### Subject Index (Mandatory, after Part 1)
+- **去重编号硬规则 (Deduplicated Subject Index, Mandatory)**：在输出 Part 2 之前，必须先输出一个去重的 Subject 列表，覆盖 Part 1 中涉及的**全部**角色、道具、环境。
+- **编号规则**：`subject_no` 必须全局唯一且连续（建议 `S001`, `S002`, ...）。
+- **精确命名规则**：`subject_name_exact` 必须与 Part 1 Markdown 表格中的实体名称逐字符一致（大小写、符号、空格、前后缀均一致）。
+- **类型规则**：`subject_type` 仅允许 `character` / `prop` / `environment`。
+- **覆盖规则**：Part 1 中出现过的实体，不得缺失；未在 Part 1 出现的实体，不得新增。
+- **JSON 绑定规则**：Part 2 的每一个实体对象都必须引用并回填对应的 `subject_no`，且与 Subject Index 一一对应。
+- **Character 名称净化映射**：若 `subject_name_exact` 为 `CHAR:[@Name]`，则 Character JSON 中 `name/name_en` 使用净化后的 `Name`；净化仅允许移除包装标记（`CHAR:[@`、`]`），不得改写字符本体与大小写。
 
-### Part 3A — Characters JSON
-- **JSON 名称净化硬规则 (Character JSON Name Sanitization, Mandatory)**：Part 3A 的角色 JSON 字段（尤其 `name`、`name_en`）必须使用**纯净角色名**，严禁输出任何引用标记或包装符号。禁止形式包括但不限于：`CHAR:[@Name]`、`[@Name]`、`[Name]`、`@Name`。  
+Subject Index 输出模板（示例）：
+| subject_no | subject_type | subject_name_exact |
+| :--- | :--- | :--- |
+| S001 | character | CHAR:[@Char A] |
+| S002 | prop | PROP:[Sword] |
+| S003 | environment | ENV:[GrandTheater_Front_Wide_Night] |
+
+#### Part 2: Entities JSON (Strict Schema)
+
+### Part 2A — Characters JSON
+- **JSON 名称净化硬规则 (Character JSON Name Sanitization, Mandatory)**：Part 2A 的角色 JSON 字段（尤其 `name`、`name_en`）必须使用**纯净角色名**，严禁输出任何引用标记或包装符号。禁止形式包括但不限于：`CHAR:[@Name]`、`[@Name]`、`[Name]`、`@Name`。  
   仅在 Scene 表格/Beats 的实体引用语境中允许使用 `CHAR:[@Name]`；JSON 内一律写 `Name`。
 ```json
 {
   "characters": [
     {
+      "subject_no": "S001",
       "name": "Exact Name",
       "name_en": "English Name",
       "gender": "M/F",
@@ -337,11 +325,12 @@
 }
 ```
 
-### Part 3B — Props JSON
+### Part 2B — Props JSON
 ```json
 {
   "props": [
     {
+      "subject_no": "S002",
       "name": "Exact Name",
       "name_en": "English Name",
       "type": "held/static",
@@ -359,11 +348,12 @@
 }
 ```
 
-### Part 3C — Environments JSON
+### Part 2C — Environments JSON
 ```json
 {
   "environments": [
     {
+      "subject_no": "S003",
       "name": "Exact Name",
       "name_en": "English Name",
       "atmosphere": "Atmosphere",
@@ -382,10 +372,27 @@
 }
 ```
 
+#### Final Consistency Report (Mandatory, last output)
+- **最终核对列表硬规则 (Mandatory Final Check List)**：在全部 JSON 输出完成后，必须追加一个“按 subject_type 分类”的核对结果列表。
+- **统计对象**：仅统计三类 `subject_type`：`character`、`prop`、`environment`。
+- **计数口径**：
+  - `subject_index_count` = Subject Index 中该类型条目数；
+  - `json_count` = Part 2 对应 JSON 数组条目数（2A/2B/2C）；
+  - `is_consistent` = 两者是否完全一致（`true/false`）。
+- **覆盖要求**：必须输出三行（character/prop/environment）且不得缺行。
+- **一致性要求**：若任一类型不一致，必须在同一行给出 `difference_note`（例如缺失或多出多少条）。
+
+Final Consistency Report 输出模板（示例）：
+| subject_type | subject_index_count | json_count | is_consistent | difference_note |
+| :--- | ---: | ---: | :---: | :--- |
+| character | 3 | 3 | true | none |
+| prop | 2 | 1 | false | JSON missing 1 item |
+| environment | 4 | 4 | true | none |
+
 ### 四、校验清单 (Validation Checklist)
 1. **Stage/Anchor Check**: 每个 Scene 的 Core Scene Info 是否都定义了 **{Stage} (核心舞台/物理锚点)**？
 2. **Space Check**: Environment Prompt 是否包含 **"No humans or characters present"**？
-3. **Consistency Check**: Scene 表格中的 `CHAR:[@Char A]` 是否在 Part 3 JSON 中有对应条目？
+3. **Consistency Check**: Scene 表格中的 `CHAR:[@Char A]` 是否在 Part 2 JSON 中有对应条目？
 4. **Logic Check**: Beats 是否形成了 Start -> Action -> End 的闭环？
 5. **Output Check**: JSON 与 Markdown 语法是否正确？
 6. **AI Split Check**: 凡轴线反转/观察方向切换/背景主物体集合变化的段落，是否已拆分成新 Scene + 新 Environment？
@@ -415,4 +422,9 @@
 30. **Prop Cinematography & Realism Check**: 每个 Prop `generation_prompt_en` 是否包含 `{Lighting Setup}`、`{Lens & Focus}`、`{Grain/Noise Strategy}`，且真人剧下具备真实材质与磨损表现？
 31. **Entity Negative Prompt Check**: 每个 Character / Prop / Environment 是否都包含 `negative_prompt_en`，且与风格一致（真人剧明确排除塑料感/CGI感等）？
 32. **Anchor Stability Check**: 每个 Character 的锚点是否仅使用稳定身份特征（骨相/固定发型/永久标记/稳定配饰等），并排除了表情、临时姿势、瞬时情绪、光影与机位导致的暂态特征？
-33. **Character JSON No-Tag Check**: Part 3A `characters` 中的 `name` / `name_en` 是否均为纯净名称（无 `CHAR:`、无 `[@]`、无 `[]`、无前导 `@`）？
+33. **Character JSON No-Tag Check**: Part 2A `characters` 中的 `name` / `name_en` 是否均为纯净名称（无 `CHAR:`、无 `[@]`、无 `[]`、无前导 `@`）？
+34. **Subject Index Presence Check**: Part 1 后是否输出了去重且带编号的 Subject Index（包含角色/道具/环境）？
+35. **Subject Exact-Match Check**: Subject Index 的 `subject_name_exact` 是否与 Part 1 表格实体名逐字符一致（含大小写与符号）？
+36. **Subject Coverage Check**: Subject Index 与 Part 1 实体集合是否双向完全覆盖（无缺失、无新增）？
+37. **Subject No Mapping Check**: Part 2A/2B/2C 每个实体是否都包含 `subject_no`，且能唯一映射到 Subject Index 对应条目？
+38. **Final Count Report Check**: 是否在最后输出了 Final Consistency Report，并按 `character/prop/environment` 给出 `subject_index_count`、`json_count` 与 `is_consistent`？
