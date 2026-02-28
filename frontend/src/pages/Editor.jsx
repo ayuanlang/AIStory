@@ -6857,6 +6857,13 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         index: -1,
         data: null,
     });
+    const normalizeOriginalScriptText = (value) => {
+        const raw = typeof value === 'string' ? value.trim() : '';
+        if (!raw) return '';
+        if (/^\{\s*Original\s+Script\s+Text\s+for\s+Scene\s*\d+\s*\}$/i.test(raw)) return '';
+        if (/^Original\s+Script\s+Text\s+for\s+Scene\s*\d+$/i.test(raw)) return '';
+        return raw;
+    };
     const sceneAutoSaveTimerRef = useRef(null);
     const sceneAutoSaveInFlightRef = useRef(false);
     const sceneAutoSaveQueuedRef = useRef(null);
@@ -7032,14 +7039,6 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
 
     // Fetch Entities (Environment) for image matching
     useEffect(() => {
-        const normalizeOriginalScriptText = (value) => {
-            const raw = typeof value === 'string' ? value.trim() : '';
-            if (!raw) return '';
-            if (/^\{\s*Original\s+Script\s+Text\s+for\s+Scene\s*\d+\s*\}$/i.test(raw)) return '';
-            if (/^Original\s+Script\s+Text\s+for\s+Scene\s*\d+$/i.test(raw)) return '';
-            return raw;
-        };
-
         // Shared Parsing Logic
         const parseScenesFromText = (text) => {
              if (!text) return [];
@@ -7193,29 +7192,6 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         loadScenes();
     }, [activeEpisode, projectId]);
 
-    const scheduleSceneAutoSave = useCallback((sceneCandidate) => {
-        if (!activeEpisode?.id || !sceneCandidate?.id) return;
-        sceneAutoSaveDraftRef.current = sceneCandidate;
-        if (sceneAutoSaveTimerRef.current) {
-            clearTimeout(sceneAutoSaveTimerRef.current);
-            sceneAutoSaveTimerRef.current = null;
-        }
-        sceneAutoSaveTimerRef.current = setTimeout(() => {
-            const latest = sceneAutoSaveDraftRef.current;
-            if (latest?.id) {
-                void flushSceneAutoSave(latest);
-            }
-        }, 900);
-    }, [activeEpisode?.id, flushSceneAutoSave]);
-
-    const handleSceneUpdate = (updatedScene) => {
-        setScenes(prev => prev.map(s => s.id === updatedScene.id ? updatedScene : s));
-        if (editingScene && editingScene.id === updatedScene.id) {
-            setEditingScene(updatedScene);
-        }
-        scheduleSceneAutoSave(updatedScene);
-    };
-
     const buildSceneContentMarkdown = (sceneRows = []) => {
         if (!activeEpisode) return '';
         const contextInfo = `Project: ${project?.title || 'Unknown'} | Episode: ${activeEpisode?.title || 'Unknown'}\n`;
@@ -7261,6 +7237,29 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
             }
         }
     }, [activeEpisode?.id, buildSceneSavePayload, buildSceneContentMarkdown, onLog, scenes]);
+
+    const scheduleSceneAutoSave = useCallback((sceneCandidate) => {
+        if (!activeEpisode?.id || !sceneCandidate?.id) return;
+        sceneAutoSaveDraftRef.current = sceneCandidate;
+        if (sceneAutoSaveTimerRef.current) {
+            clearTimeout(sceneAutoSaveTimerRef.current);
+            sceneAutoSaveTimerRef.current = null;
+        }
+        sceneAutoSaveTimerRef.current = setTimeout(() => {
+            const latest = sceneAutoSaveDraftRef.current;
+            if (latest?.id) {
+                void flushSceneAutoSave(latest);
+            }
+        }, 900);
+    }, [activeEpisode?.id, flushSceneAutoSave]);
+
+    const handleSceneUpdate = (updatedScene) => {
+        setScenes(prev => prev.map(s => s.id === updatedScene.id ? updatedScene : s));
+        if (editingScene && editingScene.id === updatedScene.id) {
+            setEditingScene(updatedScene);
+        }
+        scheduleSceneAutoSave(updatedScene);
+    };
 
     const closeEditingScene = useCallback(async () => {
         if (sceneAutoSaveTimerRef.current) {
