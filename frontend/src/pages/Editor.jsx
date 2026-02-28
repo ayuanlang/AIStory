@@ -3442,6 +3442,8 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         details: '',
     });
     const [isRecoveringMissingSubjects, setIsRecoveringMissingSubjects] = useState(false);
+    const [isCheckingCoreCoverage, setIsCheckingCoreCoverage] = useState(false);
+    const [coreCoverageReport, setCoreCoverageReport] = useState(null);
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
 
     const showAnalysisWarningStatus = useCallback((warnings = []) => {
@@ -3942,6 +3944,119 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             if (report.ok) onLog(`Subject consistency check passed (${report.markdownSubjects.length} matched).`, 'success');
             else if (report.missing?.length) onLog(`Subject consistency check failed: missing [${report.missing.join(', ')}]`, 'warning');
             else onLog('Subject consistency check failed: no entities JSON.', 'warning');
+        }
+    };
+
+    const parseCoreCoverageReport = (rawText) => {
+        const text = String(rawText || '').trim();
+        const jsonText = extractJsonFromLlmText(text);
+        if (jsonText) {
+            try {
+                const parsed = JSON.parse(jsonText);
+                const normalized = String(parsed?.is_covered || parsed?.covered || parsed?.result || '').trim();
+                const isCovered = normalized === '是' || /^yes$/i.test(normalized) || normalized === 'true';
+                const missingPoints = Array.isArray(parsed?.missing_points)
+                    ? parsed.missing_points.map(v => String(v || '').trim()).filter(Boolean)
+                    : [];
+                return {
+                    ok: true,
+                    isCovered,
+                    verdict: isCovered ? t('是', 'Yes') : t('否', 'No'),
+                    missingPoints,
+                    raw: text,
+                };
+            } catch {
+                // fall through
+            }
+        }
+
+        const isCovered = /(?:^|\b)(是|yes|true)(?:\b|$)/i.test(text) && !/(?:^|\b)(否|no|false)(?:\b|$)/i.test(text);
+        const lines = text.split('\n').map(v => String(v || '').trim()).filter(Boolean);
+        const missingPoints = lines.filter(line => /^[\-•\d]/.test(line) || /缺失|未覆盖|missing/i.test(line));
+        return {
+            ok: Boolean(text),
+            isCovered,
+            verdict: isCovered ? t('是', 'Yes') : t('否', 'No'),
+            missingPoints,
+            raw: text,
+        };
+    };
+
+    const runCoreCoverageCheck = async () => {
+        const parsed = parseMarkdownTable(llmMarkdownTableText || llmResultContent || '');
+        if (!parsed || !Array.isArray(parsed.rows) || parsed.rows.length === 0) {
+            alert(t('未检测到可解析的 Markdown 表格。', 'No parseable markdown table detected.'));
+            return;
+        }
+
+        const norm = (value) => String(value || '').toLowerCase().replace(/[\s_\-./()]/g, '');
+        const findCol = (patterns) => parsed.headers.findIndex((h) => {
+            const n = norm(h);
+            return patterns.some(p => n.includes(p));
+        });
+
+        const episodeIdIdx = findCol(['episodeid', '集id', '集编号']);
+        const sceneIdIdx = findCol(['sceneid', '场景id']);
+        const sceneNoIdx = findCol(['sceneno', '场次']);
+        const coreInfoIdx = findCol(['coresceneinfo', '核心场景信息']);
+        const originalIdx = findCol(['originalscripttext', '原始剧本文本', 'scripttext', 'original']);
+
+        if (sceneIdIdx < 0 || coreInfoIdx < 0 || originalIdx < 0) {
+            alert(t('表格缺少必要列（Scene ID / Core Scene Info / Original Script Text）。', 'Missing required columns (Scene ID / Core Scene Info / Original Script Text).'));
+            return;
+        }
+
+        const rowsPayload = parsed.rows.map((row) => ({
+            episode_id: episodeIdIdx >= 0 ? String(row[episodeIdIdx] || '').trim() : '',
+            scene_id: String(row[sceneIdIdx] || '').trim(),
+            scene_no: sceneNoIdx >= 0 ? String(row[sceneNoIdx] || '').trim() : '',
+            core_scene_info: String(row[coreInfoIdx] || '').trim(),
+            original_script_text: String(row[originalIdx] || '').trim(),
+        })).filter(item => item.scene_id && (item.core_scene_info || item.original_script_text));
+
+        if (rowsPayload.length === 0) {
+            alert(t('未找到可用于校验的场景行。', 'No scene rows available for coverage check.'));
+            return;
+        }
+
+        const systemPrompt = [
+            'You are a strict coverage auditor for screenplay adaptation.',
+            'Task: Compare each row\'s Core Scene Info against Original Script Text and determine whether coverage is complete.',
+            'Output STRICT JSON only (no markdown, no explanation):',
+            '{"is_covered":"是|否","missing_points":["..."]}',
+            'Rules:',
+            '- Return "是" only when ALL rows are fully covered.',
+            '- If any gap exists, return "否" and list concrete missing points in missing_points.',
+            '- Each missing point should include scene_id and concise uncovered detail.',
+            '- If "是", missing_points must be [].',
+        ].join('\n');
+
+        const userPrompt = [
+            'Rows to audit:',
+            JSON.stringify(rowsPayload, null, 2),
+        ].join('\n\n');
+
+        setIsCheckingCoreCoverage(true);
+        setCoreCoverageReport(null);
+        try {
+            const result = await analyzeScene(userPrompt, systemPrompt, null, activeEpisode?.id || null, null, null);
+            const analyzedText = result?.result || result?.analysis || (typeof result === 'string' ? result : JSON.stringify(result, null, 2));
+            const report = parseCoreCoverageReport(analyzedText);
+            setCoreCoverageReport(report);
+            if (onLog) {
+                onLog(
+                    report.isCovered
+                        ? 'Core Scene Info coverage check: YES (fully covered).'
+                        : `Core Scene Info coverage check: NO (${report.missingPoints.length} missing points).`,
+                    report.isCovered ? 'success' : 'warning'
+                );
+            }
+        } catch (e) {
+            console.error(e);
+            if (onLog) onLog(`Core coverage check failed: ${e.message}`, 'error');
+            alert(t('Core Scene Info 覆盖校验失败：', 'Core Scene Info coverage check failed: ') + (e?.message || 'Unknown error'));
+        } finally {
+            setIsCheckingCoreCoverage(false);
         }
     };
 
@@ -5828,6 +5943,14 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                                     >
                                         {t('检查 Subject 一致性', 'Check Subject Consistency')}
                                     </button>
+                                    <button
+                                        onClick={runCoreCoverageCheck}
+                                        disabled={isCheckingCoreCoverage}
+                                        className={`px-2.5 py-1.5 rounded-md text-[10px] font-bold border border-white/10 ${isCheckingCoreCoverage ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/5 hover:bg-white/10 text-white/80'}`}
+                                        title={t('检查 Core Scene Info 是否覆盖原始剧本内容', 'Check whether Core Scene Info fully covers original script text')}
+                                    >
+                                        {isCheckingCoreCoverage ? t('校验中...', 'Checking...') : t('校验 Core 覆盖', 'Check Core Coverage')}
+                                    </button>
                                 </div>
                             </div>
                             <textarea
@@ -5844,6 +5967,21 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                                     )}
                                     {subjectConsistencyReport.extra?.length > 0 && (
                                         <div className="mt-1 text-white/60">{t('JSON 有但 Markdown 未提到：', 'Present in JSON but not mentioned in markdown:')} {subjectConsistencyReport.extra.join(', ')}</div>
+                                    )}
+                                </div>
+                            )}
+                            {coreCoverageReport && (
+                                <div className={`px-6 pb-3 text-xs ${coreCoverageReport.isCovered ? 'text-emerald-300' : 'text-amber-300'}`}>
+                                    <div>{t('Core Scene Info 覆盖结论：', 'Core Scene Info coverage verdict:')} {coreCoverageReport.verdict}</div>
+                                    {!coreCoverageReport.isCovered && Array.isArray(coreCoverageReport.missingPoints) && coreCoverageReport.missingPoints.length > 0 && (
+                                        <div className="mt-1">
+                                            <div>{t('未覆盖点：', 'Missing points:')}</div>
+                                            <ul className="list-disc ml-4 mt-1 space-y-0.5 text-white/80">
+                                                {coreCoverageReport.missingPoints.map((point, idx) => (
+                                                    <li key={`${idx}-${point}`}>{point}</li>
+                                                ))}
+                                            </ul>
+                                        </div>
                                     )}
                                 </div>
                             )}
@@ -14610,8 +14748,64 @@ const Editor = ({
         return results;
     }
 
+    const extractFinalConsistencyReport = (text) => {
+        const raw = String(text || '');
+        if (!raw.trim()) return null;
+
+        const lines = raw.split('\n').map(line => String(line || '').trim());
+        const report = {};
+        let inReportTable = false;
+
+        const normalizeType = (value) => {
+            const key = String(value || '').trim().toLowerCase();
+            if (!key) return '';
+            if (key.includes('character')) return 'character';
+            if (key.includes('prop')) return 'prop';
+            if (key.includes('environment')) return 'environment';
+            return '';
+        };
+
+        const toInt = (value) => {
+            const n = Number(String(value || '').trim());
+            return Number.isFinite(n) ? n : null;
+        };
+
+        for (const line of lines) {
+            if (!inReportTable && /final\s+consistency\s+report/i.test(line)) {
+                inReportTable = true;
+                continue;
+            }
+
+            if (!inReportTable) continue;
+            if (!line.startsWith('|') || !line.includes('|')) continue;
+
+            let cols = line.split('|').map(v => String(v || '').trim());
+            if (cols.length > 0 && cols[0] === '') cols.shift();
+            if (cols.length > 0 && cols[cols.length - 1] === '') cols.pop();
+            if (cols.length < 5) continue;
+
+            const firstCol = String(cols[0] || '').toLowerCase();
+            if (firstCol.includes('subject_type') || /^:?-{3,}:?$/.test(firstCol) || firstCol.includes('---')) continue;
+
+            const type = normalizeType(cols[0]);
+            if (!type) continue;
+
+            report[type] = {
+                subject_index_count: toInt(cols[1]),
+                json_count: toInt(cols[2]),
+                is_consistent: /true|yes|是/i.test(String(cols[3] || '').trim()),
+                difference_note: String(cols[4] || '').trim(),
+            };
+        }
+
+        return Object.keys(report).length > 0 ? report : null;
+    };
+
     const handleImport = async (text, importType = 'auto') => {
         addLog(`Starting Import Analysis (${importType})...`, "process");
+
+        const importedSubjectCounts = { character: 0, prop: 0, environment: 0 };
+        const llmFinalReport = extractFinalConsistencyReport(text);
         
         // --- 1. JSON Processing (Only if 'auto' or 'json') ---
         const jsonBlocks = (importType === 'auto' || importType === 'json') ? extractJSONBlocks(text) : [];
@@ -14753,6 +14947,7 @@ const Editor = ({
                                 },
                             });
                             count++;
+                            importedSubjectCounts.character += 1;
                         }
                     }
 
@@ -14784,6 +14979,7 @@ const Editor = ({
                                 },
                             });
                             count++;
+                            importedSubjectCounts.prop += 1;
                         }
                     }
 
@@ -14819,6 +15015,7 @@ const Editor = ({
                                 },
                             });
                             count++;
+                            importedSubjectCounts.environment += 1;
                         }
                     }
                     
@@ -15147,6 +15344,36 @@ const Editor = ({
 
         if (changesMade) {
             setIsImportOpen(false);
+
+            const importedTotal = importedSubjectCounts.character + importedSubjectCounts.prop + importedSubjectCounts.environment;
+            if (importedTotal > 0) {
+                addLog(
+                    `Imported subjects summary: character=${importedSubjectCounts.character}, prop=${importedSubjectCounts.prop}, environment=${importedSubjectCounts.environment}.`,
+                    'info'
+                );
+            }
+
+            if (llmFinalReport && importedTotal > 0) {
+                const types = ['character', 'prop', 'environment'];
+                const mismatches = [];
+
+                for (const type of types) {
+                    const expected = llmFinalReport?.[type]?.json_count;
+                    if (expected === null || expected === undefined || Number.isNaN(expected)) continue;
+                    const actual = importedSubjectCounts[type] || 0;
+                    if (actual !== expected) {
+                        mismatches.push(`${type}: imported=${actual}, llm_json_count=${expected}`);
+                    }
+                }
+
+                if (mismatches.length === 0) {
+                    addLog('Final Consistency Report check passed: imported subject counts match LLM json_count.', 'success');
+                    alert('Import successful. Subject count check passed (matches Final Consistency Report).');
+                } else {
+                    addLog(`Final Consistency Report check mismatch: ${mismatches.join(' | ')}`, 'warning');
+                    alert(`Import completed with count mismatch:\n${mismatches.join('\n')}`);
+                }
+            }
             
             // Always refresh episodes to show new scripts/scenes
             const fresh = await fetchEpisodes(id);
