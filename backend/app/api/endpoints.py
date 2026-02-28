@@ -11108,19 +11108,43 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
         
         logger.info(f"LLM Reply Length: {len(result_content)}. Usage: {usage}")
         
-        # Remove <think> blocks if present (common in reasoning models)
-        import re
-        content = re.sub(r"<think>.*?</think>", "", result_content, flags=re.DOTALL)
+        # Remove <think> blocks and robustly extract the first valid JSON payload.
+        content = re.sub(r"<think>.*?</think>", "", str(result_content or ""), flags=re.DOTALL | re.IGNORECASE).strip()
 
-        # Parse JSON
-        content = content.replace("```json", "").replace("```", "").strip()
-        # Find start and end of JSON if extra text
-        start_idx = content.find("{")
-        end_idx = content.rfind("}")
-        if start_idx != -1 and end_idx != -1:
-            content = content[start_idx:end_idx+1]
+        if not content:
+            raise HTTPException(status_code=502, detail="LLM returned empty content for entity analysis")
 
-        data = json.loads(content)
+        # Strip fenced code blocks if present.
+        content = re.sub(r"^```(?:json)?\s*", "", content, flags=re.IGNORECASE)
+        content = re.sub(r"\s*```$", "", content, flags=re.IGNORECASE).strip()
+
+        def _extract_first_json_payload(text: str):
+            decoder = json.JSONDecoder()
+            candidates = []
+            for idx, ch in enumerate(text):
+                if ch in "[{":
+                    candidates.append(idx)
+
+            for start in candidates:
+                try:
+                    obj, _end = decoder.raw_decode(text[start:])
+                    if isinstance(obj, (dict, list)):
+                        return obj
+                except Exception:
+                    continue
+            return None
+
+        data = _extract_first_json_payload(content)
+        if data is None:
+            preview = content[:300].replace("\n", " ")
+            logger.error("Entity analysis JSON parse failed. content_preview=%s", preview)
+            raise HTTPException(status_code=422, detail="LLM returned non-JSON content for entity analysis")
+
+        if isinstance(data, list):
+            data = data[0] if data else {}
+
+        if not isinstance(data, dict):
+            raise HTTPException(status_code=422, detail="Entity analysis JSON must be an object")
                   
         # Extract the core object based on type
         updated_info = {}

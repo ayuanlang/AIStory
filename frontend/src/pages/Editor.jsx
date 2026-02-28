@@ -8920,6 +8920,16 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         setEntities(allEntities.filter(e => e.type === subTab));
     }, [allEntities, subTab]);
 
+    const subjectCategoryStats = useMemo(() => {
+        return allEntities.reduce((stats, entity) => {
+            const entityType = String(entity?.type || '').toLowerCase();
+            if (Object.prototype.hasOwnProperty.call(stats, entityType)) {
+                stats[entityType] += 1;
+            }
+            return stats;
+        }, { character: 0, environment: 0, prop: 0 });
+    }, [allEntities]);
+
     // Create Entity
     const [isAnalyzingEntity, setIsAnalyzingEntity] = useState(false);
 
@@ -9474,7 +9484,10 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     return (
         <div className="p-6 h-full flex flex-col w-full relative">
             <div className="flex justify-between items-center mb-6">
-                <h2 className="text-2xl font-bold">{t('角色资产库', 'Subjects Library')}</h2>
+                <div className="flex items-center gap-2">
+                    <h2 className="text-2xl font-bold">{t('角色资产库', 'Subjects Library')}</h2>
+                    <span className="text-xs text-muted-foreground font-mono">· {t('总计', 'Total')} {allEntities.length}</span>
+                </div>
                 <div className="flex items-center gap-4">
                      <button 
                         onClick={handleDeleteAllEntities}
@@ -9502,13 +9515,17 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                     </button>
 
                     <div className="flex space-x-1 bg-card border border-white/10 p-1 rounded-lg">
-                        {['character', 'environment', 'prop'].map(t => (
+                        {[
+                            { key: 'character', label: t('角色', 'Characters') },
+                            { key: 'environment', label: t('环境', 'Environments') },
+                            { key: 'prop', label: t('道具', 'Props') },
+                        ].map(({ key, label }) => (
                             <button 
-                                key={t}
-                                onClick={() => setSubTab(t)}
-                                className={`px-4 py-2 text-xs font-bold uppercase rounded-md transition-all ${subTab === t ? 'bg-primary text-black' : 'hover:bg-white/5 text-muted-foreground'}`}
+                                key={key}
+                                onClick={() => setSubTab(key)}
+                                className={`px-4 py-2 text-xs font-bold uppercase rounded-md transition-all ${subTab === key ? 'bg-primary text-black' : 'hover:bg-white/5 text-muted-foreground'}`}
                             >
-                                {t}s
+                                {label} ({subjectCategoryStats[key] || 0})
                             </button>
                         ))}
                     </div>
