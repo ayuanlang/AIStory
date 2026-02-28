@@ -6,7 +6,7 @@ import ReactMarkdown from 'react-markdown';
 import { useStore } from '../lib/store';
 import LogPanel from '../components/LogPanel';
 import AgentChat from '../components/AgentChat';
-import { MessageSquare, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles } from 'lucide-react';
+import { MessageSquare, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL } from '../config';
 import { setUiLang as setGlobalUiLang } from '../lib/uiLang';
@@ -6665,10 +6665,10 @@ const SceneCard = ({ scene, entities, onClick, onGenerateShots, onDelete, select
 
     return (
         <div 
-            className="bg-card/80 backdrop-blur-sm rounded-xl border border-white/10 overflow-hidden group hover:border-primary/50 transition-all cursor-pointer relative"
+            className="bg-card/80 backdrop-blur-sm rounded-xl border border-white/10 overflow-hidden group hover:border-primary/50 transition-all cursor-pointer relative flex flex-col"
             onClick={onClick}
         >
-            <div className="aspect-video bg-black/60 flex items-center justify-center text-muted-foreground relative group-hover:bg-black/40 transition-colors overflow-hidden">
+            <div className="aspect-video bg-black/60 flex items-center justify-center text-muted-foreground relative group-hover:bg-black/40 transition-colors overflow-hidden border-b border-white/10">
                 {imgUrl ? (
                     <motion.img 
                         key={imgUrl}
@@ -6696,7 +6696,7 @@ const SceneCard = ({ scene, entities, onClick, onGenerateShots, onDelete, select
                 )}
 
                 <label
-                    className="absolute top-2 left-2 z-30 flex items-center justify-center w-6 h-6 rounded bg-black/60 border border-white/20 cursor-pointer"
+                    className="absolute top-2 left-2 z-30 flex items-center justify-center w-6 h-6 rounded bg-black/60 border border-white/20 cursor-pointer shadow"
                     title={t('选择场景', 'Select scene')}
                 >
                     <input
@@ -6707,7 +6707,7 @@ const SceneCard = ({ scene, entities, onClick, onGenerateShots, onDelete, select
                     />
                 </label>
 
-                <div className="absolute top-2 left-10 bg-black/60 px-2 py-1 rounded text-xs font-mono font-bold text-white border border-white/10 z-10 max-w-[70%] truncate">
+                <div className="absolute top-2 left-10 bg-black/60 px-2 py-1 rounded text-xs font-mono font-bold text-white border border-white/10 z-10 max-w-[70%] truncate shadow">
                     {scene.scene_no || scene.id}
                 </div>
                 <div className="absolute top-2 right-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -6736,22 +6736,25 @@ const SceneCard = ({ scene, entities, onClick, onGenerateShots, onDelete, select
                 </div>
             </div>
             
-            <div className="p-4 space-y-2.5">
-                <h3 className="font-bold text-sm text-white line-clamp-1" title={scene.scene_name}>{scene.scene_name || t('未命名场景', 'Untitled Scene')}</h3>
-                
-                <div className="text-xs text-muted-foreground space-y-2">
-                    {/* Core Info - handled to prevent layout chaos with Markdown */}
-                    <div className="bg-white/5 p-2 rounded border border-white/5 relative group/info">
+            <div className="p-3 space-y-3 flex-1 flex flex-col">
+                <div className="space-y-1">
+                    <h3 className="font-semibold text-sm text-white line-clamp-1" title={scene.scene_name}>{scene.scene_name || t('未命名场景', 'Untitled Scene')}</h3>
+                    <div className="text-[10px] text-muted-foreground truncate">
+                        <span className="opacity-60">{t('环境：', 'Env:')}</span>{' '}
+                        <span className="text-white/70" title={scene.environment_name}>{scene.environment_name || '-'}</span>
+                    </div>
+                </div>
+
+                <div className="text-xs text-muted-foreground space-y-2 flex-1 min-h-0">
+                    <div className="bg-white/5 p-2 rounded border border-white/5 relative">
                         <span className="font-bold text-white/50 block text-[10px] uppercase mb-1">{t('核心信息', 'Core Info')}</span>
-                        <div className="max-h-[4.5em] overflow-hidden text-white/80 leading-normal prose prose-invert prose-p:my-0 prose-p:leading-normal prose-headings:my-0 prose-ul:my-0 prose-li:my-0 text-[11px]">
-                             <ReactMarkdown components={{
-                                 p: ({node, ...props}) => <p className="mb-1" {...props} />
-                             }}>{scene.core_scene_info || t('暂无核心信息', 'No core info')}</ReactMarkdown>
+                        <div className="h-[60px] overflow-hidden text-white/80 leading-normal prose prose-invert prose-p:my-0 prose-p:leading-normal prose-headings:my-0 prose-ul:my-0 prose-li:my-0 text-[11px]">
+                            <ReactMarkdown components={{
+                                p: ({node, ...props}) => <p className="mb-1" {...props} />
+                            }}>{scene.core_scene_info || t('暂无核心信息', 'No core info')}</ReactMarkdown>
                         </div>
-                         {/* Hover expand could be cool, but simplistic for now */}
                     </div>
 
-                    {/* Linked Characters & Key Props */}
                     <div className="space-y-1.5">
                         {(scene.linked_characters || scene.key_props) ? (
                             <>
@@ -6782,17 +6785,32 @@ const SceneCard = ({ scene, entities, onClick, onGenerateShots, onDelete, select
                             )}
                             </>
                         ) : (
-                             <div className="line-clamp-2 opacity-50 italic">
+                             <div className="line-clamp-2 opacity-50 italic text-[11px]">
                                 {scene.original_script_text || t('暂无描述', 'No description')}
                             </div>
                         )}
                     </div>
                 </div>
-                
-                <div className="pt-2 border-t border-white/5 text-[10px] text-gray-400 mt-auto flex justify-between items-center">
-                    <div className="flex items-center gap-1 max-w-[70%] truncate">
-                        <span className="opacity-50">{t('环境：', 'Env:')}</span>
-                        <span className="text-white/70" title={scene.environment_name}>{scene.environment_name || '-'}</span>
+
+                <div className="pt-2 border-t border-white/5 mt-auto">
+                    <div className="grid grid-cols-2 gap-2">
+                        <button
+                            onClick={handleGenerate}
+                            disabled={isGenerating}
+                            className="bg-primary/85 hover:bg-primary text-black px-2 py-1.5 rounded text-[11px] font-semibold flex items-center justify-center gap-1 disabled:opacity-60"
+                            title={t('AI 生成镜头列表', 'AI Generate Shot List')}
+                        >
+                            {isGenerating ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
+                            {t('AI 镜头', 'AI Shots')}
+                        </button>
+                        <button
+                            onClick={handleDelete}
+                            className="bg-red-500/20 hover:bg-red-500/30 text-red-200 border border-red-500/30 px-2 py-1.5 rounded text-[11px] font-semibold flex items-center justify-center gap-1"
+                            title={t('删除场景', 'Delete Scene')}
+                        >
+                            <Trash2 className="w-3 h-3"/>
+                            {t('删除', 'Delete')}
+                        </button>
                     </div>
                 </div>
             </div>
@@ -6808,7 +6826,6 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
     const [selectedSceneKeys, setSelectedSceneKeys] = useState([]);
     const [entities, setEntities] = useState([]);
     const [isSuperuser, setIsSuperuser] = useState(false);
-    const [sceneSelectionFilter, setSceneSelectionFilter] = useState('all');
     const [editingScene, setEditingScene] = useState(null);
     const [shotPromptModal, setShotPromptModal] = useState({ open: false, sceneId: null, data: null, loading: false });
     const [aiShotsFlowStatus, setAiShotsFlowStatus] = useState({ phase: 'idle', message: '', sceneId: null });
@@ -6841,37 +6858,6 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         data: null,
     });
 
-    const sceneFilterStorageKey = useMemo(() => {
-        if (!activeEpisode?.id) return '';
-        return `aistory.sceneFilters.${activeEpisode.id}`;
-    }, [activeEpisode?.id]);
-
-    useEffect(() => {
-        if (!sceneFilterStorageKey) return;
-        try {
-            const raw = localStorage.getItem(sceneFilterStorageKey);
-            if (!raw) return;
-            const parsed = JSON.parse(raw);
-            if (parsed && typeof parsed === 'object') {
-                const restored = String(parsed.sceneSelectionFilter || 'all');
-                setSceneSelectionFilter(restored || 'all');
-            }
-        } catch (e) {
-            console.warn('Failed to restore scene filters', e);
-        }
-    }, [sceneFilterStorageKey]);
-
-    useEffect(() => {
-        if (!sceneFilterStorageKey) return;
-        try {
-            localStorage.setItem(sceneFilterStorageKey, JSON.stringify({
-                sceneSelectionFilter,
-            }));
-        } catch (e) {
-            console.warn('Failed to persist scene filters', e);
-        }
-    }, [sceneFilterStorageKey, sceneSelectionFilter]);
-
     const getSceneSelectionKey = (scene) => {
         if (scene?.id) return `id:${scene.id}`;
         return `draft:${scene?.scene_no || ''}|${scene?.scene_name || ''}|${scene?.environment_name || ''}|${scene?.original_script_text || ''}`;
@@ -6890,9 +6876,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
     };
 
     const filteredScenes = useMemo(() => {
-        const base = sceneSelectionFilter === 'all'
-            ? [...(scenes || [])]
-            : (scenes || []).filter((scene) => getSceneSelectionKey(scene) === sceneSelectionFilter);
+        const base = [...(scenes || [])];
 
         if (sceneSortMode === 'hierarchy') {
             base.sort((a, b) => {
@@ -6916,15 +6900,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         });
         if (sceneSortDirection === 'asc') base.reverse();
         return base;
-    }, [scenes, sceneSelectionFilter, sceneSortMode, sceneSortDirection]);
-
-    useEffect(() => {
-        if (sceneSelectionFilter === 'all') return;
-        const exists = (scenes || []).some((scene) => getSceneSelectionKey(scene) === sceneSelectionFilter);
-        if (!exists) {
-            setSceneSelectionFilter('all');
-        }
-    }, [scenes, sceneSelectionFilter]);
+    }, [scenes, sceneSortMode, sceneSortDirection]);
 
     useEffect(() => {
         const validKeys = new Set((scenes || []).map(getSceneSelectionKey));
@@ -7777,79 +7753,70 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                 </div>
             )}
 
-            <div className="mb-4 flex flex-wrap items-center gap-2 shrink-0">
-                <span className="text-xs text-muted-foreground">{t('排序', 'Sort')}</span>
-                <button
-                    onClick={() => setSceneSortMode('updated_desc')}
-                    className={`px-3 py-1.5 rounded text-xs border ${sceneSortMode === 'updated_desc' ? 'bg-primary/20 text-primary border-primary/30' : 'bg-white/5 text-white border-white/10 hover:bg-white/10'}`}
-                >
-                    {t('按修改时间', 'By Modified Time')}
-                </button>
-                <button
-                    onClick={() => setSceneSortMode('hierarchy')}
-                    className={`px-3 py-1.5 rounded text-xs border ${sceneSortMode === 'hierarchy' ? 'bg-primary/20 text-primary border-primary/30' : 'bg-white/5 text-white border-white/10 hover:bg-white/10'}`}
-                >
-                    {t('按集/场景/镜头', 'By Episode/Scene/Shot')}
-                </button>
-                <button
-                    onClick={() => setSceneSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
-                    className="px-3 py-1.5 rounded text-xs border bg-white/5 text-white border-white/10 hover:bg-white/10"
-                >
-                    {sceneSortDirection === 'asc' ? t('升序', 'Ascending') : t('降序', 'Descending')}
-                </button>
-            </div>
+            <div className="mb-4 shrink-0 rounded-xl border border-white/10 bg-black/25 p-3 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={() => setSceneSortMode('updated_desc')}
+                            className={`h-8 w-8 inline-flex items-center justify-center rounded border ${sceneSortMode === 'updated_desc' ? 'bg-primary/20 text-primary border-primary/30' : 'bg-white/5 text-white border-white/10 hover:bg-white/10'}`}
+                            title={t('按修改时间排序', 'Sort by modified time')}
+                            aria-label={t('按修改时间排序', 'Sort by modified time')}
+                        >
+                            <RefreshCw className="w-4 h-4" />
+                        </button>
+                        <button
+                            onClick={() => setSceneSortMode('hierarchy')}
+                            className={`h-8 w-8 inline-flex items-center justify-center rounded border ${sceneSortMode === 'hierarchy' ? 'bg-primary/20 text-primary border-primary/30' : 'bg-white/5 text-white border-white/10 hover:bg-white/10'}`}
+                            title={t('按集/场景/镜头排序', 'Sort by episode/scene/shot')}
+                            aria-label={t('按集/场景/镜头排序', 'Sort by episode/scene/shot')}
+                        >
+                            <LayoutList className="w-4 h-4" />
+                        </button>
+                        <button
+                            onClick={() => setSceneSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
+                            className="h-8 w-8 inline-flex items-center justify-center rounded border bg-white/5 text-white border-white/10 hover:bg-white/10"
+                            title={sceneSortDirection === 'asc' ? t('当前升序，点击切换为降序', 'Currently ascending, click to switch to descending') : t('当前降序，点击切换为升序', 'Currently descending, click to switch to ascending')}
+                            aria-label={sceneSortDirection === 'asc' ? t('切换到降序', 'Switch to descending') : t('切换到升序', 'Switch to ascending')}
+                        >
+                            <ArrowUp className={`w-4 h-4 transition-transform ${sceneSortDirection === 'asc' ? '' : 'rotate-180'}`} />
+                        </button>
+                        <button
+                            onClick={toggleSelectAllFiltered}
+                            disabled={filteredScenes.length === 0}
+                            className="h-8 w-8 inline-flex items-center justify-center rounded border bg-white/5 text-white border-white/10 hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed"
+                            title={allFilteredSelected ? t('取消全选', 'Deselect all') : t('全选', 'Select all')}
+                            aria-label={allFilteredSelected ? t('取消全选', 'Deselect all') : t('全选', 'Select all')}
+                        >
+                            {allFilteredSelected ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
+                        </button>
+                    </div>
 
-            <div className="mb-4 shrink-0">
-                <select
-                    value={sceneSelectionFilter}
-                    onChange={(e) => setSceneSelectionFilter(e.target.value)}
-                    className="w-full md:w-[420px] bg-black/40 border border-white/20 rounded px-3 py-2 text-sm text-white"
-                >
-                    <option value="all">{t('全部场景', 'All Scenes')}</option>
-                    {(scenes || []).map((scene) => {
-                        const key = getSceneSelectionKey(scene);
-                        const code = scene?.scene_no || scene?.scene_id || t('未命名场景', 'Untitled Scene');
-                        const name = scene?.scene_name || t('未命名', 'Untitled');
-                        return (
-                            <option key={key} value={key}>
-                                {code} - {name}
-                            </option>
-                        );
-                    })}
-                </select>
-            </div>
+                    <div className="text-xs text-muted-foreground">
+                        {t('场景总数', 'Total Scenes')}: {filteredScenes.length}
+                    </div>
 
-            <div className="mb-4 flex flex-wrap items-center gap-2 shrink-0">
-                <label className="flex items-center gap-2 px-3 py-2 bg-white/5 border border-white/10 rounded text-xs text-white">
-                    <input
-                        type="checkbox"
-                        checked={allFilteredSelected}
-                        onChange={toggleSelectAllFiltered}
-                        disabled={filteredScenes.length === 0}
-                        className="accent-primary"
-                    />
-                    <span>{t('全选当前筛选', 'Select All Filtered')}</span>
-                </label>
+                    <div className="flex flex-wrap items-center gap-2">
+                        <button
+                            onClick={handleDeleteSelectedScenes}
+                            disabled={selectedFilteredCount === 0}
+                            className="px-3 py-2 bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 rounded text-xs text-red-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            {t('删除已选', 'Delete Selected')}
+                        </button>
 
-                <div className="text-xs text-muted-foreground px-2">
-                    {t('已选', 'Selected')} {selectedFilteredCount} / {filteredScenes.length}
+                        <button
+                            onClick={handleDeleteFilteredScenes}
+                            disabled={filteredScenes.length === 0}
+                            className="px-3 py-2 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded text-xs text-red-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            {t('删除当前筛选全部', 'Delete All Filtered')}
+                        </button>
+                    </div>
                 </div>
 
-                <button
-                    onClick={handleDeleteSelectedScenes}
-                    disabled={selectedFilteredCount === 0}
-                    className="px-3 py-2 bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 rounded text-xs text-red-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                    {t('删除已选', 'Delete Selected')}
-                </button>
-
-                <button
-                    onClick={handleDeleteFilteredScenes}
-                    disabled={filteredScenes.length === 0}
-                    className="px-3 py-2 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded text-xs text-red-100 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                    {t('删除当前筛选全部', 'Delete All Filtered')}
-                </button>
+                <div className="text-xs text-muted-foreground">
+                    {t('已选', 'Selected')} {selectedFilteredCount} / {filteredScenes.length}
+                </div>
             </div>
 
             {aiShotsFlowStatus.phase !== 'idle' && (
@@ -7875,11 +7842,11 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                     {filteredScenes.length === 0 ? (
                     <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
                         <Clapperboard className="w-12 h-12 mb-4 opacity-20" />
-                        <p>{scenes.length === 0 ? t('未找到场景。', 'No scenes found.') : t('没有符合当前筛选的场景。', 'No scenes match current filters.')}</p>
-                        <p className="text-xs mt-2 opacity-50">{scenes.length === 0 ? t('可在导入中粘贴 Markdown 表格，或先生成内容。', 'Paste a Markdown table in Import or generate content.') : t('请通过下拉列表切换场景筛选。', 'Switch scene filter from the dropdown list.')}</p>
+                        <p>{t('未找到场景。', 'No scenes found.')}</p>
+                        <p className="text-xs mt-2 opacity-50">{t('可在导入中粘贴 Markdown 表格，或先生成内容。', 'Paste a Markdown table in Import or generate content.')}</p>
                     </div>
                     ) : (
-                    <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-6">
+                    <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4">
                         {filteredScenes.map((scene, idx) => {
                             const sceneKey = getSceneSelectionKey(scene);
                             return (
