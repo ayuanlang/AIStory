@@ -3434,6 +3434,14 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
     const [isSavingReuseSubjects, setIsSavingReuseSubjects] = useState(false);
     const [analysisFlowStatus, setAnalysisFlowStatus] = useState({ phase: 'idle', message: '' });
     const [subjectConsistencyReport, setSubjectConsistencyReport] = useState(null);
+    const [subjectRecoveryModal, setSubjectRecoveryModal] = useState({
+        open: false,
+        status: 'idle',
+        missing: [],
+        message: '',
+        details: '',
+    });
+    const [isRecoveringMissingSubjects, setIsRecoveringMissingSubjects] = useState(false);
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
 
     const showAnalysisWarningStatus = useCallback((warnings = []) => {
@@ -3703,14 +3711,23 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         return Array.from(found);
     };
 
-    const runSubjectConsistencyCheck = () => {
-        const markdownSubjects = extractSubjectsFromMarkdownTable(llmMarkdownTableText || llmResultContent);
-        const entitiesPayload = getEntitiesPayloadFromJsonText(llmRawResultContent || llmResultContent);
+    const escapeRegExp = (text) => String(text || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    const buildSubjectConsistencyReport = (rawText) => {
+        const markdownSource = normalizeLlmMarkdownTable(rawText || llmResultContent || '');
+        const markdownSubjects = extractSubjectsFromMarkdownTable(markdownSource);
+        const entitiesPayload = getEntitiesPayloadFromJsonText(rawText || llmRawResultContent || llmResultContent);
 
         if (!entitiesPayload) {
-            setSubjectConsistencyReport({ ok: false, message: t('未检测到可解析的实体 JSON。', 'No parseable entities JSON detected.'), missing: [], extra: [], markdownSubjects, jsonSubjects: [] });
-            if (onLog) onLog('Subject consistency check failed: no entities JSON.', 'warning');
-            return;
+            return {
+                ok: false,
+                message: t('未检测到可解析的实体 JSON。', 'No parseable entities JSON detected.'),
+                missing: [],
+                extra: [],
+                markdownSubjects,
+                jsonSubjects: [],
+                markdownSource,
+            };
         }
 
         const jsonSubjects = Array.from(new Set((entitiesPayload.characters || [])
@@ -3727,10 +3744,204 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             ? t('一致：Markdown 中提到的 subject 均存在于 JSON characters。', 'Consistent: all markdown-mentioned subjects exist in JSON characters.')
             : t('不一致：存在 Markdown 中提到但 JSON 缺失的 subject。', 'Inconsistent: some subjects mentioned in markdown are missing in JSON characters.');
 
-        setSubjectConsistencyReport({ ok, message, missing, extra, markdownSubjects, jsonSubjects });
+        return { ok, message, missing, extra, markdownSubjects, jsonSubjects, markdownSource };
+    };
+
+    const buildRecoveryScriptFromMissingSubjects = (markdownSource, missingSubjects) => {
+        const parsed = parseMarkdownTable(markdownSource || '');
+        if (!parsed || !Array.isArray(parsed.rows) || parsed.rows.length === 0) {
+            return String(markdownSource || '').trim();
+        }
+
+        const norm = (value) => String(value || '').toLowerCase().replace(/[\s_\-./()]/g, '');
+        const findCol = (patterns) => {
+            const idx = parsed.headers.findIndex((h) => patterns.some(p => norm(h).includes(p)));
+            return idx >= 0 ? idx : -1;
+        };
+
+        const sceneNameIdx = findCol(['scenename', '场景名']);
+        const coreInfoIdx = findCol(['coresceneinfo', '核心场景信息']);
+        const originalIdx = findCol(['originalscripttext', '原始剧本文本', 'original']);
+
+        const hitRows = [];
+        for (const row of parsed.rows) {
+            const rowText = row.map(v => String(v || '')).join(' ');
+            const matched = (missingSubjects || []).some((subject) => {
+                const s = String(subject || '').trim();
+                if (!s) return false;
+                const escaped = escapeRegExp(s);
+                const patterns = [
+                    new RegExp(`CHAR:\\s*\\[@${escaped}\\]`, 'i'),
+                    new RegExp(`\\[@${escaped}\\]`, 'i'),
+                    new RegExp(`@${escaped}\\b`, 'i'),
+                ];
+                return patterns.some(re => re.test(rowText));
+            });
+            if (!matched) continue;
+
+            const sceneName = sceneNameIdx >= 0 ? String(row[sceneNameIdx] || '').trim() : '';
+            const coreInfo = coreInfoIdx >= 0 ? String(row[coreInfoIdx] || '').trim() : '';
+            const original = originalIdx >= 0 ? String(row[originalIdx] || '').trim() : '';
+            const snippet = [sceneName ? `Scene: ${sceneName}` : '', coreInfo ? `Core: ${coreInfo}` : '', original ? `Script: ${original}` : '']
+                .filter(Boolean)
+                .join('\n');
+            if (snippet) hitRows.push(snippet);
+        }
+
+        const unique = Array.from(new Set(hitRows.map(s => s.trim()).filter(Boolean)));
+        if (unique.length === 0) return String(markdownSource || '').trim();
+        return unique.map((s, i) => `# Missing Subject Scene ${i + 1}\n${s}`).join('\n\n');
+    };
+
+    const buildSubjectOnlyRecoveryPrompt = (basePrompt = '') => {
+        const recoveryMode = `\n\n[Subject Recovery Mode - Mandatory]\n` +
+            `You must only generate missing subject-related entities from the provided missing-scene snippets.\n` +
+            `Do NOT regenerate script/scene table content.\n` +
+            `Output only Part 2A/2B/2C JSON in the same schema as the first pass.\n` +
+            `Focus on entities referenced by missing markdown subjects and keep strict name consistency.`;
+        return `${String(basePrompt || '').trim()}${recoveryMode}`;
+    };
+
+    const mergeEntitiesPayload = (basePayload, patchPayload) => {
+        const base = basePayload || { characters: [], props: [], environments: [] };
+        const patch = patchPayload || { characters: [], props: [], environments: [] };
+
+        const mergeBy = (a, b, keyOf) => {
+            const out = [];
+            const seen = new Set();
+            for (const item of [...(a || []), ...(b || [])]) {
+                const key = keyOf(item);
+                if (!key || seen.has(key)) continue;
+                seen.add(key);
+                out.push(item);
+            }
+            return out;
+        };
+
+        return {
+            characters: mergeBy(base.characters, patch.characters, (item) => normalizeSubjectName(item?.name || item?.name_en || '').toLowerCase()),
+            props: mergeBy(base.props, patch.props, (item) => String(item?.name || item?.name_en || '').trim().toLowerCase()),
+            environments: mergeBy(base.environments, patch.environments, (item) => String(item?.name || item?.name_en || '').trim().toLowerCase()),
+        };
+    };
+
+    const autoRecoverMissingSubjects = async (rawText, missingSubjects) => {
+        if (!activeEpisode?.id || isRecoveringMissingSubjects) return null;
+        const normalizedMissing = Array.from(new Set((missingSubjects || []).map(v => String(v || '').trim()).filter(Boolean)));
+        if (normalizedMissing.length === 0) return null;
+
+        setIsRecoveringMissingSubjects(true);
+        setSubjectRecoveryModal({
+            open: true,
+            status: 'running',
+            missing: normalizedMissing,
+            message: t('检测到 Subject 缺失，正在自动补全...', 'Missing subjects detected. Auto-recovering...'),
+            details: '',
+        });
+
+        try {
+            const markdownSource = normalizeLlmMarkdownTable(rawText || llmResultContent || '');
+            const recoveryScript = buildRecoveryScriptFromMissingSubjects(markdownSource, normalizedMissing);
+
+            let promptContent = '';
+            try {
+                const promptRes = await fetchPrompt('scene_analysis_subject_recovery_lite.txt');
+                promptContent = promptRes?.content || '';
+            } catch {
+                try {
+                    const fallbackRes = await fetchPrompt('scene_analysis.txt');
+                    promptContent = fallbackRes?.content || '';
+                } catch {
+                    promptContent = '';
+                }
+            }
+            const recoveryPrompt = buildSubjectOnlyRecoveryPrompt(promptContent);
+
+            if (onLog) onLog(`Auto recovery started for missing subjects: [${normalizedMissing.join(', ')}]`, 'process');
+            const recoveryResult = await analyzeScene(
+                recoveryScript,
+                recoveryPrompt,
+                null,
+                activeEpisode.id,
+                analysisAttentionNotes,
+                selectedReuseSubjectAssets
+            );
+
+            const recoveryText = recoveryResult?.result || recoveryResult?.analysis || (typeof recoveryResult === 'string' ? recoveryResult : JSON.stringify(recoveryResult, null, 2));
+            const baseEntities = getEntitiesPayloadFromJsonText(rawText || llmRawResultContent || llmResultContent) || { characters: [], props: [], environments: [] };
+            const patchEntities = getEntitiesPayloadFromJsonText(recoveryText || '');
+
+            if (!patchEntities) {
+                setSubjectRecoveryModal({
+                    open: true,
+                    status: 'failed',
+                    missing: normalizedMissing,
+                    message: t('自动补全未返回可解析的实体 JSON。', 'Auto recovery returned no parseable entities JSON.'),
+                    details: '',
+                });
+                if (onLog) onLog('Auto recovery failed: no parseable entities JSON.', 'warning');
+                return null;
+            }
+
+            const mergedEntities = mergeEntitiesPayload(baseEntities, patchEntities);
+            const eGlobal = getEGlobalInfoPayloadFromJsonText(rawText || llmRawResultContent || llmResultContent);
+
+            const mergedRawSections = [];
+            if (markdownSource) mergedRawSections.push(markdownSource);
+            if (eGlobal) mergedRawSections.push(JSON.stringify(eGlobal, null, 2));
+            mergedRawSections.push(JSON.stringify(mergedEntities, null, 2));
+            const mergedRaw = mergedRawSections.join('\n\n');
+
+            setLlmRawResultContent(mergedRaw);
+            setLlmResultContent(normalizeLlmMarkdownTable(mergedRaw));
+            lastLoadedAnalysisRef.current = mergedRaw;
+            await persistLlmResultContent(mergedRaw);
+
+            const rerun = buildSubjectConsistencyReport(mergedRaw);
+            setSubjectConsistencyReport(rerun);
+
+            if (rerun.ok) {
+                setSubjectRecoveryModal({
+                    open: true,
+                    status: 'success',
+                    missing: normalizedMissing,
+                    message: t('缺失 Subject 已自动补全并通过复检。', 'Missing subjects were auto-recovered and passed re-check.'),
+                    details: '',
+                });
+                if (onLog) onLog('Auto recovery completed and consistency re-check passed.', 'success');
+            } else {
+                setSubjectRecoveryModal({
+                    open: true,
+                    status: 'partial',
+                    missing: rerun.missing || [],
+                    message: t('自动补全完成，但复检仍有缺失 Subject。', 'Auto recovery finished, but re-check still has missing subjects.'),
+                    details: (rerun.missing || []).join(', '),
+                });
+                if (onLog) onLog(`Auto recovery finished with remaining missing subjects: [${(rerun.missing || []).join(', ')}]`, 'warning');
+            }
+            return rerun;
+        } catch (error) {
+            setSubjectRecoveryModal({
+                open: true,
+                status: 'failed',
+                missing: normalizedMissing,
+                message: t('自动补全失败。', 'Auto recovery failed.'),
+                details: String(error?.message || ''),
+            });
+            if (onLog) onLog(`Auto recovery failed: ${error.message}`, 'error');
+            return null;
+        } finally {
+            setIsRecoveringMissingSubjects(false);
+        }
+    };
+
+    const runSubjectConsistencyCheck = () => {
+        const report = buildSubjectConsistencyReport(llmRawResultContent || llmResultContent);
+        setSubjectConsistencyReport(report);
         if (onLog) {
-            if (ok) onLog(`Subject consistency check passed (${markdownSubjects.length} matched).`, 'success');
-            else onLog(`Subject consistency check failed: missing [${missing.join(', ')}]`, 'warning');
+            if (report.ok) onLog(`Subject consistency check passed (${report.markdownSubjects.length} matched).`, 'success');
+            else if (report.missing?.length) onLog(`Subject consistency check failed: missing [${report.missing.join(', ')}]`, 'warning');
+            else onLog('Subject consistency check failed: no entities JSON.', 'warning');
         }
     };
 
@@ -5118,6 +5329,11 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             }
             
             await runAutoImportAndSwitchToScenes(analyzedText);
+            const firstPassReport = buildSubjectConsistencyReport(analyzedText || '');
+            setSubjectConsistencyReport(firstPassReport);
+            if (!firstPassReport.ok && Array.isArray(firstPassReport.missing) && firstPassReport.missing.length > 0) {
+                await autoRecoverMissingSubjects(analyzedText || '', firstPassReport.missing);
+            }
             if (onLog) onLog("AI Analysis applied and saved.", "success");
             setShowAnalysisModal(false);
         } catch (e) {
@@ -5225,6 +5441,11 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             }
 
             await runAutoImportAndSwitchToScenes(analyzedText || "");
+            const firstPassReport = buildSubjectConsistencyReport(analyzedText || '');
+            setSubjectConsistencyReport(firstPassReport);
+            if (!firstPassReport.ok && Array.isArray(firstPassReport.missing) && firstPassReport.missing.length > 0) {
+                await autoRecoverMissingSubjects(analyzedText || '', firstPassReport.missing);
+            }
 
             setShowAnalysisModal(false);
         } catch (e) {
@@ -5699,6 +5920,65 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                                 {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
                                           {t('运行分析', 'Run Analysis')}
                              </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {subjectRecoveryModal.open && (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+                    onClick={() => {
+                        if (subjectRecoveryModal.status !== 'running') {
+                            setSubjectRecoveryModal(prev => ({ ...prev, open: false }));
+                        }
+                    }}
+                >
+                    <div className="bg-[#1a1a1a] border border-white/10 rounded-xl w-full max-w-2xl shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+                        <div className="flex items-center justify-between p-4 border-b border-white/10 bg-white/5">
+                            <h3 className="text-lg font-bold flex items-center gap-2">
+                                {subjectRecoveryModal.status === 'running' ? (
+                                    <Loader2 className="w-5 h-5 text-purple-400 animate-spin" />
+                                ) : subjectRecoveryModal.status === 'success' ? (
+                                    <CheckCircle className="w-5 h-5 text-emerald-400" />
+                                ) : (
+                                    <Info className="w-5 h-5 text-amber-300" />
+                                )}
+                                {t('Subject 自动补全', 'Subject Auto Recovery')}
+                            </h3>
+                            <button
+                                onClick={() => {
+                                    if (subjectRecoveryModal.status !== 'running') {
+                                        setSubjectRecoveryModal(prev => ({ ...prev, open: false }));
+                                    }
+                                }}
+                                className={`p-1 rounded-lg transition-colors ${subjectRecoveryModal.status === 'running' ? 'text-white/30 cursor-not-allowed' : 'hover:bg-white/10 text-white/80'}`}
+                                disabled={subjectRecoveryModal.status === 'running'}
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                        <div className="p-4 space-y-3 text-sm">
+                            <div className="text-white/90">{subjectRecoveryModal.message}</div>
+                            {Array.isArray(subjectRecoveryModal.missing) && subjectRecoveryModal.missing.length > 0 && (
+                                <div className="text-xs text-amber-200 bg-amber-500/10 border border-amber-500/20 rounded-md px-3 py-2">
+                                    {t('缺失 Subject：', 'Missing subjects:')} {subjectRecoveryModal.missing.join(', ')}
+                                </div>
+                            )}
+                            {subjectRecoveryModal.details && (
+                                <div className="text-xs text-white/70 bg-white/5 border border-white/10 rounded-md px-3 py-2 whitespace-pre-wrap">
+                                    {subjectRecoveryModal.details}
+                                </div>
+                            )}
+                        </div>
+                        <div className="p-4 border-t border-white/10 bg-white/5 flex justify-end gap-2">
+                            <button
+                                onClick={() => setSubjectRecoveryModal(prev => ({ ...prev, open: false }))}
+                                disabled={subjectRecoveryModal.status === 'running'}
+                                className={`px-4 py-2 rounded-lg text-sm font-bold ${subjectRecoveryModal.status === 'running' ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 hover:bg-white/20 text-white'}`}
+                            >
+                                {t('关闭', 'Close')}
+                            </button>
                         </div>
                     </div>
                 </div>
