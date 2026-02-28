@@ -51,6 +51,7 @@
 #### Base + Delta 规则
 - 每个场地先定一个 Base Environment Reference（通常首个 `NEW`）。
 - `VARIANT_OF/REUSE` 必须继承 Base；`generation_prompt_en` 先写继承，再写 Delta。
+- 继承句首必须显式写“参考关系 + 机位关系”：`Use ENV:[BaseName] as visual base; keep architecture/material anchors unchanged; camera/viewpoint changes are listed in Delta only.`
 - Delta 至少覆盖：
   - `Camera Position/Direction`
   - `Axis Side`
@@ -62,6 +63,18 @@
 - Delta 顺序强制：`CPD -> AS -> BG -> LD -> FR -> DP`。
 - 固定写法：
   `Environment Delta = {Camera Position/Direction: ..., Axis Side: ..., Background Set Change: ..., Lighting Direction Change: ..., Framing Change: ..., Dynamic Parts State: ...}`。
+- 观察方向切换（Front ↔ Reverse / 门内看外 ↔ 门外看内）为高优先级变体，必须额外满足：
+  - `CPD` 必须写成“新机位落点 + 新朝向目标 + 与 Base 的相对关系（opposite side / reverse axis）”；
+  - `AS` 必须明确从哪一侧切到哪一侧（如 `left -> right`）；
+  - `BG` 必须同时给出 `Visible Set` 与 `Excluded Set`（本视角应出现/不应出现的背景集合）；
+  - `FR` 必须写清景别与构图主对象变化，禁止仅写 `same framing`。
+- 方向切换禁用含糊写法：禁止仅写 `reverse view`、`similar to base`、`same environment` 而不写可见背景差异。
+- 方向切换推荐写法（可直接复用）：
+  `Environment Delta = {Camera Position/Direction: camera moved to opposite axis side behind ENV:[AudienceArea], now facing ENV:[MainStage] entrance; Axis Side: left -> right; Background Set Change: Visible Set = [stage portal, curtain rail, front seats], Excluded Set = [backstage corridor, rear exit door]; Lighting Direction Change: key light now front-right motivated by stage practicals; Framing Change: wide-to-mid with stage portal centered; Dynamic Parts State: None}`。
+- 方向切换 Few-shot A（门内看外 -> 门外看内）：
+  `Environment Delta = {Camera Position/Direction: camera moved from inside doorway threshold to exterior corridor side, now facing inward to ENV:[RoomEntrance]; Axis Side: right -> left; Background Set Change: Visible Set = [door frame interior edge, corridor wall lamps, entry mat], Excluded Set = [window-side bookshelf, bed corner, inner desk area]; Lighting Direction Change: key light switches to corridor practicals from camera-left; Framing Change: medium-wide with doorway centered and room depth behind; Dynamic Parts State: PROP:[Door](Open -> Half-Open, reason: CHAR:[@Guard] pushes it and pauses to listen)}`。
+- 方向切换 Few-shot B（街道正向 -> 街道反向）：
+  `Environment Delta = {Camera Position/Direction: camera relocated to opposite sidewalk across traffic lane, now facing reverse toward ENV:[CrosswalkJunction]; Axis Side: left -> right; Background Set Change: Visible Set = [crosswalk signal pole, storefront neon, bus-stop shelter], Excluded Set = [alley dumpster row, rear parking gate, service entrance shutter]; Lighting Direction Change: key light becomes back-right from street signage and vehicle headlights; Framing Change: wide shot with crosswalk signal as new composition anchor; Dynamic Parts State: None}`。
 - `Dynamic Parts State` 非 `None` 时必须写 `Before -> After + reason`。
   - 合规：`Dynamic Parts State: PROP:[Door](Open -> Closed, reason: CHAR:[@Character A] closes it quietly to avoid detection)`。
   - 不合规：`Dynamic Parts State: Door: Closed`。

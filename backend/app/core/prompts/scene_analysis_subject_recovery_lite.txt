@@ -47,6 +47,22 @@
 ### 1) Environment Prompt Template
 `[Global Style]. {Base Environment Reference}: 【base_env_name / reference image id】. {Environment Delta}: 【only changed items; if REUSE write 'None'】. {Camera Position}: 【exact placement in/around environment】. {Shooting Direction}: 【Front/Reverse/Side + facing target/vector】. {Camera Setup}: 【Height/Angle/Framing】. {Lighting Setup}: 【key/fill/back source position + quality + intensity + color temperature】. {Lens & Focus Baseline}: 【focal length family + DOF strategy】. {Grain/Noise Strategy}: 【clean digital / fine film grain / medium grain + shadow readability】. Scene: inside 【environment_name】 with **Core Stage** centered on 【primary_anchor description】. Theatrical Space Rationality: 【entry->action->exit passability, actor blocking area, camera movement clearance, sightline readability on both axis sides, obstacle safety gap】. Atmosphere: 【mood keywords】. Details: 【materials, textures】. **No humans or characters present.**`
 
+### 1.1) Base + Delta 执行增强（观察方向切换）
+- 先写继承声明，再写 Delta：`Use ENV:[BaseName] as visual base; keep architecture/material anchors unchanged; camera/viewpoint changes are listed in Delta only.`
+- Delta 固定顺序：`CPD -> AS -> BG -> LD -> FR -> DP`。
+- 若为方向切换（Front ↔ Reverse / 门内看外 ↔ 门外看内），必须同时写：
+  - `CPD`：新机位落点 + 新朝向目标 + 相对 Base 的关系（opposite side / reverse axis）；
+  - `AS`：明确侧别变化（如 `left -> right`）；
+  - `BG`：同时写 `Visible Set` 与 `Excluded Set`；
+  - `FR`：明确景别/构图主对象变化。
+- 禁止含糊写法：仅写 `reverse view`、`similar to base`、`same environment` 视为无效。
+- 推荐写法：
+  `Environment Delta = {Camera Position/Direction: camera moved to opposite axis side behind ENV:[AudienceArea], now facing ENV:[MainStage] entrance; Axis Side: left -> right; Background Set Change: Visible Set = [stage portal, curtain rail, front seats], Excluded Set = [backstage corridor, rear exit door]; Lighting Direction Change: key light now front-right motivated by stage practicals; Framing Change: wide-to-mid with stage portal centered; Dynamic Parts State: None}`。
+- Few-shot A（门内看外 -> 门外看内）：
+  `Environment Delta = {Camera Position/Direction: camera moved from inside doorway threshold to exterior corridor side, now facing inward to ENV:[RoomEntrance]; Axis Side: right -> left; Background Set Change: Visible Set = [door frame interior edge, corridor wall lamps, entry mat], Excluded Set = [window-side bookshelf, bed corner, inner desk area]; Lighting Direction Change: key light switches to corridor practicals from camera-left; Framing Change: medium-wide with doorway centered and room depth behind; Dynamic Parts State: PROP:[Door](Open -> Half-Open, reason: CHAR:[@Guard] pushes it and pauses to listen)}`。
+- Few-shot B（街道正向 -> 街道反向）：
+  `Environment Delta = {Camera Position/Direction: camera relocated to opposite sidewalk across traffic lane, now facing reverse toward ENV:[CrosswalkJunction]; Axis Side: left -> right; Background Set Change: Visible Set = [crosswalk signal pole, storefront neon, bus-stop shelter], Excluded Set = [alley dumpster row, rear parking gate, service entrance shutter]; Lighting Direction Change: key light becomes back-right from street signage and vehicle headlights; Framing Change: wide shot with crosswalk signal as new composition anchor; Dynamic Parts State: None}`。
+
 ### 2) Character Prompt Template
 `[Global Style] 6-view character sheet for 【Name】. {Camera Position}: 【studio camera placement for sheet capture】. {Shooting Direction}: 【for each panel explicitly mark Front/Back/Side/3-4 + facing】. {Lighting Setup}: 【key/fill/rim source position + quality + intensity + color temperature】. {Lens & Focus}: 【focal length (e.g. 35mm/50mm/85mm) + depth of field strategy】. {Grain/Noise Strategy}: 【clean digital / fine film grain / medium film grain + shadow noise control】. Structure: 6-view layout (Front, Back, Side, 3/4, Close-up, Detail). Appearance: 【Age, Body Type, ethnicity】. Attire: 【Clothing details, footwear】. Anchors: 【Signature features e.g. scar, accessory】. Consistency: T-pose/Neutral pose. Background: White.`
 
