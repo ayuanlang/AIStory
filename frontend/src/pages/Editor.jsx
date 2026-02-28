@@ -3766,6 +3766,31 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         return [headerLine, sepLine, ...rowLines].join('\n');
     };
 
+    const normalizeLlmMarkdownTable = useCallback((text) => {
+        const parsed = parseMarkdownTable(text);
+        if (!parsed) return '';
+
+        const normalizeHeader = (h) => String(h || '').toLowerCase().replace(/[\s_.\-]/g, '');
+        const sceneNoColIdx = parsed.headers.findIndex((h) => {
+            const n = normalizeHeader(h);
+            return n.includes('sceneno') || n.includes('场次序号') || n === '场次';
+        });
+
+        const normalizedRows = (parsed.rows || []).map((row, idx) => {
+            const next = [...row];
+            if (sceneNoColIdx >= 0) {
+                while (next.length <= sceneNoColIdx) next.push('');
+                next[sceneNoColIdx] = String(idx + 1);
+            }
+            return next;
+        });
+
+        return buildMarkdownTable(parsed.headers, normalizedRows);
+    }, [parseMarkdownTable, buildMarkdownTable]);
+
+    const llmMarkdownTableText = useMemo(() => normalizeLlmMarkdownTable(llmResultContent), [llmResultContent, normalizeLlmMarkdownTable]);
+    const llmMarkdownTable = useMemo(() => parseMarkdownTable(llmMarkdownTableText), [llmMarkdownTableText]);
+
     const handleMerge = () => {
         const fullText = segments
             .map(seg => seg.content || '')
@@ -3795,7 +3820,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         const stored = (typeof storedNewField === 'string' && storedNewField.length > 0)
             ? storedNewField
             : (typeof storedLegacy === 'string' ? storedLegacy : (storedLegacy ? JSON.stringify(storedLegacy, null, 2) : ''));
-        setLlmResultContent(typeof stored === 'string' ? stored : '');
+        setLlmResultContent(normalizeLlmMarkdownTable(typeof stored === 'string' ? stored : ''));
 
         if (!activeEpisode?.script_content) {
             setSegments([]);
@@ -4021,7 +4046,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         try {
             const eps = await fetchEpisodes(projectId);
             const fresh = (eps || []).find(e => e.id === activeEpisode.id);
-            const dbText = fresh?.ai_scene_analysis_result || '';
+            const dbText = normalizeLlmMarkdownTable(fresh?.ai_scene_analysis_result || '');
 
             // Only update if user hasn't diverged from last loaded content.
             const current = llmResultContent || '';
@@ -4038,23 +4063,23 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             // non-fatal
             console.warn('[ScriptEditor] Failed to refresh analysis from DB', e);
         }
-    }, [projectId, activeEpisode?.id, llmResultContent]);
+    }, [projectId, activeEpisode?.id, llmResultContent, normalizeLlmMarkdownTable]);
 
     useEffect(() => {
         // On episode change/remount, prefer parent-provided field; fallback to DB refresh.
-        const initial = activeEpisode?.ai_scene_analysis_result || '';
+        const initial = normalizeLlmMarkdownTable(activeEpisode?.ai_scene_analysis_result || '');
         setLlmResultContent(initial);
         setAnalysisRuntimeMeta(null);
         lastLoadedAnalysisRef.current = initial;
         if (!initial) {
             refreshAnalysisFromDB();
         }
-    }, [activeEpisode?.id]);
+    }, [activeEpisode?.id, normalizeLlmMarkdownTable]);
 
     const handleLlmCellChange = (rowIdx, colIdx, value) => {
-        const parsed = parseMarkdownTable(llmResultContent);
+        const parsed = parseMarkdownTable(llmMarkdownTableText || llmResultContent);
         if (!parsed) {
-            setLlmResultContent(value);
+            setLlmResultContent(normalizeLlmMarkdownTable(value));
             return;
         }
 
@@ -4062,7 +4087,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         if (!nextRows[rowIdx]) return;
         nextRows[rowIdx][colIdx] = value;
         const nextText = buildMarkdownTable(parsed.headers, nextRows);
-        setLlmResultContent(nextText);
+        setLlmResultContent(normalizeLlmMarkdownTable(nextText));
     };
 
     const handleSegmentChange = (idx, field, value) => {
@@ -5005,16 +5030,16 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 }
             }
 
-            // Store the raw LLM output separately for viewing/editing (JSON or Markdown table)
-            setLlmResultContent(analyzedText);
-            lastLoadedAnalysisRef.current = analyzedText;
+            const normalizedMarkdown = normalizeLlmMarkdownTable(analyzedText);
+            setLlmResultContent(normalizedMarkdown);
+            lastLoadedAnalysisRef.current = normalizedMarkdown;
 
             // Persist LLM raw output into dedicated DB field (DO NOT overwrite script_content)
             // If backend already saved it (via episode_id), skip the extra PUT to avoid large payload twice.
             const savedByBackend = !!(result?.meta?.saved_to_episode);
             if (!savedByBackend) {
                 if (onLog) onLog("Analysis complete. Saving LLM result (separate field)...", "process");
-                await persistLlmResultContent(analyzedText);
+                await persistLlmResultContent(normalizedMarkdown);
             } else {
                 if (onLog) onLog("Analysis complete. Saved to DB by backend.", "success");
                 // Parent episode state may be stale; re-load from DB so the Script tab stays consistent
@@ -5115,15 +5140,15 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 }
             }
 
-            // Fill Script tab's "LLM 返回结果" immediately
-            setLlmResultContent(analyzedText || "");
-            lastLoadedAnalysisRef.current = analyzedText || "";
+            const normalizedMarkdown = normalizeLlmMarkdownTable(analyzedText || "");
+            setLlmResultContent(normalizedMarkdown);
+            lastLoadedAnalysisRef.current = normalizedMarkdown;
 
             // Persist the LLM output into dedicated DB field (unless backend already saved it)
             const savedByBackend = !!(result?.meta?.saved_to_episode);
             if (!savedByBackend) {
                 if (onLog) onLog("Advanced analysis complete. Saving LLM result (separate field)...", "process");
-                await persistLlmResultContent(analyzedText || "");
+                await persistLlmResultContent(normalizedMarkdown);
             } else {
                 if (onLog) onLog("Advanced analysis complete. Saved to DB by backend.", "success");
                 await refreshAnalysisFromDB();
@@ -5420,20 +5445,46 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                                     )}
                                 </div>
                                 <button
-                                    onClick={() => doImportText(llmResultContent, 'auto')}
+                                    onClick={() => doImportText(llmMarkdownTableText || llmResultContent, 'auto')}
                                     className="px-3 py-1.5 rounded-md text-[10px] font-bold bg-white/5 hover:bg-white/10 border border-white/10 text-white/80"
                                     title={t('从 LLM markdown/table 结果导入', 'Import from LLM markdown/table result')}
                                 >
                                     {t('导入 LLM 返回结果', 'Import LLM Result')}
                                 </button>
                             </div>
-                            <textarea
-                                className="w-full h-44 px-6 pb-6 bg-transparent text-white/90 font-mono text-xs leading-relaxed focus:outline-none custom-scrollbar resize-none"
-                                placeholder={t('在这里粘贴或编辑 LLM 结果（支持 Markdown/表格/JSON 混合）。', 'Paste or edit the LLM result here (Markdown/table/JSON mixed is ok).')}
-                                value={llmResultContent}
-                                onChange={(e) => setLlmResultContent(e.target.value)}
-                                onBlur={() => persistLlmResultContent(llmResultContent)}
-                            />
+                            <div className="h-44 overflow-auto custom-scrollbar px-6 pb-6">
+                                {llmMarkdownTable ? (
+                                    <table className="w-full text-left border-collapse text-xs font-mono">
+                                        <thead className="sticky top-0 z-10 bg-black/40 backdrop-blur-sm">
+                                            <tr>
+                                                {llmMarkdownTable.headers.map((header, idx) => (
+                                                    <th key={idx} className="p-2 border-b border-white/10 font-medium text-muted-foreground whitespace-nowrap">{header}</th>
+                                                ))}
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-white/5">
+                                            {llmMarkdownTable.rows.map((row, rowIdx) => (
+                                                <tr key={rowIdx} className="hover:bg-white/5 transition-colors">
+                                                    {llmMarkdownTable.headers.map((_, colIdx) => (
+                                                        <td key={colIdx} className="p-1 align-top">
+                                                            <textarea
+                                                                className="w-full min-h-[34px] bg-transparent border border-transparent hover:border-white/10 focus:border-primary/40 rounded px-1.5 py-1 text-white/90 leading-relaxed focus:outline-none resize-y"
+                                                                value={row[colIdx] || ''}
+                                                                onChange={(e) => handleLlmCellChange(rowIdx, colIdx, e.target.value)}
+                                                                onBlur={() => persistLlmResultContent(llmMarkdownTableText)}
+                                                            />
+                                                        </td>
+                                                    ))}
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                ) : (
+                                    <div className="text-xs text-muted-foreground pt-4">
+                                        {t('未检测到可解析的 Markdown 表格。', 'No parseable Markdown table detected.')}
+                                    </div>
+                                )}
+                            </div>
                         </div>
 
                         <div>
