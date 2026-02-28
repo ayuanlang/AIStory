@@ -385,20 +385,35 @@ class MediaGenerationService:
         keyframes: Optional[List[str]] = None,
         requested_model: Optional[str] = None,
         explicit_selection: bool = False,
+        allow_priority_fallback_when_explicit: bool = False,
+        fallback_candidate_limit: int = 3,
     ) -> Dict[str, Any]:
         with SessionLocal() as session:
             smart_enabled = self._is_smart_routing_enabled(session, user_id)
             candidates = self._get_system_candidates(session, category)
 
+        if allow_priority_fallback_when_explicit:
+            smart_enabled = True
+
         if explicit_selection:
-            logger.info(
-                "Smart routing bypassed for explicit selection | category=%s user_id=%s provider=%s model=%s",
-                category,
-                user_id,
-                provider,
-                requested_model,
-            )
-            smart_enabled = False
+            if allow_priority_fallback_when_explicit:
+                logger.info(
+                    "Smart routing kept for explicit selection (fallback-enabled) | category=%s user_id=%s provider=%s model=%s fallback_limit=%s",
+                    category,
+                    user_id,
+                    provider,
+                    requested_model,
+                    fallback_candidate_limit,
+                )
+            else:
+                logger.info(
+                    "Smart routing bypassed for explicit selection | category=%s user_id=%s provider=%s model=%s",
+                    category,
+                    user_id,
+                    provider,
+                    requested_model,
+                )
+                smart_enabled = False
 
         effective_provider = self._normalize_provider_name(provider, category)
         baseline_config = dict(api_config or {})
@@ -415,13 +430,14 @@ class MediaGenerationService:
             ],
             key=lambda x: (x.get("priority", 100), x.get("id", 0)),
         )
+        if fallback_candidate_limit and fallback_candidate_limit > 0:
+            fallback_candidates = fallback_candidates[: int(fallback_candidate_limit)]
 
-        retry_limit = 1
-        if not explicit_selection:
-            for c in candidates:
-                if c.get("provider") == effective_provider and c.get("retry_limit") is not None:
-                    retry_limit = max(1, int(c.get("retry_limit")))
-                    break
+        retry_limit = 3
+        for c in candidates:
+            if c.get("provider") == effective_provider and c.get("retry_limit") is not None:
+                retry_limit = max(3, int(c.get("retry_limit")))
+                break
 
         multi_ref_count = len(reference_image_url) if isinstance(reference_image_url, list) else 0
         attempt_items: List[Dict[str, Any]] = []
@@ -652,7 +668,7 @@ class MediaGenerationService:
 
         return {}
 
-    async def generate_image(self, prompt: str, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, width: int = None, height: int = None, aspect_ratio: str = None, user_id: int = 1, user_credits: int = 0, filename_base: Optional[str] = None):
+    async def generate_image(self, prompt: str, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, width: int = None, height: int = None, aspect_ratio: str = None, user_id: int = 1, user_credits: int = 0, filename_base: Optional[str] = None, asset_type: Optional[str] = None):
         provider = None
         if llm_config and "provider" in llm_config and llm_config["provider"]:
             provider = self._normalize_provider_name(llm_config["provider"], "Image")
@@ -692,6 +708,8 @@ class MediaGenerationService:
             aspect_ratio=aspect_ratio,
             requested_model=(llm_config or {}).get("model"),
             explicit_selection=bool((llm_config or {}).get("provider") or (llm_config or {}).get("model")),
+            allow_priority_fallback_when_explicit=str(asset_type or "").strip().lower() in {"subject", "entity", "character", "prop", "environment"},
+            fallback_candidate_limit=3,
         )
 
         # Download 

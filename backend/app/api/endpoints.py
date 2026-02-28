@@ -706,6 +706,16 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 except Exception as e:
                     logger.warning(f"Failed to inject templates into scene analysis prompt: {e}")
 
+        include_negative_prompt = getattr(request, "include_negative_prompt", True)
+        if include_negative_prompt:
+            system_instruction += (
+                "\n\n"
+                "# Output Hard Constraint (Negative Prompt)\n"
+                "In Part 3 JSON, every entity item (characters / props / environments) MUST include key \"negative_prompt_en\". "
+                "Each negative_prompt_en must be English-only, style-aware, and aligned to that entity's generation_prompt_en. "
+                "For live-action realism, explicitly exclude plastic/waxy/CGI look and other realism-breaking artifacts."
+            )
+
         # Inject authoritative character canon (if provided via episode_id)
         try:
             ep_id = getattr(request, "episode_id", None)
@@ -6094,6 +6104,7 @@ class EntityCreate(BaseModel):
 
     visual_dependencies: Optional[List[str]] = []
     dependency_strategy: Optional[Dict[str, Any]] = {}
+    custom_attributes: Optional[Dict[str, Any]] = {}
 
 class EntityOut(BaseModel):
     id: int
@@ -6181,7 +6192,8 @@ def create_entity(
             narrative_description=entity.narrative_description,
             
             visual_dependencies=entity.visual_dependencies,
-            dependency_strategy=entity.dependency_strategy
+            dependency_strategy=entity.dependency_strategy,
+            custom_attributes=entity.custom_attributes or {}
         )
         db.add(db_entity)
         db.commit()
@@ -9606,6 +9618,7 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
             user_id=current_user.id,
             user_credits=(current_user.credits or 0),
             filename_base=_build_generation_filename_base(req, db),
+            asset_type=req.asset_type,
         )
         result_meta = result.get("metadata") if isinstance(result, dict) else {}
         if not isinstance(result_meta, dict):

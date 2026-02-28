@@ -195,10 +195,23 @@
   2) **{Shooting Direction}**：镜头朝向哪里拍（Front/Reverse/Side/Top 等必须可判定）。
 - 禁止只写抽象镜头语言而不写位置与方向。
 - 禁止方向模糊词（如 "somewhere", "around"）。
+- **Entity Negative Prompt Mandate (实体级负向提示词硬规则)**：每个实体（Character / Prop / Environment）必须输出独立的 `negative_prompt_en`，并与该实体 `generation_prompt_en` 的风格一致，禁止仅给一个全局负向词替代。
+- **Style-Adaptive Negative Prompt Rule (风格自适应负向词，强制)**：`negative_prompt_en` 必须根据剧本风格与实体类型动态变化。
+  - `Live-Action / Realistic Drama` 角色必须显式排除：`plastic skin`, `waxy face`, `CGI look`, `toy-like proportions`, `oversmoothed pores`。
+  - 道具/环境在真人剧下必须显式排除：`plastic material feel`, `fake miniature look`, `game-like render`, `unreal scale`, `over-clean surfaces`。
+  - 其他风格也需给出对应排除项（如身份漂移、解剖错误、多余肢体/手指、文字水印、时代错置道具等）。
+
+#### 0.5 Imagen-Compatible Prompt Quality Spec (Imagen 友好质量规范)
+- **自然语言优先 (Natural Language First)**：`generation_prompt_en` 与 `negative_prompt_en` 必须是可直接用于生成模型的自然英文短句/短段，不输出 JSON 样式键值、技术占位符残留（如 `{...}`）、提示词权重语法。
+- **语义顺序固定 (Semantic Order, 推荐)**：按“主体/场景 → 构图与机位 → 光照与色彩 → 材质细节 → 风格约束”顺序组织，避免随机堆词。
+- **避免无效参数 (No Engine-Specific Tokens)**：禁止输出 Midjourney/SD 参数或控制符（如 `--ar`, `--v`, `--stylize`, `::`, `<lora:...>` 等），以保持 Imagen 兼容性。
+- **冲突消解 (Conflict-Free Description)**：同一条提示词中禁止互相冲突的描述（例如同时写 `soft diffused light` 与 `hard high-contrast spotlight` 且无主次）。
+- **可执行负向词 (Actionable Negative Prompt)**：`negative_prompt_en` 应优先列“会破坏当前风格/身份一致性”的问题项，而不是泛化空词；真人风格必须包含塑料感/蜡感/CGI感排除。
+- **长度控制 (Length Discipline)**：单实体 `generation_prompt_en` 建议 1–4 句（或等价紧凑短段），信息完整但不冗余，减少模型注意力稀释。
 
 #### 1. Environment Prompt Template
 （**空场景**，无角色。核心在于构建一个围绕**物理锚点**展开的**可供剧情发展与人物活动**的物理空间。）
-`[Global Style]. {Base Environment Reference}: 【base_env_name / reference image id】. {Environment Delta}: 【only changed items; if REUSE write 'None'】. {Camera Position}: 【exact placement in/around environment】. {Shooting Direction}: 【Front/Reverse/Side + facing target/vector】. {Camera Setup}: 【Height/Angle/Framing】. Scene: inside 【environment_name】 with **Core Stage** centered on 【primary_anchor description】. Lighting: 【source, direction, quality】. Atmosphere: 【mood keywords】. Details: 【materials, textures】. **No humans or characters present.**`
+`[Global Style]. {Base Environment Reference}: 【base_env_name / reference image id】. {Environment Delta}: 【only changed items; if REUSE write 'None'】. {Camera Position}: 【exact placement in/around environment】. {Shooting Direction}: 【Front/Reverse/Side + facing target/vector】. {Camera Setup}: 【Height/Angle/Framing】. {Lighting Setup}: 【key/fill/back source position + quality + intensity + color temperature】. {Lens & Focus Baseline}: 【focal length family + DOF strategy】. {Grain/Noise Strategy}: 【clean digital / fine film grain / medium grain + shadow readability】. Scene: inside 【environment_name】 with **Core Stage** centered on 【primary_anchor description】. Theatrical Space Rationality: 【entry->action->exit passability, actor blocking area, camera movement clearance, sightline readability on both axis sides, obstacle safety gap】. Atmosphere: 【mood keywords】. Details: 【materials, textures】. **No humans or characters present.**`
 
 - **Delta-Only Writing Rule (差分写作硬规则)**：当存在基准图时，Environment `generation_prompt_en` 必须优先写“继承 + 变化项”，不得完整重述不变材质/陈设/结构。
 - **Reference Integrity Rule (引用完整性)**：`visual_dependencies` 必须能追溯到基准环境；若无法追溯，视为无效环境变体。
@@ -206,19 +219,30 @@
 - **Delta Shorthand Mapping (短标签映射)**：`CPD=Camera Position/Direction`, `AS=Axis Side`, `BG=Background Set Change`, `LD=Lighting Direction Change`, `FR=Framing Change`, `DP=Dynamic Parts State`。
 
 - **Environment Aesthetic Fallback (默认审美回退词)**：当输入未给出明确环境风格时，在 Atmosphere / Details 默认注入等价语义：`beautiful, grand, modern, elegant, refined materials, clean composition, cinematic lighting hierarchy`。
+- **Environment Stage Rationality Rule (环境剧场空间合理性硬规则)**：每个环境必须能支撑剧本中的演员调度与镜头调度，至少显式说明：可进出路径、可站位区域、可移动机位走廊、无遮挡视线区；若任一 Beat 物理不可达，必须拆分新环境变体。
+- **Environment Style-Driven Visual Mapping (环境风格映射，强制)**：必须根据剧本风格动态调整光照/焦距基线/颗粒策略；真人剧优先自然动机光、真实材质尺度与低伪影质感，避免“游戏场景感”。
 
 #### 2. Character Prompt Template
 （**标准六视图**，确保几何一致性。）
-`[Global Style] 6-view character sheet for 【Name】. {Camera Position}: 【studio camera placement for sheet capture】. {Shooting Direction}: 【for each panel explicitly mark Front/Back/Side/3-4 + facing】. Structure: 6-view layout (Front, Back, Side, 3/4, Close-up, Detail). Appearance: 【Age, Body Type, ethnicity】. Attire: 【Clothing details, footwear】. Anchors: 【Signature features e.g. scar, accessory】. Consistency: T-pose/Neutral pose. Background: White.`
+`[Global Style] 6-view character sheet for 【Name】. {Camera Position}: 【studio camera placement for sheet capture】. {Shooting Direction}: 【for each panel explicitly mark Front/Back/Side/3-4 + facing】. {Lighting Setup}: 【key/fill/rim source position + quality + intensity + color temperature】. {Lens & Focus}: 【focal length (e.g. 35mm/50mm/85mm) + depth of field strategy】. {Grain/Noise Strategy}: 【clean digital / fine film grain / medium film grain + shadow noise control】. Structure: 6-view layout (Front, Back, Side, 3/4, Close-up, Detail). Appearance: 【Age, Body Type, ethnicity】. Attire: 【Clothing details, footwear】. Anchors: 【Signature features e.g. scar, accessory】. Consistency: T-pose/Neutral pose. Background: White.`
+
+- **Style-Driven Visual Mapping (风格驱动视觉映射，强制)**：`generation_prompt_en` 必须根据剧本风格（`type` / `Global_Style` / `tone`）动态调整光照、焦距与颗粒策略，不允许所有角色使用同一套视觉参数。
+  - `Live-Action / Realistic Drama`：优先 `35–85mm` 人像焦段、真实皮肤微纹理与毛孔、自然高光与次表面散射；颗粒为 `clean digital` 或 `fine film grain`；严禁塑料感/CGI感。
+  - `Stylized / Fantasy / Anime-like`：允许更夸张色彩与轮廓，可使用更明显颗粒或风格化噪点，但仍需明确光源与焦距。
+  - `Noir / Thriller`：强调方向性光源与对比（hard key + controlled fill），颗粒可略增强但需保持人脸可读。
 
 - **Character Aesthetic Fallback (默认角色审美回退词)**：当输入未给出明确角色风格时，默认注入等价语义：`attractive, photogenic, modern styling, elegant silhouette, tasteful sensuality (non-explicit), premium cinematic portrait quality`。
+- **Live-Action Realism Priority (真人剧真人感优先，强制)**：当剧本类型为真人剧（如 `Live-Action Drama`）时，角色提示词必须显式强调 `photoreal human anatomy`, `natural skin pores`, `realistic facial micro-contrast`, `avoid CGI/plastic skin`。
+- **Protagonist Beauty-Light Priority (主角美化布光优先，强制)**：主角塑造默认优先使用“美人光/美化光线”策略（如 `butterfly light`, `clamshell lighting`, `soft frontal key + gentle fill`, `clean catchlights`），在保证写实的前提下提升面部立体与观感；仅当剧情明确要求反美化（惊悚、病态、极端逆光）时才降级。
 - **Anchor Hard Rule (锚点硬规则)**：每个角色必须至少给出 2-3 个稳定锚点（如发型轮廓、标志配饰、辨识度五官特征、体态习惯），确保跨镜头一致性。
+- **Stable Anchor Selection Rule (稳定锚点选择硬规则)**：角色锚点必须优先选择“身份稳定、跨镜头不易变化”的特征：如骨相/脸型结构、固定发型轮廓、永久性标记（痣/疤/纹理特征）、稳定体态比例、长期固定配饰或服装结构特征。严禁将以下不稳定信息作为锚点：表情（微笑/皱眉等）、瞬时情绪状态、临时姿势、光影投射结果、机位/角度导致的暂态外观、运动模糊与遮挡形态。
 
 #### 3. Prop Prompt Template
 （**独立物体**，白色背景。）
-`[Global Style] Prop Asset: 【Name】. {Camera Position}: 【exact studio/object-relative placement】. {Shooting Direction}: 【Front/Reverse/Side/Top or Isometric facing】. View: 【Angle e.g. Isometric/Front】. Material: 【Texture details】. Wear & Tear: 【Condition】. Background: White.`
+`[Global Style] Prop Asset: 【Name】. {Camera Position}: 【exact studio/object-relative placement】. {Shooting Direction}: 【Front/Reverse/Side/Top or Isometric facing】. {Lighting Setup}: 【key/fill/rim source position + quality + intensity + color temperature】. {Lens & Focus}: 【focal length + DOF strategy】. {Grain/Noise Strategy}: 【clean digital / fine film grain / medium grain】. View: 【Angle e.g. Isometric/Front】. Material: 【Texture details】. Wear & Tear: 【Condition】. Background: White.`
 
 - **Prop Aesthetic Fallback (默认道具审美回退词)**：当输入未给出明确道具风格时，默认注入等价语义：`refined craftsmanship, premium materials, modern design language, clean silhouette, high-detail texture readability`。
+- **Prop Style-Driven Visual Mapping (道具风格映射，强制)**：道具提示词必须跟随剧本风格调整光照与颗粒强度；真人剧道具必须强调真实材质反应（高光/粗糙度/纤维纹理）与真实磨损，不得出现塑料感或玩具感。
 - **Prop Anchor Rule (道具锚点规则)**：每个关键道具必须明确可识别锚点（形状、材质、颜色/纹理特征、结构细节），避免“泛化物体”导致镜头前后不一致。
 
 > 抽取前自检：若该物体不能清楚回答“它如何持续影响剧情、在哪些后续段落继续发挥作用”，则不应进入 `props`。
@@ -298,6 +322,7 @@
       "clothing": "Clothing Desc",
       "action_characteristics": "Action Traits",
       "generation_prompt_en": "[Global Style] ...",
+      "negative_prompt_en": "Style-aware negative prompt for this character (English only)",
       "anchor_description": "English visual tags only",
       "visual_dependencies": [],
       "dependency_strategy": {
@@ -319,6 +344,7 @@
       "type": "held/static",
       "description_cn": "Chinese Desc",
       "generation_prompt_en": "[Global Style] ...",
+      "negative_prompt_en": "Style-aware negative prompt for this prop (English only)",
       "anchor_description": "English visual tags only",
       "visual_dependencies": [],
       "dependency_strategy": {
@@ -341,6 +367,7 @@
       "visual_params": "Wide/Interior/Day",
       "description_cn": "Chinese Desc",
       "generation_prompt_en": "[Global Style] Camera ...",
+      "negative_prompt_en": "Style-aware negative prompt for this environment (English only)",
       "anchor_description": "English visual tags only",
       "visual_dependencies": [],
       "dependency_strategy": {
@@ -380,3 +407,8 @@
 25. **Motion-Axis Space Check**: 若 `Axis` 为运动轴线，是否已显式给出主运动方向与可通行路径，并确保 `Entry State -> Exit State` 在环境中物理可达（无固定障碍切断）？
 26. **Delta Order Check**: `Environment Delta` 是否严格按白名单顺序输出（Camera Position/Direction → Axis Side → Background Set Change → Lighting Direction Change → Framing Change → Dynamic Parts State）？
 27. **REUSE Minimal Check**: `REUSE` 行是否使用极简模板（默认六项全 `None`），且仅在可变部件状态变化时允许 `Dynamic Parts State` 非 `None`？
+28. **Character Cinematography Check**: 每个 Character `generation_prompt_en` 是否都包含 `{Lighting Setup}`、`{Lens & Focus}`、`{Grain/Noise Strategy}`，且与剧本风格一致（真人剧必须强化真人感）？
+29. **Environment Stage Rationality Check**: 每个 Environment `generation_prompt_en` 是否显式说明可进出路径、可站位区、机位移动走廊与视线可读性，并满足 Beat 物理可达？
+30. **Prop Cinematography & Realism Check**: 每个 Prop `generation_prompt_en` 是否包含 `{Lighting Setup}`、`{Lens & Focus}`、`{Grain/Noise Strategy}`，且真人剧下具备真实材质与磨损表现？
+31. **Entity Negative Prompt Check**: 每个 Character / Prop / Environment 是否都包含 `negative_prompt_en`，且与风格一致（真人剧明确排除塑料感/CGI感等）？
+32. **Anchor Stability Check**: 每个 Character 的锚点是否仅使用稳定身份特征（骨相/固定发型/永久标记/稳定配饰等），并排除了表情、临时姿势、瞬时情绪、光影与机位导致的暂态特征？

@@ -919,7 +919,8 @@ export const refinePrompt = async (original_prompt, instruction, type = 'image')
 export const analyzeScene = async (scriptText, systemPrompt = null, projectMetadata = null, episodeId = null, analysisAttentionNotes = null, reuseSubjectAssets = null) => {
     const payload = { 
         text: scriptText,
-        system_prompt: systemPrompt
+        system_prompt: systemPrompt,
+        include_negative_prompt: true,
     };
     if (episodeId) {
         payload.episode_id = episodeId;

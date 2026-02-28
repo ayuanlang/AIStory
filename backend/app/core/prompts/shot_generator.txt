@@ -47,6 +47,17 @@
   - **焦距必写**：必须明确镜头焦距或等效镜头描述（如 `24mm wide`, `35mm`, `50mm`, `85mm portrait`, `telephoto compression`），禁止只写泛化词汇。
   - **噪点策略必写**：必须给出噪点/颗粒控制（如 `clean digital look`, `fine film grain`, `low noise in shadows`, `avoid heavy chroma noise`），确保暗部可读与质感稳定。
   - **参考图防复制粘贴**：明确要求“继承身份锚点但不做像素级复刻”，并优先使用以下英文模板：`Use reference images for identity and key asset consistency only. Recompose camera angle, framing, pose, lighting, and background layout for a new shot. Do not replicate the reference composition or pixel arrangement.`
+- **风格驱动视觉映射 (Style-Driven Visual Mapping, 强制)**：`Start Frame` / `Video Content` / `End Frame` / `Keyframes` 必须根据 `Global Style + type + tone` 动态调整光源、焦距与颗粒策略，禁止整场景套用同一参数模板。
+  - `Live-Action / Realistic Drama`：优先自然动机光、`35–85mm` 人像友好焦段、`clean digital` 或 `fine film grain`、真实皮肤与材质微纹理；禁止塑料感/CGI感。
+  - `Stylized / Fantasy`：允许更风格化色彩与颗粒，但仍必须写清光源结构与焦距逻辑。
+  - `Noir / Thriller`：允许更高反差与方向性硬光，但必须保留关键面部可读性。
+- **Imagen 兼容写法 (Imagen-Compatible Wording, 强制)**：`Start Frame` / `Video Content` / `End Frame` / `Keyframes` 的英文文本必须采用自然语言描述，不得使用模型专属参数语法（如 `--ar`, `--stylize`, `::`, `<lora:...>`）。
+- **镜头语义顺序 (Prompt Semantic Order, 强制)**：每条镜头描述建议按“主体与场景锚点 → 机位与构图 → 光照与色彩 → 动作演化（视频）→ 结果状态”组织，避免词袋式罗列。
+- **视频时序可执行性 (Temporal Executability, 强制)**：`Video Content` 必须给出可执行的连续动作链（起始条件、过程变化、结束状态），避免“仅氛围词无动作”。
+- **冲突约束 (No Contradictory Directives)**：同一镜头文本中禁止给出互斥动作/光照/景别指令（例如同时要求 static lock-off 与 fast handheld shake）。
+- **负向约束继承 (Negative Constraint Inheritance)**：当上游实体提供 `negative_prompt_en` 时，本镜头描述需避免触发对应风险（身份漂移、塑料感、时代错置、文字水印等），并在必要时显式重申关键排除项。
+- **主角美化布光优先 (Protagonist Beauty-Light Priority, 强制)**：主角镜头（尤其 Medium Close-up / Close-up）默认优先采用 `butterfly light` / `clamshell` / 软正面主光 + 温和补光 + 清晰眼神光（catchlight）；仅当剧情明确要求反美化时才降级。
+- **环境剧场空间合理性 (Environment Stage-Space Rationality, 强制)**：涉及环境与调度描述时，必须显式保证：可进出路径、可站位区、机位移动走廊、双侧视线可读性、障碍安全间隙，且与当前 Beat 动作物理可达。
 - **分镜对应**：分镜需与 Scene 一一对应，一个 Scene 可以拆分为多个 Shot，根据视觉需要按Beat为单位拆分或合并，长度符合时长限制。
 - **时长限制 (Duration Management: The 4-10s Control)**：
   - **主流模型适配 (Mainstream Adaptation)**：针对主流视频生成模型，**最佳生成质感时长为 5s - 8s**。时长过短（<4s）可能导致生成失败或连贯性差。
@@ -376,6 +387,8 @@
     - 禁止模糊词：如 `facing sideways`、`turned a bit`、`angled`、`partially facing` 等不可判定表达。
   - **{Camera Description}**: 必须包含 **Focal Length** (焦距), **Framing** (景别) 和 **Angle** (角度)。
   - **{Image Fidelity}**: 必须包含 **Noise/Grain 控制** 与 **Anti-Copy 约束**（继承 reference 的身份锚点，但重构构图/光线/姿态，禁止复制粘贴参考图构图）。
+  - **{Style Mapping Note}**：必须声明该镜头采用的风格映射（至少 1 句），说明为何使用当前光照/焦距/颗粒组合；真人剧需强调写实质感控制。
+  - **主角布光加权 (Lead Lighting Weighting)**：若该镜头主叙事主体为主角，必须显式写出美人光/美化布光策略与保真约束（提升颜值但不失真）。
   - **光影与色调 (Lighting & Color)**：严格继承 `[Global Style]` 的视觉基调。必须明确描述**光源性质**（Hard/Soft）、**光影对比度**（High key/Low key/Chiaroscuro）以及**主色调**（Color Palette）。例如：若风格为 "Neon Noir"，则描述 "Harsh neon side lighting, deep shadows, wet pavement reflections, cyan and magenta contrast"。
   - **构图法则 (Composition Technique)**：必须指定一种经典的构图方式以增强形式感。可选技法包括：**Symmetrical Composition** (对称), **Rule of Thirds** (三分法), **Leading Lines** (引导线), **Center Framed** (中心), **Frame within a Frame** (框中框), **Triangular** (三角), **Negative Space** (留白)。
   - **构图景深与主体状态 (Composition & Subject Status)**：**Critical**: 不要使用“距离3米”等物理数值（AI对此不敏感）。必须使用**视觉层级 (Visual Layers)** 和 **屏幕占比 (Screen Space)** 来定义物体位置。
@@ -466,6 +479,7 @@
       *   **速度明确性 (Speed Specification)**: **Critical**. 严禁只描述方向而不描述速度。必须明确运镜的速率。
           - **Adverbs**: Slowly, Rapidly, Gradually, Abruptly, Smoothly.
           - **Example**: "Camera **slowly** pushes in...", "**Abrupt** whip pan to..."
+      *   **视频质感连续性 (Video Lighting/Lens/Grain Continuity, 强制)**：Video Content 必须明确说明光照变化趋势（是否变化/为何变化）、焦段策略是否切换、颗粒/噪点控制是否保持一致，避免“首尾帧参数断裂”。
         *   **多样性 (Variety, Recommended)**：尽量在一个 Scene 内引入 1 种能服务叙事的高级技法（Advanced FX / Perspective），但**不得**为了满足术语而牺牲动作可生成性与物理连贯。
 
   2.  **动作流与拆解 (Action Flow & Decomposition)**：
@@ -574,6 +588,8 @@
     - **位移闭环**: 若 Video Content 描述 "Camera tracks backward"，End Frame 的 `Shot Size` 必须变宽 (Wider) 或 `Position` 距离变远。
     - **状态闭环**: Start Frame (Standing) -> Video Content (Sit down) -> End Frame **MUST BE** (Sitting). 严禁状态回滚。
   - **朝向闭环**: Start/Video/End 三段的拍摄方向必须可推导且不冲突；若发生 Front ↔ Reverse 变化，必须在 Video Content 中给出明确转向过程或 cut trigger。
+  - **风格参数闭环**: Start/Video/End 的光源结构、焦段策略、颗粒控制必须可推导一致（允许“有动机变化”，禁止“无动机跳变”）。
+  - **主角美化闭环**: 主角镜头链路中，美化布光策略必须连续且与剧情情绪匹配，不得在无叙事理由下突然切换为破坏颜值的极端光比。
 
 #### E. 动作逻辑 (Shot Logic) {中文输出}<200字
 - **定义**：这是对镜头时空演变的**中文逻辑规划 (Blueprint)**。用于验证从起点到终点的物理可行性及动作密度。

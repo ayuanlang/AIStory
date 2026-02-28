@@ -8468,6 +8468,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                 finalPrompt = `${finalPrompt}${finalPrompt ? ', ' : ''}${suffixes.join(', ')}`;
             }
 
+            const primaryRefUrl = String(analyzed?.image_url || entity?.image_url || '').trim();
             const depUrls = [];
             const deps = Array.isArray(analyzed.visual_dependencies) ? analyzed.visual_dependencies : [];
             deps.forEach(dep => {
@@ -8482,7 +8483,16 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                 });
                 if (target?.image_url) depUrls.push(target.image_url);
             });
-            const uniqueRefs = [...new Set(depUrls)];
+            const combinedRefs = [primaryRefUrl, ...depUrls]
+                .map(url => String(url || '').trim())
+                .filter(Boolean);
+            const uniqueRefs = [...new Set(combinedRefs)];
+            if (onLog) {
+                onLog(
+                    `Subject refactor references prepared: primary=${primaryRefUrl ? 'yes' : 'no'}, dependencies=${depUrls.length}, total_unique=${uniqueRefs.length}`,
+                    'process'
+                );
+            }
 
             setReconstructProgress({ step: 'generating', label: t('正在根据新提示词生成图片...', 'Generating image with new prompt...'), percent: 80 });
 
@@ -10139,7 +10149,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         // Append explicit labels so the model understands the context
         if (info.Global_Style) parts.push(`Style: ${info.Global_Style}`);
         if (info.tone) parts.push(`Tone: ${info.tone}`);
-        if (info.lighting) parts.push(`Lighting: ${info.lighting}`);
         
         return parts.length > 0 ? " | " + parts.join(", ") : "";
     };
@@ -11480,6 +11489,49 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         // In ShotsView, 'entities' contains ALL entities.
         const entList = entities;
 
+        const isSubjectEntity = (entity) => {
+            const typeValue = String(entity?.type || '').trim().toLowerCase();
+            return typeValue === 'subject' || typeValue === 'character' || typeValue === 'char';
+        };
+
+        const resolveEntityByToken = (cleanKey) => {
+            return (Array.isArray(entList) ? entList : []).find(e => {
+                const cn = normalizeEntityToken(e?.name || '');
+                const en = normalizeEntityToken(e?.name_en || '');
+
+                let fallbackEn = '';
+                if (!en && e?.description) {
+                    const enMatch = e.description.match(/Name \(EN\):\s*([^\n\r]+)/i);
+                    if (enMatch && enMatch[1]) {
+                        fallbackEn = normalizeEntityToken(enMatch[1].trim().split(/(?:\s+role:|\n|,)/)[0]);
+                    }
+                }
+
+                return (cn === cleanKey) || (en === cleanKey) || (fallbackEn === cleanKey);
+            });
+        };
+
+        const computeSubjectRefIndexMap = (sourceText = '') => {
+            const indexMap = new Map();
+            const refs = [];
+            const matches = String(sourceText || '').match(/[\[【](.*?)[\]】]/g) || [];
+            for (const token of matches) {
+                const cleanKey = normalizeEntityToken(token);
+                const entity = resolveEntityByToken(cleanKey);
+                if (!entity) continue;
+                if (!isSubjectEntity(entity)) continue;
+                const imageUrl = String(entity?.image_url || '').trim();
+                if (!imageUrl) continue;
+                if (!refs.includes(imageUrl)) {
+                    refs.push(imageUrl);
+                }
+                indexMap.set(String(entity?.id || ''), refs.indexOf(imageUrl) + 1);
+            }
+            return indexMap;
+        };
+
+        const subjectRefIndexMap = computeSubjectRefIndexMap(text);
+
         const regex = /[\[【](.*?)[\]】]/g;
         let newText = text;
         let modified = false;
@@ -11500,36 +11552,25 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 return match;
             }
 
-            // 1. Global Style Injection
+            // 1. Keep [Global Style] token unchanged in shot prompt body.
             if (cleanKey === 'global style' || cleanKey === 'global_style') {
-                const style = activeEpisode?.episode_info?.e_global_info?.Global_Style;
-                if (style) {
-                    modified = true;
-                    return `${match}(${style})`;
-                }
                 return match; 
             }
 
             // 2. Entity Injection
             if (entList.length > 0) {
-                const entity = entList.find(e => {
-                    const cn = normalizeEntityToken(e.name || '');
-                    const en = normalizeEntityToken(e.name_en || '');
-                    
-                    let fallbackEn = '';
-                    if (!en && e.description) {
-                        const enMatch = e.description.match(/Name \(EN\):\s*([^\n\r]+)/i);
-                        if (enMatch && enMatch[1]) {
-                            fallbackEn = normalizeEntityToken(enMatch[1].trim().split(/(?:\s+role:|\n|,)/)[0]);
-                        }
-                    }
-                    return (cn === cleanKey) || (en === cleanKey) || (fallbackEn === cleanKey);
-                });
+                const entity = resolveEntityByToken(cleanKey);
 
                 if (entity) {
                     modified = true;
                     const anchor = entity.anchor_description || entity.description || '';
-                    return `${match}(${anchor})`;
+                    const isSubject = isSubjectEntity(entity);
+                    const refNo = isSubject ? subjectRefIndexMap.get(String(entity?.id || '')) : null;
+                    const anchorWithRef = [
+                        anchor,
+                        (isSubject && refNo) ? `参考图编号: #${refNo}` : ''
+                    ].filter(Boolean).join(' | ');
+                    return anchorWithRef ? `${match}(${anchorWithRef})` : match;
                 }
             }
 
@@ -13675,7 +13716,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     );
 };
 
-const ImportModal = ({ isOpen, onClose, onImport, defaultType = 'auto', project, uiLang = 'zh' }) => {
+const ImportModal = ({ isOpen, onClose, onImport, defaultType = 'auto', project, activeEpisodeId = null, uiLang = 'zh' }) => {
     const [text, setText] = useState('');
     const [importType, setImportType] = useState(defaultType); // auto, json, script, scene, shot
     const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -13699,10 +13740,14 @@ const ImportModal = ({ isOpen, onClose, onImport, defaultType = 'auto', project,
             const token = localStorage.getItem('token');
             const body = { 
                 text: text,
-                prompt_file: "scene_analysis.txt"
+                prompt_file: "scene_analysis.txt",
+                include_negative_prompt: true,
             };
             if (project?.global_info) {
                 body.project_metadata = project.global_info;
+            }
+            if (activeEpisodeId) {
+                body.episode_id = activeEpisodeId;
             }
 
             const res = await fetch(`${API_BASE_URL}/analyze_scene`, {
@@ -14102,8 +14147,22 @@ const Editor = ({
                     addLog("Skipping Episode Info: No Active Episode selected.", "warning");
                 } else {
                     try {
+                        const incomingGlobal = { ...(data.e_global_info || {}) };
+
+                        const currentEpisode = episodes.find(ep => ep.id === activeEpisodeId);
+                        const currentEpisodeInfo = (currentEpisode?.episode_info && typeof currentEpisode.episode_info === 'object')
+                            ? currentEpisode.episode_info
+                            : {};
+                        const mergedEpisodeInfo = {
+                            ...currentEpisodeInfo,
+                            e_global_info: {
+                                ...(currentEpisodeInfo.e_global_info || {}),
+                                ...incomingGlobal,
+                            },
+                        };
+
                         await updateEpisode(activeEpisodeId, { 
-                            episode_info: { e_global_info: data.e_global_info } 
+                            episode_info: mergedEpisodeInfo
                         });
                         addLog("Episode Global Info updated.", "success");
                         changesMade = true;
@@ -14130,7 +14189,8 @@ const Editor = ({
                                 `Appearance: ${char.appearance_cn}`,
                                 `Clothing: ${char.clothing}`,
                                 `Action: ${char.action_characteristics}`,
-                                `Prompt: ${char.generation_prompt_en}`
+                                `Prompt: ${char.generation_prompt_en}`,
+                                char.negative_prompt_en ? `Negative Prompt: ${char.negative_prompt_en}` : ''
                             ].join('\n\n');
                             
                             await createEntity(id, {
@@ -14148,7 +14208,11 @@ const Editor = ({
                                 clothing: char.clothing,
                                 action_characteristics: char.action_characteristics,
                                 visual_dependencies: char.visual_dependencies || [],
-                                dependency_strategy: char.dependency_strategy || {}
+                                dependency_strategy: char.dependency_strategy || {},
+                                custom_attributes: {
+                                    ...(char.custom_attributes || {}),
+                                    ...(char.negative_prompt_en ? { negative_prompt_en: char.negative_prompt_en } : {}),
+                                },
                             });
                             count++;
                         }
@@ -14162,6 +14226,7 @@ const Editor = ({
                                 `Type: ${prop.type}`, // inner type from JSON
                                 `Description: ${prop.description_cn}`,
                                 `Prompt: ${prop.generation_prompt_en}`,
+                                prop.negative_prompt_en ? `Negative Prompt: ${prop.negative_prompt_en}` : '',
                                 prop.dependency_strategy?.logic ? `Dependency: ${prop.dependency_strategy.logic}` : ''
                             ].filter(Boolean).join('\n\n');
 
@@ -14174,7 +14239,11 @@ const Editor = ({
                                 
                                 name_en: prop.name_en,
                                 visual_dependencies: prop.visual_dependencies || [],
-                                dependency_strategy: prop.dependency_strategy || {}
+                                dependency_strategy: prop.dependency_strategy || {},
+                                custom_attributes: {
+                                    ...(prop.custom_attributes || {}),
+                                    ...(prop.negative_prompt_en ? { negative_prompt_en: prop.negative_prompt_en } : {}),
+                                },
                             });
                             count++;
                         }
@@ -14188,7 +14257,8 @@ const Editor = ({
                                 `Atmosphere: ${env.atmosphere}`,
                                 `Visual Params: ${env.visual_params}`,
                                 `Description: ${env.description_cn}`,
-                                `Prompt: ${env.generation_prompt_en}`
+                                `Prompt: ${env.generation_prompt_en}`,
+                                env.negative_prompt_en ? `Negative Prompt: ${env.negative_prompt_en}` : ''
                             ].join('\n\n');
 
                             await createEntity(id, {
@@ -14204,7 +14274,11 @@ const Editor = ({
                                 narrative_description: env.description_cn,
 
                                 visual_dependencies: env.visual_dependencies || [],
-                                dependency_strategy: env.dependency_strategy || {}
+                                dependency_strategy: env.dependency_strategy || {},
+                                custom_attributes: {
+                                    ...(env.custom_attributes || {}),
+                                    ...(env.negative_prompt_en ? { negative_prompt_en: env.negative_prompt_en } : {}),
+                                },
                             });
                             count++;
                         }
@@ -14892,7 +14966,7 @@ const Editor = ({
                 )}
             </AnimatePresence>
 
-            <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} onImport={handleImport} project={project} uiLang={uiLang} />
+            <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} onImport={handleImport} project={project} activeEpisodeId={activeEpisode?.id || null} uiLang={uiLang} />
 
             {/* Log Panel */}
             <LogPanel />
