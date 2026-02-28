@@ -6857,6 +6857,23 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         index: -1,
         data: null,
     });
+    const sceneAutoSaveTimerRef = useRef(null);
+    const sceneAutoSaveInFlightRef = useRef(false);
+    const sceneAutoSaveQueuedRef = useRef(null);
+    const sceneAutoSavedSnapshotRef = useRef({ sceneId: null, snapshot: '' });
+
+    const buildSceneSavePayload = useCallback((scene) => ({
+        scene_no: scene?.scene_no,
+        scene_name: scene?.scene_name,
+        equivalent_duration: scene?.equivalent_duration,
+        core_scene_info: scene?.core_scene_info,
+        original_script_text: scene?.original_script_text,
+        environment_name: scene?.environment_name,
+        linked_characters: scene?.linked_characters,
+        key_props: scene?.key_props,
+    }), []);
+
+    const buildSceneSnapshot = useCallback((scene) => JSON.stringify(buildSceneSavePayload(scene)), [buildSceneSavePayload]);
 
     const getSceneSelectionKey = (scene) => {
         if (scene?.id) return `id:${scene.id}`;
@@ -7189,6 +7206,86 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         )).join('\n');
         return `${contextInfo}${header}\n${content}`;
     };
+
+    const flushSceneAutoSave = useCallback(async (sceneCandidate) => {
+        if (!activeEpisode?.id || !sceneCandidate?.id) return;
+
+        const payload = buildSceneSavePayload(sceneCandidate);
+        const snapshot = JSON.stringify(payload);
+        const lastSnapshot = sceneAutoSavedSnapshotRef.current;
+        if (lastSnapshot.sceneId === sceneCandidate.id && lastSnapshot.snapshot === snapshot) return;
+
+        if (sceneAutoSaveInFlightRef.current) {
+            sceneAutoSaveQueuedRef.current = sceneCandidate;
+            return;
+        }
+
+        sceneAutoSaveInFlightRef.current = true;
+        try {
+            await updateScene(sceneCandidate.id, payload);
+            const nextScenes = (scenes || []).map((sceneRow) => (
+                sceneRow.id === sceneCandidate.id ? { ...sceneRow, ...payload } : sceneRow
+            ));
+            setScenes(nextScenes);
+            setEditingScene((prev) => (prev?.id === sceneCandidate.id ? { ...prev, ...payload } : prev));
+            await updateEpisode(activeEpisode.id, { scene_content: buildSceneContentMarkdown(nextScenes) });
+            sceneAutoSavedSnapshotRef.current = { sceneId: sceneCandidate.id, snapshot };
+        } catch (e) {
+            onLog?.(`Scene auto-save failed - ${e?.message || 'Unknown error'}`, 'error');
+        } finally {
+            sceneAutoSaveInFlightRef.current = false;
+            const queued = sceneAutoSaveQueuedRef.current;
+            sceneAutoSaveQueuedRef.current = null;
+            if (queued?.id) {
+                void flushSceneAutoSave(queued);
+            }
+        }
+    }, [activeEpisode?.id, buildSceneSavePayload, buildSceneContentMarkdown, onLog, scenes]);
+
+    const closeEditingScene = useCallback(async () => {
+        if (sceneAutoSaveTimerRef.current) {
+            clearTimeout(sceneAutoSaveTimerRef.current);
+            sceneAutoSaveTimerRef.current = null;
+        }
+        if (editingScene?.id) {
+            await flushSceneAutoSave(editingScene);
+        }
+        setEditingScene(null);
+    }, [editingScene, flushSceneAutoSave]);
+
+    useEffect(() => {
+        if (!editingScene?.id) {
+            sceneAutoSavedSnapshotRef.current = { sceneId: null, snapshot: '' };
+            return;
+        }
+        sceneAutoSavedSnapshotRef.current = {
+            sceneId: editingScene.id,
+            snapshot: buildSceneSnapshot(editingScene),
+        };
+    }, [editingScene?.id, buildSceneSnapshot]);
+
+    useEffect(() => {
+        if (!activeEpisode?.id || !editingScene?.id) return;
+        const snapshot = buildSceneSnapshot(editingScene);
+        const lastSnapshot = sceneAutoSavedSnapshotRef.current;
+        if (lastSnapshot.sceneId === editingScene.id && lastSnapshot.snapshot === snapshot) return;
+
+        if (sceneAutoSaveTimerRef.current) {
+            clearTimeout(sceneAutoSaveTimerRef.current);
+            sceneAutoSaveTimerRef.current = null;
+        }
+
+        sceneAutoSaveTimerRef.current = setTimeout(() => {
+            void flushSceneAutoSave(editingScene);
+        }, 900);
+
+        return () => {
+            if (sceneAutoSaveTimerRef.current) {
+                clearTimeout(sceneAutoSaveTimerRef.current);
+                sceneAutoSaveTimerRef.current = null;
+            }
+        };
+    }, [activeEpisode?.id, editingScene, buildSceneSnapshot, flushSceneAutoSave]);
 
     const handleSave = async () => {
         if (!activeEpisode) return;
@@ -7868,7 +7965,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
             
             <AnimatePresence>
                 {editingScene && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm" onClick={() => setEditingScene(null)}>
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm" onClick={() => { void closeEditingScene(); }}>
                         <motion.div 
                             initial={{ scale: 0.9, opacity: 0 }}
                             animate={{ scale: 1, opacity: 1 }}
@@ -7901,7 +7998,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                             if (typeof onSwitchToShots === 'function') {
                                                 onSwitchToShots(editingScene.id);
                                             }
-                                            setEditingScene(null);
+                                            void closeEditingScene();
                                         }}
                                         disabled={!editingScene?.id}
                                         className="px-3 py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-200 border border-emerald-500/20 rounded text-xs flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -7909,7 +8006,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                     >
                                         <Film className="w-3 h-3"/> {t('查看本场景 Shots', 'View Scene Shots')}
                                     </button>
-                                    <button onClick={() => setEditingScene(null)} className="p-2 hover:bg-white/10 rounded-full"><X className="w-5 h-5"/></button>
+                                    <button onClick={() => { void closeEditingScene(); }} className="p-2 hover:bg-white/10 rounded-full"><X className="w-5 h-5"/></button>
                                 </div>
                             </div>
                             

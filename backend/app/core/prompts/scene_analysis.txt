@@ -202,6 +202,7 @@
   - 其他风格也需给出对应排除项（如身份漂移、解剖错误、多余肢体/手指、文字水印、时代错置道具等）。
 
 #### 0.5 Imagen-Compatible Prompt Quality Spec (Imagen 友好质量规范)
+- **规则不回写 (Spec Is Instruction-Only, Mandatory)**：本节仅用于约束写作质量，禁止把本节标题或规则原文回写到最终 `generation_prompt_en` / `negative_prompt_en`。严禁出现类似 `Prompt quality constraints (Imagen-compatible): ...` 的元说明句。
 - **自然语言优先 (Natural Language First)**：`generation_prompt_en` 与 `negative_prompt_en` 必须是可直接用于生成模型的自然英文短句/短段，不输出 JSON 样式键值、技术占位符残留（如 `{...}`）、提示词权重语法。
 - **语义顺序固定 (Semantic Order, 推荐)**：按“主体/场景 → 构图与机位 → 光照与色彩 → 材质细节 → 风格约束”顺序组织，避免随机堆词。
 - **避免无效参数 (No Engine-Specific Tokens)**：禁止输出 Midjourney/SD 参数或控制符（如 `--ar`, `--v`, `--stylize`, `::`, `<lora:...>` 等），以保持 Imagen 兼容性。
