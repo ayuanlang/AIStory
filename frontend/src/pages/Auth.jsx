@@ -6,6 +6,8 @@ import { useStore } from '../lib/store';
 import { Lock, Mail, User, AlertCircle, Sparkles, ArrowRight } from 'lucide-react';
 import { getUiLang, setUiLang, tUI, UI_LANG_EVENT, UI_LANG_KEY } from '../lib/uiLang';
 
+const PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY = 'aistory.projects.return.snapshot';
+
 const Auth = () => {
     const [uiLang, setUiLangState] = useState(getUiLang());
     const t = (zh, en) => tUI(uiLang, zh, en);
@@ -70,6 +72,11 @@ const Auth = () => {
                 // Use the JSON login endpoint
                 const response = await apiLogin(formData.username, formData.password);
                 localStorage.setItem('token', response.access_token);
+                try {
+                    sessionStorage.removeItem(PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY);
+                } catch {
+                    // ignore
+                }
                 try {
                     await refreshSettings();
                 } catch (refreshErr) {

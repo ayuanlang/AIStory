@@ -309,6 +309,8 @@
 #### Part 3: Entities JSON (Strict Schema)
 
 ### Part 3A — Characters JSON
+- **JSON 名称净化硬规则 (Character JSON Name Sanitization, Mandatory)**：Part 3A 的角色 JSON 字段（尤其 `name`、`name_en`）必须使用**纯净角色名**，严禁输出任何引用标记或包装符号。禁止形式包括但不限于：`CHAR:[@Name]`、`[@Name]`、`[Name]`、`@Name`。  
+  仅在 Scene 表格/Beats 的实体引用语境中允许使用 `CHAR:[@Name]`；JSON 内一律写 `Name`。
 ```json
 {
   "characters": [
@@ -412,3 +414,4 @@
 30. **Prop Cinematography & Realism Check**: 每个 Prop `generation_prompt_en` 是否包含 `{Lighting Setup}`、`{Lens & Focus}`、`{Grain/Noise Strategy}`，且真人剧下具备真实材质与磨损表现？
 31. **Entity Negative Prompt Check**: 每个 Character / Prop / Environment 是否都包含 `negative_prompt_en`，且与风格一致（真人剧明确排除塑料感/CGI感等）？
 32. **Anchor Stability Check**: 每个 Character 的锚点是否仅使用稳定身份特征（骨相/固定发型/永久标记/稳定配饰等），并排除了表情、临时姿势、瞬时情绪、光影与机位导致的暂态特征？
+33. **Character JSON No-Tag Check**: Part 3A `characters` 中的 `name` / `name_en` 是否均为纯净名称（无 `CHAR:`、无 `[@]`、无 `[]`、无前导 `@`）？

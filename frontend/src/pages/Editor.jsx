@@ -7753,53 +7753,56 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                 </div>
             )}
 
-            <div className="mb-4 shrink-0 rounded-xl border border-white/10 bg-black/25 p-3 space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex items-center gap-2">
+            <div className="mb-3 shrink-0 rounded-xl border border-white/10 bg-black/25 p-2.5 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5">
                         <button
                             onClick={() => setSceneSortMode('updated_desc')}
-                            className={`h-8 w-8 inline-flex items-center justify-center rounded border ${sceneSortMode === 'updated_desc' ? 'bg-primary/20 text-primary border-primary/30' : 'bg-white/5 text-white border-white/10 hover:bg-white/10'}`}
+                            className={`h-7 w-7 inline-flex items-center justify-center rounded border ${sceneSortMode === 'updated_desc' ? 'bg-primary/20 text-primary border-primary/30' : 'bg-white/5 text-white border-white/10 hover:bg-white/10'}`}
                             title={t('按修改时间排序', 'Sort by modified time')}
                             aria-label={t('按修改时间排序', 'Sort by modified time')}
                         >
-                            <RefreshCw className="w-4 h-4" />
+                            <RefreshCw className="w-3.5 h-3.5" />
                         </button>
                         <button
                             onClick={() => setSceneSortMode('hierarchy')}
-                            className={`h-8 w-8 inline-flex items-center justify-center rounded border ${sceneSortMode === 'hierarchy' ? 'bg-primary/20 text-primary border-primary/30' : 'bg-white/5 text-white border-white/10 hover:bg-white/10'}`}
+                            className={`h-7 w-7 inline-flex items-center justify-center rounded border ${sceneSortMode === 'hierarchy' ? 'bg-primary/20 text-primary border-primary/30' : 'bg-white/5 text-white border-white/10 hover:bg-white/10'}`}
                             title={t('按集/场景/镜头排序', 'Sort by episode/scene/shot')}
                             aria-label={t('按集/场景/镜头排序', 'Sort by episode/scene/shot')}
                         >
-                            <LayoutList className="w-4 h-4" />
+                            <LayoutList className="w-3.5 h-3.5" />
                         </button>
                         <button
                             onClick={() => setSceneSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
-                            className="h-8 w-8 inline-flex items-center justify-center rounded border bg-white/5 text-white border-white/10 hover:bg-white/10"
+                            className="h-7 w-7 inline-flex items-center justify-center rounded border bg-white/5 text-white border-white/10 hover:bg-white/10"
                             title={sceneSortDirection === 'asc' ? t('当前升序，点击切换为降序', 'Currently ascending, click to switch to descending') : t('当前降序，点击切换为升序', 'Currently descending, click to switch to ascending')}
                             aria-label={sceneSortDirection === 'asc' ? t('切换到降序', 'Switch to descending') : t('切换到升序', 'Switch to ascending')}
                         >
-                            <ArrowUp className={`w-4 h-4 transition-transform ${sceneSortDirection === 'asc' ? '' : 'rotate-180'}`} />
+                            <ArrowUp className={`w-3.5 h-3.5 transition-transform ${sceneSortDirection === 'asc' ? '' : 'rotate-180'}`} />
                         </button>
                         <button
                             onClick={toggleSelectAllFiltered}
                             disabled={filteredScenes.length === 0}
-                            className="h-8 w-8 inline-flex items-center justify-center rounded border bg-white/5 text-white border-white/10 hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="h-7 w-7 inline-flex items-center justify-center rounded border bg-white/5 text-white border-white/10 hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed"
                             title={allFilteredSelected ? t('取消全选', 'Deselect all') : t('全选', 'Select all')}
                             aria-label={allFilteredSelected ? t('取消全选', 'Deselect all') : t('全选', 'Select all')}
                         >
-                            {allFilteredSelected ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
+                            {allFilteredSelected ? <CheckSquare className="w-3.5 h-3.5" /> : <Square className="w-3.5 h-3.5" />}
                         </button>
                     </div>
 
-                    <div className="text-xs text-muted-foreground">
-                        {t('场景总数', 'Total Scenes')}: {filteredScenes.length}
+                    <div className="text-[11px] text-muted-foreground px-2 py-1 rounded border border-white/10 bg-white/5">
+                        {filteredScenes.length}
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                        <div className="text-[11px] text-muted-foreground px-2 py-1 rounded border border-white/10 bg-white/5">
+                            {selectedFilteredCount}/{filteredScenes.length}
+                        </div>
                         <button
                             onClick={handleDeleteSelectedScenes}
                             disabled={selectedFilteredCount === 0}
-                            className="px-3 py-2 bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 rounded text-xs text-red-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="px-2.5 py-1.5 bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 rounded text-xs text-red-200 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             {t('删除已选', 'Delete Selected')}
                         </button>
@@ -7807,15 +7810,11 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                         <button
                             onClick={handleDeleteFilteredScenes}
                             disabled={filteredScenes.length === 0}
-                            className="px-3 py-2 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded text-xs text-red-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="px-2.5 py-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded text-xs text-red-100 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             {t('删除当前筛选全部', 'Delete All Filtered')}
                         </button>
                     </div>
-                </div>
-
-                <div className="text-xs text-muted-foreground">
-                    {t('已选', 'Selected')} {selectedFilteredCount} / {filteredScenes.length}
                 </div>
             </div>
 

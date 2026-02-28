@@ -357,6 +357,11 @@ const ProjectList = ({ initialTab = 'projects' }) => {
             menu_label: 'Sign Out',
             page: `${location.pathname}${location.search}${location.hash}`,
         });
+        try {
+            sessionStorage.removeItem(PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY);
+        } catch {
+            // ignore
+        }
         localStorage.removeItem('token');
         navigate('/');
         void recordSystemLogAction({
