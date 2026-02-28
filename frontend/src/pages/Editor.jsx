@@ -6860,18 +6860,22 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
     const sceneAutoSaveTimerRef = useRef(null);
     const sceneAutoSaveInFlightRef = useRef(false);
     const sceneAutoSaveQueuedRef = useRef(null);
+    const sceneAutoSaveDraftRef = useRef(null);
     const sceneAutoSavedSnapshotRef = useRef({ sceneId: null, snapshot: '' });
 
-    const buildSceneSavePayload = useCallback((scene) => ({
-        scene_no: scene?.scene_no,
-        scene_name: scene?.scene_name,
-        equivalent_duration: scene?.equivalent_duration,
-        core_scene_info: scene?.core_scene_info,
-        original_script_text: scene?.original_script_text,
-        environment_name: scene?.environment_name,
-        linked_characters: scene?.linked_characters,
-        key_props: scene?.key_props,
-    }), []);
+    const buildSceneSavePayload = useCallback((scene) => {
+        const toText = (value) => (value === null || value === undefined ? '' : String(value));
+        return {
+            scene_no: toText(scene?.scene_no),
+            scene_name: toText(scene?.scene_name),
+            equivalent_duration: toText(scene?.equivalent_duration),
+            core_scene_info: toText(scene?.core_scene_info),
+            original_script_text: normalizeOriginalScriptText(toText(scene?.original_script_text)),
+            environment_name: toText(scene?.environment_name),
+            linked_characters: toText(scene?.linked_characters),
+            key_props: toText(scene?.key_props),
+        };
+    }, []);
 
     const buildSceneSnapshot = useCallback((scene) => JSON.stringify(buildSceneSavePayload(scene)), [buildSceneSavePayload]);
 
@@ -7189,11 +7193,27 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         loadScenes();
     }, [activeEpisode, projectId]);
 
+    const scheduleSceneAutoSave = useCallback((sceneCandidate) => {
+        if (!activeEpisode?.id || !sceneCandidate?.id) return;
+        sceneAutoSaveDraftRef.current = sceneCandidate;
+        if (sceneAutoSaveTimerRef.current) {
+            clearTimeout(sceneAutoSaveTimerRef.current);
+            sceneAutoSaveTimerRef.current = null;
+        }
+        sceneAutoSaveTimerRef.current = setTimeout(() => {
+            const latest = sceneAutoSaveDraftRef.current;
+            if (latest?.id) {
+                void flushSceneAutoSave(latest);
+            }
+        }, 900);
+    }, [activeEpisode?.id, flushSceneAutoSave]);
+
     const handleSceneUpdate = (updatedScene) => {
         setScenes(prev => prev.map(s => s.id === updatedScene.id ? updatedScene : s));
         if (editingScene && editingScene.id === updatedScene.id) {
             setEditingScene(updatedScene);
         }
+        scheduleSceneAutoSave(updatedScene);
     };
 
     const buildSceneContentMarkdown = (sceneRows = []) => {
@@ -7256,6 +7276,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
     useEffect(() => {
         if (!editingScene?.id) {
             sceneAutoSavedSnapshotRef.current = { sceneId: null, snapshot: '' };
+            sceneAutoSaveDraftRef.current = null;
             return;
         }
         sceneAutoSavedSnapshotRef.current = {
@@ -7264,62 +7285,43 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         };
     }, [editingScene?.id, buildSceneSnapshot]);
 
-    useEffect(() => {
-        if (!activeEpisode?.id || !editingScene?.id) return;
-        const snapshot = buildSceneSnapshot(editingScene);
-        const lastSnapshot = sceneAutoSavedSnapshotRef.current;
-        if (lastSnapshot.sceneId === editingScene.id && lastSnapshot.snapshot === snapshot) return;
-
-        if (sceneAutoSaveTimerRef.current) {
-            clearTimeout(sceneAutoSaveTimerRef.current);
-            sceneAutoSaveTimerRef.current = null;
-        }
-
-        sceneAutoSaveTimerRef.current = setTimeout(() => {
-            void flushSceneAutoSave(editingScene);
-        }, 900);
-
-        return () => {
-            if (sceneAutoSaveTimerRef.current) {
-                clearTimeout(sceneAutoSaveTimerRef.current);
-                sceneAutoSaveTimerRef.current = null;
-            }
-        };
-    }, [activeEpisode?.id, editingScene, buildSceneSnapshot, flushSceneAutoSave]);
-
     const handleSave = async () => {
         if (!activeEpisode) return;
         
         onLog?.('SceneManager: Saving content...', 'info');
         
         try {
-            // Update scenes in DB (Create if missing ID, Update if exists)
-            const savePromises = scenes.map(async (s) => {
-                const payload = {
-                    scene_no: s.scene_no,
-                    scene_name: s.scene_name,
-                    equivalent_duration: s.equivalent_duration,
-                    core_scene_info: s.core_scene_info,
-                    original_script_text: s.original_script_text,
-                    environment_name: s.environment_name,
-                    linked_characters: s.linked_characters,
-                    key_props: s.key_props
-                };
+            const savedScenes = [];
+            const failedScenes = [];
 
-                if (s.id) {
-                    await updateScene(s.id, payload);
-                    return s;
-                } else {
-                    const created = await createScene(activeEpisode.id, payload);
-                    return { ...s, id: created.id };
+            for (const sceneRow of (scenes || [])) {
+                const payload = buildSceneSavePayload(sceneRow);
+                try {
+                    if (sceneRow.id) {
+                        await updateScene(sceneRow.id, payload);
+                        savedScenes.push({ ...sceneRow, ...payload });
+                    } else {
+                        const created = await createScene(activeEpisode.id, payload);
+                        savedScenes.push({ ...sceneRow, ...payload, id: created.id });
+                    }
+                } catch (e) {
+                    failedScenes.push({ scene: sceneRow, error: e });
+                    onLog?.(`Scene save failed: ${sceneRow?.scene_no || sceneRow?.id || 'unknown'} - ${e?.response?.data?.detail || e?.message || 'Unknown error'}`, 'error');
                 }
-            });
+            }
 
-            const savedScenes = await Promise.all(savePromises);
+            if (savedScenes.length === 0 && failedScenes.length > 0) {
+                throw new Error(failedScenes[0]?.error?.response?.data?.detail || failedScenes[0]?.error?.message || 'All scenes failed to save');
+            }
+
             setScenes(savedScenes);
 
             await updateEpisode(activeEpisode.id, { scene_content: buildSceneContentMarkdown(savedScenes) });
-            onLog?.('SceneManager: Saved successfully.', 'success');
+            if (failedScenes.length > 0) {
+                onLog?.(`SceneManager: Partially saved (${savedScenes.length} ok, ${failedScenes.length} failed).`, 'warning');
+            } else {
+                onLog?.('SceneManager: Saved successfully.', 'success');
+            }
         } catch(e) {
             console.error(e);
             onLog?.(`SceneManager: Save failed - ${e.message}`, 'error');
