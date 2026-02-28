@@ -4932,6 +4932,22 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         }
     };
 
+    const autoSaveScriptBeforeAnalysis = async () => {
+        if (!activeEpisode?.id || typeof onUpdateScript !== 'function') return;
+        const latestScript = String(rawContent || '');
+        const savedScript = String(activeEpisode?.script_content || '');
+        if (latestScript === savedScript) return;
+
+        try {
+            if (onLog) onLog('Auto-saving script before AI Scene Analysis...', 'process');
+            await onUpdateScript(activeEpisode.id, latestScript);
+            if (onLog) onLog('Script auto-saved before analysis.', 'success');
+        } catch (saveError) {
+            console.warn('[ScriptEditor] Auto-save before analysis failed:', saveError);
+            if (onLog) onLog(`Script auto-save failed (analysis continues): ${saveError.message}`, 'warning');
+        }
+    };
+
     const executeAnalysis = async (content, customSystemPrompt = null, skipMetadata = false) => {
         setIsAnalyzing(true);
         setAnalysisFlowStatus({
@@ -4941,6 +4957,8 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         if (onLog) onLog("Starting AI Scene Analysis...", "start");
 
         try {
+            await autoSaveScriptBeforeAnalysis();
+
             // Include project metadata if available, unless skipped (baked in)
             const metadata = skipMetadata ? null : (project?.global_info || null);
             
@@ -5052,6 +5070,8 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         if (onLog) onLog("Starting Advanced AI Analysis (Superuser)...", "start");
 
         try {
+            await autoSaveScriptBeforeAnalysis();
+
             const result = await analyzeScene(
                 userInput,
                 customSystemPrompt,
