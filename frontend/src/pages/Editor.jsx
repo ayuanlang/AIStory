@@ -8111,7 +8111,23 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         if (!activeEpisode) return '';
         const contextInfo = `Project: ${project?.title || 'Unknown'} | Episode: ${activeEpisode?.title || 'Unknown'}\n`;
         const header = `| Episode ID | Scene ID | Scene No. | Scene Name | Equivalent Duration | Core Scene Info | Original Script Text | Environment Name | Environment Relation | Entry State | Exit State | Linked Characters | Key Props |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|`;
-        const clean = (txt) => (txt || '').replace(/\n/g, '<br>').replace(/\|/g, '\\|');
+        const clean = (txt) => {
+            let normalized = '';
+            if (txt === null || txt === undefined) {
+                normalized = '';
+            } else if (typeof txt === 'string') {
+                normalized = txt;
+            } else if (typeof txt === 'number' || typeof txt === 'boolean') {
+                normalized = String(txt);
+            } else {
+                try {
+                    normalized = JSON.stringify(txt);
+                } catch {
+                    normalized = String(txt);
+                }
+            }
+            return normalized.replace(/\n/g, '<br>').replace(/\|/g, '\\|');
+        };
         const content = (sceneRows || []).map((s) => (
             `| ${clean(activeEpisode?.id)} | ${clean(s.id)} | ${clean(s.scene_no)} | ${clean(s.scene_name)} | ${clean(s.equivalent_duration)} | ${clean(s.core_scene_info)} | ${clean(s.original_script_text)} | ${clean(s.environment_name)} | ${clean(s.environment_relation || '')} | ${clean(s.entry_state || '')} | ${clean(s.exit_state || '')} | ${clean(s.linked_characters)} | ${clean(s.key_props)} |`
         )).join('\n');
@@ -8470,9 +8486,41 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
 
         setSceneRegenerating(true);
         try {
-            await flushSceneAutoSave(editingScene);
+            // Preflight: scene ID may become stale after list refresh/replacement; resolve latest DB row first.
+            let targetScene = editingScene;
+            if (activeEpisode?.id) {
+                try {
+                    const latestScenes = await fetchScenes(activeEpisode.id);
+                    const byId = (latestScenes || []).find((s) => Number(s?.id) === Number(editingScene?.id));
+                    if (byId) {
+                        targetScene = { ...byId, ...editingScene, id: byId.id };
+                    } else {
+                        const editingSceneNo = String(editingScene?.scene_no || '').trim();
+                        const bySceneNo = editingSceneNo
+                            ? (latestScenes || []).find((s) => String(s?.scene_no || '').trim() === editingSceneNo)
+                            : null;
+                        if (bySceneNo) {
+                            targetScene = { ...bySceneNo, ...editingScene, id: bySceneNo.id };
+                            setEditingScene(targetScene);
+                        } else {
+                            setScenes((latestScenes || []).map((scene) => ({
+                                ...scene,
+                                original_script_text: normalizeOriginalScriptText(scene?.original_script_text),
+                            })));
+                            setEditingScene(null);
+                            throw new Error(t('目标场景已不存在，请刷新后重新选择场景再重生成。', 'Target scene no longer exists. Refresh and reselect the scene before regenerating.'));
+                        }
+                    }
+                } catch (preflightErr) {
+                    if (String(preflightErr?.message || '').trim()) {
+                        throw preflightErr;
+                    }
+                }
+            }
 
-            const oldSceneId = editingScene.id;
+            await flushSceneAutoSave(targetScene);
+
+            const oldSceneId = targetScene.id;
             const result = await regenerateScene(oldSceneId, {
                 user_requirements: requirements,
             });
@@ -8506,9 +8554,34 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                 'success'
             );
         } catch (e) {
+            const status = Number(e?.response?.status || 0);
             const detail = e?.response?.data?.detail || e?.message || t('重生成失败', 'Regeneration failed');
-            onLog?.(`${t('场景重生成失败', 'Scene regeneration failed')}: ${detail}`, 'error');
-            alert(`${t('场景重生成失败：', 'Scene regeneration failed: ')}${detail}`);
+
+            if (status === 404) {
+                onLog?.(
+                    t('场景不存在或后端未包含该接口（/scenes/{id}/regenerate）。请刷新场景列表并确认后端已部署最新版本。', 'Scene not found or backend route /scenes/{id}/regenerate is unavailable. Refresh scenes and ensure backend is up-to-date.'),
+                    'warning'
+                );
+                if (activeEpisode?.id) {
+                    try {
+                        const latestScenes = await fetchScenes(activeEpisode.id);
+                        setScenes((latestScenes || []).map((scene) => ({
+                            ...scene,
+                            original_script_text: normalizeOriginalScriptText(scene?.original_script_text),
+                        })));
+                        const stillExists = (latestScenes || []).find((s) => s.id === editingScene?.id);
+                        if (!stillExists) {
+                            setEditingScene(null);
+                        }
+                    } catch {
+                        // ignore refresh failure
+                    }
+                }
+                alert(t('场景重生成失败：目标场景不存在或后端接口不可用。已尝试刷新场景列表。', 'Scene regeneration failed: target scene not found or backend route unavailable. Scene list refresh attempted.'));
+            } else {
+                onLog?.(`${t('场景重生成失败', 'Scene regeneration failed')}: ${detail}`, 'error');
+                alert(`${t('场景重生成失败：', 'Scene regeneration failed: ')}${detail}`);
+            }
         } finally {
             setSceneRegenerating(false);
         }
@@ -15256,8 +15329,12 @@ const Editor = ({
             
             // Fix trailing commas
             repaired = repaired.replace(/,\s*([}\]])/g, '$1');
-            
-            return JSON.parse(repaired);
+
+            try {
+                return JSON.parse(repaired);
+            } catch {
+                return null;
+            }
         }
     };
 
@@ -15288,9 +15365,11 @@ const Editor = ({
                     const jsonStr = text.substring(startIndex, i + 1);
                     try {
                         const obj = repairJSON(jsonStr);
-                        results.push(obj);
+                        if (obj && typeof obj === 'object') {
+                            results.push(obj);
+                        }
                     } catch (e) {
-                        console.warn("Failed to parse/repair block starting at " + startIndex, e);
+                        // keep import flow resilient: skip invalid blocks silently
                         // Optional: Could try to fuzzy find the end if brace counting was off
                     }
                     startIndex = -1;

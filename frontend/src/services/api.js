@@ -583,6 +583,13 @@ const shouldAutoDownloadByUserSetting = () => {
     return false;
 };
 
+const shouldAutoDownloadForRequest = (options = {}) => {
+    if (Object.prototype.hasOwnProperty.call(options || {}, 'auto_download_local')) {
+        return options?.auto_download_local !== false;
+    }
+    return shouldAutoDownloadByUserSetting();
+};
+
 const resolveMediaDownloadUrl = (url) => {
     const raw = String(url || '').trim();
     if (!raw) return '';
@@ -650,9 +657,6 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
     const effectiveNegativePrompt = String(negative_prompt ?? options?.negative_prompt ?? '').trim();
     const payload = { prompt, provider, ref_image_url, ...options, ...(effectiveNegativePrompt ? { negative_prompt: effectiveNegativePrompt } : {}) };
     const idempotencyKey = getOrCreateImageSubmitIdempotencyKey(payload, options?.idempotency_key);
-    const autoDownloadLocal = Object.prototype.hasOwnProperty.call(options || {}, 'auto_download_local')
-        ? options?.auto_download_local !== false
-        : shouldAutoDownloadByUserSetting();
 
     let submitResp;
     try {
@@ -669,7 +673,7 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
         }
 
         const response = await api.post('/generate/image', payload);
-        if (autoDownloadLocal && response?.data?.url) {
+        if (shouldAutoDownloadForRequest(options) && response?.data?.url) {
             try {
                 await downloadMediaToLocal(response.data.url, `generated_image_${Date.now()}.png`);
             } catch (downloadError) {
@@ -689,7 +693,7 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
         pollIntervalMs: Number(options?.job_poll_interval_ms || 2000),
     });
 
-    if (autoDownloadLocal && result?.url) {
+    if (shouldAutoDownloadForRequest(options) && result?.url) {
         try {
             await downloadMediaToLocal(result.url, `generated_image_${Date.now()}.png`);
         } catch (downloadError) {
@@ -713,10 +717,7 @@ export const generateVideo = async (prompt, provider = null, ref_image_url = nul
         ...(effectiveNegativePrompt ? { negative_prompt: effectiveNegativePrompt } : {}),
     };
     const response = await api.post('/generate/video', payload);
-    const autoDownloadLocal = Object.prototype.hasOwnProperty.call(options || {}, 'auto_download_local')
-        ? options?.auto_download_local !== false
-        : shouldAutoDownloadByUserSetting();
-    if (autoDownloadLocal && response?.data?.url) {
+    if (shouldAutoDownloadForRequest(options) && response?.data?.url) {
         try {
             await downloadMediaToLocal(response.data.url, `generated_video_${Date.now()}.mp4`);
         } catch (downloadError) {
