@@ -4280,8 +4280,19 @@ async def generate_project_episode_scripts_from_global_framework(
         try:
             latest_project = db.query(Project).filter(Project.id == project_id).first()
             latest_gi = dict((latest_project.global_info if latest_project else {}) or {})
+            existing_status = latest_gi.get(status_key) if isinstance(latest_gi.get(status_key), dict) else {}
+
+            merged_status = dict(status_payload or {})
+            if bool(existing_status.get("stop_requested")):
+                merged_status["stop_requested"] = True
+                if existing_status.get("stop_requested_at") and not merged_status.get("stop_requested_at"):
+                    merged_status["stop_requested_at"] = existing_status.get("stop_requested_at")
+                if not merged_status.get("stopped_by_user"):
+                    merged_status["stopped_by_user"] = bool(existing_status.get("stopped_by_user"))
+
             latest_gi[status_key] = status_payload
             if latest_project:
+                latest_gi[status_key] = merged_status
                 latest_project.global_info = latest_gi
                 db.add(latest_project)
                 db.commit()
