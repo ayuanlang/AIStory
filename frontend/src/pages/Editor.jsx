@@ -1613,6 +1613,14 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
         setIsStoppingEpisodeScripts(true);
         try {
             const res = await stopProjectEpisodeScripts(id);
+            setEpisodeScriptsProgress((prev) => {
+                if (!prev || typeof prev !== 'object') return prev;
+                return {
+                    ...prev,
+                    stop_requested: true,
+                    message: res?.message || prev?.message || t('已请求停止，等待当前分集完成后中止。', 'Stop requested. Waiting for current episode to finish.'),
+                };
+            });
             addLog?.(res?.message || 'Stop requested for episode scripts task.', 'warning');
             const status = await pollEpisodeScriptsStatus();
             if (status?.running && !episodeScriptsStatusTimerRef.current) {
@@ -1709,6 +1717,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
     const processedCount = Number(episodeScriptsProgress?.processed || 0);
     const progressPercent = episodesInRun > 0 ? Math.min(100, Math.round((processedCount / episodesInRun) * 100)) : 0;
     const episodeScriptsRunning = Boolean(episodeScriptsProgress?.running) || isGeneratingEpisodeScripts;
+    const episodeScriptsStopRequested = Boolean(episodeScriptsProgress?.stop_requested);
 
     const episodeTitleByNumber = useMemo(() => {
         const titleMap = new Map();
@@ -2028,11 +2037,13 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                             </button>
                             <button
                                 onClick={handleStopEpisodeScripts}
-                                disabled={!episodeScriptsRunning || isStoppingEpisodeScripts}
-                                className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${(!episodeScriptsRunning || isStoppingEpisodeScripts) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                disabled={!episodeScriptsRunning || isStoppingEpisodeScripts || episodeScriptsStopRequested}
+                                className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${(!episodeScriptsRunning || isStoppingEpisodeScripts || episodeScriptsStopRequested) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
                                 title={t('停止当前批量分集剧本任务（当前分集完成后停止）', 'Stop current batch episode scripts task (stops after current episode finishes)')}
                             >
-                                {isStoppingEpisodeScripts ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('停止中...', 'Stopping...')}</> : <><X className="w-4 h-4" /> {t('停止任务', 'Stop Task')}</>}
+                                {isStoppingEpisodeScripts
+                                    ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('停止中...', 'Stopping...')}</>
+                                    : <><X className="w-4 h-4" /> {episodeScriptsStopRequested ? t('已请求停止', 'Stop Requested') : t('停止任务', 'Stop Task')}</>}
                             </button>
                         </div>
                     </div>
@@ -2069,10 +2080,12 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                                 </button>
                                 <button
                                     onClick={handleStopEpisodeScripts}
-                                    disabled={!episodeScriptsRunning || isStoppingEpisodeScripts}
-                                    className={`px-3 py-1.5 rounded-md text-xs font-bold flex items-center gap-1.5 ${(!episodeScriptsRunning || isStoppingEpisodeScripts) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                    disabled={!episodeScriptsRunning || isStoppingEpisodeScripts || episodeScriptsStopRequested}
+                                    className={`px-3 py-1.5 rounded-md text-xs font-bold flex items-center gap-1.5 ${(!episodeScriptsRunning || isStoppingEpisodeScripts || episodeScriptsStopRequested) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
                                 >
-                                    {isStoppingEpisodeScripts ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('停止中...', 'Stopping...')}</> : <><X className="w-3.5 h-3.5" /> {t('停止任务', 'Stop Task')}</>}
+                                    {isStoppingEpisodeScripts
+                                        ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('停止中...', 'Stopping...')}</>
+                                        : <><X className="w-3.5 h-3.5" /> {episodeScriptsStopRequested ? t('已请求停止', 'Stop Requested') : t('停止任务', 'Stop Task')}</>}
                                 </button>
                             </div>
                         </div>
@@ -2431,10 +2444,12 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                             <div className="flex items-center gap-2">
                                 <button
                                     onClick={handleStopEpisodeScripts}
-                                    disabled={!episodeScriptsRunning || isStoppingEpisodeScripts}
-                                    className={`px-3 py-1.5 rounded-md text-xs font-bold flex items-center gap-1.5 ${(!episodeScriptsRunning || isStoppingEpisodeScripts) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                    disabled={!episodeScriptsRunning || isStoppingEpisodeScripts || episodeScriptsStopRequested}
+                                    className={`px-3 py-1.5 rounded-md text-xs font-bold flex items-center gap-1.5 ${(!episodeScriptsRunning || isStoppingEpisodeScripts || episodeScriptsStopRequested) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
                                 >
-                                    {isStoppingEpisodeScripts ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('停止中...', 'Stopping...')}</> : <><X className="w-3.5 h-3.5" /> {t('停止任务', 'Stop Task')}</>}
+                                    {isStoppingEpisodeScripts
+                                        ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('停止中...', 'Stopping...')}</>
+                                        : <><X className="w-3.5 h-3.5" /> {episodeScriptsStopRequested ? t('已请求停止', 'Stop Requested') : t('停止任务', 'Stop Task')}</>}
                                 </button>
                                 <button
                                     onClick={pollEpisodeScriptsStatus}
@@ -5425,6 +5440,11 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         setIsStoppingSceneGen(true);
         try {
             const res = await stopEpisodeScenesGeneration(activeEpisode.id);
+            setSceneGenStatus((prev) => ({
+                ...(prev && typeof prev === 'object' ? prev : {}),
+                stop_requested: true,
+                message: res?.message || prev?.message || t('已请求停止，等待当前场景完成后中止。', 'Stop requested. Waiting for current scene to finish.'),
+            }));
             await pollSceneGenStatus();
             if (onLog) onLog(`Scene generation: ${res?.message || 'stop requested'}`, 'warning');
         } catch (e) {
