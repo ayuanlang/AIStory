@@ -10936,15 +10936,15 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 
 def _normalize_batch_job_status(payload: Dict[str, Any]) -> str:
+    if bool(payload.get("stopped_by_user")) or bool(payload.get("stop_requested")):
+        return "canceled"
+
     status_raw = str(payload.get("status") or "").strip().lower()
     if status_raw in {"running", "queued", "completed", "failed", "stopped", "canceled", "cancelled", "error", "idle", "partial"}:
         return status_raw
 
     if bool(payload.get("running")):
         return "running"
-
-    if bool(payload.get("stopped_by_user")) or bool(payload.get("stop_requested")):
-        return "canceled"
 
     failed = _safe_int(payload.get("failed"), 0)
     success = _safe_int(payload.get("success"), 0)
