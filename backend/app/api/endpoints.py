@@ -88,6 +88,33 @@ VIDEO_JOB_TASKS: Dict[str, asyncio.Task] = {}
 
 SHOT_MEDIA_BATCH_CANCEL_EVENTS: Dict[int, threading.Event] = {}
 SHOT_MEDIA_BATCH_CANCEL_LOCK = threading.Lock()
+EPISODE_SCENE_JOB_THREADS: Dict[int, threading.Thread] = {}
+SCENE_AI_SHOTS_BATCH_THREADS: Dict[int, threading.Thread] = {}
+SHOT_MEDIA_BATCH_THREADS: Dict[int, threading.Thread] = {}
+EPISODE_SCENE_JOB_THREADS_LOCK = threading.Lock()
+SCENE_AI_SHOTS_BATCH_THREADS_LOCK = threading.Lock()
+SHOT_MEDIA_BATCH_THREADS_LOCK = threading.Lock()
+
+
+def _register_episode_worker(store: Dict[int, threading.Thread], lock: threading.Lock, episode_id: int, worker: threading.Thread) -> None:
+    with lock:
+        store[int(episode_id)] = worker
+
+
+def _clear_episode_worker(store: Dict[int, threading.Thread], lock: threading.Lock, episode_id: int) -> None:
+    with lock:
+        store.pop(int(episode_id), None)
+
+
+def _is_episode_worker_alive(store: Dict[int, threading.Thread], lock: threading.Lock, episode_id: int) -> bool:
+    with lock:
+        worker = store.get(int(episode_id))
+        if not worker:
+            return False
+        alive = bool(worker.is_alive())
+        if not alive:
+            store.pop(int(episode_id), None)
+        return alive
 
 
 def _get_shot_media_batch_cancel_event(episode_id: int, create: bool = True) -> Optional[threading.Event]:
@@ -3775,6 +3802,7 @@ def _run_episode_scene_generation_job(episode_id: int, req_payload: Dict[str, An
         except Exception:
             pass
     finally:
+        _clear_episode_worker(EPISODE_SCENE_JOB_THREADS, EPISODE_SCENE_JOB_THREADS_LOCK, int(episode_id))
         db.close()
 
 
@@ -4238,6 +4266,7 @@ def start_episode_scenes_generation_job(
         daemon=True,
     )
     worker.start()
+    _register_episode_worker(EPISODE_SCENE_JOB_THREADS, EPISODE_SCENE_JOB_THREADS_LOCK, int(episode_id), worker)
     return status_payload
 
 
@@ -4251,7 +4280,18 @@ def get_episode_scenes_generation_job_status(
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
     _require_project_access(db, episode.project_id, current_user)
-    return _read_episode_scene_generation_status(episode)
+    status_payload = _read_episode_scene_generation_status(episode)
+    if bool(status_payload.get("running")) and not _is_episode_worker_alive(EPISODE_SCENE_JOB_THREADS, EPISODE_SCENE_JOB_THREADS_LOCK, int(episode_id)):
+        now_iso = datetime.utcnow().isoformat()
+        status_payload["running"] = False
+        status_payload["status"] = "canceled"
+        status_payload["force_stopped"] = True
+        status_payload["stopped_by_user"] = True
+        status_payload["updated_at"] = now_iso
+        status_payload["finished_at"] = status_payload.get("finished_at") or now_iso
+        status_payload["message"] = "Recovered orphaned task state (no active worker)"
+        _persist_episode_scene_generation_status(db, episode, status_payload)
+    return status_payload
 
 
 @router.post("/episodes/{episode_id}/script_generator/scenes/stop", response_model=Dict[str, Any])
@@ -6034,6 +6074,7 @@ def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id
         except Exception:
             pass
     finally:
+        _clear_episode_worker(SCENE_AI_SHOTS_BATCH_THREADS, SCENE_AI_SHOTS_BATCH_THREADS_LOCK, int(episode_id))
         db.close()
 
 
@@ -6092,6 +6133,7 @@ def start_scene_ai_shots_batch(
         daemon=True,
     )
     worker.start()
+    _register_episode_worker(SCENE_AI_SHOTS_BATCH_THREADS, SCENE_AI_SHOTS_BATCH_THREADS_LOCK, int(episode_id), worker)
 
     return status_payload
 
@@ -6106,7 +6148,18 @@ def get_scene_ai_shots_batch_status(
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
     _require_project_access(db, episode.project_id, current_user)
-    return _read_scene_ai_shots_batch_status(episode)
+    status_payload = _read_scene_ai_shots_batch_status(episode)
+    if bool(status_payload.get("running")) and not _is_episode_worker_alive(SCENE_AI_SHOTS_BATCH_THREADS, SCENE_AI_SHOTS_BATCH_THREADS_LOCK, int(episode_id)):
+        now_iso = datetime.utcnow().isoformat()
+        status_payload["running"] = False
+        status_payload["status"] = "canceled"
+        status_payload["force_stopped"] = True
+        status_payload["stopped_by_user"] = True
+        status_payload["updated_at"] = now_iso
+        status_payload["finished_at"] = status_payload.get("finished_at") or now_iso
+        status_payload["message"] = "Recovered orphaned task state (no active worker)"
+        _persist_scene_ai_shots_batch_status(db, episode, status_payload)
+    return status_payload
 
 
 @router.post("/episodes/{episode_id}/scenes/ai_shots/batch/stop", response_model=Dict[str, Any])
@@ -12282,6 +12335,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
         except Exception:
             pass
     finally:
+        _clear_episode_worker(SHOT_MEDIA_BATCH_THREADS, SHOT_MEDIA_BATCH_THREADS_LOCK, int(episode_id))
         _clear_shot_media_batch_cancel_event(int(episode_id))
         db.close()
 
@@ -12347,6 +12401,7 @@ def start_shot_media_batch_job(
         daemon=True,
     )
     worker.start()
+    _register_episode_worker(SHOT_MEDIA_BATCH_THREADS, SHOT_MEDIA_BATCH_THREADS_LOCK, int(episode_id), worker)
     return status_payload
 
 
@@ -12360,7 +12415,18 @@ def get_shot_media_batch_job_status(
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
     _require_project_access(db, episode.project_id, current_user)
-    return _read_shot_media_batch_status(episode)
+    status_payload = _read_shot_media_batch_status(episode)
+    if bool(status_payload.get("running")) and not _is_episode_worker_alive(SHOT_MEDIA_BATCH_THREADS, SHOT_MEDIA_BATCH_THREADS_LOCK, int(episode_id)):
+        now_iso = datetime.utcnow().isoformat()
+        status_payload["running"] = False
+        status_payload["status"] = "canceled"
+        status_payload["force_stopped"] = True
+        status_payload["stopped_by_user"] = True
+        status_payload["updated_at"] = now_iso
+        status_payload["finished_at"] = status_payload.get("finished_at") or now_iso
+        status_payload["message"] = "Recovered orphaned task state (no active worker)"
+        _persist_shot_media_batch_status(db, episode, status_payload)
+    return status_payload
 
 
 @router.post("/episodes/{episode_id}/shots/batch-media/stop", response_model=Dict[str, Any])
