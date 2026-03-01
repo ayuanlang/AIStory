@@ -206,6 +206,9 @@ import {
     stopEpisodeScenesGeneration,
     startShotMediaBatch,
     getShotMediaBatchStatus,
+    getVideoGenerationJobStatus,
+    getGenerationJobPool,
+    stopGenerationJob,
     stopShotMediaBatch,
     saveProjectStoryGeneratorGlobalInput,
     exportProjectStoryGlobalPackage,
@@ -4056,6 +4059,20 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
     };
 
     const parseCoreCoverageReport = (rawText) => {
+        const dedupeMissingPoints = (points) => {
+            const seen = new Set();
+            const out = [];
+            for (const item of points || []) {
+                const text = String(item || '').trim();
+                if (!text) continue;
+                const key = text.toLowerCase();
+                if (seen.has(key)) continue;
+                seen.add(key);
+                out.push(text);
+            }
+            return out;
+        };
+
         const formatMissingPoint = (value) => {
             if (value == null) return '';
             if (typeof value === 'string') return value.trim();
@@ -4066,9 +4083,11 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 const sceneId = String(
                     value.scene_id ?? value.sceneId ?? value['Scene ID'] ?? value['场景ID'] ?? value['场景id'] ?? ''
                 ).trim();
-                const detail = String(
+                const detailRaw =
                     value.missing_detail
                     ?? value.missing_point
+                    ?? value.missing_points
+                    ?? value.missing_items
                     ?? value.detail
                     ?? value.reason
                     ?? value.issue
@@ -4077,12 +4096,26 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                     ?? value['缺失点']
                     ?? value['未覆盖点']
                     ?? value['说明']
-                    ?? ''
-                ).trim();
+                    ?? '';
+
+                let detail = '';
+                if (Array.isArray(detailRaw)) {
+                    detail = detailRaw.map(v => String(v || '').trim()).filter(Boolean).join(' | ');
+                } else if (detailRaw && typeof detailRaw === 'object') {
+                    try {
+                        detail = JSON.stringify(detailRaw);
+                    } catch {
+                        detail = '';
+                    }
+                } else {
+                    detail = String(detailRaw || '').trim();
+                }
 
                 if (sceneId && detail) return `${sceneId}: ${detail}`;
                 if (detail) return detail;
-                if (sceneId) return sceneId;
+                if (sceneId) {
+                    return `${sceneId}: ${t('未提供具体缺失说明', 'No specific uncovered detail provided')}`;
+                }
 
                 try {
                     return JSON.stringify(value);
@@ -4100,9 +4133,10 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 const parsed = JSON.parse(jsonText);
                 const normalized = String(parsed?.is_covered || parsed?.covered || parsed?.result || '').trim();
                 const isCovered = normalized === '是' || /^yes$/i.test(normalized) || normalized === 'true';
-                const missingPoints = Array.isArray(parsed?.missing_points)
+                const missingPointsRaw = Array.isArray(parsed?.missing_points)
                     ? parsed.missing_points.map(v => formatMissingPoint(v)).filter(Boolean)
                     : [];
+                const missingPoints = dedupeMissingPoints(missingPointsRaw);
                 return {
                     ok: true,
                     isCovered,
@@ -4117,7 +4151,9 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
 
         const isCovered = /(?:^|\b)(是|yes|true)(?:\b|$)/i.test(text) && !/(?:^|\b)(否|no|false)(?:\b|$)/i.test(text);
         const lines = text.split('\n').map(v => String(v || '').trim()).filter(Boolean);
-        const missingPoints = lines.filter(line => /^[\-•\d]/.test(line) || /缺失|未覆盖|missing/i.test(line));
+        const missingPoints = dedupeMissingPoints(
+            lines.filter(line => /^[\-•\d]/.test(line) || /缺失|未覆盖|missing/i.test(line))
+        );
         return {
             ok: Boolean(text),
             isCovered,
@@ -5624,6 +5660,8 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         });
         if (onLog) onLog("Starting AI Scene Analysis...", "start");
 
+        let llmReturned = false;
+
         try {
             await autoSaveScriptBeforeAnalysis();
 
@@ -5639,6 +5677,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 selectedReuseSubjectAssets
             );
             const analyzedText = result.result || result.analysis || (typeof result === 'string' ? result : JSON.stringify(result, null, 2));
+            llmReturned = true;
 
             if (result && result.meta) {
                 try {
@@ -5680,14 +5719,18 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             // Persist LLM raw output into dedicated DB field (DO NOT overwrite script_content)
             // If backend already saved it (via episode_id), skip the extra PUT to avoid large payload twice.
             const savedByBackend = !!(result?.meta?.saved_to_episode);
-            if (!savedByBackend) {
-                if (onLog) onLog("Analysis complete. Saving LLM result (separate field)...", "process");
-                await persistLlmResultContent(analyzedText);
-            } else {
-                if (onLog) onLog("Analysis complete. Saved to DB by backend.", "success");
-                // Parent episode state may be stale; re-load from DB so the Script tab stays consistent
-                // across tab switches/remounts.
-                await refreshAnalysisFromDB();
+            try {
+                if (!savedByBackend) {
+                    if (onLog) onLog("Analysis complete. Saving LLM result (separate field)...", "process");
+                    await persistLlmResultContent(analyzedText);
+                } else {
+                    if (onLog) onLog("Analysis complete. Saved to DB by backend.", "success");
+                    // Parent episode state may be stale; re-load from DB so the Script tab stays consistent
+                    // across tab switches/remounts.
+                    await refreshAnalysisFromDB();
+                }
+            } catch (persistErr) {
+                if (onLog) onLog(`Analysis result saved with warning: ${persistErr?.message || persistErr}`, 'warning');
             }
             
             try {
@@ -5695,23 +5738,46 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             } catch (importErr) {
                 if (onLog) onLog(`Auto-import failed (checks will continue): ${importErr?.message || importErr}`, 'warning');
             }
-            const firstPassReport = buildSubjectConsistencyReport(analyzedText || '');
-            setSubjectConsistencyReport(firstPassReport);
-            if (!firstPassReport.ok && Array.isArray(firstPassReport.missing) && firstPassReport.missing.length > 0) {
-                await autoRecoverMissingSubjects(analyzedText || '', firstPassReport.missing);
+
+            try {
+                const firstPassReport = buildSubjectConsistencyReport(analyzedText || '');
+                setSubjectConsistencyReport(firstPassReport);
+                if (!firstPassReport.ok && Array.isArray(firstPassReport.missing) && firstPassReport.missing.length > 0) {
+                    await autoRecoverMissingSubjects(analyzedText || '', firstPassReport.missing);
+                }
+            } catch (consistencyErr) {
+                if (onLog) onLog(`Subject consistency check warning: ${consistencyErr?.message || consistencyErr}`, 'warning');
             }
-            await runPostAnalysisChecksAndPrompt(analyzedText || '');
-            setPendingSwitchAfterPostChecks(true);
+
+            try {
+                await runPostAnalysisChecksAndPrompt(analyzedText || '');
+                setPendingSwitchAfterPostChecks(true);
+            } catch (postCheckErr) {
+                if (onLog) onLog(`Post-analysis checks warning: ${postCheckErr?.message || postCheckErr}`, 'warning');
+                setAnalysisFlowStatus({
+                    phase: 'completed',
+                    message: t('分析完成（后置检查部分失败，可继续）。', 'Analysis completed (post-checks partially failed, you can continue).'),
+                });
+            }
+
             if (onLog) onLog("AI Analysis applied and saved.", "success");
             setShowAnalysisModal(false);
         } catch (e) {
             console.error(e);
-            if (onLog) onLog(`Analysis Failed: ${e.message}`, "error");
-            setAnalysisFlowStatus({
-                phase: 'failed',
-                message: t(`分析失败：${e.message}`, `Analysis failed: ${e.message}`),
-            });
-            alert(`Analysis failed: ${e.message}`);
+            if (llmReturned) {
+                if (onLog) onLog(`Analysis completed with warnings: ${e.message}`, "warning");
+                setAnalysisFlowStatus({
+                    phase: 'warning',
+                    message: t(`分析已完成，但后续处理有告警：${e.message}`, `Analysis completed, but follow-up processing has warnings: ${e.message}`),
+                });
+            } else {
+                if (onLog) onLog(`Analysis Failed: ${e.message}`, "error");
+                setAnalysisFlowStatus({
+                    phase: 'failed',
+                    message: t(`分析失败：${e.message}`, `Analysis failed: ${e.message}`),
+                });
+                alert(`Analysis failed: ${e.message}`);
+            }
         } finally {
             setIsAnalyzing(false);
         }
@@ -5748,6 +5814,8 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         });
         if (onLog) onLog("Starting Advanced AI Analysis (Superuser)...", "start");
 
+        let llmReturned = false;
+
         try {
             await autoSaveScriptBeforeAnalysis();
 
@@ -5760,6 +5828,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 selectedReuseSubjectAssets
             );
             const analyzedText = result.result || result.analysis || (typeof result === 'string' ? result : JSON.stringify(result));
+            llmReturned = true;
 
             if (result && result.meta) {
                 try {
@@ -5800,12 +5869,16 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
 
             // Persist the LLM output into dedicated DB field (unless backend already saved it)
             const savedByBackend = !!(result?.meta?.saved_to_episode);
-            if (!savedByBackend) {
-                if (onLog) onLog("Advanced analysis complete. Saving LLM result (separate field)...", "process");
-                await persistLlmResultContent(analyzedText || "");
-            } else {
-                if (onLog) onLog("Advanced analysis complete. Saved to DB by backend.", "success");
-                await refreshAnalysisFromDB();
+            try {
+                if (!savedByBackend) {
+                    if (onLog) onLog("Advanced analysis complete. Saving LLM result (separate field)...", "process");
+                    await persistLlmResultContent(analyzedText || "");
+                } else {
+                    if (onLog) onLog("Advanced analysis complete. Saved to DB by backend.", "success");
+                    await refreshAnalysisFromDB();
+                }
+            } catch (persistErr) {
+                if (onLog) onLog(`Advanced analysis result saved with warning: ${persistErr?.message || persistErr}`, 'warning');
             }
 
             try {
@@ -5813,24 +5886,45 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             } catch (importErr) {
                 if (onLog) onLog(`Auto-import failed (checks will continue): ${importErr?.message || importErr}`, 'warning');
             }
-            const firstPassReport = buildSubjectConsistencyReport(analyzedText || '');
-            setSubjectConsistencyReport(firstPassReport);
-            if (!firstPassReport.ok && Array.isArray(firstPassReport.missing) && firstPassReport.missing.length > 0) {
-                await autoRecoverMissingSubjects(analyzedText || '', firstPassReport.missing);
+
+            try {
+                const firstPassReport = buildSubjectConsistencyReport(analyzedText || '');
+                setSubjectConsistencyReport(firstPassReport);
+                if (!firstPassReport.ok && Array.isArray(firstPassReport.missing) && firstPassReport.missing.length > 0) {
+                    await autoRecoverMissingSubjects(analyzedText || '', firstPassReport.missing);
+                }
+            } catch (consistencyErr) {
+                if (onLog) onLog(`Subject consistency check warning: ${consistencyErr?.message || consistencyErr}`, 'warning');
             }
 
-            await runPostAnalysisChecksAndPrompt(analyzedText || '');
-            setPendingSwitchAfterPostChecks(true);
+            try {
+                await runPostAnalysisChecksAndPrompt(analyzedText || '');
+                setPendingSwitchAfterPostChecks(true);
+            } catch (postCheckErr) {
+                if (onLog) onLog(`Post-analysis checks warning: ${postCheckErr?.message || postCheckErr}`, 'warning');
+                setAnalysisFlowStatus({
+                    phase: 'completed',
+                    message: t('分析完成（后置检查部分失败，可继续）。', 'Analysis completed (post-checks partially failed, you can continue).'),
+                });
+            }
 
             setShowAnalysisModal(false);
         } catch (e) {
             console.error(e);
-            if (onLog) onLog(`Advanced analysis failed: ${e.message}`, "error");
-            setAnalysisFlowStatus({
-                phase: 'failed',
-                message: t(`分析失败：${e.message}`, `Analysis failed: ${e.message}`),
-            });
-            alert(`Analysis failed: ${e.message}`);
+            if (llmReturned) {
+                if (onLog) onLog(`Advanced analysis completed with warnings: ${e.message}`, "warning");
+                setAnalysisFlowStatus({
+                    phase: 'warning',
+                    message: t(`分析已完成，但后续处理有告警：${e.message}`, `Analysis completed, but follow-up processing has warnings: ${e.message}`),
+                });
+            } else {
+                if (onLog) onLog(`Advanced analysis failed: ${e.message}`, "error");
+                setAnalysisFlowStatus({
+                    phase: 'failed',
+                    message: t(`分析失败：${e.message}`, `Analysis failed: ${e.message}`),
+                });
+                alert(`Analysis failed: ${e.message}`);
+            }
         } finally {
             setIsAnalyzing(false);
         }
@@ -9527,8 +9621,56 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
 };
 
 const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
+    const createSubjectBatchTaskState = () => ({
+        running: false,
+        progress: null,
+        scopeKey: '',
+        updatedAt: 0,
+    });
+
+    if (!window.__AISTORY_SUBJECT_BATCH_RUNTIME__) {
+        window.__AISTORY_SUBJECT_BATCH_RUNTIME__ = {
+            generate: createSubjectBatchTaskState(),
+            analyze: createSubjectBatchTaskState(),
+            listeners: new Set(),
+        };
+    }
+
+    const subjectBatchRuntime = window.__AISTORY_SUBJECT_BATCH_RUNTIME__;
+    const getSubjectBatchSnapshot = () => ({
+        generate: { ...subjectBatchRuntime.generate },
+        analyze: { ...subjectBatchRuntime.analyze },
+    });
+    const emitSubjectBatchRuntime = () => {
+        const snapshot = getSubjectBatchSnapshot();
+        subjectBatchRuntime.listeners.forEach((listener) => {
+            try {
+                listener(snapshot);
+            } catch {
+                // ignore listener errors
+            }
+        });
+    };
+    const updateSubjectBatchTask = (task, patch) => {
+        if (!subjectBatchRuntime[task]) return;
+        subjectBatchRuntime[task] = {
+            ...subjectBatchRuntime[task],
+            ...(patch || {}),
+            updatedAt: Date.now(),
+        };
+        emitSubjectBatchRuntime();
+    };
+    const subscribeSubjectBatchRuntime = (listener) => {
+        subjectBatchRuntime.listeners.add(listener);
+        return () => {
+            subjectBatchRuntime.listeners.delete(listener);
+        };
+    };
+
     const { addLog: onLog } = useLog();
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
+    const subjectBatchScopeKey = String(projectId || '');
+    const isMountedRef = useRef(false);
     const [subTab, setSubTab] = useState('character');
     const [entities, setEntities] = useState([]);
     const [allEntities, setAllEntities] = useState([]); // Store ALL entities for cross-reference
@@ -9552,6 +9694,65 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     const [isReconstructingEntity, setIsReconstructingEntity] = useState(false);
     const [reconstructProgress, setReconstructProgress] = useState(null);
     const [pickerConfig, setPickerConfig] = useState({ isOpen: false, callback: null });
+
+    const applyGenerateBatchState = useCallback((running, progress) => {
+        if (!isMountedRef.current) return;
+        setIsBatchGeneratingEntities(Boolean(running));
+        setBatchEntityProgress(progress || null);
+    }, []);
+
+    const applyAnalyzeBatchState = useCallback((running, progress) => {
+        if (!isMountedRef.current) return;
+        setIsBatchAnalyzingEntities(Boolean(running));
+        setBatchAnalyzeProgress(progress || null);
+    }, []);
+
+    const updateGenerateBatchRuntimeState = useCallback((running, progress) => {
+        updateSubjectBatchTask('generate', {
+            running: Boolean(running),
+            progress: progress || null,
+            scopeKey: subjectBatchScopeKey,
+        });
+        applyGenerateBatchState(running, progress);
+    }, [applyGenerateBatchState, subjectBatchScopeKey]);
+
+    const updateAnalyzeBatchRuntimeState = useCallback((running, progress) => {
+        updateSubjectBatchTask('analyze', {
+            running: Boolean(running),
+            progress: progress || null,
+            scopeKey: subjectBatchScopeKey,
+        });
+        applyAnalyzeBatchState(running, progress);
+    }, [applyAnalyzeBatchState, subjectBatchScopeKey]);
+
+    useEffect(() => {
+        isMountedRef.current = true;
+        return () => {
+            isMountedRef.current = false;
+        };
+    }, []);
+
+    useEffect(() => {
+        const applySnapshot = (snapshot) => {
+            const generateTask = snapshot?.generate || createSubjectBatchTaskState();
+            const analyzeTask = snapshot?.analyze || createSubjectBatchTaskState();
+
+            if (generateTask.scopeKey === subjectBatchScopeKey && generateTask.running) {
+                applyGenerateBatchState(true, generateTask.progress || null);
+            } else {
+                applyGenerateBatchState(false, null);
+            }
+
+            if (analyzeTask.scopeKey === subjectBatchScopeKey && analyzeTask.running) {
+                applyAnalyzeBatchState(true, analyzeTask.progress || null);
+            } else {
+                applyAnalyzeBatchState(false, null);
+            }
+        };
+
+        applySnapshot(getSubjectBatchSnapshot());
+        return subscribeSubjectBatchRuntime(applySnapshot);
+    }, [applyAnalyzeBatchState, applyGenerateBatchState, subjectBatchScopeKey]);
 
     const openMediaPicker = (callback, context = {}) => {
         setPickerConfig({ isOpen: true, callback, context });
@@ -9635,6 +9836,12 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     };
 
     const handleBatchAnalyzeExistingSubjects = async () => {
+        const runtimeSnapshot = getSubjectBatchSnapshot();
+        if (runtimeSnapshot?.analyze?.running && runtimeSnapshot?.analyze?.scopeKey === subjectBatchScopeKey) {
+            alert(t('批量分析任务正在运行中，请稍候。', 'Batch analyze task is already running.'));
+            return;
+        }
+
         const targets = allEntities.filter(item => item?.id && String(item?.image_url || '').trim());
         if (targets.length === 0) {
             alert(t('当前没有可分析的已配图主体。', 'No subjects with images available for analysis.'));
@@ -9647,8 +9854,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         ));
         if (!confirmed) return;
 
-        setIsBatchAnalyzingEntities(true);
-        setBatchAnalyzeProgress({ current: 0, total: targets.length, status: t('准备开始...', 'Preparing...') });
+        updateAnalyzeBatchRuntimeState(true, { current: 0, total: targets.length, status: t('准备开始...', 'Preparing...') });
 
         let successCount = 0;
         let failedCount = 0;
@@ -9657,7 +9863,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
             for (let idx = 0; idx < targets.length; idx += 1) {
                 const entity = targets[idx];
                 const current = idx + 1;
-                setBatchAnalyzeProgress({
+                updateAnalyzeBatchRuntimeState(true, {
                     current,
                     total: targets.length,
                     status: t(`分析中：${entity?.name || entity?.name_en || entity?.id}`, `Analyzing: ${entity?.name || entity?.name_en || entity?.id}`),
@@ -9690,8 +9896,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
             if (onLog) onLog(summary, failedCount > 0 ? 'warning' : 'success');
             alert(summary);
         } finally {
-            setIsBatchAnalyzingEntities(false);
-            setBatchAnalyzeProgress(null);
+            updateAnalyzeBatchRuntimeState(false, null);
         }
     };
 
@@ -10078,6 +10283,12 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     };
 
     const handleBatchGenerateEntities = async () => {
+        const runtimeSnapshot = getSubjectBatchSnapshot();
+        if (runtimeSnapshot?.generate?.running && runtimeSnapshot?.generate?.scopeKey === subjectBatchScopeKey) {
+            alert(t('批量补图任务正在运行中，请稍候。', 'Batch fill-images task is already running.'));
+            return;
+        }
+
         const toGenerate = allEntities.filter(e => !e.image_url);
         if (toGenerate.length === 0) {
             alert("All entities already have images!");
@@ -10086,8 +10297,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
 
         if (!await confirmUiMessage(`Batch generate images for ${toGenerate.length} entities? This will respect dependency order.`)) return;
 
-        setBatchEntityProgress({ current: 0, total: toGenerate.length, status: 'Initializing...' });
-        setIsBatchGeneratingEntities(true);
+        updateGenerateBatchRuntimeState(true, { current: 0, total: toGenerate.length, status: 'Initializing...' });
 
         // Determine Dependency Map
         const nameMap = new Map();
@@ -10142,7 +10352,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
 
                 for (const entity of batch) {
                     const idx = processedCount + 1;
-                    setBatchEntityProgress({ current: idx, total: toGenerate.length, status: `Generating ${entity.name}...` });
+                    updateGenerateBatchRuntimeState(true, { current: idx, total: toGenerate.length, status: `Generating ${entity.name}...` });
                     
                     try {
                         // 1. Prepare Prompt
@@ -10243,8 +10453,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
             console.error(e);
             alert("Batch Generation Failed: " + e.message);
         } finally {
-            setIsBatchGeneratingEntities(false);
-            setBatchEntityProgress(null);
+            updateGenerateBatchRuntimeState(false, null);
         }
     };
 
@@ -11233,11 +11442,16 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         if (!activeEpisode?.id) return '';
         return `aistory.shotGenerationState.${activeEpisode.id}`;
     }, [activeEpisode?.id]);
+    const videoJobStateStorageKey = useMemo(() => {
+        if (!activeEpisode?.id) return '';
+        return `aistory.shotVideoJobs.${activeEpisode.id}`;
+    }, [activeEpisode?.id]);
     const restoreEditingAttemptedRef = useRef(false);
     const hasHydratedGenerationStateRef = useRef(false);
     const mediaRebindAttemptedRef = useRef('');
     const generationMediaBaselineRef = useRef({});
     const GENERATION_STATE_TTL_MS = 1000 * 60 * 60;
+    const VIDEO_JOB_STATE_TTL_MS = 1000 * 60 * 60;
 
     const getShotEndFrameUrl = useCallback((shot) => {
         try {
@@ -11350,6 +11564,69 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         });
     }, [applyGeneratingStateChange, setStoredShotGeneratingState, shots, editingShot, getShotEndFrameUrl]);
 
+    const readVideoJobStateStorage = useCallback(() => {
+        if (!videoJobStateStorageKey) return {};
+        try {
+            const raw = localStorage.getItem(videoJobStateStorageKey);
+            if (!raw) return {};
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== 'object') return {};
+
+            const now = Date.now();
+            const cleaned = {};
+            Object.entries(parsed).forEach(([shotId, payload]) => {
+                const jobId = String(payload?.jobId || '').trim();
+                const startedAt = Number(payload?.startedAt || 0);
+                if (!shotId || !jobId) return;
+                if (startedAt > 0 && (now - startedAt) > VIDEO_JOB_STATE_TTL_MS) return;
+                cleaned[String(shotId)] = { jobId, startedAt: startedAt || now };
+            });
+            return cleaned;
+        } catch (e) {
+            console.warn('Failed to read shot video job state', e);
+            return {};
+        }
+    }, [videoJobStateStorageKey]);
+
+    const writeVideoJobStateStorage = useCallback((state) => {
+        if (!videoJobStateStorageKey) return;
+        try {
+            const normalized = state && typeof state === 'object' ? state : {};
+            if (Object.keys(normalized).length === 0) {
+                localStorage.removeItem(videoJobStateStorageKey);
+                return;
+            }
+            localStorage.setItem(videoJobStateStorageKey, JSON.stringify(normalized));
+        } catch (e) {
+            console.warn('Failed to write shot video job state', e);
+        }
+    }, [videoJobStateStorageKey]);
+
+    const setPendingVideoJob = useCallback((shotId, jobId) => {
+        const stableShotId = String(shotId || '').trim();
+        const stableJobId = String(jobId || '').trim();
+        if (!stableShotId || !stableJobId) return;
+        const prev = readVideoJobStateStorage();
+        const next = {
+            ...prev,
+            [stableShotId]: {
+                jobId: stableJobId,
+                startedAt: Date.now(),
+            },
+        };
+        writeVideoJobStateStorage(next);
+    }, [readVideoJobStateStorage, writeVideoJobStateStorage]);
+
+    const clearPendingVideoJob = useCallback((shotId) => {
+        const stableShotId = String(shotId || '').trim();
+        if (!stableShotId) return;
+        const prev = readVideoJobStateStorage();
+        if (!Object.prototype.hasOwnProperty.call(prev, stableShotId)) return;
+        const next = { ...prev };
+        delete next[stableShotId];
+        writeVideoJobStateStorage(next);
+    }, [readVideoJobStateStorage, writeVideoJobStateStorage]);
+
     useEffect(() => {
         hasHydratedGenerationStateRef.current = false;
         if (!generationStateStorageKey) {
@@ -11385,6 +11662,89 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         if (!hasHydratedGenerationStateRef.current) return;
         writeGenerationStateStorage(generatingStateByShot);
     }, [generatingStateByShot, writeGenerationStateStorage]);
+
+    useEffect(() => {
+        if (!activeEpisode?.id) return;
+        let cancelled = false;
+
+        const resumePendingVideoJobs = async () => {
+            const pending = readVideoJobStateStorage();
+            const entries = Object.entries(pending);
+            if (entries.length === 0) return;
+
+            onLog?.(`Resuming ${entries.length} pending video job(s) for this episode...`, 'info');
+
+            for (const [shotId, payload] of entries) {
+                if (cancelled) break;
+
+                const stableShotId = String(shotId || '').trim();
+                const jobId = String(payload?.jobId || '').trim();
+                if (!stableShotId || !jobId) {
+                    clearPendingVideoJob(stableShotId);
+                    continue;
+                }
+
+                setShotGeneratingState(stableShotId, 'video', true);
+
+                while (!cancelled) {
+                    try {
+                        const status = await getVideoGenerationJobStatus(jobId);
+                        const phase = String(status?.status || '').toLowerCase();
+
+                        if (phase === 'succeeded') {
+                            const resultUrl = String(status?.result?.url || '').trim();
+                            if (resultUrl) {
+                                const newData = { video_url: resultUrl };
+                                try {
+                                    await onUpdateShot(stableShotId, newData);
+                                } catch (persistErr) {
+                                    console.warn('Resume video job save failed:', persistErr);
+                                }
+                                setEditingShot(prev => (prev && String(prev.id) === stableShotId ? { ...prev, ...newData } : prev));
+                                onLog?.(`Recovered video generation completed for shot ${stableShotId}.`, 'success');
+                            }
+                            clearPendingVideoJob(stableShotId);
+                            setShotGeneratingState(stableShotId, 'video', false);
+                            await refreshShots();
+                            break;
+                        }
+
+                        if (phase === 'failed' || phase === 'error' || phase === 'canceled' || phase === 'cancelled') {
+                            clearPendingVideoJob(stableShotId);
+                            setShotGeneratingState(stableShotId, 'video', false);
+                            onLog?.(`Recovered video generation failed for shot ${stableShotId}: ${status?.error || 'unknown error'}`, 'error');
+                            break;
+                        }
+                    } catch (e) {
+                        const detail = e?.response?.data?.detail || e?.message || '';
+                        if (String(detail).toLowerCase().includes('job not found')) {
+                            clearPendingVideoJob(stableShotId);
+                            setShotGeneratingState(stableShotId, 'video', false);
+                            onLog?.(`Recovered video job missing for shot ${stableShotId}; cleared pending state.`, 'warning');
+                            break;
+                        }
+                    }
+
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                }
+            }
+        };
+
+        resumePendingVideoJobs();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [
+        activeEpisode?.id,
+        clearPendingVideoJob,
+        onLog,
+        onUpdateShot,
+        readVideoJobStateStorage,
+        refreshShots,
+        setEditingShot,
+        setShotGeneratingState,
+    ]);
 
     const currentGeneratingState = editingShot?.id
         ? (generatingStateByShot[String(editingShot.id)] || { start: false, end: false, video: false, startAt: 0, endAt: 0, videoAt: 0 })
@@ -13268,9 +13628,13 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 shot_number: editingShot.shot_id,
                 shot_name: editingShot.shot_name,
                 asset_type: 'video',
-                negative_prompt: buildEntityNegativePrompt(rawPrompt, null, entities)
+                negative_prompt: buildEntityNegativePrompt(rawPrompt, null, entities),
+                on_job_created: (jobId) => {
+                    setPendingVideoJob(targetShotId, jobId);
+                },
             }, apiKeyframes);
             if (res && res.url) {
+                clearPendingVideoJob(targetShotId);
                 const newData = { video_url: res.url, prompt: rawPrompt };
                 
                 // 1. Force Local State Update IMMEDIATELY (Optimistic/Local)
@@ -13291,6 +13655,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 }
             }
         } catch (e) {
+             clearPendingVideoJob(targetShotId);
              onLog?.(`Generation failed: ${e.message}`, 'error');
              showNotification(`Generation failed: ${e.message}`, 'error');
         } finally {
@@ -15214,6 +15579,14 @@ const Editor = ({
     const [isAgentOpen, setIsAgentOpen] = useState(false);
     const [activeTab, setActiveTab] = useState(initialActiveTab || 'overview');
     const [isImportOpen, setIsImportOpen] = useState(false);
+    const [isJobPoolOpen, setIsJobPoolOpen] = useState(false);
+    const [jobPoolLoading, setJobPoolLoading] = useState(false);
+    const [jobPoolStoppingId, setJobPoolStoppingId] = useState('');
+    const [jobPoolStoppingAll, setJobPoolStoppingAll] = useState(false);
+    const [jobPoolStopLimit, setJobPoolStopLimit] = useState('20');
+    const [jobPoolFilterKind, setJobPoolFilterKind] = useState('all');
+    const [jobPoolRunningOnly, setJobPoolRunningOnly] = useState(true);
+    const [jobPoolData, setJobPoolData] = useState({ total: 0, status_counts: {}, items: [] });
     const [isSuperuser, setIsSuperuser] = useState(false);
     const [refreshKey, setRefreshKey] = useState(0);
     const [editingShot, setEditingShot] = useState(null);
@@ -16118,6 +16491,119 @@ const Editor = ({
         }
     };
 
+    const refreshGenerationJobPool = useCallback(async (override = {}) => {
+        const kind = String(override.kind || jobPoolFilterKind || 'all');
+        const runningOnly = typeof override.runningOnly === 'boolean' ? override.runningOnly : jobPoolRunningOnly;
+        setJobPoolLoading(true);
+        try {
+            const data = await getGenerationJobPool({
+                kind,
+                running_only: runningOnly,
+                limit: 300,
+            });
+            setJobPoolData({
+                total: Number(data?.total || 0),
+                status_counts: data?.status_counts || {},
+                items: Array.isArray(data?.items) ? data.items : [],
+            });
+        } catch (e) {
+            addLog(`Failed to load job pool: ${e?.response?.data?.detail || e?.message || 'unknown error'}`, 'error');
+        } finally {
+            setJobPoolLoading(false);
+        }
+    }, [addLog, jobPoolFilterKind, jobPoolRunningOnly]);
+
+    useEffect(() => {
+        if (!isJobPoolOpen) return;
+        refreshGenerationJobPool();
+    }, [isJobPoolOpen, refreshGenerationJobPool]);
+
+    const handleStopJobFromPool = async (item) => {
+        const kind = String(item?.kind || '').trim();
+        const jobId = String(item?.job_id || '').trim();
+        if (!kind || !jobId) return;
+        const ok = await confirmUiMessage(t(
+            `确认停止任务？\n${kind} / ${jobId}`,
+            `Stop this task?\n${kind} / ${jobId}`
+        ));
+        if (!ok) return;
+
+        setJobPoolStoppingId(`${kind}:${jobId}`);
+        try {
+            const res = await stopGenerationJob(kind, jobId);
+            addLog(`Job stop requested: ${kind}/${jobId} - ${res?.message || 'ok'}`, 'warning');
+            await refreshGenerationJobPool();
+        } catch (e) {
+            addLog(`Failed to stop job ${kind}/${jobId}: ${e?.response?.data?.detail || e?.message || 'unknown error'}`, 'error');
+        } finally {
+            setJobPoolStoppingId('');
+        }
+    };
+
+    const isJobPoolItemStoppable = (item) => {
+        const statusLower = String(item?.status || '').toLowerCase();
+        return !['succeeded', 'failed', 'canceled', 'cancelled', 'error'].includes(statusLower);
+    };
+
+    const runningJobPoolItems = (jobPoolData?.items || []).filter(isJobPoolItemStoppable);
+    const parsedStopLimit = Number.parseInt(String(jobPoolStopLimit || '0'), 10);
+    const stopAllUsesUnlimited = String(jobPoolStopLimit || '').toLowerCase() === 'all' || !Number.isFinite(parsedStopLimit) || parsedStopLimit <= 0;
+    const stopAllTargetItems = stopAllUsesUnlimited ? runningJobPoolItems : runningJobPoolItems.slice(0, parsedStopLimit);
+
+    const handleStopAllJobsFromPool = async () => {
+        if (jobPoolStoppingAll) return;
+        const candidates = stopAllTargetItems;
+        if (!candidates.length) {
+            addLog(t('当前没有可停止的运行中任务。', 'No running tasks can be stopped right now.'), 'warning');
+            return;
+        }
+
+        const limitLabel = stopAllUsesUnlimited ? t('全部', 'all') : String(parsedStopLimit);
+        const ok = await confirmUiMessage(t(
+            `确认批量停止运行中任务？\n将停止前 ${limitLabel} 个（本次 ${candidates.length} / 可停止 ${runningJobPoolItems.length}）。`,
+            `Stop running tasks in batch?\nWill stop first ${limitLabel} (this run ${candidates.length} / stoppable ${runningJobPoolItems.length}).`
+        ));
+        if (!ok) return;
+
+        setJobPoolStoppingAll(true);
+        setJobPoolStoppingId('');
+        let successCount = 0;
+        let failedCount = 0;
+
+        try {
+            for (const item of candidates) {
+                const kind = String(item?.kind || '').trim();
+                const jobId = String(item?.job_id || '').trim();
+                if (!kind || !jobId) {
+                    failedCount += 1;
+                    continue;
+                }
+                try {
+                    await stopGenerationJob(kind, jobId);
+                    successCount += 1;
+                } catch (e) {
+                    failedCount += 1;
+                    addLog(`Failed to stop job ${kind}/${jobId}: ${e?.response?.data?.detail || e?.message || 'unknown error'}`, 'error');
+                }
+            }
+
+            if (failedCount > 0) {
+                addLog(t(
+                    `批量停止完成：成功 ${successCount}，失败 ${failedCount}（目标 ${candidates.length}）。`,
+                    `Batch stop completed: ${successCount} succeeded, ${failedCount} failed (target ${candidates.length}).`
+                ), 'warning');
+            } else {
+                addLog(t(
+                    `批量停止完成：共停止 ${successCount} 个任务（目标 ${candidates.length}）。`,
+                    `Batch stop completed: ${successCount} tasks stopped (target ${candidates.length}).`
+                ), 'warning');
+            }
+        } finally {
+            setJobPoolStoppingAll(false);
+            await refreshGenerationJobPool();
+        }
+    };
+
     const activeEpisode = episodes.find(e => e.id === activeEpisodeId);
     const activeEpisodeIndex = activeEpisode ? episodes.findIndex((episode) => episode.id === activeEpisode.id) : -1;
     const activeEpisodeLabel = activeEpisode
@@ -16331,6 +16817,16 @@ const Editor = ({
                     )}
                     <button
                         onClick={() => {
+                            trackMenuAction('editor.action.job_pool', t('任务池', 'Job Pool'), () => setIsJobPoolOpen(true));
+                        }}
+                        className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1.5"
+                        title={t('全局任务池', 'Global Job Pool')}
+                    >
+                        <Layers className="w-4 h-4" />
+                        <span className="text-xs font-medium hidden sm:block">{t('任务池', 'Job Pool')}</span>
+                    </button>
+                    <button
+                        onClick={() => {
                             trackMenuAction('editor.action.settings', t('设置', 'Settings'), () => {
                                 try {
                                     const snapshot = {
@@ -16412,6 +16908,127 @@ const Editor = ({
             </AnimatePresence>
 
             <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} onImport={handleImport} project={project} activeEpisodeId={activeEpisode?.id || null} uiLang={uiLang} />
+
+            {isJobPoolOpen && (
+                <div className="fixed inset-0 z-[110] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setIsJobPoolOpen(false)}>
+                    <div className="bg-[#09090b] border border-white/10 rounded-xl w-full max-w-5xl max-h-[88vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+                        <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between gap-3">
+                            <div>
+                                <div className="text-sm font-bold text-white">{t('全局任务池', 'Global Job Pool')}</div>
+                                <div className="text-[11px] text-muted-foreground">{t('可查询并停止 image/video 异步任务。', 'Query and stop async image/video tasks.')}</div>
+                            </div>
+                            <button className="p-2 rounded hover:bg-white/10" onClick={() => setIsJobPoolOpen(false)}><X size={16} /></button>
+                        </div>
+
+                        <div className="px-4 py-3 border-b border-white/10 flex flex-wrap items-center gap-2 text-xs">
+                            <select
+                                value={jobPoolFilterKind}
+                                onChange={(e) => setJobPoolFilterKind(e.target.value)}
+                                className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white"
+                            >
+                                <option value="all">all</option>
+                                <option value="image">image</option>
+                                <option value="video">video</option>
+                            </select>
+                            <label className="flex items-center gap-1 text-muted-foreground">
+                                <input
+                                    type="checkbox"
+                                    checked={jobPoolRunningOnly}
+                                    onChange={(e) => setJobPoolRunningOnly(e.target.checked)}
+                                />
+                                {t('仅运行中', 'Running only')}
+                            </label>
+                            <button
+                                onClick={() => refreshGenerationJobPool()}
+                                disabled={jobPoolLoading}
+                                className="px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-white flex items-center gap-1 disabled:opacity-50"
+                            >
+                                {jobPoolLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} {t('刷新', 'Refresh')}
+                            </button>
+                            <button
+                                onClick={handleStopAllJobsFromPool}
+                                disabled={jobPoolStoppingAll || stopAllTargetItems.length === 0}
+                                className={`px-3 py-1.5 rounded text-white flex items-center gap-1 disabled:opacity-50 ${jobPoolStoppingAll ? 'bg-red-500/30' : 'bg-red-500/20 hover:bg-red-500/30'}`}
+                                title={t('停止全部运行中任务', 'Stop all running tasks')}
+                            >
+                                {jobPoolStoppingAll ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Square className="w-3.5 h-3.5" />}
+                                {jobPoolStoppingAll ? t('批量停止中...', 'Stopping...') : t('批量停止', 'Batch Stop')}
+                            </button>
+                            <label className="flex items-center gap-1 text-muted-foreground">
+                                {t('阈值', 'Limit')}
+                                <select
+                                    value={jobPoolStopLimit}
+                                    onChange={(e) => setJobPoolStopLimit(e.target.value)}
+                                    className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white"
+                                    disabled={jobPoolStoppingAll}
+                                >
+                                    <option value="10">10</option>
+                                    <option value="20">20</option>
+                                    <option value="50">50</option>
+                                    <option value="100">100</option>
+                                    <option value="all">{t('全部', 'All')}</option>
+                                </select>
+                            </label>
+                            <div className="ml-auto text-muted-foreground">
+                                {t('任务数', 'Tasks')}: <b className="text-white">{Number(jobPoolData?.total || 0)}</b>
+                                <span className="ml-3">{t('可停止', 'Stoppable')}: <b className="text-white">{runningJobPoolItems.length}</b></span>
+                                <span className="ml-3">{t('本次目标', 'Target now')}: <b className="text-white">{stopAllTargetItems.length}</b></span>
+                            </div>
+                        </div>
+
+                        <div className="px-4 py-2 text-[11px] text-muted-foreground border-b border-white/10">
+                            {Object.entries(jobPoolData?.status_counts || {}).map(([key, value]) => `${key}:${value}`).join(' · ') || '-'}
+                        </div>
+
+                        <div className="flex-1 overflow-auto custom-scrollbar">
+                            <table className="w-full text-xs">
+                                <thead className="sticky top-0 bg-[#111] border-b border-white/10">
+                                    <tr className="text-muted-foreground">
+                                        <th className="px-3 py-2 text-left">kind</th>
+                                        <th className="px-3 py-2 text-left">job_id</th>
+                                        <th className="px-3 py-2 text-left">status</th>
+                                        <th className="px-3 py-2 text-left">user</th>
+                                        <th className="px-3 py-2 text-left">created_at</th>
+                                        <th className="px-3 py-2 text-left">error</th>
+                                        <th className="px-3 py-2 text-right">action</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {(jobPoolData?.items || []).map((item) => {
+                                        const rowKey = `${item.kind}:${item.job_id}`;
+                                        const stopping = jobPoolStoppingId === rowKey;
+                                        const canStop = isJobPoolItemStoppable(item);
+                                        return (
+                                            <tr key={rowKey} className="border-b border-white/5 hover:bg-white/5">
+                                                <td className="px-3 py-2 text-white/80">{item.kind}</td>
+                                                <td className="px-3 py-2 font-mono text-[11px] text-white/80">{item.job_id}</td>
+                                                <td className="px-3 py-2 text-white">{item.status}</td>
+                                                <td className="px-3 py-2 text-white/70">{item.username || item.user_id || '-'}</td>
+                                                <td className="px-3 py-2 text-white/60">{item.created_at || '-'}</td>
+                                                <td className="px-3 py-2 text-amber-300/80 max-w-[220px] truncate" title={item.error || ''}>{item.error || '-'}</td>
+                                                <td className="px-3 py-2 text-right">
+                                                    <button
+                                                        onClick={() => handleStopJobFromPool(item)}
+                                                        disabled={!canStop || stopping || jobPoolStoppingAll}
+                                                        className={`px-2.5 py-1 rounded text-[11px] font-semibold ${(!canStop || stopping || jobPoolStoppingAll) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-red-500/20 text-red-200 hover:bg-red-500/30'}`}
+                                                    >
+                                                        {stopping ? t('停止中...', 'Stopping...') : t('停止', 'Stop')}
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                    {(!jobPoolData?.items || jobPoolData.items.length === 0) && (
+                                        <tr>
+                                            <td colSpan={7} className="px-3 py-8 text-center text-muted-foreground">{t('暂无任务', 'No tasks')}</td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Log Panel */}
             <LogPanel />

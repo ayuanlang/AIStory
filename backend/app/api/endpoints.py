@@ -75,6 +75,16 @@ IMAGE_JOB_MAX_ITEMS = max(100, int(os.getenv("IMAGE_JOB_MAX_ITEMS", "500")))
 IMAGE_SUBMIT_IDEMPOTENCY_STORE: Dict[str, Dict[str, Any]] = {}
 IMAGE_SUBMIT_IDEMPOTENCY_TTL_SECONDS = max(30, int(os.getenv("IMAGE_SUBMIT_IDEMPOTENCY_TTL_SECONDS", "120")))
 IMAGE_JOB_FILE_DIR = os.path.join(settings.UPLOAD_DIR, "_image_jobs")
+IMAGE_JOB_TASKS: Dict[str, asyncio.Task] = {}
+
+VIDEO_JOB_STORE: Dict[str, Dict[str, Any]] = {}
+VIDEO_JOB_LOCK = threading.Lock()
+VIDEO_JOB_TTL_SECONDS = max(300, int(os.getenv("VIDEO_JOB_TTL_SECONDS", "3600")))
+VIDEO_JOB_MAX_ITEMS = max(100, int(os.getenv("VIDEO_JOB_MAX_ITEMS", "500")))
+VIDEO_SUBMIT_IDEMPOTENCY_STORE: Dict[str, Dict[str, Any]] = {}
+VIDEO_SUBMIT_IDEMPOTENCY_TTL_SECONDS = max(30, int(os.getenv("VIDEO_SUBMIT_IDEMPOTENCY_TTL_SECONDS", "120")))
+VIDEO_JOB_FILE_DIR = os.path.join(settings.UPLOAD_DIR, "_video_jobs")
+VIDEO_JOB_TASKS: Dict[str, asyncio.Task] = {}
 
 
 def _image_job_file_path(job_id: str) -> str:
@@ -107,7 +117,41 @@ def _read_image_job_file(job_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _video_job_file_path(job_id: str) -> str:
+    safe_job_id = re.sub(r"[^a-zA-Z0-9_-]", "", str(job_id or "").strip())
+    return os.path.join(VIDEO_JOB_FILE_DIR, f"{safe_job_id}.json")
+
+
+def _write_video_job_file(job_id: str, payload: Dict[str, Any]) -> None:
+    try:
+        os.makedirs(VIDEO_JOB_FILE_DIR, exist_ok=True)
+        path = _video_job_file_path(job_id)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+    except Exception as e:
+        logger.warning("failed to persist video job file job_id=%s err=%s", job_id, e)
+
+
+def _read_video_job_file(job_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        path = _video_job_file_path(job_id)
+        if not os.path.exists(path):
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            data["job_id"] = data.get("job_id") or str(job_id)
+            return data
+    except Exception as e:
+        logger.warning("failed to read video job file job_id=%s err=%s", job_id, e)
+    return None
+
+
 def _build_image_idempotency_store_key(user_id: int, idempotency_key: str) -> str:
+    return f"{int(user_id)}::{idempotency_key.strip()}"
+
+
+def _build_video_idempotency_store_key(user_id: int, idempotency_key: str) -> str:
     return f"{int(user_id)}::{idempotency_key.strip()}"
 
 
@@ -131,6 +175,28 @@ def _prune_image_submit_idempotency_locked(now: Optional[datetime] = None) -> No
 
     for store_key in expired_keys:
         IMAGE_SUBMIT_IDEMPOTENCY_STORE.pop(store_key, None)
+
+
+def _prune_video_submit_idempotency_locked(now: Optional[datetime] = None) -> None:
+    now_dt = now or datetime.utcnow()
+    expired_keys: List[str] = []
+
+    for store_key, record in VIDEO_SUBMIT_IDEMPOTENCY_STORE.items():
+        created_at = _parse_iso_datetime(record.get("created_at"))
+        if not created_at:
+            expired_keys.append(store_key)
+            continue
+
+        if (now_dt - created_at).total_seconds() > VIDEO_SUBMIT_IDEMPOTENCY_TTL_SECONDS:
+            expired_keys.append(store_key)
+            continue
+
+        job_id = str(record.get("job_id") or "").strip()
+        if not job_id or job_id not in VIDEO_JOB_STORE:
+            expired_keys.append(store_key)
+
+    for store_key in expired_keys:
+        VIDEO_SUBMIT_IDEMPOTENCY_STORE.pop(store_key, None)
 
 
 def _is_shot_submit_debug_enabled() -> bool:
@@ -239,6 +305,34 @@ def _prune_image_jobs_locked() -> None:
         IMAGE_JOB_STORE.pop(job_id, None)
 
     _prune_image_submit_idempotency_locked(now)
+
+
+def _prune_video_jobs_locked() -> None:
+    now = datetime.utcnow()
+    expired_ids = []
+
+    for job_id, job in VIDEO_JOB_STORE.items():
+        status = str(job.get("status") or "").lower()
+        if status not in {"succeeded", "failed", "canceled", "cancelled", "error"}:
+            continue
+
+        finished_at = _parse_iso_datetime(job.get("finished_at")) or _job_sort_key(job)
+        age_seconds = (now - finished_at).total_seconds()
+        if age_seconds > VIDEO_JOB_TTL_SECONDS:
+            expired_ids.append(job_id)
+
+    for job_id in expired_ids:
+        VIDEO_JOB_STORE.pop(job_id, None)
+
+    if len(VIDEO_JOB_STORE) <= VIDEO_JOB_MAX_ITEMS:
+        return
+
+    ordered = sorted(VIDEO_JOB_STORE.items(), key=lambda pair: _job_sort_key(pair[1]))
+    overflow_count = len(VIDEO_JOB_STORE) - VIDEO_JOB_MAX_ITEMS
+    for job_id, _ in ordered[:overflow_count]:
+        VIDEO_JOB_STORE.pop(job_id, None)
+
+    _prune_video_submit_idempotency_locked(now)
 
 
 def _snapshot_image_job_stats() -> Dict[str, Any]:
@@ -10236,6 +10330,14 @@ async def _run_generate_image_job(job_id: str, user_id: int, req_payload: Dict[s
             result=result,
             error=None,
         )
+    except asyncio.CancelledError:
+        _set_image_job(
+            job_id,
+            status="canceled",
+            finished_at=datetime.utcnow().isoformat(),
+            error="Cancelled by user",
+        )
+        raise
     except HTTPException as e:
         _set_image_job(
             job_id,
@@ -10251,6 +10353,8 @@ async def _run_generate_image_job(job_id: str, user_id: int, req_payload: Dict[s
             error=str(e),
         )
     finally:
+        with IMAGE_JOB_LOCK:
+            IMAGE_JOB_TASKS.pop(job_id, None)
         db.close()
 
 
@@ -10300,7 +10404,9 @@ async def submit_generate_image_endpoint(
                 "created_at": now,
             }
 
-    asyncio.create_task(_run_generate_image_job(job_id, current_user.id, req.model_dump()))
+    image_task = asyncio.create_task(_run_generate_image_job(job_id, current_user.id, req.model_dump()))
+    with IMAGE_JOB_LOCK:
+        IMAGE_JOB_TASKS[job_id] = image_task
     return {"job_id": job_id, "status": "queued", "created_at": now}
 
 
@@ -10537,6 +10643,10 @@ async def generate_video_endpoint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    return await _run_generate_video(req, current_user, db)
+
+
+async def _run_generate_video(req: VideoGenerationRequest, current_user: User, db: Session):
     # Billing
     cost = billing_service.estimate_cost(db, "video_gen", req.provider, req.model)
     billing_service.check_can_proceed(current_user, cost)
@@ -10662,6 +10772,306 @@ async def generate_video_endpoint(
         traceback.print_exc()
         billing_service.log_failed_transaction(db, current_user.id, "video_gen", req.provider, req.model, str(e))
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+
+
+def _set_video_job(job_id: str, **fields) -> None:
+    with VIDEO_JOB_LOCK:
+        _prune_video_jobs_locked()
+        current = VIDEO_JOB_STORE.get(job_id, {})
+        if "result" in fields:
+            fields["result"] = _compact_job_result(fields.get("result"))
+        current.update(fields)
+        current["job_id"] = job_id
+        VIDEO_JOB_STORE[job_id] = current
+        _write_video_job_file(job_id, current)
+
+
+async def _run_generate_video_job(job_id: str, user_id: int, req_payload: Dict[str, Any]) -> None:
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            _set_video_job(
+                job_id,
+                status="failed",
+                finished_at=datetime.utcnow().isoformat(),
+                error="User not found",
+            )
+            return
+
+        req_obj = VideoGenerationRequest(**req_payload)
+        _set_video_job(job_id, status="running", started_at=datetime.utcnow().isoformat())
+        result = await _run_generate_video(req_obj, user, db)
+        _set_video_job(
+            job_id,
+            status="succeeded",
+            finished_at=datetime.utcnow().isoformat(),
+            result=result,
+            error=None,
+        )
+    except asyncio.CancelledError:
+        _set_video_job(
+            job_id,
+            status="canceled",
+            finished_at=datetime.utcnow().isoformat(),
+            error="Cancelled by user",
+        )
+        raise
+    except HTTPException as e:
+        _set_video_job(
+            job_id,
+            status="failed",
+            finished_at=datetime.utcnow().isoformat(),
+            error=str(e.detail),
+        )
+    except Exception as e:
+        _set_video_job(
+            job_id,
+            status="failed",
+            finished_at=datetime.utcnow().isoformat(),
+            error=str(e),
+        )
+    finally:
+        with VIDEO_JOB_LOCK:
+            VIDEO_JOB_TASKS.pop(job_id, None)
+        db.close()
+
+
+@router.post("/generate/video/submit")
+async def submit_generate_video_endpoint(
+    req: VideoGenerationRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+):
+    idempotency_key = str(request.headers.get("X-Idempotency-Key") or "").strip()
+
+    if idempotency_key:
+        with VIDEO_JOB_LOCK:
+            _prune_video_jobs_locked()
+            store_key = _build_video_idempotency_store_key(current_user.id, idempotency_key)
+            mapped = VIDEO_SUBMIT_IDEMPOTENCY_STORE.get(store_key) or {}
+            existing_job_id = str(mapped.get("job_id") or "").strip()
+            if existing_job_id:
+                existing_job = dict(VIDEO_JOB_STORE.get(existing_job_id) or {})
+                if existing_job:
+                    return {
+                        "job_id": existing_job_id,
+                        "status": existing_job.get("status") or "queued",
+                        "created_at": existing_job.get("created_at") or datetime.utcnow().isoformat(),
+                        "deduplicated": True,
+                    }
+
+    job_id = uuid.uuid4().hex
+    now = datetime.utcnow().isoformat()
+    _set_video_job(
+        job_id,
+        status="queued",
+        user_id=current_user.id,
+        username=current_user.username,
+        created_at=now,
+        started_at=None,
+        finished_at=None,
+        result=None,
+        error=None,
+    )
+
+    if idempotency_key:
+        with VIDEO_JOB_LOCK:
+            store_key = _build_video_idempotency_store_key(current_user.id, idempotency_key)
+            VIDEO_SUBMIT_IDEMPOTENCY_STORE[store_key] = {
+                "job_id": job_id,
+                "created_at": now,
+            }
+
+    video_task = asyncio.create_task(_run_generate_video_job(job_id, current_user.id, req.model_dump()))
+    with VIDEO_JOB_LOCK:
+        VIDEO_JOB_TASKS[job_id] = video_task
+    return {"job_id": job_id, "status": "queued", "created_at": now}
+
+
+@router.get("/generate/video/jobs/{job_id}")
+def get_generate_video_job_status(
+    job_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    with VIDEO_JOB_LOCK:
+        job = dict(VIDEO_JOB_STORE.get(job_id) or {})
+
+    if not job:
+        file_job = _read_video_job_file(job_id)
+        if file_job:
+            with VIDEO_JOB_LOCK:
+                VIDEO_JOB_STORE[job_id] = dict(file_job)
+            job = dict(file_job)
+            logger.info(
+                "[VideoJob] recovered from shared file store | job_id=%s status=%s user_id=%s",
+                job_id,
+                job.get("status"),
+                job.get("user_id"),
+            )
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    owner_id = job.get("user_id")
+    if not current_user.is_superuser and owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    return {
+        "job_id": job.get("job_id"),
+        "status": job.get("status"),
+        "created_at": job.get("created_at"),
+        "started_at": job.get("started_at"),
+        "finished_at": job.get("finished_at"),
+        "error": job.get("error"),
+        "result": job.get("result"),
+    }
+
+
+@router.get("/generate/jobs/pool")
+def get_generation_job_pool(
+    kind: str = "all",
+    running_only: bool = False,
+    limit: int = 200,
+    current_user: User = Depends(get_current_user),
+):
+    safe_kind = str(kind or "all").strip().lower()
+    if safe_kind not in {"all", "image", "video"}:
+        raise HTTPException(status_code=400, detail="kind must be one of: all, image, video")
+
+    safe_limit = max(1, min(int(limit or 200), 500))
+
+    items: List[Dict[str, Any]] = []
+    final_statuses = {"succeeded", "failed", "canceled", "cancelled", "error"}
+
+    if safe_kind in {"all", "image"}:
+        with IMAGE_JOB_LOCK:
+            _prune_image_jobs_locked()
+            for job_id, payload in IMAGE_JOB_STORE.items():
+                item = dict(payload or {})
+                item["job_id"] = item.get("job_id") or job_id
+                item["kind"] = "image"
+                item["has_task"] = job_id in IMAGE_JOB_TASKS
+                items.append(item)
+
+    if safe_kind in {"all", "video"}:
+        with VIDEO_JOB_LOCK:
+            _prune_video_jobs_locked()
+            for job_id, payload in VIDEO_JOB_STORE.items():
+                item = dict(payload or {})
+                item["job_id"] = item.get("job_id") or job_id
+                item["kind"] = "video"
+                item["has_task"] = job_id in VIDEO_JOB_TASKS
+                items.append(item)
+
+    if not current_user.is_superuser:
+        items = [item for item in items if item.get("user_id") == current_user.id]
+
+    if running_only:
+        items = [item for item in items if str(item.get("status") or "").lower() not in final_statuses]
+
+    items.sort(key=lambda item: _job_sort_key(item), reverse=True)
+    items = items[:safe_limit]
+
+    status_counts: Dict[str, int] = {}
+    for item in items:
+        status = str(item.get("status") or "unknown").lower()
+        status_counts[status] = status_counts.get(status, 0) + 1
+
+    return {
+        "total": len(items),
+        "kind": safe_kind,
+        "running_only": bool(running_only),
+        "status_counts": status_counts,
+        "items": [
+            {
+                "kind": item.get("kind"),
+                "job_id": item.get("job_id"),
+                "status": item.get("status"),
+                "user_id": item.get("user_id"),
+                "username": item.get("username"),
+                "created_at": item.get("created_at"),
+                "started_at": item.get("started_at"),
+                "finished_at": item.get("finished_at"),
+                "error": item.get("error"),
+                "has_task": bool(item.get("has_task")),
+            }
+            for item in items
+        ],
+    }
+
+
+@router.post("/generate/jobs/{kind}/{job_id}/stop")
+def stop_generation_job(
+    kind: str,
+    job_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    safe_kind = str(kind or "").strip().lower()
+    if safe_kind not in {"image", "video"}:
+        raise HTTPException(status_code=400, detail="kind must be image or video")
+
+    if safe_kind == "image":
+        lock = IMAGE_JOB_LOCK
+        store = IMAGE_JOB_STORE
+        task_store = IMAGE_JOB_TASKS
+        read_file_func = _read_image_job_file
+        set_job_func = _set_image_job
+    else:
+        lock = VIDEO_JOB_LOCK
+        store = VIDEO_JOB_STORE
+        task_store = VIDEO_JOB_TASKS
+        read_file_func = _read_video_job_file
+        set_job_func = _set_video_job
+
+    with lock:
+        job = dict(store.get(job_id) or {})
+        task_ref = task_store.get(job_id)
+
+    if not job:
+        file_job = read_file_func(job_id)
+        if file_job:
+            with lock:
+                store[job_id] = dict(file_job)
+            job = dict(file_job)
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    owner_id = job.get("user_id")
+    if not current_user.is_superuser and owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    status = str(job.get("status") or "").lower()
+    if status in {"succeeded", "failed", "canceled", "cancelled", "error"}:
+        return {
+            "ok": True,
+            "kind": safe_kind,
+            "job_id": job_id,
+            "status": status,
+            "message": "Job already finished",
+        }
+
+    set_job_func(
+        job_id,
+        status="canceled",
+        finished_at=datetime.utcnow().isoformat(),
+        error="Cancelled by user",
+    )
+
+    if task_ref:
+        try:
+            task_ref.cancel()
+        except Exception:
+            pass
+
+    return {
+        "ok": True,
+        "kind": safe_kind,
+        "job_id": job_id,
+        "status": "canceled",
+        "message": "Stop requested",
+    }
 
 
 SHOT_MEDIA_BATCH_STATUS_KEY = "shot_media_batch_status"

@@ -653,6 +653,41 @@ const pollImageJobUntilDone = async (jobId, { timeoutMs = 10 * 60 * 1000, pollIn
     throw new Error('Image generation timed out while polling job status');
 };
 
+const pollVideoJobUntilDone = async (jobId, { timeoutMs = 15 * 60 * 1000, pollIntervalMs = 2000 } = {}) => {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+        const response = await api.get(`/generate/video/jobs/${jobId}`);
+        const data = response?.data || {};
+        const status = String(data.status || '').toLowerCase();
+
+        if (status === 'succeeded') {
+            return data.result || {};
+        }
+        if (status === 'failed') {
+            throw new Error(data.error || 'Video generation job failed');
+        }
+
+        await sleep(pollIntervalMs);
+    }
+
+    throw new Error('Video generation timed out while polling job status');
+};
+
+export const getVideoGenerationJobStatus = async (jobId) => {
+    const response = await api.get(`/generate/video/jobs/${jobId}`);
+    return response?.data || {};
+};
+
+export const getGenerationJobPool = async (params = {}) => {
+    const response = await api.get('/generate/jobs/pool', { params });
+    return response?.data || {};
+};
+
+export const stopGenerationJob = async (kind, jobId) => {
+    const response = await api.post(`/generate/jobs/${kind}/${jobId}/stop`);
+    return response?.data || {};
+};
+
 export const generateImage = async (prompt, provider = null, ref_image_url = null, options = {}, negative_prompt = null) => {
     const effectiveNegativePrompt = String(negative_prompt ?? options?.negative_prompt ?? '').trim();
     const payload = { prompt, provider, ref_image_url, ...options, ...(effectiveNegativePrompt ? { negative_prompt: effectiveNegativePrompt } : {}) };
@@ -706,25 +741,75 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
 
 export const generateVideo = async (prompt, provider = null, ref_image_url = null, last_frame_url = null, duration = 5, options = {}, keyframes = [], negative_prompt = null) => {
     const effectiveNegativePrompt = String(negative_prompt ?? options?.negative_prompt ?? '').trim();
+    const {
+        job_timeout_ms,
+        job_poll_interval_ms,
+        on_job_created,
+        ...requestOptions
+    } = options || {};
     const payload = {
         prompt,
         duration,
-        ...options,
+        ...requestOptions,
         ...(provider ? { provider } : {}),
         ...(ref_image_url !== null && ref_image_url !== undefined && ref_image_url !== '' ? { ref_image_url } : {}),
         ...(last_frame_url !== null && last_frame_url !== undefined && last_frame_url !== '' ? { last_frame_url } : {}),
         ...(Array.isArray(keyframes) && keyframes.length > 0 ? { keyframes } : {}),
         ...(effectiveNegativePrompt ? { negative_prompt: effectiveNegativePrompt } : {}),
     };
-    const response = await api.post('/generate/video', payload);
-    if (shouldAutoDownloadForRequest(options) && response?.data?.url) {
+
+    const idempotencyKey = `vid-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+
+    let submitResp;
+    try {
+        submitResp = await api.post('/generate/video/submit', payload, {
+            headers: {
+                'X-Idempotency-Key': idempotencyKey,
+            },
+        });
+    } catch (error) {
+        const status = Number(error?.response?.status || 0);
+        const shouldFallback = status === 404 || status === 405 || status === 501;
+        if (!shouldFallback) {
+            throw error;
+        }
+
+        const response = await api.post('/generate/video', payload);
+        if (shouldAutoDownloadForRequest(options) && response?.data?.url) {
+            try {
+                await downloadMediaToLocal(response.data.url, `generated_video_${Date.now()}.mp4`);
+            } catch (downloadError) {
+                console.warn('[generateVideo] auto local download failed:', downloadError);
+            }
+        }
+        return response.data;
+    }
+
+    const jobId = submitResp?.data?.job_id;
+    if (!jobId) {
+        throw new Error('Missing video job_id from submit response');
+    }
+    if (typeof on_job_created === 'function') {
         try {
-            await downloadMediaToLocal(response.data.url, `generated_video_${Date.now()}.mp4`);
+            on_job_created(jobId);
+        } catch {
+            // ignore callback errors
+        }
+    }
+
+    const result = await pollVideoJobUntilDone(jobId, {
+        timeoutMs: Number(job_timeout_ms || 15 * 60 * 1000),
+        pollIntervalMs: Number(job_poll_interval_ms || 2000),
+    });
+
+    if (shouldAutoDownloadForRequest(options) && result?.url) {
+        try {
+            await downloadMediaToLocal(result.url, `generated_video_${Date.now()}.mp4`);
         } catch (downloadError) {
             console.warn('[generateVideo] auto local download failed:', downloadError);
         }
     }
-    return response.data;
+    return result;
 }
 
 export const deleteProject = async (projectId) => {
