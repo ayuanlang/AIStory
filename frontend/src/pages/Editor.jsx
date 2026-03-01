@@ -8545,7 +8545,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                         title={t('后台批量对当前分集所有场景执行 AI Shots 并自动导入', 'Run AI Shots in background for all scenes in this episode and auto-apply')}
                     >
                         {batchAiShotsProgress.running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
-                        {batchAiShotsProgress.running ? t('批量执行中...', 'Batch Running...') : t('批量 AI Shots（全部）', 'Batch AI Shots (All)')}
+                        {batchAiShotsProgress.running ? t('执行中...', 'Running...') : t('AI Shots', 'AI Shots')}
                     </button>
                     <button
                         onClick={handleStopBatchAiShots}
@@ -8554,7 +8554,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                         title={t('停止当前后台批量 AI Shots 任务（当前场景完成后停止）', 'Stop current background batch AI Shots task (stops after current scene finishes)')}
                     >
                         {isStoppingBatchAiShots ? <Loader2 className="w-4 h-4 animate-spin" /> : <X className="w-4 h-4" />}
-                        {isStoppingBatchAiShots ? t('停止中...', 'Stopping...') : t('停止批量', 'Stop Batch')}
+                        {isStoppingBatchAiShots ? t('停止中...', 'Stopping...') : t('停止', 'Stop')}
                     </button>
                      <button onClick={handleSave} className="px-4 py-2 bg-primary text-black rounded-lg text-sm font-bold hover:bg-primary/90 flex items-center gap-2">
                         <CheckCircle className="w-4 h-4" />
