@@ -3692,10 +3692,33 @@ def _read_episode_scene_generation_status(episode: Episode) -> Dict[str, Any]:
 
 
 def _persist_episode_scene_generation_status(db: Session, episode: Episode, status_payload: Dict[str, Any]) -> None:
-    info = dict(episode.episode_info or {})
-    info[EPISODE_SCENE_GEN_STATUS_KEY] = status_payload
-    episode.episode_info = info
-    db.add(episode)
+    latest_episode = (
+        db.query(Episode)
+        .execution_options(populate_existing=True)
+        .filter(Episode.id == int(episode.id))
+        .first()
+    )
+    target_episode = latest_episode or episode
+
+    info = dict(target_episode.episode_info or {})
+    existing_status = info.get(EPISODE_SCENE_GEN_STATUS_KEY)
+    merged_status = dict(status_payload or {})
+    has_incoming_force_flag = "force_stopped" in merged_status
+
+    if isinstance(existing_status, dict) and bool(existing_status.get("force_stopped")) and not has_incoming_force_flag:
+        merged_status["force_stopped"] = True
+
+    if bool(merged_status.get("force_stopped")):
+        now_iso = datetime.utcnow().isoformat()
+        merged_status["running"] = False
+        merged_status["status"] = "canceled"
+        merged_status["stopped_by_user"] = True
+        merged_status["finished_at"] = merged_status.get("finished_at") or now_iso
+        merged_status["updated_at"] = now_iso
+
+    info[EPISODE_SCENE_GEN_STATUS_KEY] = merged_status
+    target_episode.episode_info = info
+    db.add(target_episode)
     db.commit()
 
 
@@ -4202,6 +4225,7 @@ def start_episode_scenes_generation_job(
         "result": None,
         "stop_requested": False,
         "stop_requested_at": None,
+        "force_stopped": False,
         "started_at": now_iso,
         "updated_at": now_iso,
         "finished_at": None,
@@ -4249,8 +4273,13 @@ def stop_episode_scenes_generation_job(
     now_iso = datetime.utcnow().isoformat()
     status_payload["stop_requested"] = True
     status_payload["stop_requested_at"] = now_iso
+    status_payload["force_stopped"] = True
+    status_payload["stopped_by_user"] = True
+    status_payload["running"] = False
+    status_payload["status"] = "canceled"
+    status_payload["finished_at"] = status_payload.get("finished_at") or now_iso
     status_payload["updated_at"] = now_iso
-    status_payload["message"] = "Stop requested"
+    status_payload["message"] = "Force stopped"
     _persist_episode_scene_generation_status(db, episode, status_payload)
     return status_payload
 
@@ -4315,12 +4344,26 @@ async def generate_project_episode_scripts_from_global_framework(
             existing_status = latest_gi.get(status_key) if isinstance(latest_gi.get(status_key), dict) else {}
 
             merged_status = dict(status_payload or {})
+            has_incoming_force_flag = "force_stopped" in merged_status
+            if bool(existing_status.get("force_stopped")) and not has_incoming_force_flag:
+                merged_status["force_stopped"] = True
+
             if bool(existing_status.get("stop_requested")):
                 merged_status["stop_requested"] = True
                 if existing_status.get("stop_requested_at") and not merged_status.get("stop_requested_at"):
                     merged_status["stop_requested_at"] = existing_status.get("stop_requested_at")
                 if not merged_status.get("stopped_by_user"):
                     merged_status["stopped_by_user"] = bool(existing_status.get("stopped_by_user"))
+
+            if bool(merged_status.get("force_stopped")):
+                now_iso = datetime.utcnow().isoformat()
+                merged_status["running"] = False
+                merged_status["status"] = "canceled"
+                merged_status["stopped_by_user"] = True
+                merged_status["finished_at"] = merged_status.get("finished_at") or now_iso
+                merged_status["updated_at"] = now_iso
+                if not merged_status.get("message"):
+                    merged_status["message"] = "Force stopped"
 
             latest_gi[status_key] = status_payload
             if latest_project:
@@ -4922,7 +4965,13 @@ def stop_project_episode_scripts_generation(
     status_payload["stop_requested"] = True
     if not status_payload.get("stop_requested_at"):
         status_payload["stop_requested_at"] = now_iso
+    status_payload["force_stopped"] = True
+    status_payload["stopped_by_user"] = True
+    status_payload["running"] = False
+    status_payload["status"] = "canceled"
+    status_payload["finished_at"] = status_payload.get("finished_at") or now_iso
     status_payload["updated_at"] = now_iso
+    status_payload["message"] = "Force stopped"
     gi[status_key] = status_payload
     project.global_info = gi
     db.add(project)
@@ -5814,10 +5863,33 @@ def _read_scene_ai_shots_batch_status(episode: Episode) -> Dict[str, Any]:
 
 
 def _persist_scene_ai_shots_batch_status(db: Session, episode: Episode, status_payload: Dict[str, Any]) -> None:
-    info = dict(episode.episode_info or {})
-    info[SCENE_AI_SHOTS_BATCH_STATUS_KEY] = status_payload
-    episode.episode_info = info
-    db.add(episode)
+    latest_episode = (
+        db.query(Episode)
+        .execution_options(populate_existing=True)
+        .filter(Episode.id == int(episode.id))
+        .first()
+    )
+    target_episode = latest_episode or episode
+
+    info = dict(target_episode.episode_info or {})
+    existing_status = info.get(SCENE_AI_SHOTS_BATCH_STATUS_KEY)
+    merged_status = dict(status_payload or {})
+    has_incoming_force_flag = "force_stopped" in merged_status
+
+    if isinstance(existing_status, dict) and bool(existing_status.get("force_stopped")) and not has_incoming_force_flag:
+        merged_status["force_stopped"] = True
+
+    if bool(merged_status.get("force_stopped")):
+        now_iso = datetime.utcnow().isoformat()
+        merged_status["running"] = False
+        merged_status["status"] = "canceled"
+        merged_status["stopped_by_user"] = True
+        merged_status["finished_at"] = merged_status.get("finished_at") or now_iso
+        merged_status["updated_at"] = now_iso
+
+    info[SCENE_AI_SHOTS_BATCH_STATUS_KEY] = merged_status
+    target_episode.episode_info = info
+    db.add(target_episode)
     db.commit()
 
 
@@ -5997,6 +6069,7 @@ def start_scene_ai_shots_batch(
         "errors": [],
         "stop_requested": False,
         "stop_requested_at": None,
+        "force_stopped": False,
         "stopped_by_user": False,
         "started_at": now_iso,
         "updated_at": now_iso,
@@ -6046,8 +6119,13 @@ def stop_scene_ai_shots_batch(
     now_iso = datetime.utcnow().isoformat()
     status_payload["stop_requested"] = True
     status_payload["stop_requested_at"] = now_iso
+    status_payload["force_stopped"] = True
+    status_payload["stopped_by_user"] = True
+    status_payload["running"] = False
+    status_payload["status"] = "canceled"
+    status_payload["finished_at"] = status_payload.get("finished_at") or now_iso
     status_payload["updated_at"] = now_iso
-    status_payload["message"] = "Stop requested"
+    status_payload["message"] = "Force stopped"
     _persist_scene_ai_shots_batch_status(db, episode, status_payload)
     return status_payload
 
@@ -10998,6 +11076,8 @@ def _parse_iso_datetime(value: Any) -> Optional[datetime]:
 
 
 def _normalize_batch_job_status(payload: Dict[str, Any]) -> str:
+    if bool(payload.get("force_stopped")):
+        return "canceled"
     if bool(payload.get("stopped_by_user")) or bool(payload.get("stop_requested")):
         return "canceled"
 
@@ -11450,12 +11530,13 @@ def stop_generation_job(
 
             payload["stop_requested"] = True
             payload["stop_requested_at"] = payload.get("stop_requested_at") or now_iso
+            payload["force_stopped"] = True
             payload["running"] = False
             payload["status"] = "canceled"
             payload["stopped_by_user"] = True
             payload["finished_at"] = payload.get("finished_at") or now_iso
             payload["updated_at"] = now_iso
-            payload["message"] = "Stopped from job pool"
+            payload["message"] = "Force stopped from job pool"
             gi["episode_script_generation_status"] = payload
             project.global_info = gi
             db.add(project)
@@ -11499,12 +11580,13 @@ def stop_generation_job(
 
         payload["stop_requested"] = True
         payload["stop_requested_at"] = payload.get("stop_requested_at") or now_iso
+        payload["force_stopped"] = True
         payload["running"] = False
         payload["status"] = "canceled"
         payload["stopped_by_user"] = True
         payload["finished_at"] = payload.get("finished_at") or now_iso
         payload["updated_at"] = now_iso
-        payload["message"] = "Stopped from job pool"
+        payload["message"] = "Force stopped from job pool"
         info[status_key] = payload
         episode.episode_info = info
         db.add(episode)
@@ -11620,6 +11702,10 @@ def _persist_shot_media_batch_status(db: Session, episode: Episode, status_paylo
     info = dict(target_episode.episode_info or {})
     existing_status = info.get(SHOT_MEDIA_BATCH_STATUS_KEY)
     merged_status = dict(status_payload or {})
+    has_incoming_force_flag = "force_stopped" in merged_status
+
+    if isinstance(existing_status, dict) and bool(existing_status.get("force_stopped")) and not has_incoming_force_flag:
+        merged_status["force_stopped"] = True
 
     if isinstance(existing_status, dict) and bool(existing_status.get("stop_requested")):
         merged_status["stop_requested"] = True
@@ -11627,6 +11713,15 @@ def _persist_shot_media_batch_status(db: Session, episode: Episode, status_paylo
             merged_status["stop_requested_at"] = existing_status.get("stop_requested_at")
         if not merged_status.get("stopped_by_user"):
             merged_status["stopped_by_user"] = bool(existing_status.get("stopped_by_user"))
+
+    if bool(merged_status.get("force_stopped")):
+        now_iso = datetime.utcnow().isoformat()
+        merged_status["running"] = False
+        merged_status["status"] = "canceled"
+        merged_status["stopped_by_user"] = True
+        merged_status["finished_at"] = merged_status.get("finished_at") or now_iso
+        merged_status["updated_at"] = now_iso
+        merged_status["message"] = merged_status.get("message") or "Force stopped"
 
     info[SHOT_MEDIA_BATCH_STATUS_KEY] = merged_status
     target_episode.episode_info = info
@@ -12224,6 +12319,7 @@ def start_shot_media_batch_job(
         "errors": [],
         "stop_requested": False,
         "stop_requested_at": None,
+        "force_stopped": False,
         "stopped_by_user": False,
         "started_at": now_iso,
         "updated_at": now_iso,
@@ -12273,8 +12369,13 @@ def stop_shot_media_batch_job(
     now_iso = datetime.utcnow().isoformat()
     status_payload["stop_requested"] = True
     status_payload["stop_requested_at"] = now_iso
+    status_payload["force_stopped"] = True
+    status_payload["stopped_by_user"] = True
+    status_payload["running"] = False
+    status_payload["status"] = "canceled"
+    status_payload["finished_at"] = status_payload.get("finished_at") or now_iso
     status_payload["updated_at"] = now_iso
-    status_payload["message"] = "Stop requested"
+    status_payload["message"] = "Force stopped"
     _persist_shot_media_batch_status(db, episode, status_payload)
     _set_shot_media_batch_cancel_requested(int(episode_id))
     return status_payload
