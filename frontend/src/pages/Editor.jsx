@@ -7750,6 +7750,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         completed: 0,
         success: 0,
         failed: 0,
+        stopRequested: false,
         currentSceneLabel: '',
         message: '',
         errors: [],
@@ -8600,6 +8601,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                 completed: Number(status.completed || 0),
                 success: Number(status.success || 0),
                 failed: Number(status.failed || 0),
+                stopRequested: Boolean(status.stop_requested),
                 currentSceneLabel: status.current_scene_label || '',
                 message: status.message || prev.message || '',
                 errors: Array.isArray(status.errors) ? status.errors : [],
@@ -8646,6 +8648,11 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         setIsStoppingBatchAiShots(true);
         try {
             const res = await stopSceneAiShotsBatch(activeEpisode.id);
+            setBatchAiShotsProgress((prev) => ({
+                ...prev,
+                stopRequested: true,
+                message: res?.message || prev.message || t('已请求停止，等待当前场景完成后中止。', 'Stop requested. Waiting for current scene to finish.'),
+            }));
             await pollBatchAiShotsStatus();
             onLog?.(`SceneManager: Batch AI Shots ${res?.message || 'stop requested'}.`, 'warning');
         } catch (e) {
@@ -8684,6 +8691,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                 completed: Number(started?.completed || 0),
                 success: Number(started?.success || 0),
                 failed: Number(started?.failed || 0),
+                stopRequested: Boolean(started?.stop_requested),
                 currentSceneLabel: started?.current_scene_label || '',
                 message: started?.message || t('批量任务已启动...', 'Batch task started...'),
                 errors: Array.isArray(started?.errors) ? started.errors : [],
@@ -8880,12 +8888,14 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                     </button>
                     <button
                         onClick={handleStopBatchAiShots}
-                        disabled={!batchAiShotsProgress.running || isStoppingBatchAiShots}
+                        disabled={!batchAiShotsProgress.running || isStoppingBatchAiShots || batchAiShotsProgress.stopRequested}
                         className="px-4 py-2 bg-white/10 text-white rounded-lg text-sm font-bold hover:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                         title={t('停止当前后台批量 AI Shots 任务（当前场景完成后停止）', 'Stop current background batch AI Shots task (stops after current scene finishes)')}
                     >
                         {isStoppingBatchAiShots ? <Loader2 className="w-4 h-4 animate-spin" /> : <X className="w-4 h-4" />}
-                        {isStoppingBatchAiShots ? t('停止中...', 'Stopping...') : t('停止', 'Stop')}
+                        {isStoppingBatchAiShots
+                            ? t('停止中...', 'Stopping...')
+                            : (batchAiShotsProgress.stopRequested ? t('已请求停止', 'Stop Requested') : t('停止', 'Stop'))}
                     </button>
                      <button onClick={handleSave} className="px-4 py-2 bg-primary text-black rounded-lg text-sm font-bold hover:bg-primary/90 flex items-center gap-2">
                         <CheckCircle className="w-4 h-4" />
@@ -8905,6 +8915,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                     {batchAiShotsProgress.running ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
                     <span>
                         {batchAiShotsProgress.message}
+                        {batchAiShotsProgress.stopRequested ? ` · ${t('已请求停止', 'Stop requested')}` : ''}
                         {batchAiShotsProgress.currentSceneLabel ? ` · ${t('当前', 'Current')}: ${batchAiShotsProgress.currentSceneLabel}` : ''}
                     </span>
                 </div>
@@ -11188,7 +11199,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const [isStoppingShotBatch, setIsStoppingShotBatch] = useState(false);
     const [isManualRebindingMedia, setIsManualRebindingMedia] = useState(false);
     const [translatingPromptField, setTranslatingPromptField] = useState('');
-    const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0, status: '' }); // Progress tracking
+    const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0, status: '', stopRequested: false }); // Progress tracking
     const shotBatchStatusTimerRef = useRef(null);
     const [activeSources, setActiveSources] = useState({ Image: 'unset', Video: 'unset' });
     const [localKeyframes, setLocalKeyframes] = useState([]);
@@ -13273,6 +13284,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 current: Number(status.completed || 0),
                 total: Number(status.total || 0),
                 status: String(status.message || ''),
+                stopRequested: Boolean(status.stop_requested),
             });
 
             if (!running && shotBatchStatusTimerRef.current) {
@@ -13314,6 +13326,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         setIsStoppingShotBatch(true);
         try {
             const res = await stopShotMediaBatch(activeEpisode.id);
+            setBatchProgress((prev) => ({
+                ...prev,
+                stopRequested: true,
+                status: res?.message || prev.status || t('已请求停止，等待当前镜头完成后中止。', 'Stop requested. Waiting for current shot to finish.'),
+            }));
             await pollShotBatchStatus();
             onLog?.(`Shot batch: ${res?.message || 'stop requested'}`, 'warning');
         } catch (e) {
@@ -13351,6 +13368,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 current: 0,
                 total: shots.length,
                 status: mode === 'videos' ? 'Video batch started...' : 'Keyframe batch started...',
+                stopRequested: false,
             });
             onLog?.(
                 mode === 'videos'
@@ -13484,12 +13502,16 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                             {isBatchGenerating && (
                                 <button
                                     onClick={handleStopShotBatch}
-                                    disabled={isStoppingShotBatch}
+                                    disabled={isStoppingShotBatch || batchProgress.stopRequested}
                                     className={`px-3 py-1.5 text-xs flex items-center gap-1 transition-all ${isStoppingShotBatch ? 'bg-amber-500/20 text-amber-200 cursor-wait' : 'bg-amber-500/10 text-amber-300 hover:bg-amber-500/20'}`}
                                     title={t('停止当前批处理任务', 'Stop current batch task')}
                                 >
                                     {isStoppingShotBatch ? <Loader2 className="w-3 h-3 animate-spin"/> : <X className="w-3 h-3"/>}
-                                    <span>{t('停止', 'Stop')}</span>
+                                    <span>
+                                        {isStoppingShotBatch
+                                            ? t('停止中...', 'Stopping...')
+                                            : (batchProgress.stopRequested ? t('已请求停止', 'Stop Requested') : t('停止', 'Stop'))}
+                                    </span>
                                 </button>
                             )}
                         </div>
