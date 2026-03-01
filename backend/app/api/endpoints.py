@@ -11233,16 +11233,16 @@ def stop_generation_job(
             gi = dict(project.global_info or {})
             payload = gi.get("episode_script_generation_status")
             if not isinstance(payload, dict):
-                raise HTTPException(status_code=404, detail="Job not found")
-
-            if not bool(payload.get("running")):
-                return {
-                    "ok": True,
-                    "kind": safe_kind,
-                    "job_id": job_id,
-                    "status": _normalize_batch_job_status(payload),
-                    "message": "Job already finished",
+                payload = {
+                    "project_id": int(project.id),
+                    "results": [],
+                    "processed": 0,
+                    "generated": 0,
+                    "failed": 0,
+                    "skipped": 0,
                 }
+
+            normalized_before = _normalize_batch_job_status(payload)
 
             payload["stop_requested"] = True
             payload["stop_requested_at"] = payload.get("stop_requested_at") or now_iso
@@ -11262,7 +11262,7 @@ def stop_generation_job(
                 "kind": safe_kind,
                 "job_id": job_id,
                 "status": "canceled",
-                "message": "Stopped",
+                "message": "Stopped" if normalized_before == "running" else "Marked as canceled",
             }
 
         episode = db.query(Episode).filter(Episode.id == target_id).first()
@@ -11280,16 +11280,17 @@ def stop_generation_job(
         info = dict(episode.episode_info or {})
         payload = info.get(status_key)
         if not isinstance(payload, dict):
-            raise HTTPException(status_code=404, detail="Job not found")
-
-        if not bool(payload.get("running")):
-            return {
-                "ok": True,
-                "kind": safe_kind,
-                "job_id": job_id,
-                "status": _normalize_batch_job_status(payload),
-                "message": "Job already finished",
+            payload = {
+                "episode_id": int(episode.id),
+                "project_id": int(episode.project_id),
+                "errors": [],
+                "total": 0,
+                "completed": 0,
+                "success": 0,
+                "failed": 0,
             }
+
+        normalized_before = _normalize_batch_job_status(payload)
 
         payload["stop_requested"] = True
         payload["stop_requested_at"] = payload.get("stop_requested_at") or now_iso
@@ -11309,7 +11310,7 @@ def stop_generation_job(
             "kind": safe_kind,
             "job_id": job_id,
             "status": "canceled",
-            "message": "Stopped",
+            "message": "Stopped" if normalized_before == "running" else "Marked as canceled",
         }
 
     if safe_kind == "image":
