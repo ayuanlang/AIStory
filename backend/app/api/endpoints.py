@@ -11235,8 +11235,12 @@ def stop_generation_job(
 
             payload["stop_requested"] = True
             payload["stop_requested_at"] = payload.get("stop_requested_at") or now_iso
+            payload["running"] = False
+            payload["status"] = "canceled"
+            payload["stopped_by_user"] = True
+            payload["finished_at"] = payload.get("finished_at") or now_iso
             payload["updated_at"] = now_iso
-            payload["message"] = "Stop requested from job pool"
+            payload["message"] = "Stopped from job pool"
             gi["episode_script_generation_status"] = payload
             project.global_info = gi
             db.add(project)
@@ -11246,8 +11250,8 @@ def stop_generation_job(
                 "ok": True,
                 "kind": safe_kind,
                 "job_id": job_id,
-                "status": "running",
-                "message": "Stop requested",
+                "status": "canceled",
+                "message": "Stopped",
             }
 
         episode = db.query(Episode).filter(Episode.id == target_id).first()
@@ -11278,8 +11282,12 @@ def stop_generation_job(
 
         payload["stop_requested"] = True
         payload["stop_requested_at"] = payload.get("stop_requested_at") or now_iso
+        payload["running"] = False
+        payload["status"] = "canceled"
+        payload["stopped_by_user"] = True
+        payload["finished_at"] = payload.get("finished_at") or now_iso
         payload["updated_at"] = now_iso
-        payload["message"] = "Stop requested from job pool"
+        payload["message"] = "Stopped from job pool"
         info[status_key] = payload
         episode.episode_info = info
         db.add(episode)
@@ -11289,8 +11297,8 @@ def stop_generation_job(
             "ok": True,
             "kind": safe_kind,
             "job_id": job_id,
-            "status": "running",
-            "message": "Stop requested",
+            "status": "canceled",
+            "message": "Stopped",
         }
 
     if safe_kind == "image":
