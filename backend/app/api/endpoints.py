@@ -11075,18 +11075,18 @@ def get_generation_job_pool(
             else:
                 projects = db.query(Project).filter(Project.id.in_(accessible_project_ids)).all()
 
-        owner_ids = sorted({int(p.user_id) for p in projects if p and p.user_id is not None})
+        owner_ids = sorted({int(p.owner_id) for p in projects if p and p.owner_id is not None})
         owners_by_id: Dict[int, str] = {}
         if owner_ids:
             owner_rows = db.query(User).filter(User.id.in_(owner_ids)).all()
             owners_by_id = {int(row.id): str(row.username or "") for row in owner_rows}
 
         project_ids = [int(p.id) for p in projects]
-        project_owner_by_id = {int(p.id): int(p.user_id) for p in projects if p.user_id is not None}
+        project_owner_by_id = {int(p.id): int(p.owner_id) for p in projects if p.owner_id is not None}
         project_owner_name_by_id = {
-            int(p.id): owners_by_id.get(int(p.user_id), "")
+            int(p.id): owners_by_id.get(int(p.owner_id), "")
             for p in projects
-            if p.user_id is not None
+            if p.owner_id is not None
         }
 
         if safe_kind in {"all", "episode-scripts"}:
