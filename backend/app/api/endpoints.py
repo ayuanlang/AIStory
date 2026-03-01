@@ -4277,8 +4277,9 @@ async def generate_project_episode_scripts_from_global_framework(
     status_key = "episode_script_generation_status"
 
     def _persist_run_status(status_payload: Dict[str, Any]) -> None:
+        status_db = SessionLocal()
         try:
-            latest_project = db.query(Project).filter(Project.id == project_id).first()
+            latest_project = status_db.query(Project).filter(Project.id == project_id).first()
             latest_gi = dict((latest_project.global_info if latest_project else {}) or {})
             existing_status = latest_gi.get(status_key) if isinstance(latest_gi.get(status_key), dict) else {}
 
@@ -4294,20 +4295,25 @@ async def generate_project_episode_scripts_from_global_framework(
             if latest_project:
                 latest_gi[status_key] = merged_status
                 latest_project.global_info = latest_gi
-                db.add(latest_project)
-                db.commit()
+                status_db.add(latest_project)
+                status_db.commit()
         except Exception as e:
             logger.warning(f"[generate_episode_scripts] failed to persist run status: {e}")
+        finally:
+            status_db.close()
 
     def _read_run_status() -> Dict[str, Any]:
+        status_db = SessionLocal()
         try:
-            latest_project = db.query(Project).filter(Project.id == project_id).first()
+            latest_project = status_db.query(Project).filter(Project.id == project_id).first()
             latest_gi = dict((latest_project.global_info if latest_project else {}) or {})
             latest_status = latest_gi.get(status_key)
             if isinstance(latest_status, dict):
                 return dict(latest_status)
         except Exception as e:
             logger.warning(f"[generate_episode_scripts] failed to read run status: {e}")
+        finally:
+            status_db.close()
         return {}
 
     def _is_stop_requested() -> bool:
@@ -11228,7 +11234,8 @@ def stop_generation_job(
             project = db.query(Project).filter(Project.id == target_id).first()
             if not project:
                 raise HTTPException(status_code=404, detail="Job not found")
-            _require_project_access(db, int(project.id), current_user)
+            if not bool(getattr(current_user, "is_superuser", False)):
+                _require_project_access(db, int(project.id), current_user)
 
             gi = dict(project.global_info or {})
             payload = gi.get("episode_script_generation_status")
@@ -11268,7 +11275,8 @@ def stop_generation_job(
         episode = db.query(Episode).filter(Episode.id == target_id).first()
         if not episode:
             raise HTTPException(status_code=404, detail="Job not found")
-        _require_project_access(db, int(episode.project_id), current_user)
+        if not bool(getattr(current_user, "is_superuser", False)):
+            _require_project_access(db, int(episode.project_id), current_user)
 
         if safe_kind == "episode-scenes":
             status_key = EPISODE_SCENE_GEN_STATUS_KEY
