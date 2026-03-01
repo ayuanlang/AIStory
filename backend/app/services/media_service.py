@@ -164,6 +164,25 @@ class MediaGenerationService:
             return "21:9"
         return raw
 
+    def _normalize_image_size_value(self, image_size: Optional[str]) -> Optional[str]:
+        raw = str(image_size or "").strip().upper().replace(" ", "")
+        if raw in {"1K", "2K", "4K"}:
+            return raw
+        return None
+
+    def _infer_image_size_from_dimensions(self, width: Any, height: Any) -> str:
+        try:
+            w = int(width)
+            h = int(height)
+        except Exception:
+            return "1K"
+        max_side = max(w, h)
+        if max_side >= 3200:
+            return "4K"
+        if max_side >= 1900:
+            return "2K"
+        return "1K"
+
     def _repair_invalid_user_config_rows(self, session, user_id: int, category: Optional[str] = None) -> None:
         q = session.query(
             APISetting.id,
@@ -334,6 +353,7 @@ class MediaGenerationService:
         reference_image_url: Optional[Union[str, List[str]]],
         width: Optional[int] = None,
         height: Optional[int] = None,
+        image_size: Optional[str] = None,
         aspect_ratio: Optional[str] = None,
         last_frame_url: Optional[str] = None,
         duration: int = 5,
@@ -345,11 +365,16 @@ class MediaGenerationService:
                     api_config["config"] = {}
                 api_config["config"]["width"] = width
                 api_config["config"]["height"] = height
+            normalized_image_size = self._normalize_image_size_value(image_size)
+            if normalized_image_size:
+                if not api_config.get("config"):
+                    api_config["config"] = {}
+                api_config["config"]["image_size"] = normalized_image_size
 
             if provider in ["doubao", "ark"]:
                 return await self._handle_doubao_generation("image", prompt, api_config, reference_image_url, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt)
             if provider == "grsai":
-                return await self._handle_grsai_generation("image", prompt, api_config, reference_image_url, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt)
+                return await self._handle_grsai_generation("image", prompt, api_config, reference_image_url, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt, image_size=normalized_image_size)
             if provider == "tencent":
                 return await self._handle_tencent_generation("image", prompt, api_config, reference_image_url, negative_prompt=negative_prompt)
             if provider in ["stability", "stable diffusion"]:
@@ -392,6 +417,7 @@ class MediaGenerationService:
         reference_image_url: Optional[Union[str, List[str]]],
         width: Optional[int] = None,
         height: Optional[int] = None,
+        image_size: Optional[str] = None,
         aspect_ratio: Optional[str] = None,
         last_frame_url: Optional[str] = None,
         duration: int = 5,
@@ -533,6 +559,7 @@ class MediaGenerationService:
                 reference_image_url=reference_image_url,
                 width=width,
                 height=height,
+                image_size=image_size,
                 aspect_ratio=aspect_ratio,
                 last_frame_url=last_frame_url,
                 duration=duration,
@@ -682,7 +709,7 @@ class MediaGenerationService:
 
         return {}
 
-    async def generate_image(self, prompt: str, negative_prompt: Optional[str] = None, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, width: int = None, height: int = None, aspect_ratio: str = None, user_id: int = 1, user_credits: int = 0, filename_base: Optional[str] = None, asset_type: Optional[str] = None):
+    async def generate_image(self, prompt: str, negative_prompt: Optional[str] = None, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, width: int = None, height: int = None, image_size: Optional[str] = None, aspect_ratio: str = None, user_id: int = 1, user_credits: int = 0, filename_base: Optional[str] = None, asset_type: Optional[str] = None):
         provider = None
         if llm_config and "provider" in llm_config and llm_config["provider"]:
             provider = self._normalize_provider_name(llm_config["provider"], "Image")
@@ -708,7 +735,7 @@ class MediaGenerationService:
             user_credits=user_credits,
         )
 
-        print(f"[MediaService] Generating Image. Provider: {provider}, Refs Type: {type(reference_image_url)}, Refs: {reference_image_url}, W: {width}, H: {height}, AR: {aspect_ratio}")
+        print(f"[MediaService] Generating Image. Provider: {provider}, Refs Type: {type(reference_image_url)}, Refs: {reference_image_url}, W: {width}, H: {height}, image_size: {image_size}, AR: {aspect_ratio}")
 
         result = await self._generate_with_smart_routing(
             category="Image",
@@ -720,6 +747,7 @@ class MediaGenerationService:
             reference_image_url=reference_image_url,
             width=width,
             height=height,
+            image_size=image_size,
             aspect_ratio=aspect_ratio,
             requested_model=(llm_config or {}).get("model"),
             explicit_selection=bool((llm_config or {}).get("provider") or (llm_config or {}).get("model")),
@@ -1146,7 +1174,7 @@ class MediaGenerationService:
              traceback.print_exc()
              return {"error": f"Vidu Exception: {str(e)}"}
              
-    async def _handle_grsai_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None):
+    async def _handle_grsai_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None):
         prompt = self._merge_negative_prompt(prompt, negative_prompt)
         api_key = config.get("api_key")
         model = config.get("model") or "unknown_model"
@@ -1218,11 +1246,17 @@ class MediaGenerationService:
             else:
                  res_str = "1024x1024"
 
+            normalized_image_size = self._normalize_image_size_value(
+                image_size or tool_conf.get("image_size") or tool_conf.get("imageSize")
+            )
+            if not normalized_image_size:
+                normalized_image_size = self._infer_image_size_from_dimensions(
+                    w if w else (res_str.split("x")[0] if "x" in res_str else 1024),
+                    h if h else (res_str.split("x")[1] if "x" in res_str else 1024),
+                )
+
             if is_banana:
-                # Banana might expect "1K" or specific strings.
-                # If specialized model, maybe fallback to defaults unless sure.
-                # Assuming Banana supports size param or defaults to 1K
-                payload["imageSize"] = "1K" # simplification (Custom logic for Banana if needed)
+                payload["imageSize"] = normalized_image_size
             else:
                 payload["size"] = res_str
             

@@ -9360,8 +9360,10 @@ class GenerationRequest(BaseModel):
     negative_prompt: Optional[str] = None
     provider: Optional[str] = None
     model: Optional[str] = None
+    image_size: Optional[str] = None
     ref_image_url: Optional[Union[str, List[str]]] = None
     project_id: Optional[int] = None
+    episode_id: Optional[int] = None
     shot_id: Optional[int] = None
     shot_number: Optional[str] = None
     shot_name: Optional[str] = None
@@ -9824,10 +9826,29 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
         aspect_ratio = None
         width = None
         height = None
+        image_size = str(req.image_size or "").strip().upper()
+        if image_size not in {"1K", "2K", "4K"}:
+            image_size = None
         episode_info = {}
 
+        # Prefer explicit episode_id when provided
+        if req.episode_id:
+            ep = db.query(Episode).filter(Episode.id == req.episode_id).first()
+            if ep and ep.episode_info:
+                temp = ep.episode_info
+                if isinstance(temp, str):
+                    try:
+                        temp = json.loads(temp)
+                    except Exception:
+                        temp = {}
+                if isinstance(temp, dict):
+                    if "e_global_info" in temp and isinstance(temp["e_global_info"], dict):
+                        episode_info = temp["e_global_info"]
+                    else:
+                        episode_info = temp
+
         # Try to find episode info via Shot -> Scene -> Episode
-        if req.shot_id:
+        if req.shot_id and not episode_info:
              shot = db.query(Shot).filter(Shot.id == req.shot_id).first()
              if shot:
                  scene = db.query(Scene).filter(Scene.id == shot.scene_id).first()
@@ -9851,14 +9872,22 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
             vis = tech.get("visual_standard", {})
             if isinstance(vis, dict):
                 aspect_ratio = vis.get("aspect_ratio") or vis.get("aspectRatio")
-                width = vis.get("h_resolution") or vis.get("width")
-                height = vis.get("v_resolution") or vis.get("height")
+                width = vis.get("horizontal_resolution") or vis.get("h_resolution") or vis.get("width")
+                height = vis.get("vertical_resolution") or vis.get("v_resolution") or vis.get("height")
+                if not image_size:
+                    raw_size = str(vis.get("image_size") or vis.get("imageSize") or "").strip().upper()
+                    if raw_size in {"1K", "2K", "4K"}:
+                        image_size = raw_size
         
         # Fallback top-level checks
         if not aspect_ratio:
             aspect_ratio = episode_info.get("aspect_ratio") or episode_info.get("aspectRatio")
-        if not width: width = episode_info.get("h_resolution") or episode_info.get("width")
-        if not height: height = episode_info.get("v_resolution") or episode_info.get("height")
+        if not width: width = episode_info.get("horizontal_resolution") or episode_info.get("h_resolution") or episode_info.get("width")
+        if not height: height = episode_info.get("vertical_resolution") or episode_info.get("v_resolution") or episode_info.get("height")
+        if not image_size:
+            raw_size = str(episode_info.get("image_size") or episode_info.get("imageSize") or "").strip().upper()
+            if raw_size in {"1K", "2K", "4K"}:
+                image_size = raw_size
 
         # Cast to int for safety
         try: width = int(width) if width else 720 
@@ -9866,7 +9895,16 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
         try: height = int(height) if height else 1080
         except: height = 1080
 
-        logger.info(f"[GenerateImage] Context Params - AR: {aspect_ratio}, W: {width}, H: {height}")
+        if not image_size:
+            max_side = max(width or 0, height or 0)
+            if max_side >= 3200:
+                image_size = "4K"
+            elif max_side >= 1900:
+                image_size = "2K"
+            else:
+                image_size = "1K"
+
+        logger.info(f"[GenerateImage] Context Params - AR: {aspect_ratio}, W: {width}, H: {height}, image_size: {image_size}")
         _log_shot_submit_debug(
             "image_submit",
             req,
@@ -9875,6 +9913,7 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
                 "aspect_ratio": aspect_ratio,
                 "width": width,
                 "height": height,
+                "image_size": image_size,
                 "user_id": current_user.id,
             },
         )
@@ -9887,6 +9926,7 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
             reference_image_url=req.ref_image_url,
             width=width,
             height=height,
+            image_size=image_size,
             aspect_ratio=aspect_ratio,
             user_id=current_user.id,
             user_credits=(current_user.credits or 0),
@@ -11561,8 +11601,57 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
         data = _extract_first_json_payload(content)
         if data is None:
             preview = content[:300].replace("\n", " ")
-            logger.error("Entity analysis JSON parse failed. content_preview=%s", preview)
-            raise HTTPException(status_code=422, detail="LLM returned non-JSON content for entity analysis")
+            logger.warning("Entity analysis JSON parse first-pass failed. content_preview=%s", preview)
+
+            # One-shot repair retry: ask the same model to convert output into strict JSON only.
+            repair_system = (
+                "You are a strict JSON formatter. "
+                "Convert the user's text into a valid JSON object only. "
+                "No markdown fences, no explanation, no extra text."
+            )
+            repair_user = (
+                "Convert the following content to a valid JSON object that preserves the original fields as much as possible.\n\n"
+                f"{content}"
+            )
+
+            try:
+                repair_response = await llm_service.chat_completion(
+                    [
+                        {"role": "system", "content": repair_system},
+                        {"role": "user", "content": repair_user},
+                    ],
+                    llm_config,
+                )
+                repair_text = re.sub(
+                    r"<think>.*?</think>",
+                    "",
+                    str((repair_response or {}).get("content", "") or ""),
+                    flags=re.DOTALL | re.IGNORECASE,
+                ).strip()
+                repair_text = re.sub(r"^```(?:json)?\s*", "", repair_text, flags=re.IGNORECASE)
+                repair_text = re.sub(r"\s*```$", "", repair_text, flags=re.IGNORECASE).strip()
+
+                repaired_data = _extract_first_json_payload(repair_text)
+                if repaired_data is not None:
+                    data = repaired_data
+                    logger.info("Entity analysis JSON parse recovered via repair retry.")
+                else:
+                    repair_preview = repair_text[:300].replace("\n", " ")
+                    logger.error(
+                        "Entity analysis JSON parse failed after repair retry. content_preview=%s repair_preview=%s",
+                        preview,
+                        repair_preview,
+                    )
+                    raise HTTPException(status_code=422, detail="LLM returned non-JSON content for entity analysis")
+            except HTTPException:
+                raise
+            except Exception as repair_err:
+                logger.error(
+                    "Entity analysis JSON repair retry failed: %s | content_preview=%s",
+                    str(repair_err),
+                    preview,
+                )
+                raise HTTPException(status_code=422, detail="LLM returned non-JSON content for entity analysis")
 
         if isinstance(data, list):
             data = data[0] if data else {}

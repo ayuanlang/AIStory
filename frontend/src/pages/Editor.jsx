@@ -98,6 +98,39 @@ function buildEntityNegativePrompt(sourceText = '', primaryEntity = null, entity
     return negatives.join(', ');
 }
 
+function normalizeImageSizeOption(value) {
+    const raw = String(value || '').trim().toUpperCase().replace(/\s+/g, '');
+    if (!raw) return '';
+    if (raw === '1K' || raw === '2K' || raw === '4K') return raw;
+    return '';
+}
+
+function inferImageSizeFromResolution(width, height) {
+    const w = Number(width);
+    const h = Number(height);
+    if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return '';
+    const maxSide = Math.max(w, h);
+    if (maxSide >= 3200) return '4K';
+    if (maxSide >= 1900) return '2K';
+    return '1K';
+}
+
+function getEpisodePreferredImageSize(episodeInfoLike) {
+    const root = (episodeInfoLike && typeof episodeInfoLike === 'object' && episodeInfoLike.e_global_info)
+        ? episodeInfoLike.e_global_info
+        : (episodeInfoLike || {});
+    const visual = root?.tech_params?.visual_standard || {};
+
+    const explicit = normalizeImageSizeOption(
+        visual?.image_size || visual?.imageSize || root?.image_size || root?.imageSize
+    );
+    if (explicit) return explicit;
+
+    const width = visual?.horizontal_resolution || visual?.h_resolution || visual?.width;
+    const height = visual?.vertical_resolution || visual?.v_resolution || visual?.height;
+    return inferImageSizeFromResolution(width, height);
+}
+
 const buildEpisodeDisplayLabel = ({ episodeNumber, title, fallbackNumber } = {}) => {
     const directNumber = Number(episodeNumber);
     const fallback = Number(fallbackNumber);
@@ -568,7 +601,8 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                 vertical_resolution: "1920",
                 frame_rate: "24",
                 aspect_ratio: "9:16",
-                quality: "Ultra High"
+                quality: "Ultra High",
+                image_size: "1K"
             }
         },
         tone: "Skin Tone Optimized, Dreamy",
@@ -2860,7 +2894,8 @@ const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'en' }) =
                     vertical_resolution: "2160",
                     frame_rate: "24",
                     aspect_ratio: "9:16",
-                    quality: "Ultra High"
+                    quality: "Ultra High",
+                    image_size: "4K"
                 }
             },
             tone: "Skin Tone Optimized, Dreamy",
@@ -3259,6 +3294,7 @@ const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'en' }) =
                          <InputGroup idPrefix={prefix} label={t('帧率', 'Frame Rate')} value={data.tech_params?.visual_standard?.frame_rate} onChange={v => updateTech('frame_rate', v)} list={["24", "30", "60"]} />
                          <InputGroup idPrefix={prefix} label={t('画幅比例', 'Aspect Ratio')} value={data.tech_params?.visual_standard?.aspect_ratio} onChange={v => updateTech('aspect_ratio', v)} list={["16:9", "2.35:1", "4:3", "9:16", "1:1"]} />
                          <InputGroup idPrefix={prefix} label={t('质量等级', 'Quality')} value={data.tech_params?.visual_standard?.quality} onChange={v => updateTech('quality', v)} list={["Ultra High", "High", "Medium", "Low", "Draft"]} />
+                        <InputGroup idPrefix={prefix} label={t('图像尺寸', 'Image Size')} value={data.tech_params?.visual_standard?.image_size} onChange={v => updateTech('image_size', v)} list={["1K", "2K", "4K"]} />
                     </div>
 
                     <div className="grid grid-cols-2 gap-4">
@@ -3486,6 +3522,13 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
     const [isRecoveringMissingSubjects, setIsRecoveringMissingSubjects] = useState(false);
     const [isCheckingCoreCoverage, setIsCheckingCoreCoverage] = useState(false);
     const [coreCoverageReport, setCoreCoverageReport] = useState(null);
+    const [postAnalysisCheckModal, setPostAnalysisCheckModal] = useState({
+        open: false,
+        status: 'idle',
+        message: '',
+        guidance: [],
+    });
+    const [pendingSwitchAfterPostChecks, setPendingSwitchAfterPostChecks] = useState(false);
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
 
     const showAnalysisWarningStatus = useCallback((warnings = []) => {
@@ -3979,14 +4022,16 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         }
     };
 
-    const runSubjectConsistencyCheck = () => {
-        const report = buildSubjectConsistencyReport(llmRawResultContent || llmResultContent);
+    const runSubjectConsistencyCheck = (rawText = null, options = {}) => {
+        const silent = Boolean(options?.silent);
+        const report = buildSubjectConsistencyReport(rawText || llmRawResultContent || llmResultContent);
         setSubjectConsistencyReport(report);
-        if (onLog) {
+        if (!silent && onLog) {
             if (report.ok) onLog(`Subject consistency check passed (${report.markdownSubjects.length} matched).`, 'success');
             else if (report.missing?.length) onLog(`Subject consistency check failed: missing [${report.missing.join(', ')}]`, 'warning');
             else onLog('Subject consistency check failed: no entities JSON.', 'warning');
         }
+        return report;
     };
 
     const parseCoreCoverageReport = (rawText) => {
@@ -4061,11 +4106,15 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         };
     };
 
-    const runCoreCoverageCheck = async () => {
-        const parsed = parseMarkdownTable(llmMarkdownTableText || llmResultContent || '');
+    const runCoreCoverageCheck = async (markdownText = null, options = {}) => {
+        const suppressAlert = Boolean(options?.suppressAlert);
+        const suppressLog = Boolean(options?.suppressLog);
+        const parsed = parseMarkdownTable(markdownText || llmMarkdownTableText || llmResultContent || '');
         if (!parsed || !Array.isArray(parsed.rows) || parsed.rows.length === 0) {
-            alert(t('未检测到可解析的 Markdown 表格。', 'No parseable markdown table detected.'));
-            return;
+            if (!suppressAlert) {
+                alert(t('未检测到可解析的 Markdown 表格。', 'No parseable markdown table detected.'));
+            }
+            return null;
         }
 
         const norm = (value) => String(value || '').toLowerCase().replace(/[\s_\-./()]/g, '');
@@ -4081,8 +4130,10 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         const originalIdx = findCol(['originalscripttext', '原始剧本文本', 'scripttext', 'original']);
 
         if (sceneIdIdx < 0 || coreInfoIdx < 0 || originalIdx < 0) {
-            alert(t('表格缺少必要列（Scene ID / Core Scene Info / Original Script Text）。', 'Missing required columns (Scene ID / Core Scene Info / Original Script Text).'));
-            return;
+            if (!suppressAlert) {
+                alert(t('表格缺少必要列（Scene ID / Core Scene Info / Original Script Text）。', 'Missing required columns (Scene ID / Core Scene Info / Original Script Text).'));
+            }
+            return null;
         }
 
         const rowsPayload = parsed.rows.map((row) => ({
@@ -4094,8 +4145,10 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         })).filter(item => item.scene_id && (item.core_scene_info || item.original_script_text));
 
         if (rowsPayload.length === 0) {
-            alert(t('未找到可用于校验的场景行。', 'No scene rows available for coverage check.'));
-            return;
+            if (!suppressAlert) {
+                alert(t('未找到可用于校验的场景行。', 'No scene rows available for coverage check.'));
+            }
+            return null;
         }
 
         const systemPrompt = [
@@ -4122,7 +4175,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             const analyzedText = result?.result || result?.analysis || (typeof result === 'string' ? result : JSON.stringify(result, null, 2));
             const report = parseCoreCoverageReport(analyzedText);
             setCoreCoverageReport(report);
-            if (onLog) {
+            if (!suppressLog && onLog) {
                 onLog(
                     report.isCovered
                         ? 'Core Scene Info coverage check: YES (fully covered).'
@@ -4130,12 +4183,98 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                     report.isCovered ? 'success' : 'warning'
                 );
             }
+            return report;
         } catch (e) {
             console.error(e);
-            if (onLog) onLog(`Core coverage check failed: ${e.message}`, 'error');
-            alert(t('Core Scene Info 覆盖校验失败：', 'Core Scene Info coverage check failed: ') + (e?.message || 'Unknown error'));
+            if (!suppressLog && onLog) onLog(`Core coverage check failed: ${e.message}`, 'error');
+            if (!suppressAlert) {
+                alert(t('Core Scene Info 覆盖校验失败：', 'Core Scene Info coverage check failed: ') + (e?.message || 'Unknown error'));
+            }
+            return null;
         } finally {
             setIsCheckingCoreCoverage(false);
+        }
+    };
+
+    const closePostAnalysisCheckModal = () => {
+        setPostAnalysisCheckModal({ open: false, status: 'idle', message: '', guidance: [] });
+        if (pendingSwitchAfterPostChecks && typeof onSwitchToScenes === 'function') {
+            onSwitchToScenes();
+            setAnalysisFlowStatus({
+                phase: 'completed',
+                message: t('检查结果已确认，已切换到 Scenes。', 'Check results confirmed, switched to Scenes.'),
+            });
+        }
+        setPendingSwitchAfterPostChecks(false);
+    };
+
+    const handlePostCheckRerunAnalysis = async () => {
+        setPendingSwitchAfterPostChecks(false);
+        setPostAnalysisCheckModal({ open: false, status: 'idle', message: '', guidance: [] });
+        if (onLog) onLog('Post-check action: rerun AI Scene Analysis.', 'info');
+        await handleAnalysisClick();
+    };
+
+    const handlePostCheckGoToScenes = () => {
+        setPendingSwitchAfterPostChecks(false);
+        setPostAnalysisCheckModal({ open: false, status: 'idle', message: '', guidance: [] });
+        if (typeof onSwitchToScenes === 'function') {
+            onSwitchToScenes();
+            setAnalysisFlowStatus({
+                phase: 'completed',
+                message: t('已切换到 Scenes，请按检查结果修改内容。', 'Switched to Scenes. Update content based on check results.'),
+            });
+        }
+        if (onLog) onLog('Post-check action: switched to Scenes for manual fixes.', 'info');
+    };
+
+    const runPostAnalysisChecksAndPrompt = async (analyzedText = '') => {
+        setPostAnalysisCheckModal({
+            open: true,
+            status: 'running',
+            message: t('正在自动执行检查：Subject 一致性 / Core 覆盖...', 'Running checks: Subject Consistency / Core Coverage...'),
+            guidance: [],
+        });
+
+        const subjectReport = runSubjectConsistencyCheck(analyzedText || '', { silent: true });
+        const coverageReport = await runCoreCoverageCheck(analyzedText || '', { suppressAlert: true, suppressLog: true });
+
+        const passedSubject = Boolean(subjectReport?.ok);
+        const passedCoverage = Boolean(coverageReport?.isCovered);
+        const summary = (passedSubject && passedCoverage)
+            ? t('两项检查已完成且通过。请先观察结果，再关闭窗口继续。', 'Both checks completed and passed. Review the results, then close this dialog to continue.')
+            : t('检查已完成。请先观察结果（含未通过项），再关闭窗口继续。', 'Checks completed. Review the results (including failed items), then close this dialog to continue.');
+
+        const guidance = [];
+        if (!passedSubject) {
+            guidance.push(
+                t(
+                    'Subject 一致性未通过：说明角色/道具/环境索引可能不完整或不一致，建议重新执行 AI Scene Analysis。',
+                    'Subject consistency failed: subject index/entities may be incomplete or inconsistent; rerun AI Scene Analysis is recommended.'
+                )
+            );
+        }
+        if (!passedCoverage) {
+            guidance.push(
+                t(
+                    'Core 覆盖未通过：请先判断缺失点是否核心剧情；若是核心内容，建议重跑整个剧本分析；若非核心，可直接修改对应 Scene 的内容后继续。',
+                    'Core coverage failed: first decide whether missing points are core story beats; if core, rerun full script analysis; if not core, edit scene content directly and continue.'
+                )
+            );
+        }
+
+        setPostAnalysisCheckModal({
+            open: true,
+            status: 'done',
+            message: summary,
+            guidance,
+        });
+
+        if (onLog) {
+            onLog(
+                `Post-analysis checks completed: subject=${passedSubject ? 'pass' : 'fail'}, core=${passedCoverage ? 'pass' : 'fail'}`,
+                (passedSubject && passedCoverage) ? 'success' : 'warning'
+            );
         }
     };
 
@@ -4151,7 +4290,8 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         }
     };
 
-    const runAutoImportAndSwitchToScenes = async (analyzedText) => {
+    const runAutoImportAndSwitchToScenes = async (analyzedText, options = {}) => {
+        const switchToScenes = options?.switchToScenes !== false;
         if (typeof onImportText !== 'function') {
             if (onLog) onLog('Import is not available in this context.', 'warning');
             setAnalysisFlowStatus({
@@ -4170,13 +4310,15 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         await onImportText(analyzedText || '', 'auto');
         if (onLog) onLog('Auto-import finished.', 'success');
 
-        if (typeof onSwitchToScenes === 'function') {
+        if (switchToScenes && typeof onSwitchToScenes === 'function') {
             onSwitchToScenes();
         }
 
         setAnalysisFlowStatus({
             phase: 'completed',
-            message: t('分析与导入已完成，已切换到 Scenes。', 'Analysis and import completed, switched to Scenes.'),
+            message: switchToScenes
+                ? t('分析与导入已完成，已切换到 Scenes。', 'Analysis and import completed, switched to Scenes.')
+                : t('分析与导入已完成。', 'Analysis and import completed.'),
         });
     };
 
@@ -5522,12 +5664,18 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 await refreshAnalysisFromDB();
             }
             
-            await runAutoImportAndSwitchToScenes(analyzedText);
+            try {
+                await runAutoImportAndSwitchToScenes(analyzedText, { switchToScenes: false });
+            } catch (importErr) {
+                if (onLog) onLog(`Auto-import failed (checks will continue): ${importErr?.message || importErr}`, 'warning');
+            }
             const firstPassReport = buildSubjectConsistencyReport(analyzedText || '');
             setSubjectConsistencyReport(firstPassReport);
             if (!firstPassReport.ok && Array.isArray(firstPassReport.missing) && firstPassReport.missing.length > 0) {
                 await autoRecoverMissingSubjects(analyzedText || '', firstPassReport.missing);
             }
+            await runPostAnalysisChecksAndPrompt(analyzedText || '');
+            setPendingSwitchAfterPostChecks(true);
             if (onLog) onLog("AI Analysis applied and saved.", "success");
             setShowAnalysisModal(false);
         } catch (e) {
@@ -5634,12 +5782,19 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 await refreshAnalysisFromDB();
             }
 
-            await runAutoImportAndSwitchToScenes(analyzedText || "");
+            try {
+                await runAutoImportAndSwitchToScenes(analyzedText || "", { switchToScenes: false });
+            } catch (importErr) {
+                if (onLog) onLog(`Auto-import failed (checks will continue): ${importErr?.message || importErr}`, 'warning');
+            }
             const firstPassReport = buildSubjectConsistencyReport(analyzedText || '');
             setSubjectConsistencyReport(firstPassReport);
             if (!firstPassReport.ok && Array.isArray(firstPassReport.missing) && firstPassReport.missing.length > 0) {
                 await autoRecoverMissingSubjects(analyzedText || '', firstPassReport.missing);
             }
+
+            await runPostAnalysisChecksAndPrompt(analyzedText || '');
+            setPendingSwitchAfterPostChecks(true);
 
             setShowAnalysisModal(false);
         } catch (e) {
@@ -6076,6 +6231,109 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 </div>
 
             </div>
+
+            {postAnalysisCheckModal.open && (
+                <div
+                    className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+                    onClick={() => {
+                        if (postAnalysisCheckModal.status !== 'running') {
+                            closePostAnalysisCheckModal();
+                        }
+                    }}
+                >
+                    <div className="bg-[#1a1a1a] border border-white/10 rounded-xl w-full max-w-3xl shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+                        <div className="flex items-center justify-between p-4 border-b border-white/10 bg-white/5">
+                            <h3 className="text-lg font-bold flex items-center gap-2">
+                                {postAnalysisCheckModal.status === 'running' ? (
+                                    <Loader2 className="w-5 h-5 text-purple-400 animate-spin" />
+                                ) : (
+                                    <Info className="w-5 h-5 text-sky-300" />
+                                )}
+                                {t('AI Scene Analysis 检查结果', 'AI Scene Analysis Check Results')}
+                            </h3>
+                            <button
+                                onClick={closePostAnalysisCheckModal}
+                                className={`p-1 rounded-lg transition-colors ${postAnalysisCheckModal.status === 'running' ? 'text-white/30 cursor-not-allowed' : 'hover:bg-white/10 text-white/80'}`}
+                                disabled={postAnalysisCheckModal.status === 'running'}
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+
+                        <div className="p-4 space-y-3 text-sm">
+                            <div className="text-white/90">{postAnalysisCheckModal.message}</div>
+
+                            {Array.isArray(postAnalysisCheckModal.guidance) && postAnalysisCheckModal.guidance.length > 0 && (
+                                <div className="rounded-md border border-sky-500/20 bg-sky-500/10 px-3 py-2 text-xs text-sky-100 space-y-1">
+                                    {postAnalysisCheckModal.guidance.map((tip, idx) => (
+                                        <div key={`guidance-${idx}`}>• {tip}</div>
+                                    ))}
+                                </div>
+                            )}
+
+                            <div className={`rounded-md border px-3 py-2 ${subjectConsistencyReport?.ok ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200' : 'border-amber-500/30 bg-amber-500/10 text-amber-200'}`}>
+                                <div className="font-semibold">{t('Check Subject Consistency', 'Check Subject Consistency')}</div>
+                                <div className="mt-1 text-xs text-white/80">
+                                    {subjectConsistencyReport?.message || t('等待结果...', 'Waiting for result...')}
+                                </div>
+                                {subjectConsistencyReport?.missing?.length > 0 && (
+                                    <div className="mt-1 text-xs">
+                                        {t('缺失：', 'Missing: ')}{subjectConsistencyReport.missing.join(', ')}
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className={`rounded-md border px-3 py-2 ${coreCoverageReport?.isCovered ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200' : 'border-amber-500/30 bg-amber-500/10 text-amber-200'}`}>
+                                <div className="font-semibold">{t('Check Core Coverage', 'Check Core Coverage')}</div>
+                                <div className="mt-1 text-xs text-white/80">
+                                    {coreCoverageReport
+                                        ? `${t('结论', 'Verdict')}: ${coreCoverageReport.verdict}`
+                                        : t('等待结果...', 'Waiting for result...')}
+                                </div>
+                                {!coreCoverageReport?.isCovered && Array.isArray(coreCoverageReport?.missingPoints) && coreCoverageReport.missingPoints.length > 0 && (
+                                    <ul className="mt-1 list-disc ml-4 space-y-0.5 text-xs text-white/80">
+                                        {coreCoverageReport.missingPoints.map((point, idx) => (
+                                            <li key={`${idx}-${point}`}>{point}</li>
+                                        ))}
+                                    </ul>
+                                )}
+                            </div>
+
+                            <div className="text-xs text-muted-foreground">
+                                {t('请先观察以上检查结果，确认后关闭窗口继续。', 'Please review the check results above, then close this dialog to continue.')}
+                            </div>
+                        </div>
+
+                        <div className="p-4 border-t border-white/10 bg-white/5 flex justify-end gap-2">
+                            {postAnalysisCheckModal.status === 'done' && subjectConsistencyReport && !subjectConsistencyReport.ok && (
+                                <button
+                                    onClick={handlePostCheckRerunAnalysis}
+                                    className="px-4 py-2 rounded-lg text-sm font-bold bg-amber-500/20 hover:bg-amber-500/30 text-amber-100 border border-amber-500/30"
+                                    title={t('建议重跑 AI Scene Analysis', 'Recommended: rerun AI Scene Analysis')}
+                                >
+                                    {t('重跑分析', 'Rerun Analysis')}
+                                </button>
+                            )}
+                            {postAnalysisCheckModal.status === 'done' && coreCoverageReport && !coreCoverageReport.isCovered && (
+                                <button
+                                    onClick={handlePostCheckGoToScenes}
+                                    className="px-4 py-2 rounded-lg text-sm font-bold bg-sky-500/20 hover:bg-sky-500/30 text-sky-100 border border-sky-500/30"
+                                    title={t('去 Scenes 手动修正核心内容覆盖', 'Go to Scenes to manually fix core coverage')}
+                                >
+                                    {t('去场景修改', 'Go to Scenes')}
+                                </button>
+                            )}
+                            <button
+                                onClick={closePostAnalysisCheckModal}
+                                disabled={postAnalysisCheckModal.status === 'running'}
+                                className={`px-4 py-2 rounded-lg text-sm font-bold ${postAnalysisCheckModal.status === 'running' ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 hover:bg-white/20 text-white'}`}
+                            >
+                                {t('关闭并继续', 'Close and Continue')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {showAnalysisModal && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm" onClick={() => setShowAnalysisModal(false)}>
@@ -9351,6 +9609,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
             setReconstructProgress({ step: 'prompt', label: t('正在整理新的提示词...', 'Refining prompt...'), percent: 55 });
 
             const epInfo = currentEpisode?.episode_info || {};
+            const preferredImageSize = getEpisodePreferredImageSize(epInfo);
             let rawPrompt = analyzed.generation_prompt_en || '';
             if (!rawPrompt && analyzed.description) {
                 const match = analyzed.description.match(/Prompt:\s*(.*)/);
@@ -9400,12 +9659,14 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
 
             const asset = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
                 project_id: projectId,
+                episode_id: currentEpisode?.id,
                 entity_id: analyzed?.id,
                 entity_name: analyzed?.name || analyzed?.name_en,
                 subject_name: analyzed?.name || analyzed?.name_en,
                 subject_type: analyzed?.type,
                 entity_type: analyzed?.type,
                 asset_type: 'subject',
+                ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
                 negative_prompt: buildEntityNegativePrompt(rawPrompt, analyzed || entity, allEntities)
             });
 
@@ -9546,6 +9807,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         }
 
         const epInfo = currentEpisode?.episode_info || {};
+        const preferredImageSize = getEpisodePreferredImageSize(epInfo);
         
         // If undefined, ensure we pass empty object to avoid crash in utils
         // Use allEntities for resolution to ensure cross-type references work
@@ -9663,12 +9925,14 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
 
             const asset = await generateImage(finalPrompt, provider || null, uniqueRefs.length > 0 ? uniqueRefs : null, {
                 project_id: projectId,
+                episode_id: currentEpisode?.id,
                 entity_id: selectedEntity?.id,
                 entity_name: selectedEntity?.name || selectedEntity?.name_en,
                 subject_name: selectedEntity?.name || selectedEntity?.name_en,
                 subject_type: selectedEntity?.type,
                 entity_type: selectedEntity?.type,
                 asset_type: 'subject',
+                ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
                 negative_prompt: buildEntityNegativePrompt(finalPrompt, selectedEntity, allEntities)
             });
             await updateEntityImage(asset.url);
@@ -9773,6 +10037,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                     try {
                         // 1. Prepare Prompt
                         const epInfo = currentEpisode?.episode_info || {};
+                        const preferredImageSize = getEpisodePreferredImageSize(epInfo);
                         let basePrompt = entity.generation_prompt_en || 
                                          entity.description || 
                                          `A ${entity.type} named ${entity.name}.`;
@@ -9818,12 +10083,14 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                         // 3. Generate
                         const res = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
                             project_id: projectId,
+                            episode_id: currentEpisode?.id,
                             entity_id: entity?.id,
                             entity_name: entity?.name || entity?.name_en,
                             subject_name: entity?.name || entity?.name_en,
                             subject_type: entity?.type,
                             entity_type: entity?.type,
                             asset_type: 'subject',
+                            ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
                             negative_prompt: buildEntityNegativePrompt(basePrompt, entity, allEntities)
                         });
                         
@@ -12381,14 +12648,17 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             const globalCtx = getGlobalContextStr();
             const promptToUse = promptOverride || kf.prompt;
             const fullPrompt = promptToUse + globalCtx;
+            const preferredImageSize = getEpisodePreferredImageSize(activeEpisode?.episode_info);
             
             // Generate
             const res = await generateImage(fullPrompt, null, null, {
                 project_id: projectId,
+                episode_id: activeEpisode?.id,
                 shot_id: editingShot.id,
                 shot_number: `${editingShot.shot_id}_KF_${kf.time}`,
                 shot_name: editingShot.shot_name,
                 asset_type: 'keyframe',
+                ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
                 negative_prompt: buildEntityNegativePrompt(promptToUse, null, entities)
             });
             
@@ -12644,13 +12914,16 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 // NEW: Inject Global Context
                 const globalCtx = getGlobalContextStr();
                 const finalPrompt = isManual ? submitPrompt : (submitPrompt + globalCtx);
+                   const preferredImageSize = getEpisodePreferredImageSize(activeEpisode?.episode_info);
 
                 const res = await generateImage(finalPrompt, null, refs.length > 0 ? refs : null, {
                     project_id: projectId,
+                        episode_id: activeEpisode?.id,
                     shot_id: targetShotId,
                     shot_number: editingShot.shot_id,
                     shot_name: editingShot.shot_name,
                     asset_type: 'start_frame',
+                        ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
                     negative_prompt: buildEntityNegativePrompt(rawPrompt, null, entities)
                 });
                 if (res && res.url) {
@@ -12731,13 +13004,16 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 // NEW: Inject Global Context
                 const globalCtx = getGlobalContextStr();
                 const finalPrompt = isManual ? submitPrompt : (submitPrompt + globalCtx);
+                const preferredImageSize = getEpisodePreferredImageSize(activeEpisode?.episode_info);
 
                 const res = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
                     project_id: projectId,
+                    episode_id: activeEpisode?.id,
                     shot_id: targetShotId,
                     shot_number: editingShot.shot_id,
                     shot_name: editingShot.shot_name,
                     asset_type: 'end_frame',
+                    ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
                     negative_prompt: buildEntityNegativePrompt(rawPrompt, null, entities)
                 });
                 if (res && res.url) {
@@ -13112,6 +13388,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                 title={t('手动回填历史媒体关联（只补空槽位）', 'Manual historical media rebind (fills empty slots only)')}
                             >
                                 {isManualRebindingMedia ? <Loader2 className="w-3 h-3 animate-spin"/> : <RefreshCw className="w-3 h-3"/>}
+                                <span>{t('回填', 'Rebind')}</span>
                             </button>
                              <button 
                                 onClick={handleBatchGenerate}
@@ -13120,6 +13397,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                 title={t('批量生成缺失的起始/结束帧', 'Batch Generate Missing Start/End Frames')}
                             >
                                 {isBatchGenerating ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
+                                <span>{t('补帧', 'Frames')}</span>
                             </button>
                             <button 
                                 onClick={handleBatchGenerateVideo}
@@ -13128,6 +13406,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                 title={t('批量生成视频（会先自动生成图片）', 'Batch Generate Videos (Auto-creates images first)')}
                             >
                                 {isBatchGenerating ? <Loader2 className="w-3 h-3 animate-spin"/> : <Film className="w-3 h-3"/>}
+                                <span>{t('视频', 'Video')}</span>
                             </button>
                             {isBatchGenerating && (
                                 <button
@@ -13137,6 +13416,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                     title={t('停止当前批处理任务', 'Stop current batch task')}
                                 >
                                     {isStoppingShotBatch ? <Loader2 className="w-3 h-3 animate-spin"/> : <X className="w-3 h-3"/>}
+                                    <span>{t('停止', 'Stop')}</span>
                                 </button>
                             )}
                         </div>
