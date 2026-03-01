@@ -5913,19 +5913,28 @@ def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id
         failed = 0
         errors: List[str] = []
 
+        def _read_latest_episode() -> Optional[Episode]:
+            db.expire_all()
+            return (
+                db.query(Episode)
+                .execution_options(populate_existing=True)
+                .filter(Episode.id == episode_id)
+                .first()
+            )
+
         def _stop_requested() -> bool:
-            latest_episode = db.query(Episode).filter(Episode.id == episode_id).first()
+            latest_episode = _read_latest_episode()
             if not latest_episode:
                 return True
             latest_status = _read_scene_ai_shots_batch_status(latest_episode)
-            return bool(latest_status.get("stop_requested"))
+            return bool(latest_status.get("stop_requested") or latest_status.get("force_stopped"))
 
         for sid in scene_ids:
-            episode = db.query(Episode).filter(Episode.id == episode_id).first()
+            episode = _read_latest_episode()
             if not episode:
                 break
             latest = _read_scene_ai_shots_batch_status(episode)
-            if bool(latest.get("stop_requested")):
+            if bool(latest.get("stop_requested") or latest.get("force_stopped")):
                 latest["running"] = False
                 latest["completed"] = completed
                 latest["success"] = success
@@ -10414,6 +10423,8 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
             _bind_generated_media_to_shot(db, current_user, req, result.get("url"))
 
         return result
+    except asyncio.CancelledError:
+        raise
     except HTTPException:
         raise
     except Exception as e:
@@ -10891,6 +10902,8 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
         billing_service.deduct_credits(db, current_user.id, "video_gen", req.provider, req.model, {"duration": req.duration})
 
         return result
+    except asyncio.CancelledError:
+        raise
     except HTTPException:
         raise
     except Exception as e:
@@ -11940,7 +11953,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                     task.cancel()
                     try:
                         await task
-                    except asyncio.CancelledError:
+                    except BaseException:
                         pass
                     raise _BatchStopRequested("Stop requested")
         finally:
@@ -12004,14 +12017,14 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
             if not latest_episode:
                 return True
             latest_status = _read_shot_media_batch_status(latest_episode)
-            return bool(latest_status.get("stop_requested"))
+            return bool(latest_status.get("stop_requested") or latest_status.get("force_stopped"))
 
         for shot in target_shots:
             episode = _read_latest_episode()
             if not episode:
                 break
             latest = _read_shot_media_batch_status(episode)
-            if bool(latest.get("stop_requested")):
+            if bool(latest.get("stop_requested") or latest.get("force_stopped")):
                 _persist_stopped_status()
                 return
 
