@@ -23,6 +23,11 @@
 - **角色/道具同权规则 (Character/Prop Parity, 强制)**：角色与道具与环境执行完全相同的名称继承规则；不得使用别名、同义词、翻译名或简写替代上游规范名。
 - **环境继承权威 (Scene-to-Shot Environment Inheritance, 强制)**：环境在 Scene 阶段已定稿（名称/视角语义/Entry-Exit 连续性）。Shot 阶段只能继承，不得重命名、重定义或新建环境。
 - **环境变更回退规则 (Environment Change Fallback, 强制)**：若某镜头需求导致背景集合显著变化、轴线跨越/反转、观察方向重构或已超出当前 Scene 环境语义，不得在 Shot 内临时改环境；必须回退到 Scene 层新增 Scene + Environment 变体后再生成该 Shot。
+- **OTS 切换强制拆分 (OTS Split Mandate, 强制)**：当出现过肩镜头从 `A over B shoulder` 切换到 `B over A shoulder`（角色视角切换）时，必须至少拆成两个独立 Shot，禁止在同一 Shot 内同时完成双向 OTS。
+  - 即使在同一 Scene 内执行正反打，也必须输出两个独立 Shot（`Cam-01` 与 `Cam-02`），不得合并为单镜。
+  - 两个 OTS Shot 必须分别写明：机位落点、拍摄朝向、`Axis Side`（如 `left/right`）与是否跨线（`crossed/not crossed`）。
+  - 两个 OTS Shot 必须在 `Shot Logic (CN)` 中显式标注对应关系：`Cam-01: A over B`、`Cam-02: B over A`。
+- **OTS 分场触发器 (OTS Scene-Split Trigger, 强制)**：若 OTS 切换伴随背景主集合变化、轴线跨越/反转、观察方向重构、镜位由门内看外↔门外看内，必须新起 Scene 并绑定对应 Environment 变体；禁止在原 Scene 内硬写“反打重构”。
 - **禁止新造实体 (No New Entity Creation, 强制)**：Shot 生成阶段绝不能新增角色/环境/道具实体名；`Associated Entities` 仅能由 Start/Video/End 中已出现且属于上游实体清单的名称组成。
 - **默认审美基调 (Default Aesthetic Bias, 强制)**：当输入未指定特殊风格时，所有镜头默认追求“高审美 + 现代 + 精致 + 电影级视觉享受”：
   - 角色：优先呈现有吸引力、上镜、气质鲜明的形象（可有性感张力但必须 non-explicit，禁止露骨化）。
@@ -97,6 +102,8 @@
   - **Hold Mandate (禁止切断)**：情绪延续、动作未完成、对话中的倾听状态。在此类时刻严禁切断镜头，必须保持连贯。
 - **拆分规则 (The Cut Triggers)**
   - **Must Cut**: 时间跳跃、空间瞬移、视角剧烈反转 (Reverse Angle)。
+  - **Must Cut (OTS)**: 任何 OTS 主体切换（A→B 或 B→A）都必须切镜；连续对话至少输出一组可审计的 OTS 正反打镜头对。
+    - **OTS 审计标注（强制）**：该正反打镜头对必须可被一眼审计，至少包含 `Cam-01/Cam-02`、`A over B/B over A`、`Axis Side`。
 - **景别递进**：同一 Scene 内遵循 Master → Medium → Close/Detail → Insert 的视觉呼吸感，避免单调重复。
 - **人物塑造与景变 (Character Shaping & Scale Rules)**
   - **强制特写 (Mandatory Character Shot)**: 每个 Scene 的分镜序列中，**必须至少包含一次**针对主要人物 (Lead Character) 的 Close-up 或 Medium Close-up 级别分镜，以强化人物形象与面部细节。
@@ -225,6 +232,10 @@
 - **冲突降级策略 (Conflict Fallback)**：若规划命中禁配，保留与场景目标最相关的 1 个主技法，其他一律降级为基础运镜（Dolly/Pan/Truck/OTS）。
 - **超限降级策略 (Overflow Fallback)**：若运镜术语数量 > 2，必须按优先级保留前两项（主技法 > 支持技法），其余删除并改写为动作描述，不得保留第三个运镜术语。
 - **输出自检 (Mandatory Check)**：生成每个 Shot 前先做“禁配检查”；若存在禁配组合，必须先改写运镜方案，再输出 Start/Video/End。
+- **Scene↔Shot 一致性自检 (OTS Consistency Check, 强制)**：在输出每个 OTS 镜头对前，必须先对照 `scene_analysis` 的分场规则执行校验：
+  - 若仅发生 `A over B -> B over A` 视角切换且轴线/背景主集合/观察方向未重构：允许同一 Scene 下分为两个 Shot；
+  - 若伴随轴线跨越/反转、背景主集合变化、观察方向重构或门内看外↔门外看内：必须中止当前 Scene 内续写，改为 `新 Scene + 新 Environment 变体` 后再继续分镜。
+  - 若输入 Scene 未拆但已命中上述分场条件，必须在 `Shot Logic (CN)` 明确标注 `需要回退 Scene 层拆分`，不得强行在同一 Scene 完成正反打。
 - **DP 兜底校验 (Dynamic Parts Fallback Check)**：若上游输入的 `Environment Delta` 中 `Dynamic Parts State` 非 `None`，则本镜头生成前必须核对并显式体现 `Before -> After + reason`；若仅有结果态（如 `Door: Closed`）或缺少触发原因，判定输入不完整，先补齐后再输出 Start/Video/End。
   - **DP 合规示例**：`Dynamic Parts State: PROP:[Door](Open -> Closed, reason: CHAR:[@Character A] closes it quietly to avoid detection)`。
   - **DP 不合规示例**：`Dynamic Parts State: Door: Closed`（缺少 `Before` 与 `reason`）。

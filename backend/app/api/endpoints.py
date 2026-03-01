@@ -27,6 +27,7 @@ import json
 from datetime import datetime, timedelta
 from jose import jwt
 from app.core.config import settings
+from app.core.entity_token import normalize_entity_token
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi import File, UploadFile
 import shutil
@@ -4684,6 +4685,123 @@ class SceneOut(BaseModel):
         from_attributes = True
 
 
+class SceneRegenerateRequest(BaseModel):
+    user_requirements: str
+    prompt_file: Optional[str] = "scene_regenerate.txt"
+    system_prompt: Optional[str] = None
+    max_scenes: Optional[int] = 4
+
+
+def _normalize_scene_header(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    text = re.sub(r"[*_`]+", "", text)
+    text = re.sub(r"\s+", "", text)
+    text = re.sub(r"[\.:\-_/\\|]+", "", text)
+    return text
+
+
+def _clean_scene_table_cell(value: Any) -> str:
+    text = str(value or "")
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+    text = text.replace("\\|", "|")
+    return html.unescape(text).strip()
+
+
+def _parse_scene_rows_from_markdown(markdown_text: str) -> List[Dict[str, str]]:
+    if not markdown_text:
+        return []
+
+    lines = [line.rstrip("\n\r") for line in str(markdown_text).splitlines()]
+    if not lines:
+        return []
+
+    def _split_row(line: str) -> List[str]:
+        cols = [col.strip() for col in line.strip().split("|")]
+        if cols and cols[0] == "":
+            cols = cols[1:]
+        if cols and cols[-1] == "":
+            cols = cols[:-1]
+        return cols
+
+    def _find_idx(headers: List[str], aliases: List[str]) -> int:
+        normalized_headers = [_normalize_scene_header(h) for h in headers]
+        normalized_aliases = [_normalize_scene_header(a) for a in aliases]
+        for idx, h in enumerate(normalized_headers):
+            for alias in normalized_aliases:
+                if alias and (h == alias or alias in h):
+                    return idx
+        return -1
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+
+        headers = _split_row(stripped)
+        if len(headers) < 4:
+            continue
+
+        scene_no_idx = _find_idx(headers, ["Scene No", "场次", "场次号"])
+        core_idx = _find_idx(headers, ["Core Scene Info", "核心场景信息", "Core Goal"])
+        original_idx = _find_idx(headers, ["Original Script Text", "原始剧本文本", "Description"])
+
+        if core_idx < 0 and original_idx < 0:
+            continue
+
+        j = i + 1
+        if j < len(lines):
+            separator = lines[j].strip()
+            if separator.startswith("|") and re.fullmatch(r"[\|\s:\-]+", separator or ""):
+                j += 1
+
+        parsed_rows: List[Dict[str, str]] = []
+
+        scene_name_idx = _find_idx(headers, ["Scene Name", "场景名称", "场景名", "Title"])
+        duration_idx = _find_idx(headers, ["Equivalent Duration", "Duration", "时长"])
+        env_name_idx = _find_idx(headers, ["Environment Name", "环境名称", "环境锚点", "Environment"])
+        linked_chars_idx = _find_idx(headers, ["Linked Characters", "关联角色", "角色"])
+        key_props_idx = _find_idx(headers, ["Key Props", "关键道具", "道具"])
+
+        while j < len(lines):
+            row_line = lines[j].strip()
+            if not row_line.startswith("|"):
+                break
+            if re.fullmatch(r"[\|\s:\-]+", row_line or ""):
+                j += 1
+                continue
+
+            cols = _split_row(row_line)
+            if not cols:
+                j += 1
+                continue
+
+            def _get(idx: int) -> str:
+                return _clean_scene_table_cell(cols[idx]) if idx >= 0 and idx < len(cols) else ""
+
+            row_payload = {
+                "scene_no": _get(scene_no_idx),
+                "scene_name": _get(scene_name_idx),
+                "equivalent_duration": _get(duration_idx),
+                "core_scene_info": _get(core_idx),
+                "original_script_text": _get(original_idx),
+                "environment_name": _get(env_name_idx),
+                "linked_characters": _get(linked_chars_idx),
+                "key_props": _get(key_props_idx),
+            }
+
+            if any(str(v or "").strip() for v in row_payload.values()):
+                parsed_rows.append(row_payload)
+
+            j += 1
+
+        if parsed_rows:
+            return parsed_rows
+
+    return []
+
+
 @router.get("/episodes/{episode_id}/scenes", response_model=List[SceneOut])
 def read_scenes(
     episode_id: int,
@@ -4792,6 +4910,163 @@ def delete_scene(
     db.delete(db_scene)
     db.commit()
     return None
+
+
+@router.post("/scenes/{scene_id}/regenerate", response_model=Dict[str, Any])
+async def regenerate_scene(
+    scene_id: int,
+    req: SceneRegenerateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    db_scene = db.query(Scene).filter(Scene.id == scene_id).first()
+    if not db_scene:
+        raise HTTPException(status_code=404, detail="Scene not found")
+
+    episode = db.query(Episode).filter(Episode.id == db_scene.episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+
+    project = _require_project_access(db, episode.project_id, current_user, owner_only=True)
+
+    user_requirements = str(req.user_requirements or "").strip()
+    if not user_requirements:
+        raise HTTPException(status_code=400, detail="user_requirements is required")
+
+    safe_max_scenes = max(1, min(int(req.max_scenes or 4), 8))
+
+    system_instruction = ""
+    if req.system_prompt:
+        system_instruction = str(req.system_prompt)
+    else:
+        prompt_filename = str(req.prompt_file or "scene_regenerate.txt").strip() or "scene_regenerate.txt"
+        prompt_dir = os.path.join(str(settings.BASE_DIR), "app", "core", "prompts")
+        prompt_path = os.path.join(prompt_dir, prompt_filename)
+        if not os.path.exists(prompt_path):
+            raise HTTPException(status_code=404, detail=f"Prompt file '{prompt_filename}' not found.")
+        with open(prompt_path, "r", encoding="utf-8") as f:
+            system_instruction = f.read()
+
+    scene_snapshot = (
+        f"| Episode ID | Scene ID | Scene No. | Scene Name | Equivalent Duration | Core Scene Info | Original Script Text | Environment Name | Linked Characters | Key Props |\n"
+        f"| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+        f"| EP{int(episode.id):02d} | EP{int(episode.id):02d}_SCXX | {db_scene.scene_no or ''} | {db_scene.scene_name or ''} | {db_scene.equivalent_duration or ''} | {(db_scene.core_scene_info or '').replace(chr(10), '<br>')} | {(db_scene.original_script_text or '').replace(chr(10), '<br>')} | {db_scene.environment_name or ''} | {db_scene.linked_characters or ''} | {db_scene.key_props or ''} |"
+    )
+
+    user_prompt = (
+        f"Project Title: {project.title}\n"
+        f"Episode Title: {episode.title}\n"
+        f"Source Scene Database ID: {db_scene.id}\n\n"
+        f"Current Scene (Markdown Row):\n{scene_snapshot}\n\n"
+        f"User Requirements:\n{user_requirements}\n\n"
+        f"Regenerate this scene into 1 to {safe_max_scenes} new scene rows in markdown table format, following scene_analysis conventions. "
+        f"You may split into multiple rows when needed."
+    )
+
+    llm_config = agent_service.get_active_llm_config(current_user.id)
+    provider = llm_config.get("provider") if llm_config else None
+    model = llm_config.get("model") if llm_config else None
+    billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+
+    resp = await llm_service.generate_content(user_prompt, system_instruction, llm_config)
+    raw = str((resp or {}).get("content") or "").strip()
+    if not raw:
+        raise HTTPException(status_code=502, detail="LLM returned empty content")
+
+    cleaned = sanitize_llm_markdown_output(raw)
+    parsed_rows = _parse_scene_rows_from_markdown(cleaned)
+    if not parsed_rows:
+        raise HTTPException(status_code=502, detail="Failed to parse regenerated scene markdown table")
+
+    parsed_rows = parsed_rows[:safe_max_scenes]
+
+    old_scene_no = str(db_scene.scene_no or db_scene.id)
+    fallback_original_script = str(db_scene.original_script_text or "").strip()
+    fallback_scene_name = db_scene.scene_name
+    fallback_duration = db_scene.equivalent_duration
+    fallback_core_info = db_scene.core_scene_info
+    fallback_env_name = db_scene.environment_name
+    fallback_linked_chars = db_scene.linked_characters
+    fallback_key_props = db_scene.key_props
+
+    created_scenes: List[Scene] = []
+
+    try:
+        db.query(Shot).filter(Shot.scene_id == scene_id).delete(synchronize_session=False)
+        db.delete(db_scene)
+        db.flush()
+
+        total_new = len(parsed_rows)
+        for idx, row in enumerate(parsed_rows, start=1):
+            if total_new > 1:
+                next_scene_no = f"{old_scene_no}.{idx}"
+            else:
+                next_scene_no = str(row.get("scene_no") or "").strip() or old_scene_no
+
+            original_script_text = str(row.get("original_script_text") or "").strip() or fallback_original_script
+            if not original_script_text:
+                original_script_text = f"Scene regenerated from {old_scene_no}"
+
+            new_scene = Scene(
+                episode_id=episode.id,
+                scene_no=next_scene_no,
+                scene_name=str(row.get("scene_name") or "").strip() or fallback_scene_name,
+                original_script_text=original_script_text,
+                equivalent_duration=str(row.get("equivalent_duration") or "").strip() or fallback_duration,
+                core_scene_info=str(row.get("core_scene_info") or "").strip() or fallback_core_info,
+                environment_name=str(row.get("environment_name") or "").strip() or fallback_env_name,
+                linked_characters=str(row.get("linked_characters") or "").strip() or fallback_linked_chars,
+                key_props=str(row.get("key_props") or "").strip() or fallback_key_props,
+            )
+            db.add(new_scene)
+            created_scenes.append(new_scene)
+
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to replace scene: {str(e)}")
+
+    for item in created_scenes:
+        db.refresh(item)
+
+    usage = (resp or {}).get("usage") if isinstance(resp, dict) else None
+    details: Dict[str, Any] = {
+        "item": "scene_regenerate",
+        "source_scene_id": scene_id,
+        "generated_scene_count": len(created_scenes),
+    }
+    if isinstance(usage, dict):
+        details.update(usage)
+        if "prompt_tokens" in details and "input_tokens" not in details:
+            details["input_tokens"] = details.get("prompt_tokens", 0)
+        if "completion_tokens" in details and "output_tokens" not in details:
+            details["output_tokens"] = details.get("completion_tokens", 0)
+    billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, details)
+
+    return {
+        "replaced_scene_id": scene_id,
+        "episode_id": episode.id,
+        "project_id": project.id,
+        "generated_scene_count": len(created_scenes),
+        "raw_markdown": cleaned,
+        "scenes": [
+            {
+                "id": s.id,
+                "scene_no": s.scene_no,
+                "scene_name": s.scene_name,
+                "equivalent_duration": s.equivalent_duration,
+                "core_scene_info": s.core_scene_info,
+                "original_script_text": s.original_script_text,
+                "environment_name": s.environment_name,
+                "linked_characters": s.linked_characters,
+                "key_props": s.key_props,
+            }
+            for s in created_scenes
+        ],
+    }
 
 # --- Shots ---
 
@@ -5016,12 +5291,7 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
     relevant_names = set()
     
     def _clean_br(s):
-        # Normalize tokens like "CHAR:[@Name]" / "[@Name]" / "[Name]" to plain name.
-        cleaned = str(s or '').replace('[', '').replace(']', '').replace('`', '').strip()
-        cleaned = re.sub(r'^(CHAR|ENV|PROP)\s*:\s*', '', cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r'^@+', '', cleaned)
-        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-        return cleaned
+        return normalize_entity_token(s)
 
     if scene.linked_characters:
         # Split by comma and handle potential variations
@@ -9087,6 +9357,7 @@ def update_user_credits(
 
 class GenerationRequest(BaseModel):
     prompt: str
+    negative_prompt: Optional[str] = None
     provider: Optional[str] = None
     model: Optional[str] = None
     ref_image_url: Optional[Union[str, List[str]]] = None
@@ -9103,6 +9374,7 @@ class GenerationRequest(BaseModel):
 
 class VideoGenerationRequest(BaseModel):
     prompt: str
+    negative_prompt: Optional[str] = None
     provider: Optional[str] = None
     model: Optional[str] = None
     ref_image_url: Optional[Union[str, List[str]]] = None
@@ -9610,6 +9882,7 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
         # Assuming generate_image returns {"url": "...", ...}
         result = await media_service.generate_image(
             prompt=req.prompt, 
+            negative_prompt=req.negative_prompt,
             llm_config={"provider": req.provider, "model": req.model} if req.provider or req.model else None,
             reference_image_url=req.ref_image_url,
             width=width,
@@ -10062,8 +10335,31 @@ async def generate_video_endpoint(
             },
         )
 
+        prompt_text = str(req.prompt or "")
+        flat_refs: List[str] = []
+        if isinstance(req.ref_image_url, list):
+            flat_refs.extend([str(x).strip() for x in req.ref_image_url if str(x).strip()])
+        elif isinstance(req.ref_image_url, str) and req.ref_image_url.strip():
+            flat_refs.append(req.ref_image_url.strip())
+
+        if isinstance(req.keyframes, list):
+            flat_refs.extend([str(x).strip() for x in req.keyframes if str(x).strip()])
+
+        if isinstance(req.last_frame_url, str) and req.last_frame_url.strip():
+            flat_refs.append(req.last_frame_url.strip())
+
+        flat_refs = [x for x in dict.fromkeys([str(x).strip() for x in flat_refs if str(x).strip()]) if x]
+        prompt_text = _append_video_api_ref_mapping(
+            prompt_text,
+            flat_refs,
+            req.ref_image_url,
+            req.last_frame_url,
+            req.keyframes,
+        )
+
         result = await media_service.generate_video(
-            prompt=req.prompt, 
+            prompt=prompt_text,
+            negative_prompt=req.negative_prompt,
             llm_config={"provider": req.provider, "model": req.model} if req.provider or req.model else None,
             reference_image_url=req.ref_image_url,
             last_frame_url=req.last_frame_url,
@@ -10154,21 +10450,7 @@ def _parse_shot_tech(shot: Shot) -> Dict[str, Any]:
 
 
 def _normalize_entity_anchor_token(value: Any) -> str:
-    return (
-        str(value or "")
-        .replace("（", "(")
-        .replace("）", ")")
-        .replace("【", "[")
-        .replace("】", "]")
-        .replace("‘", "")
-        .replace("’", "")
-        .replace("“", "")
-        .replace("”", "")
-        .replace("\"", "")
-        .replace("'", "")
-        .strip()
-        .lower()
-    )
+    return normalize_entity_token(value)
 
 
 def _build_project_entity_lookup(db: Session, project_id: int) -> Dict[str, Dict[str, Any]]:
@@ -10177,10 +10459,12 @@ def _build_project_entity_lookup(db: Session, project_id: int) -> Dict[str, Dict
     for row in rows:
         anchor = str(row.anchor_description or row.description or "").strip()
         image_url = str(row.image_url or "").strip()
+        entity_type = str(row.type or "").strip().lower()
         payload = {
             "anchor": anchor,
             "image_url": image_url,
             "entity_id": row.id,
+            "entity_type": entity_type,
         }
         keys = {
             _normalize_entity_anchor_token(row.name),
@@ -10193,7 +10477,12 @@ def _build_project_entity_lookup(db: Session, project_id: int) -> Dict[str, Dict
     return lookup
 
 
-def _inject_shot_prompt_anchors(prompt: str, entity_lookup: Dict[str, Dict[str, Any]], global_style: str = "") -> str:
+def _inject_shot_prompt_anchors(
+    prompt: str,
+    entity_lookup: Dict[str, Dict[str, Any]],
+    global_style: str = "",
+    subject_ref_index_map: Optional[Dict[str, int]] = None,
+) -> str:
     text = str(prompt or "")
     if not text:
         return text
@@ -10202,7 +10491,7 @@ def _inject_shot_prompt_anchors(prompt: str, entity_lookup: Dict[str, Dict[str, 
 
     def _replace(match: re.Match) -> str:
         token = str(match.group(1) or "").strip()
-        normalized = _normalize_entity_anchor_token(re.sub(r"^(CHAR|ENV|PROP)\s*:\s*", "", token, flags=re.IGNORECASE).lstrip("@"))
+        normalized = _normalize_entity_anchor_token(token)
         tail = text[match.end():]
         if re.match(r"^\s*[\(（]", tail):
             return match.group(0)
@@ -10212,7 +10501,13 @@ def _inject_shot_prompt_anchors(prompt: str, entity_lookup: Dict[str, Dict[str, 
 
         row = entity_lookup.get(normalized)
         if row and row.get("anchor"):
-            return f"{match.group(0)}({row['anchor']})"
+            anchor = str(row.get("anchor") or "").strip()
+            entity_id = str(row.get("entity_id") or "").strip()
+            ref_no = (subject_ref_index_map or {}).get(entity_id)
+            anchor_with_ref = anchor
+            if ref_no:
+                anchor_with_ref = f"{anchor} | ref_image_url: #{ref_no}"
+            return f"{match.group(0)}({anchor_with_ref})"
         return match.group(0)
 
     return regex.sub(_replace, text)
@@ -10227,7 +10522,7 @@ def _collect_prompt_entity_ref_images(prompt: str, entity_lookup: Dict[str, Dict
     regex = re.compile(r"(?:CHAR|ENV|PROP)?\s*:\s*[\[【](.*?)[\]】]|[\[【](.*?)[\]】]", re.IGNORECASE)
     for m in regex.finditer(text):
         raw_name = m.group(1) or m.group(2) or ""
-        normalized = _normalize_entity_anchor_token(re.sub(r"^(CHAR|ENV|PROP)\s*:\s*", "", raw_name, flags=re.IGNORECASE).lstrip("@"))
+        normalized = _normalize_entity_anchor_token(raw_name)
         if not normalized:
             continue
         row = entity_lookup.get(normalized)
@@ -10235,6 +10530,92 @@ def _collect_prompt_entity_ref_images(prompt: str, entity_lookup: Dict[str, Dict
         if image_url:
             refs.append(image_url)
     return [x for x in dict.fromkeys(refs) if x]
+
+
+def _compute_subject_ref_index_map(prompt: str, entity_lookup: Dict[str, Dict[str, Any]]) -> Dict[str, int]:
+    text = str(prompt or "")
+    if not text:
+        return {}
+
+    refs: List[str] = []
+    index_map: Dict[str, int] = {}
+    regex = re.compile(r"(?:CHAR|ENV|PROP)?\s*:\s*[\[【](.*?)[\]】]|[\[【](.*?)[\]】]", re.IGNORECASE)
+
+    for m in regex.finditer(text):
+        raw_name = m.group(1) or m.group(2) or ""
+        normalized = _normalize_entity_anchor_token(raw_name)
+        if not normalized:
+            continue
+
+        row = entity_lookup.get(normalized)
+        if not row:
+            continue
+
+        entity_type = str(row.get("entity_type") or "").strip().lower()
+        if entity_type not in {"subject", "character", "char"}:
+            continue
+
+        image_url = str(row.get("image_url") or "").strip()
+        if not image_url:
+            continue
+
+        if image_url not in refs:
+            refs.append(image_url)
+
+        entity_id = str(row.get("entity_id") or "").strip()
+        if entity_id:
+            index_map[entity_id] = refs.index(image_url) + 1
+
+    return index_map
+
+
+def _append_video_api_ref_mapping(
+    prompt: str,
+    refs: List[str],
+    ref_image_url: Optional[Union[str, List[str]]],
+    last_frame_url: Optional[str],
+    keyframes: Optional[List[str]] = None,
+) -> str:
+    text = str(prompt or "").strip()
+    ordered_refs = [str(x).strip() for x in (refs or []) if str(x).strip()]
+    if not text or not ordered_refs:
+        return text
+
+    index_map: Dict[str, int] = {}
+    for idx, url in enumerate(ordered_refs, start=1):
+        if url not in index_map:
+            index_map[url] = idx
+
+    parts: List[str] = []
+    if isinstance(ref_image_url, list):
+        start_urls = [str(x).strip() for x in ref_image_url if str(x).strip()]
+    else:
+        single_start = str(ref_image_url or "").strip()
+        start_urls = [single_start] if single_start else []
+    end_url = str(last_frame_url or "").strip()
+    keyframe_urls = [str(x).strip() for x in (keyframes or []) if str(x).strip()]
+
+    start_indices = [index_map[u] for u in start_urls if u in index_map]
+    end_idx = index_map.get(end_url)
+    keyframe_indices = [index_map[u] for u in keyframe_urls if u in index_map]
+
+    if start_indices:
+        if len(start_indices) == 1:
+            parts.append(f"ref_image_url=#{start_indices[0]}")
+        else:
+            parts.append("ref_image_url=[" + ",".join(f"#{i}" for i in start_indices) + "]")
+    if end_idx:
+        parts.append(f"last_frame_url=#{end_idx}")
+    if keyframe_indices:
+        parts.append("keyframes=[" + ",".join(f"#{i}" for i in keyframe_indices) + "]")
+
+    if not parts:
+        return text
+
+    mapping_line = "API ref mapping: " + "; ".join(parts)
+    if mapping_line.lower() in text.lower():
+        return text
+    return f"{text}\n\n{mapping_line}"
 
 
 def _find_previous_shot_end_frame_url(db: Session, episode_id: int, shot_id: int) -> Optional[str]:
@@ -10315,7 +10696,14 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                 if need_start:
                     start_prompt_raw = str(shot.start_frame or shot.video_content or "").strip()
                     if start_prompt_raw:
-                        start_prompt = _inject_shot_prompt_anchors(start_prompt_raw, entity_lookup, global_style)
+                        start_ref_index_map = _compute_subject_ref_index_map(start_prompt_raw, entity_lookup)
+                        logger.info(
+                            "[shot_media_batch] subject_ref_index_map asset=start_frame shot_id=%s shot_label=%s map=%s",
+                            shot.id,
+                            shot_label,
+                            start_ref_index_map,
+                        )
+                        start_prompt = _inject_shot_prompt_anchors(start_prompt_raw, entity_lookup, global_style, start_ref_index_map)
                         auto_matches = _collect_prompt_entity_ref_images(start_prompt_raw, entity_lookup)
                         start_refs: List[str] = []
                         if isinstance(tech.get("ref_image_urls"), list):
@@ -10345,7 +10733,14 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                 if need_end:
                     end_prompt_raw = str(shot.end_frame or "").strip()
                     if end_prompt_raw:
-                        end_prompt = _inject_shot_prompt_anchors(end_prompt_raw, entity_lookup, global_style)
+                        end_ref_index_map = _compute_subject_ref_index_map(end_prompt_raw, entity_lookup)
+                        logger.info(
+                            "[shot_media_batch] subject_ref_index_map asset=end_frame shot_id=%s shot_label=%s map=%s",
+                            shot.id,
+                            shot_label,
+                            end_ref_index_map,
+                        )
+                        end_prompt = _inject_shot_prompt_anchors(end_prompt_raw, entity_lookup, global_style, end_ref_index_map)
                         refs: List[str] = []
                         if isinstance(tech.get("end_ref_image_urls"), list):
                             refs.extend([str(x).strip() for x in tech.get("end_ref_image_urls") or [] if str(x).strip()])
@@ -10376,7 +10771,14 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                     need_video = overwrite_existing or not str(shot.video_url or "").strip()
                     if need_video:
                         video_prompt_raw = str(shot.video_content or shot.prompt or "").strip() or "Video motion"
-                        video_prompt = _inject_shot_prompt_anchors(video_prompt_raw, entity_lookup, global_style)
+                        video_ref_index_map = _compute_subject_ref_index_map(video_prompt_raw, entity_lookup)
+                        logger.info(
+                            "[shot_media_batch] subject_ref_index_map asset=video shot_id=%s shot_label=%s map=%s",
+                            shot.id,
+                            shot_label,
+                            video_ref_index_map,
+                        )
+                        video_prompt = _inject_shot_prompt_anchors(video_prompt_raw, entity_lookup, global_style, video_ref_index_map)
 
                         def _resolve_video_mode(payload: Dict[str, Any]) -> str:
                             if payload.get("video_mode_unified"):
@@ -10421,6 +10823,27 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             if len(refs) > 1:
                                 final_end_ref = refs[-1]
 
+                        video_keyframes: List[str] = []
+                        if refs:
+                            start_idx = refs.index(final_start_ref) if final_start_ref in refs else -1
+                            end_idx = refs.index(final_end_ref) if final_end_ref in refs else -1
+                            if start_idx >= 0 and end_idx > start_idx:
+                                video_keyframes = refs[start_idx + 1:end_idx]
+                            elif start_idx >= 0:
+                                video_keyframes = refs[start_idx + 1:]
+                            elif end_idx > 0:
+                                video_keyframes = refs[:end_idx]
+                            else:
+                                video_keyframes = refs[1:] if len(refs) > 1 else []
+
+                        video_prompt = _append_video_api_ref_mapping(
+                            video_prompt,
+                            refs,
+                            final_start_ref,
+                            final_end_ref,
+                            video_keyframes,
+                        )
+
                         duration_val = 5.0
                         try:
                             duration_val = float(str(shot.duration or 5).strip() or 5)
@@ -10431,6 +10854,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             prompt=video_prompt,
                             ref_image_url=final_start_ref,
                             last_frame_url=final_end_ref,
+                            keyframes=video_keyframes or None,
                             duration=duration_val,
                             project_id=episode.project_id,
                             shot_id=shot.id,

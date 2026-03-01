@@ -1,4 +1,6 @@
 
+import { normalizeEntityToken } from './entityToken';
+
 /**
  * Processes a prompt string by replacing variables.
  * 
@@ -16,19 +18,6 @@
 export const processPrompt = (prompt, episodeInfo, entities) => {
     if (!prompt) return "";
     let finalPrompt = prompt;
-
-    const normalizeEntityToken = (value) => {
-        return String(value || '')
-            .replace(/[（【〔［]/g, '(')
-            .replace(/[）】〕］]/g, ')')
-            .replace(/[“”"'‘’]/g, '')
-            .replace(/^[\[\{【｛\(\s]+|[\]\}】｝\)\s]+$/g, '')
-            .replace(/^(CHAR|ENV|PROP)\s*:\s*/i, '')
-            .replace(/^@+/, '')
-            .replace(/\s+/g, ' ')
-            .trim()
-            .toLowerCase();
-    };
 
     // 1. Global Style Replacement
     // Check both potential keys: "Global Style" (from JSON) or "Global_Style" (from internal state)

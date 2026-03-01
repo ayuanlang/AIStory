@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { API_URL, BASE_URL } from '../config';
+import { normalizeEntityToken } from '../lib/entityToken';
 
 // Use API_URL from config which supports production env vars
 export const api = axios.create({
@@ -75,6 +76,7 @@ const normalizeRefImageValue = (value) => {
 const buildImageSubmitSignature = (payload) => {
     const signatureSource = {
         prompt: String(payload?.prompt || '').trim(),
+        negative_prompt: String(payload?.negative_prompt || '').trim(),
         provider: String(payload?.provider || '').trim(),
         model: String(payload?.model || '').trim(),
         ref_image_url: normalizeRefImageValue(payload?.ref_image_url),
@@ -284,6 +286,11 @@ export const updateScene = async (sceneId, data) => {
 
 export const deleteScene = async (sceneId) => {
     const response = await api.delete(`/scenes/${sceneId}`);
+    return response.data;
+}
+
+export const regenerateScene = async (sceneId, payload) => {
+    const response = await api.post(`/scenes/${sceneId}/regenerate`, payload || {});
     return response.data;
 }
 
@@ -639,8 +646,9 @@ const pollImageJobUntilDone = async (jobId, { timeoutMs = 10 * 60 * 1000, pollIn
     throw new Error('Image generation timed out while polling job status');
 };
 
-export const generateImage = async (prompt, provider = null, ref_image_url = null, options = {}) => {
-    const payload = { prompt, provider, ref_image_url, ...options };
+export const generateImage = async (prompt, provider = null, ref_image_url = null, options = {}, negative_prompt = null) => {
+    const effectiveNegativePrompt = String(negative_prompt ?? options?.negative_prompt ?? '').trim();
+    const payload = { prompt, provider, ref_image_url, ...options, ...(effectiveNegativePrompt ? { negative_prompt: effectiveNegativePrompt } : {}) };
     const idempotencyKey = getOrCreateImageSubmitIdempotencyKey(payload, options?.idempotency_key);
     const autoDownloadLocal = Object.prototype.hasOwnProperty.call(options || {}, 'auto_download_local')
         ? options?.auto_download_local !== false
@@ -692,8 +700,19 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
     return result;
 }
 
-export const generateVideo = async (prompt, provider = null, ref_image_url = null, last_frame_url = null, duration = 5, options = {}, keyframes = []) => {
-    const response = await api.post('/generate/video', { prompt, provider, ref_image_url, last_frame_url, duration, keyframes, ...options });
+export const generateVideo = async (prompt, provider = null, ref_image_url = null, last_frame_url = null, duration = 5, options = {}, keyframes = [], negative_prompt = null) => {
+    const effectiveNegativePrompt = String(negative_prompt ?? options?.negative_prompt ?? '').trim();
+    const payload = {
+        prompt,
+        duration,
+        ...options,
+        ...(provider ? { provider } : {}),
+        ...(ref_image_url !== null && ref_image_url !== undefined && ref_image_url !== '' ? { ref_image_url } : {}),
+        ...(last_frame_url !== null && last_frame_url !== undefined && last_frame_url !== '' ? { last_frame_url } : {}),
+        ...(Array.isArray(keyframes) && keyframes.length > 0 ? { keyframes } : {}),
+        ...(effectiveNegativePrompt ? { negative_prompt: effectiveNegativePrompt } : {}),
+    };
+    const response = await api.post('/generate/video', payload);
     const autoDownloadLocal = Object.prototype.hasOwnProperty.call(options || {}, 'auto_download_local')
         ? options?.auto_download_local !== false
         : shouldAutoDownloadByUserSetting();
@@ -970,19 +989,6 @@ export const uploadMyAvatar = async (file) => {
 // Prompt Helper Export
 export const injectEntityFeatures = (prompt, entities = []) => {
     let text = prompt || '';
-
-    const normalizeEntityToken = (value) => {
-        return String(value || '')
-            .replace(/[（【〔［]/g, '(')
-            .replace(/[）】〕］]/g, ')')
-            .replace(/[“”"'‘’]/g, '')
-            .replace(/^[\[\{【｛\(\s]+|[\]\}】｝\)\s]+$/g, '')
-            .replace(/^(CHAR|ENV|PROP)\s*:\s*/i, '')
-            .replace(/^@+/, '')
-            .replace(/\s+/g, ' ')
-            .trim()
-            .toLowerCase();
-    };
 
     const regex = /[\[【\{｛]([\s\S]*?)[\]】\}｝]/g;
 

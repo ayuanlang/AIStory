@@ -58,6 +58,46 @@ const normalizeEpisodeTitleForDisplay = (rawTitle) => {
         .trim();
 };
 
+function buildEntityNegativePrompt(sourceText = '', primaryEntity = null, entityPool = []) {
+    const pool = Array.isArray(entityPool) ? entityPool : [];
+    const negatives = [];
+
+    const pushNegative = (value) => {
+        const text = String(value || '').trim();
+        if (!text) return;
+        if (!negatives.includes(text)) negatives.push(text);
+    };
+
+    if (primaryEntity?.negative_prompt_en) {
+        pushNegative(primaryEntity.negative_prompt_en);
+    }
+
+    const resolveEntity = (tokenValue) => {
+        const raw = String(tokenValue || '').trim();
+        const norm = normalizeEntityToken(raw);
+        if (!norm) return null;
+
+        return pool.find((item) => {
+            if (!item) return false;
+            if (String(item?.id || '').trim() === raw) return true;
+            if (normalizeEntityToken(item?.name || '') === norm) return true;
+            if (normalizeEntityToken(item?.name_en || '') === norm) return true;
+            return false;
+        }) || null;
+    };
+
+    const tokenMatches = String(sourceText || '').match(/[\[【](.*?)[\]】]/g) || [];
+    tokenMatches.forEach((wrapped) => {
+        const inner = String(wrapped || '').replace(/^[\[【]\s*/, '').replace(/[\]】]\s*$/, '');
+        const entity = resolveEntity(inner);
+        if (entity?.negative_prompt_en) {
+            pushNegative(entity.negative_prompt_en);
+        }
+    });
+
+    return negatives.join(', ');
+}
+
 const buildEpisodeDisplayLabel = ({ episodeNumber, title, fallbackNumber } = {}) => {
     const directNumber = Number(episodeNumber);
     const fallback = Number(fallbackNumber);
@@ -90,6 +130,7 @@ import {
     createScene,
     updateScene, 
     deleteScene,
+    regenerateScene,
     fetchShots,
     fetchEpisodeShots,
     createShot,
@@ -158,6 +199,7 @@ import {
 
 // RefineControl moved to components/RefineControl.jsx
 import { processPrompt } from '../lib/promptUtils';
+import { normalizeEntityToken } from '../lib/entityToken';
 import SettingsPage from './Settings';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
 
@@ -3948,6 +3990,43 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
     };
 
     const parseCoreCoverageReport = (rawText) => {
+        const formatMissingPoint = (value) => {
+            if (value == null) return '';
+            if (typeof value === 'string') return value.trim();
+            if (Array.isArray(value)) {
+                return value.map(item => formatMissingPoint(item)).filter(Boolean).join(' | ');
+            }
+            if (typeof value === 'object') {
+                const sceneId = String(
+                    value.scene_id ?? value.sceneId ?? value['Scene ID'] ?? value['场景ID'] ?? value['场景id'] ?? ''
+                ).trim();
+                const detail = String(
+                    value.missing_detail
+                    ?? value.missing_point
+                    ?? value.detail
+                    ?? value.reason
+                    ?? value.issue
+                    ?? value.desc
+                    ?? value.description
+                    ?? value['缺失点']
+                    ?? value['未覆盖点']
+                    ?? value['说明']
+                    ?? ''
+                ).trim();
+
+                if (sceneId && detail) return `${sceneId}: ${detail}`;
+                if (detail) return detail;
+                if (sceneId) return sceneId;
+
+                try {
+                    return JSON.stringify(value);
+                } catch {
+                    return '';
+                }
+            }
+            return String(value).trim();
+        };
+
         const text = String(rawText || '').trim();
         const jsonText = extractJsonFromLlmText(text);
         if (jsonText) {
@@ -3956,7 +4035,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 const normalized = String(parsed?.is_covered || parsed?.covered || parsed?.result || '').trim();
                 const isCovered = normalized === '是' || /^yes$/i.test(normalized) || normalized === 'true';
                 const missingPoints = Array.isArray(parsed?.missing_points)
-                    ? parsed.missing_points.map(v => String(v || '').trim()).filter(Boolean)
+                    ? parsed.missing_points.map(v => formatMissingPoint(v)).filter(Boolean)
                     : [];
                 return {
                     ok: true,
@@ -6668,17 +6747,7 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
         const uniqueRaws = [...new Set(rawMatches.map(s => s.trim()).filter(Boolean))];
         
         // Helper to normalize punctuation while preserving full name semantics
-        const normalize = (str) => {
-            return (str || '')
-                .replace(/[（【〔［]/g, '(')
-                .replace(/[）】〕］]/g, ')')
-                .replace(/[“”"']/g, '') // Remove quotes
-                .replace(/^(CHAR|ENV|PROP)\s*:\s*/i, '')
-                .replace(/^@+/, '')
-                .replace(/\s+/g, ' ')   // Collapse spaces
-                .trim()
-                .toLowerCase();
-        };
+        const normalize = (str) => normalizeEntityToken(str);
 
         // 2. Generate Search Candidates
         const candidates = new Set();
@@ -6690,6 +6759,17 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
             const base = normalize(content);
             if (base) candidates.add(base);
         });
+
+        const typedRefRegex = /(CHAR\s*:\s*\[@([^\]]+)\])|(ENV\s*:\s*\[([^\]]+)\])|(PROP\s*:\s*\[([^\]]+)\])/gi;
+        if (promptText) {
+            let typedMatch;
+            typedRefRegex.lastIndex = 0;
+            while ((typedMatch = typedRefRegex.exec(promptText)) !== null) {
+                const rawName = typedMatch[2] || typedMatch[4] || typedMatch[6] || '';
+                const normalized = normalize(rawName);
+                if (normalized) candidates.add(normalized);
+            }
+        }
 
         // 3. Match against Entities
         return entities.filter(e => {
@@ -7402,6 +7482,8 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
     const [entities, setEntities] = useState([]);
     const [isSuperuser, setIsSuperuser] = useState(false);
     const [editingScene, setEditingScene] = useState(null);
+    const [sceneRegenRequirements, setSceneRegenRequirements] = useState('');
+    const [sceneRegenerating, setSceneRegenerating] = useState(false);
     const [shotPromptModal, setShotPromptModal] = useState({ open: false, sceneId: null, data: null, loading: false });
     const [aiShotsFlowStatus, setAiShotsFlowStatus] = useState({ phase: 'idle', message: '', sceneId: null });
     const [batchAiShotsProgress, setBatchAiShotsProgress] = useState({
@@ -7859,6 +7941,10 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         };
     }, [editingScene?.id, buildSceneSnapshot]);
 
+    useEffect(() => {
+        setSceneRegenRequirements('');
+    }, [editingScene?.id]);
+
     const handleSave = async () => {
         if (!activeEpisode) return;
         
@@ -8100,6 +8186,73 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
             const detail = e?.response?.data?.detail || e?.message || 'Failed to delete scene';
             onLog?.(`Scene delete failed: ${detail}`, 'error');
             alert(`Failed to delete scene: ${detail}`);
+        }
+    };
+
+    const handleRegenerateScene = async () => {
+        if (!editingScene?.id) {
+            alert(t('请先保存当前场景。', 'Please save current scene first.'));
+            return;
+        }
+
+        const requirements = String(sceneRegenRequirements || '').trim();
+        if (!requirements) {
+            alert(t('请先输入重生成要求。', 'Please provide regeneration requirements first.'));
+            return;
+        }
+
+        const label = editingScene.scene_no || editingScene.scene_name || `#${editingScene.id}`;
+        const confirmed = await confirmUiMessage(
+            t(
+                `将重生成场景 ${label}，并删除旧场景及其镜头。是否继续？`,
+                `Regenerate scene ${label}, replace it with new scene rows, and delete old scene with its shots. Continue?`
+            )
+        );
+        if (!confirmed) return;
+
+        setSceneRegenerating(true);
+        try {
+            await flushSceneAutoSave(editingScene);
+
+            const oldSceneId = editingScene.id;
+            const result = await regenerateScene(oldSceneId, {
+                user_requirements: requirements,
+            });
+
+            const generated = Array.isArray(result?.scenes) ? result.scenes : [];
+            if (generated.length === 0) {
+                throw new Error(t('未返回可用的新场景。', 'No regenerated scenes returned.'));
+            }
+
+            const currentRows = Array.isArray(scenes) ? scenes : [];
+            const oldIndex = currentRows.findIndex((s) => s.id === oldSceneId);
+            const nextRows = [...currentRows];
+            if (oldIndex >= 0) {
+                nextRows.splice(oldIndex, 1, ...generated);
+            } else {
+                nextRows.push(...generated);
+            }
+
+            setScenes(nextRows);
+            setEditingScene(generated[0]);
+
+            if (activeEpisode?.id) {
+                await updateEpisode(activeEpisode.id, { scene_content: buildSceneContentMarkdown(nextRows) });
+            }
+
+            onLog?.(
+                t(
+                    `场景重生成完成：替换 1 个旧场景，新增 ${generated.length} 个场景。`,
+                    `Scene regeneration completed: replaced 1 scene with ${generated.length} new scene(s).`
+                ),
+                'success'
+            );
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || t('重生成失败', 'Regeneration failed');
+            onLog?.(`${t('场景重生成失败', 'Scene regeneration failed')}: ${detail}`, 'error');
+            alert(`${t('场景重生成失败：', 'Scene regeneration failed: ')}${detail}`);
+        } finally {
+            setSceneRegenerating(false);
         }
     };
 
@@ -8561,6 +8714,15 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                         <Trash2 className="w-3 h-3"/> {t('删除', 'Delete')}
                                     </button>
                                     <button
+                                        onClick={() => { void handleRegenerateScene(); }}
+                                        disabled={!editingScene?.id || sceneRegenerating}
+                                        className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/20 rounded text-xs flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        title={editingScene?.id ? t('按要求重生成并替换当前场景', 'Regenerate and replace current scene') : t('请先保存场景', 'Save scene first')}
+                                    >
+                                        {sceneRegenerating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3"/>}
+                                        {sceneRegenerating ? t('重生成中...', 'Regenerating...') : t('重生成场景', 'Regenerate Scene')}
+                                    </button>
+                                    <button
                                         onClick={() => editingScene?.id && handleGenerateShots(editingScene.id)}
                                         disabled={!editingScene?.id}
                                         className="px-3 py-1.5 bg-primary/20 hover:bg-primary/30 text-primary border border-primary/20 rounded text-xs flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -8607,6 +8769,13 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                     </div>
                                     
                                     <div className="pt-4 border-t border-white/5 h-full flex flex-col">
+                                         <label className="text-xs text-muted-foreground uppercase font-bold tracking-wider mb-2 block text-amber-300/90">{t('重生成要求', 'Regeneration Requirements')}</label>
+                                         <textarea
+                                            className="w-full bg-black/40 border border-amber-500/20 rounded p-3 text-white text-sm focus:outline-none focus:ring-1 focus:ring-amber-400/60 resize-y custom-scrollbar leading-relaxed min-h-[96px] mb-4"
+                                            value={sceneRegenRequirements}
+                                            onChange={e => setSceneRegenRequirements(e.target.value)}
+                                            placeholder={t('输入本次重生成要求，例如：拆分为2个场景、强化机位方向、补足角色反应镜头等。', 'Enter regeneration requirements, e.g. split into 2 scenes, strengthen camera direction, add reaction beats.')}
+                                        />
                                          <label className="text-xs text-muted-foreground uppercase font-bold tracking-wider mb-2 block text-primary/80">{t('核心场景信息（视觉指导）', 'Core Scene Info (Visual Direction)')}</label>
                                          <textarea 
                                             className="w-full flex-1 bg-black/40 border border-white/10 rounded p-3 text-white text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-none custom-scrollbar font-mono leading-relaxed min-h-[400px]"
@@ -9142,12 +9311,12 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
             const deps = Array.isArray(analyzed.visual_dependencies) ? analyzed.visual_dependencies : [];
             deps.forEach(dep => {
                 const depValue = String(dep).trim();
-                const depLower = depValue.toLowerCase();
+                const depNormalized = normalizeEntityToken(depValue);
                 const target = allEntities.find(e => {
                     if (!e) return false;
-                    if (String(e.id) === depValue) return true;
-                    if (e.name && e.name.trim().toLowerCase() === depLower) return true;
-                    if (e.name_en && e.name_en.trim().toLowerCase() === depLower) return true;
+                    if (String(e.id).trim() === depValue) return true;
+                    if (normalizeEntityToken(e.name || '') === depNormalized) return true;
+                    if (normalizeEntityToken(e.name_en || '') === depNormalized) return true;
                     return false;
                 });
                 if (target?.image_url) depUrls.push(target.image_url);
@@ -9172,7 +9341,8 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                 subject_name: analyzed?.name || analyzed?.name_en,
                 subject_type: analyzed?.type,
                 entity_type: analyzed?.type,
-                asset_type: 'subject'
+                asset_type: 'subject',
+                negative_prompt: buildEntityNegativePrompt(rawPrompt, analyzed || entity, allEntities)
             });
 
             if (!asset?.url) {
@@ -9394,15 +9564,15 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                  deps.forEach(dep => {
                      // dep can be name or id
                      const startDep = String(dep).trim();
+                     const startDepNormalized = normalizeEntityToken(startDep);
                      if (!startDep) return;
-                     const startDepLower = startDep.toLowerCase();
                      
                      // Use allEntities for resolution with case-insensitive match
                      const target = allEntities.find(e => {
                          if (!e) return false;
-                         if (String(e.id) === startDep) return true;
-                         if (e.name && e.name.trim().toLowerCase() === startDepLower) return true;
-                         if (e.name_en && e.name_en.trim().toLowerCase() === startDepLower) return true;
+                         if (String(e.id).trim() === startDep) return true;
+                         if (normalizeEntityToken(e.name || '') === startDepNormalized) return true;
+                         if (normalizeEntityToken(e.name_en || '') === startDepNormalized) return true;
                          return false;
                      });
 
@@ -9420,6 +9590,13 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
             // Deduplicate
             const uniqueRefs = [...new Set(allRefs)];
 
+            if (onLog) {
+                onLog(
+                    `Subject generation refs: manual_ref=${refImage?.url ? 'yes' : 'no'}, dependency_refs=${depUrls.length}, total_unique=${uniqueRefs.length}`,
+                    'process'
+                );
+            }
+
             const asset = await generateImage(finalPrompt, provider || null, uniqueRefs.length > 0 ? uniqueRefs : null, {
                 project_id: projectId,
                 entity_id: selectedEntity?.id,
@@ -9427,7 +9604,8 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                 subject_name: selectedEntity?.name || selectedEntity?.name_en,
                 subject_type: selectedEntity?.type,
                 entity_type: selectedEntity?.type,
-                asset_type: 'subject'
+                asset_type: 'subject',
+                negative_prompt: buildEntityNegativePrompt(finalPrompt, selectedEntity, allEntities)
             });
             await updateEntityImage(asset.url);
         } catch (e) {
@@ -9476,8 +9654,10 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         // Determine Dependency Map
         const nameMap = new Map();
         allEntities.forEach(e => {
-            if (e.name) nameMap.set(e.name.trim().toLowerCase(), e);
-            if (e.name_en) nameMap.set(e.name_en.trim().toLowerCase(), e);
+            const normName = normalizeEntityToken(e.name || '');
+            const normNameEn = normalizeEntityToken(e.name_en || '');
+            if (normName) nameMap.set(normName, e);
+            if (normNameEn) nameMap.set(normNameEn, e);
         });
 
         // Current status of images (starts with existing)
@@ -9496,10 +9676,10 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
             if (deps.length === 0) return true;
             
             return deps.every(depRaw => {
-                const dep = String(depRaw).trim().toLowerCase();
+                const dep = normalizeEntityToken(depRaw);
                 let target = null;
-                 if (allEntities.find(e => String(e.id) === dep)) {
-                     target = allEntities.find(e => String(e.id) === dep);
+                 if (allEntities.find(e => String(e.id).trim() === dep)) {
+                     target = allEntities.find(e => String(e.id).trim() === dep);
                  } else {
                      target = nameMap.get(dep);
                  }
@@ -9547,13 +9727,13 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                          const deps = Array.isArray(entity.visual_dependencies) ? entity.visual_dependencies : [];
                          deps.forEach(dep => {
                              const startDep = String(dep).trim();
-                             const startDepLower = startDep.toLowerCase();
+                             const startDepNormalized = normalizeEntityToken(startDep);
                              
                              let target = allEntities.find(e => {
                                  if (!e) return false;
-                                 if (String(e.id) === startDep) return true;
-                                 if (e.name && e.name.trim().toLowerCase() === startDepLower) return true;
-                                 if (e.name_en && e.name_en.trim().toLowerCase() === startDepLower) return true;
+                                 if (String(e.id).trim() === startDep) return true;
+                                 if (normalizeEntityToken(e.name || '') === startDepNormalized) return true;
+                                 if (normalizeEntityToken(e.name_en || '') === startDepNormalized) return true;
                                  return false;
                              });
 
@@ -9563,6 +9743,13 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                              }
                         });
                         const uniqueRefs = [...new Set(depUrls)];
+
+                        if (onLog) {
+                            onLog(
+                                `Batch subject refs: entity=${entity?.name || entity?.name_en || entity?.id}, dependency_refs=${depUrls.length}, total_unique=${uniqueRefs.length}`,
+                                'process'
+                            );
+                        }
                         
                         // 3. Generate
                         const res = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
@@ -9572,7 +9759,8 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                             subject_name: entity?.name || entity?.name_en,
                             subject_type: entity?.type,
                             entity_type: entity?.type,
-                            asset_type: 'subject'
+                            asset_type: 'subject',
+                            negative_prompt: buildEntityNegativePrompt(basePrompt, entity, allEntities)
                         });
                         
                         if (res && res.url) {
@@ -10319,13 +10507,16 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                                 <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
                                                     {(Array.isArray(selectedEntity.visual_dependencies) ? selectedEntity.visual_dependencies : []).map((dep, idx) => {
                                                         const startDep = String(dep).trim();
-                                                        const startDepLower = startDep.toLowerCase();
+                                                        const startDepNormalized = normalizeEntityToken(startDep);
                                                         
                                                         const depEntity = allEntities.find(e => {
                                                             if (!e) return false;
-                                                            if (String(e.id) === startDep) return true;
-                                                            if (e.name && e.name.trim().toLowerCase() === startDepLower) return true;
-                                                            if (e.name_en && e.name_en.trim().toLowerCase() === startDepLower) return true;
+                                                            const entityId = String(e.id || '').trim();
+                                                            const entityName = normalizeEntityToken(e.name || '');
+                                                            const entityNameEn = normalizeEntityToken(e.name_en || '');
+                                                            if (entityId && entityId === startDep) return true;
+                                                            if (startDepNormalized && entityName && entityName === startDepNormalized) return true;
+                                                            if (startDepNormalized && entityNameEn && entityNameEn === startDepNormalized) return true;
                                                             return false;
                                                         });
                                                         
@@ -11840,16 +12031,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
         // Updated Logic: Matches both [Name] and {Name}, allowing specific text source
         // Now synchronized with ReferenceManager logic for consistent robust matching
-        const normalizeName = (s) => (s || '')
-            .replace(/[（【〔［]/g, '(')
-            .replace(/[）】〕］]/g, ')')
-            .replace(/[“”"'‘’]/g, '')
-            .replace(/[\[\]\{\}【】｛｝]/g, '')
-            .replace(/^(CHAR|ENV|PROP)\s*:\s*/i, '')
-            .replace(/^@+/, '')
-            .replace(/\s+/g, ' ')
-            .trim()
-            .toLowerCase();
+        const normalizeName = (s) => normalizeEntityToken(s);
         
         // Associated Entities (Included unless strictMode is true)
         const rawNames1 = strictMode ? [] : (shot.associated_entities || '').split(/[,，]/);
@@ -12115,7 +12297,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 shot_id: editingShot.id,
                 shot_number: `${editingShot.shot_id}_KF_${kf.time}`,
                 shot_name: editingShot.shot_name,
-                asset_type: 'keyframe'
+                asset_type: 'keyframe',
+                negative_prompt: buildEntityNegativePrompt(promptToUse, null, entities)
             });
             
             if (res && res.url) {
@@ -12138,19 +12321,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         }
     };
     
-    const normalizeEntityToken = (value) => {
-        return String(value || '')
-            .replace(/[（【〔［]/g, '(')
-            .replace(/[）】〕］]/g, ')')
-            .replace(/[“”"'‘’]/g, '')
-            .replace(/^[\[\{【｛\(\s]+|[\]\}】｝\)\s]+$/g, '')
-            .replace(/^(CHAR|ENV|PROP)\s*:\s*/i, '')
-            .replace(/^@+/, '')
-            .replace(/\s+/g, ' ')
-            .trim()
-            .toLowerCase();
-    };
-
     // --- Entity Injection Helper ---
     // Injects anchor description while keeping original entity token shape.
     const injectEntityFeatures = (text, isUserEdited = false) => {
@@ -12244,7 +12414,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     const refNo = isSubject ? subjectRefIndexMap.get(String(entity?.id || '')) : null;
                     const anchorWithRef = [
                         anchor,
-                        (isSubject && refNo) ? `参考图编号: #${refNo}` : ''
+                        (isSubject && refNo) ? `ref_image_url: #${refNo}` : ''
                     ].filter(Boolean).join(' | ');
                     return anchorWithRef ? `${match}(${anchorWithRef})` : match;
                 }
@@ -12390,6 +12560,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     shot_number: editingShot.shot_id,
                     shot_name: editingShot.shot_name,
                     asset_type: 'start_frame',
+                    negative_prompt: buildEntityNegativePrompt(rawPrompt, null, entities)
                 });
                 if (res && res.url) {
                     // Save original prompt to DB (user view), but image was generated with context
@@ -12476,6 +12647,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     shot_number: editingShot.shot_id,
                     shot_name: editingShot.shot_name,
                     asset_type: 'end_frame',
+                    negative_prompt: buildEntityNegativePrompt(rawPrompt, null, entities)
                 });
                 if (res && res.url) {
                     tech.end_frame_url = res.url;
@@ -12579,25 +12751,26 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 // refs.push(...entityRefs);
             }
             
-            const uniqueRefs = [...new Set(refs)];
-            
-            // Last Frame Argument logic
-            
-            // Refined Strategy: "Final Video取首尾帧要从Refs (Video)按序获取，第一个和最后一个"
-            
-            let finalStartRef = null;
-            let finalEndRef = null;
-            
-            if (videoRefSubmitMode === 'refs_video') {
-                // Submit Refs (Video) as reference images without requiring Start/End frames.
-                finalStartRef = uniqueRefs.length > 0 ? uniqueRefs[0] : null;
-                finalEndRef = null;
-            } else if (uniqueRefs.length > 0) {
-                finalStartRef = uniqueRefs[0];
-                // Take the last item as End Frame if there is more than 1 item
-                if (uniqueRefs.length > 1) {
-                    finalEndRef = uniqueRefs[uniqueRefs.length - 1];
-                }
+            const uniqueRefs = [...new Set(refs)].filter(Boolean);
+
+            const effectiveVideoMode = videoMode === 'refs_video' ? 'refs_video' : (shotMode || 'start');
+            let apiRefImageUrl = null;
+            let apiLastFrameUrl;
+            let apiKeyframes = [];
+
+            if (effectiveVideoMode === 'refs_video') {
+                apiRefImageUrl = uniqueRefs.length > 0 ? uniqueRefs : null;
+                apiLastFrameUrl = undefined;
+                apiKeyframes = Array.isArray(keyframes) ? keyframes.filter(Boolean) : [];
+            } else if (effectiveVideoMode === 'start_end') {
+                apiRefImageUrl = editingShot.image_url || uniqueRefs[0] || null;
+                apiLastFrameUrl = tech.end_frame_url || (uniqueRefs.length > 1 ? uniqueRefs[uniqueRefs.length - 1] : undefined);
+            } else if (effectiveVideoMode === 'end') {
+                apiRefImageUrl = tech.end_frame_url || uniqueRefs[0] || null;
+                apiLastFrameUrl = undefined;
+            } else {
+                apiRefImageUrl = editingShot.image_url || uniqueRefs[0] || null;
+                apiLastFrameUrl = undefined;
             }
             
             // Duration Logic: Use Shot Duration (s) if valid, else default to 5
@@ -12607,13 +12780,19 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             const globalCtx = getGlobalContextStr();
             const finalPrompt = isManual ? submitPrompt : (submitPrompt + globalCtx);
 
-            const res = await generateVideo(finalPrompt, null, finalStartRef, finalEndRef, durParam, {
+            onLog?.(
+                `Video API payload mode=${effectiveVideoMode}, ref=${Array.isArray(apiRefImageUrl) ? `list(${apiRefImageUrl.length})` : (apiRefImageUrl ? 'single' : 'none')}, last_frame=${apiLastFrameUrl ? 'yes' : 'no'}, keyframes=${Array.isArray(apiKeyframes) ? apiKeyframes.length : 0}, duration=${durParam}`,
+                'info'
+            );
+
+            const res = await generateVideo(finalPrompt, null, apiRefImageUrl, apiLastFrameUrl, durParam, {
                 project_id: projectId,
                 shot_id: targetShotId,
                 shot_number: editingShot.shot_id,
                 shot_name: editingShot.shot_name,
                 asset_type: 'video',
-            }, keyframes);
+                negative_prompt: buildEntityNegativePrompt(rawPrompt, null, entities)
+            }, apiKeyframes);
             if (res && res.url) {
                 const newData = { video_url: res.url, prompt: rawPrompt };
                 

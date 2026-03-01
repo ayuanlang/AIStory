@@ -80,6 +80,17 @@ class MediaGenerationService:
             return " ".join(self._flatten_text(item) for item in value)
         return str(value)
 
+    def _merge_negative_prompt(self, prompt: Any, negative_prompt: Any) -> str:
+        base_prompt = str(prompt or "").strip()
+        neg_prompt = str(negative_prompt or "").strip()
+        if not neg_prompt:
+            return base_prompt
+        if re.search(r"negative\s*prompt\s*:", base_prompt, flags=re.IGNORECASE):
+            return base_prompt
+        if base_prompt:
+            return f"{base_prompt}\n\nNegative prompt constraints: {neg_prompt}"
+        return f"Negative prompt constraints: {neg_prompt}"
+
     def _is_grsai_quota_or_throttle_error(self, payload: Any) -> bool:
         text = self._flatten_text(payload).lower()
         markers = [
@@ -318,6 +329,7 @@ class MediaGenerationService:
         category: str,
         provider: str,
         prompt: str,
+        negative_prompt: Optional[str],
         api_config: Dict[str, Any],
         reference_image_url: Optional[Union[str, List[str]]],
         width: Optional[int] = None,
@@ -335,13 +347,13 @@ class MediaGenerationService:
                 api_config["config"]["height"] = height
 
             if provider in ["doubao", "ark"]:
-                return await self._handle_doubao_generation("image", prompt, api_config, reference_image_url, aspect_ratio=aspect_ratio)
+                return await self._handle_doubao_generation("image", prompt, api_config, reference_image_url, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt)
             if provider == "grsai":
-                return await self._handle_grsai_generation("image", prompt, api_config, reference_image_url, aspect_ratio=aspect_ratio)
+                return await self._handle_grsai_generation("image", prompt, api_config, reference_image_url, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt)
             if provider == "tencent":
-                return await self._handle_tencent_generation("image", prompt, api_config, reference_image_url)
+                return await self._handle_tencent_generation("image", prompt, api_config, reference_image_url, negative_prompt=negative_prompt)
             if provider in ["stability", "stable diffusion"]:
-                return await self._handle_stability_generation("image", prompt, api_config, reference_image_url)
+                return await self._handle_stability_generation("image", prompt, api_config, reference_image_url, negative_prompt=negative_prompt)
 
             print(f"Mocking Image Gen for {provider}")
             return {
@@ -351,15 +363,15 @@ class MediaGenerationService:
 
         if category == "Video":
             if provider in ["doubao", "ark"]:
-                return await self._handle_doubao_generation("video", prompt, api_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio)
+                return await self._handle_doubao_generation("video", prompt, api_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt)
             if provider == "grsai":
-                return await self._handle_grsai_generation("video", prompt, api_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio)
+                return await self._handle_grsai_generation("video", prompt, api_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt)
             if provider == "tencent":
-                return await self._handle_tencent_generation("video", prompt, api_config, reference_image_url, duration=duration)
+                return await self._handle_tencent_generation("video", prompt, api_config, reference_image_url, duration=duration, negative_prompt=negative_prompt)
             if provider in ["wanxiang", "wanx"]:
-                return await self._handle_wanxiang_generation("video", prompt, api_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio)
+                return await self._handle_wanxiang_generation("video", prompt, api_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt)
             if provider == "vidu":
-                return await self._handle_vidu_generation("video", prompt, api_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio, keyframes=keyframes)
+                return await self._handle_vidu_generation("video", prompt, api_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio, keyframes=keyframes, negative_prompt=negative_prompt)
 
             print(f"Mocking Video Gen for {provider}")
             return {
@@ -373,6 +385,7 @@ class MediaGenerationService:
         self,
         category: str,
         prompt: str,
+        negative_prompt: Optional[str],
         provider: str,
         api_config: Dict[str, Any],
         user_id: int,
@@ -515,6 +528,7 @@ class MediaGenerationService:
                 category=category,
                 provider=selected_provider,
                 prompt=prompt,
+                negative_prompt=negative_prompt,
                 api_config=selected_config,
                 reference_image_url=reference_image_url,
                 width=width,
@@ -668,7 +682,7 @@ class MediaGenerationService:
 
         return {}
 
-    async def generate_image(self, prompt: str, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, width: int = None, height: int = None, aspect_ratio: str = None, user_id: int = 1, user_credits: int = 0, filename_base: Optional[str] = None, asset_type: Optional[str] = None):
+    async def generate_image(self, prompt: str, negative_prompt: Optional[str] = None, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, width: int = None, height: int = None, aspect_ratio: str = None, user_id: int = 1, user_credits: int = 0, filename_base: Optional[str] = None, asset_type: Optional[str] = None):
         provider = None
         if llm_config and "provider" in llm_config and llm_config["provider"]:
             provider = self._normalize_provider_name(llm_config["provider"], "Image")
@@ -699,6 +713,7 @@ class MediaGenerationService:
         result = await self._generate_with_smart_routing(
             category="Image",
             prompt=prompt,
+            negative_prompt=negative_prompt,
             provider=provider,
             api_config=api_config,
             user_id=user_id,
@@ -724,7 +739,7 @@ class MediaGenerationService:
             result["error"] = self._vendor_failed_message(provider, result.get("error"))
         return result
 
-    async def generate_video(self, prompt: str, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, last_frame_url: Optional[str] = None, duration: int = 5, aspect_ratio: Optional[str] = None, keyframes: Optional[List[str]] = None, user_id: int = 1, user_credits: int = 0, filename_base: Optional[str] = None):
+    async def generate_video(self, prompt: str, negative_prompt: Optional[str] = None, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, last_frame_url: Optional[str] = None, duration: int = 5, aspect_ratio: Optional[str] = None, keyframes: Optional[List[str]] = None, user_id: int = 1, user_credits: int = 0, filename_base: Optional[str] = None):
         provider = None
         if llm_config and "provider" in llm_config and llm_config["provider"]:
             provider = self._normalize_provider_name(llm_config["provider"], "Video")
@@ -755,6 +770,7 @@ class MediaGenerationService:
         result = await self._generate_with_smart_routing(
             category="Video",
             prompt=prompt,
+            negative_prompt=negative_prompt,
             provider=provider,
             api_config=api_config,
             user_id=user_id,
@@ -782,7 +798,8 @@ class MediaGenerationService:
     
     # --- Provider Implementations ---
     
-    async def _handle_doubao_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None):
+    async def _handle_doubao_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None):
+        prompt = self._merge_negative_prompt(prompt, negative_prompt)
         api_key = config.get("api_key")
         if not api_key: return {"error": "No API Key"}
         model = config.get("model")
@@ -970,10 +987,11 @@ class MediaGenerationService:
 
         return {"error": "Unknown Type"}
 
-    async def _handle_vidu_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, keyframes=None):
+    async def _handle_vidu_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, keyframes=None, negative_prompt: Optional[str] = None):
         """
         Vidu API Support (Images + Text -> Video)
         """
+        prompt = self._merge_negative_prompt(prompt, negative_prompt)
         api_key = config.get("api_key")
         if not api_key: return {"error": "No Vidu API Key"}
         
@@ -1128,7 +1146,8 @@ class MediaGenerationService:
              traceback.print_exc()
              return {"error": f"Vidu Exception: {str(e)}"}
              
-    async def _handle_grsai_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None):
+    async def _handle_grsai_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None):
+        prompt = self._merge_negative_prompt(prompt, negative_prompt)
         api_key = config.get("api_key")
         model = config.get("model") or "unknown_model"
         trace_id = f"grsai-{uuid.uuid4().hex[:10]}"
@@ -1446,7 +1465,8 @@ class MediaGenerationService:
              return {"error": f"Grsai Exception: {str(e)}"}
 
 
-    async def _handle_tencent_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5):
+    async def _handle_tencent_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, negative_prompt: Optional[str] = None):
+        prompt = self._merge_negative_prompt(prompt, negative_prompt)
         if gen_type != "image":
              return {"error": "Tencent Video Not Implemented"}
 
@@ -1594,8 +1614,10 @@ class MediaGenerationService:
                          return {"error": "Job Failed", "details": resp_inner.get("JobErrorMsg")}
             return {"error": "Timeout"}
 
-    async def _handle_wanxiang_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None):
+    async def _handle_wanxiang_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None):
         if gen_type != "video": return {"error": "Wanxiang only supports video"}
+
+        prompt = self._merge_negative_prompt(prompt, negative_prompt)
         
         api_key = config.get("api_key") or os.getenv("DASHSCOPE_API_KEY")
         endpoint = "https://dashscope.aliyuncs.com/api/v1/services/aigc/image2video/video-synthesis" 
@@ -1621,8 +1643,9 @@ class MediaGenerationService:
              return {"error": "Wanxiang I2V model requires a reference image."}
         
         input_data = {"prompt": prompt}
-        if config.get("negative_prompt"):
-             input_data["negative_prompt"] = config.get("negative_prompt")
+        effective_negative_prompt = str(negative_prompt or config.get("negative_prompt") or "").strip()
+        if effective_negative_prompt:
+            input_data["negative_prompt"] = effective_negative_prompt
         
         if is_i2v:
             input_data["image_url"] = first_img
@@ -1725,7 +1748,7 @@ class MediaGenerationService:
                      return {"error": "Generation Failed", "details": err_msg}
         return {"error": "Timeout"}
 
-    async def _handle_stability_generation(self, gen_type, prompt, config, ref_image=None):
+    async def _handle_stability_generation(self, gen_type, prompt, config, ref_image=None, negative_prompt: Optional[str] = None):
         if gen_type != "image": return {"error": "Stability only supports image"}
         
         api_key = config.get("api_key")
@@ -1758,6 +1781,9 @@ class MediaGenerationService:
              if ref_bytes:
                  files = {"init_image": ("init_image.png", ref_bytes, "image/png")}
                  data = {"text_prompts[0][text]": prompt, "init_image_mode": "IMAGE_STRENGTH", "image_strength": 0.35}
+                 if str(negative_prompt or "").strip():
+                     data["text_prompts[1][text]"] = str(negative_prompt).strip()
+                     data["text_prompts[1][weight]"] = -1
                  
                  def _post_i2i(): return requests.post(url, headers=headers, files=files, data=data, timeout=60, verify=False)
                  resp = await asyncio.to_thread(_post_i2i)
@@ -1769,6 +1795,8 @@ class MediaGenerationService:
              url = f"{endpoint}/v1/generation/{model}/text-to-image"
              headers["Content-Type"] = "application/json"
              body = {"text_prompts": [{"text": prompt}], "cfg_scale": 7, "height": 1024, "width": 1024, "samples": 1}
+             if str(negative_prompt or "").strip():
+                 body["text_prompts"].append({"text": str(negative_prompt).strip(), "weight": -1})
              def _post_t2i(): return requests.post(url, headers=headers, json=body, timeout=60, verify=False)
              resp = await asyncio.to_thread(_post_t2i)
         

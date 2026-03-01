@@ -7,7 +7,7 @@
 3. 资产标准化：Environment / Character / Prop 独立且可关联。
 4. 视角多样：预埋正/反/侧/俯等可拍视角。
 5. 极简与平整：环境服务动作，默认无台阶/坑洞/复杂高差；剧情刚需除外。剧情必需道具不可省略。
-6. AI优先分场：凡机位/轴线变化导致背景构图显著变化，必须拆分为新 Scene + 新 Environment。
+6. AI优先分场：凡机位/轴线变化导致背景构图显著变化，优先拆分为新 Scene + 新 Environment；但 OTS 正反打允许在同一 Scene 内完成，前提是显式给出双环境变体、机位编号与轴线变化标注。
 7. 双视角默认：每个核心 Environment 默认有 Front 与 Reverse；仅在轴线全程不变且无反打需求时可豁免。
 8. 道具宁缺毋滥：仅抽取有持续叙事作用且后续被再次使用/引用的道具。
 9. 环境默认审美：未指定风格时，默认优美/大气/现代/优雅；若剧本指定风格，以剧本优先。
@@ -18,6 +18,7 @@
 14. 环境命名权威：`scene_analysis.txt` 是 Environment 最终命名唯一权威；上游若提供 `environment_name` 仅作种子参考，必须在本阶段统一定稿。
 15. 名称冻结：Environment/Character/Prop 一旦定稿，下游逐字符继承，禁止任何自动改写。
 16. 角色与道具命名权威：Character/Prop 同样以本文件为最终权威，禁止别名/翻译漂移。
+17. 锚点不可变更：`anchor_description` 与已定稿身份锚点（脸型/体态/标志物/鞋履识别点）一经确定即为只读，后续阶段仅可引用，不得增删改或语义改写。
 17. 零推理泄露：仅输出最终结果；禁止思维链、解释、`<think>`、代码围栏。若指令冲突，本条优先。
 
 ---
@@ -32,6 +33,8 @@
 - 默认高审美表达（现代、优雅、材质清晰、光影分层）。
 - 一个 Scene 绑定一个主 Environment。
 - 原则上每个 Scene 独立 Environment；仅在结构/视角/光影/氛围完全一致时允许复用。
+- 环境构图必须显式按前景（FG）/中景（MG）/后景（BG）描述，三层均需给出可见元素与空间关系。
+- 每个环境必须明确当前画面主体（Primary Subject）与次级支撑主体（Secondary Subject），并与景别/机位保持一致。
 - 同地不同观察方向（如门内看外/门外看内、正打/反打背景差异大）必须拆分独立 Environment，并以 `visual_dependencies` 关联。
 - 触发拆分条件（任一满足）：
   1) 轴线反转（跨180°）；
@@ -39,6 +42,11 @@
   3) 背景主物体集合变化；
   4) 主光方向变化；
   5) 景别/镜高引发背景结构重组。
+- OTS 切换硬规则（Mandatory）：当对话/对峙从 `A over B shoulder` 切到 `B over A shoulder` 时，必须切分为独立 Shot；可在同一 Scene 内保留该正反打，但必须同时满足：
+  - 双环境显式：同场内写明 `ENV:[..._OTS_A]` 与 `ENV:[..._OTS_B]`（或等价 Front/Reverse 双变体）；
+  - 机位编号显式：在 `{Observer View}` 与 `{Beats}` 中标注 `Cam-01`（A over B）与 `Cam-02`（B over A）；
+  - 轴线变化显式：在 `{Axis}` 中标注 `Axis Side`（如 `left -> right`）与是否跨线（`crossed/not crossed`）。
+  - 若未满足以上三项，不允许同场 OTS，必须回退为新 Scene + 新 Environment。
 - 同场地可多变体，命名建议：`{场地}_{方向/轴线标签}_{景别}`。
 - Environment Name 模板：`{Venue}_{DirectionTag}_{ShotScale}_{LightingTag可选}`。
   - `Venue` 优先遵循脚本主语言命名（中文脚本优先中文；英文脚本或剧本已给稳定英文名时可用英文）。
@@ -52,6 +60,8 @@
 - 每个场地先定一个 Base Environment Reference（通常首个 `NEW`）。
 - `VARIANT_OF/REUSE` 必须继承 Base；`generation_prompt_en` 先写继承，再写 Delta。
 - 继承句首必须显式写“参考关系 + 机位关系”：`Use ENV:[BaseName] as visual base; keep architecture/material anchors unchanged; camera/viewpoint changes are listed in Delta only.`
+- 参考图作用域锁定（Reference Scope Lock, Mandatory）：参考图仅用于继承“空间结构/材质/光照风格锚点”，禁止继承原构图与原背景主次。
+- Delta 覆盖优先级（Delta Override Priority, Mandatory）：`Visible Set` / `Excluded Set` / `Depth Role Reassignment` 的约束优先级高于参考图；冲突时必须以 Delta 为准。
 - Delta 至少覆盖：
   - `Camera Position/Direction`
   - `Axis Side`
@@ -68,9 +78,19 @@
   - `AS` 必须明确从哪一侧切到哪一侧（如 `left -> right`）；
   - `BG` 必须同时给出 `Visible Set` 与 `Excluded Set`（本视角应出现/不应出现的背景集合）；
   - `FR` 必须写清景别与构图主对象变化，禁止仅写 `same framing`。
+- 正反打层级重排硬规则（Depth Role Reassignment, Mandatory）：当 Base 里的“前景/中景主体”在反向镜头中后移为当前背景时，Delta 必须显式写出层级迁移：
+  - 固定写法：`Depth Role Reassignment: Base FG/MG:[A,B] -> Current BG:[...]; Base BG:[...] -> Current MG/FG:[...]`；
+  - 与 `FR` 联动：若层级迁移发生，`Framing Change` 必须同步说明新的画面主锚点（谁成为中景主锚点）；
+  - 禁止沿用 Base 的层级语义（例如应后移的 Base 前景仍被写成当前前景主锚点）。
 - 方向切换禁用含糊写法：禁止仅写 `reverse view`、`similar to base`、`same environment` 而不写可见背景差异。
+- 背景硬排除（Hard Exclusion, Mandatory）：`Excluded Set` 内元素不得成为当前镜头主背景或中景主锚点；若出现则结果无效，必须重写。
+- 构图去耦（Composition Decoupling, Mandatory）：反向镜头必须显式声明 `new primary anchor`，不得沿用 Base 的 primary anchor 作为当前主锚点。
+- 层级迁移失败防呆（Anti-Failure Guard）：若反向结果仍保留 Base 前景/中景主体为当前前景主锚点、未后移到背景，判为无效 Delta，必须重写。
+- 强约束附加句（推荐）：`Reference usage scope: structure/material/lighting style only; ignore base composition and original background dominance.`
 - 方向切换推荐写法（可直接复用）：
   `Environment Delta = {Camera Position/Direction: camera moved to opposite axis side behind ENV:[AudienceArea], now facing ENV:[MainStage] entrance; Axis Side: left -> right; Background Set Change: Visible Set = [stage portal, curtain rail, front seats], Excluded Set = [backstage corridor, rear exit door]; Lighting Direction Change: key light now front-right motivated by stage practicals; Framing Change: wide-to-mid with stage portal centered; Dynamic Parts State: None}`。
+- 层级重排示例（Base 前景后移为当前背景）：
+  `Environment Delta = {Camera Position/Direction: camera moved behind ENV:[DeskZone], now facing ENV:[EntranceCorridor]; Axis Side: left -> right; Background Set Change: Visible Set = [entrance door, corridor wall lamps, visitor chairs], Excluded Set = [window wall panorama, skyline glass reflection as dominant backdrop]; Lighting Direction Change: key shifts to back-right from window spill; Framing Change: medium shot with ENV:[EntranceDoor] and visitor chairs as MG anchor, desk edge no longer dominant; Depth Role Reassignment: Base FG/MG:[DeskEdge, DeskFrontPlane] -> Current BG:[DeskEdge, DeskFrontPlane]; Base BG:[EntranceDoor, CorridorWall] -> Current MG:[EntranceDoor, VisitorChairs]; Dynamic Parts State: None}`。
 - 方向切换 Few-shot A（门内看外 -> 门外看内）：
   `Environment Delta = {Camera Position/Direction: camera moved from inside doorway threshold to exterior corridor side, now facing inward to ENV:[RoomEntrance]; Axis Side: right -> left; Background Set Change: Visible Set = [door frame interior edge, corridor wall lamps, entry mat], Excluded Set = [window-side bookshelf, bed corner, inner desk area]; Lighting Direction Change: key light switches to corridor practicals from camera-left; Framing Change: medium-wide with doorway centered and room depth behind; Dynamic Parts State: PROP:[Door](Open -> Half-Open, reason: CHAR:[@Guard] pushes it and pauses to listen)}`。
 - 方向切换 Few-shot B（街道正向 -> 街道反向）：
@@ -105,13 +125,18 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 
 #### {Axis}
 - 描述主要运动轨迹。
-- 相比上一段若跨线/反向/观察方向切换，必须起新 Scene。
+- 相比上一段若跨线/反向/观察方向切换，优先起新 Scene；但 OTS 正反打可在同一 Scene 内保留，前提是显式满足“双环境 + 机位编号 + 轴线变化标注”。
+- 若发生 OTS 正反切换且未给出上述显式标注，或背景主集合已无法在同场双环境中自洽，必须起新 Scene。
 - 运动轴线场景必须声明主运动方向和可通行路径，禁止固定障碍切断，且确保 `Entry -> Exit` 位移闭环可达。
 - 必须绑定观察者站位与看向（轴线左/右、沿轴/逆轴）。
+- OTS 正反打时必须写机位编号与轴线标注：`Cam-01(A over B, Axis left, not crossed)`、`Cam-02(B over A, Axis right, crossed/not crossed)`。
 
 #### {Beats}
 - 按时间顺序。
 - 必须是可拍摄、可见变化的动作，不得抽象总结。
+- OTS 分镜硬规则：任何角色视角切换（A看B 的 OTS -> B看A 的 OTS）必须拆为两个 Beat，并在 Beat 中分别写清机位落点、拍摄朝向与轴线侧；禁止单 Beat 同时描述双向 OTS。
+- 下游交付约束（Shot 级）：上述 OTS 双 Beat 在 `shot_generator` 阶段必须落成两个独立 Shot（`Cam-01` / `Cam-02`），不得并镜。
+- OTS 同场双环境规则：当 OTS 正反打在同一 Scene 内执行时，这两个 Beat 必须分别绑定不同环境变体（如 `ENV:[..._OTS_A]` / `ENV:[..._OTS_B]`），并显式标注 `Cam-01/Cam-02` 与 `Axis Side` 变化。
 - 每个 Beat 必须写：
   1) 镜头位置（camera position）
   2) 镜头朝向（shooting direction）
@@ -159,6 +184,8 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - 所有 `generation_prompt_en`（Environment/Character/Prop）必须显式包含：
   - `{Camera Position}`
   - `{Shooting Direction}`
+- Subject 生图提示词仅用于描述“最终要生成的画面”，禁止夹带生成原因、推理逻辑、解释性说明或流程话术。
+- 禁止写法（示例）：`because...`, `in order to...`, `to ensure...`, `reason: ...`, `logic: ...`, `explain...`，以及中文“因为/为了/逻辑是/原因是/这样做是为了”。
 - 禁止方向模糊词（如 `somewhere`, `around`）。
 - 每个实体必须有独立 `negative_prompt_en`，不得以全局负向词替代。
 - `negative_prompt_en` 必须按风格与实体类型自适应：
@@ -169,6 +196,7 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 ### 0.5) Imagen 兼容质量规范
 - 仅作为写作约束，禁止把本节规则回写到最终 prompt。
 - `generation_prompt_en` / `negative_prompt_en` 必须自然英文短句/短段，不用 JSON 键值残片、占位符、权重语法。
+- `generation_prompt_en` 必须是“画面指令文本”，不得包含解释句、理由句、评注句、步骤说明或任何元叙述。
 - 推荐语义顺序：主体/场景 → 构图机位 → 光照色彩 → 材质细节 → 风格约束。
 - 禁止引擎参数与控制符（如 `--ar`, `--v`, `--stylize`, `::`, `<lora:...>`）。
 - 禁止同条 prompt 内明显冲突描述。
@@ -176,16 +204,23 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - 单实体 `generation_prompt_en` 建议 1–4 句。
 
 ### 1) Environment Prompt Template
-`[Global Style]. {Base Environment Reference}: 【base_env_name / reference image id】. {Environment Delta}: 【only changed items; if REUSE write 'None'】. {Camera Position}: 【exact placement in/around environment】. {Shooting Direction}: 【Front/Reverse/Side + facing target/vector】. {Camera Setup}: 【Height/Angle/Framing】. {Lighting Setup}: 【key/fill/back source position + quality + intensity + color temperature】. {Lens & Focus Baseline}: 【focal length family + DOF strategy】. {Grain/Noise Strategy}: 【clean digital / fine film grain / medium grain + shadow readability】. Scene: inside 【environment_name】 with **Core Stage** centered on 【primary_anchor description】. Theatrical Space Rationality: 【entry->action->exit passability, actor blocking area, camera movement clearance, sightline readability on both axis sides, obstacle safety gap】. Atmosphere: 【mood keywords】. Details: 【materials, textures】. **No humans or characters present.**`
+`[Global Style]. {Base Environment Reference}: 【base_env_name / reference image id】. {Environment Delta}: 【only changed items; if REUSE write 'None'】. {Camera Position}: 【exact placement in/around environment】. {Shooting Direction}: 【Front/Reverse/Side + facing target/vector】. {Camera Setup}: 【Height/Angle/Framing】. {Composition Layers}: 【FG: elements + depth relation; MG: primary structure/subject anchor; BG: distant structure/light anchor; Primary Subject + Secondary Subject】. {Lighting Setup}: 【key/fill/back source position + quality + intensity + color temperature】. {Lens & Focus Baseline}: 【focal length family + DOF strategy】. {Grain/Noise Strategy}: 【clean digital / fine film grain / medium grain + shadow readability】. Atmosphere: 【mood keywords】. Details: 【materials, textures】. **No humans or characters present.**`
 
 - 变体写作必须 Delta-only；可追溯 Base；Delta 顺序必须合法。
 - 缩写映射：`CPD/AS/BG/LD/FR/DP`。
+- `generation_prompt_en` 必须写清 FG/MG/BG 三层构图，并明确 `Primary Subject`（画面主体）与 `Secondary Subject`（支撑主体）。
 - 未给定风格时默认注入高审美回退语义。
 - 必须显式说明空间可达与调度可行性。
 - 风格映射必须动态，真人剧避免“游戏感”。
 
 ### 2) Character Prompt Template
 `[Global Style] 6-view character sheet for 【Name】. {Camera Position}: 【studio camera placement for sheet capture】. {Shooting Direction}: 【for each panel explicitly mark Front/Back/Side/3-4 + facing】. {Lighting Setup}: 【key/fill/rim source position + quality + intensity + color temperature】. {Lens & Focus}: 【focal length (e.g. 35mm/50mm/85mm) + depth of field strategy】. {Grain/Noise Strategy}: 【clean digital / fine film grain / medium film grain + shadow noise control】. Structure: 6-view layout (Front, Back, Side, 3/4, Close-up, Detail). Appearance: 【Age, Body Type, ethnicity】. Attire: 【Clothing details, footwear】. Anchors: 【Signature features e.g. scar, accessory】. Consistency: T-pose/Neutral pose. Background: White.`
+
+- 全身像硬规则（Mandatory）：角色 `generation_prompt_en` 必须明确为 full-body framing，人物从头到脚完整入镜，双脚与鞋子清晰可见（shoes fully visible）。
+- 鞋子可见硬规则（Mandatory）：不得使用会裁切鞋子的构图（如 waist-up / bust shot / knee crop）作为角色资产主图；若需近景，仅可作为附加 panel，且必须保留至少一个全身含鞋 panel。
+- 不合规判定：若角色提示词未明确“full body + shoes visible”，或输出画面描述存在脚部/鞋子被遮挡、出框、裁切，判定无效并必须重写。
+- 锚点只读硬规则（Mandatory）：`anchor_description` 与角色身份锚点是不可变更锚点（immutable anchors）；下游仅允许逐字符继承，不得重写、扩写、弱化、替换同义词或做风格化改写。
+- 锚点冲突处理：若“美化/风格化”与锚点冲突，必须以锚点优先；宁可降低风格化程度，也不得改变锚点。
 
 - 风格驱动映射强制：
   - 真人剧：35–85mm、真实皮肤微纹理、自然高光，禁塑料/CGI感。
