@@ -5647,6 +5647,7 @@ class SceneAiShotsBatchStartRequest(BaseModel):
 
 
 SCENE_AI_SHOTS_BATCH_STATUS_KEY = "scene_ai_shots_batch_status"
+SCENE_AI_SHOTS_BATCH_PER_SCENE_TIMEOUT_SEC = 300
 
 
 def _read_scene_ai_shots_batch_status(episode: Episode) -> Dict[str, Any]:
@@ -5725,12 +5726,18 @@ def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id
             scene_label = scene_label_map.get(sid) or f"#{sid}"
             latest["current_scene_id"] = sid
             latest["current_scene_label"] = scene_label
+            latest["current_scene_started_at"] = datetime.utcnow().isoformat()
             latest["message"] = f"Processing scene {scene_label}..."
             latest["updated_at"] = datetime.utcnow().isoformat()
             _persist_scene_ai_shots_batch_status(db, episode, latest)
 
             try:
-                generated = asyncio.run(ai_generate_shots(scene_id=sid, req=None, db=db, current_user=user))
+                generated = asyncio.run(
+                    asyncio.wait_for(
+                        ai_generate_shots(scene_id=sid, req=None, db=db, current_user=user),
+                        timeout=SCENE_AI_SHOTS_BATCH_PER_SCENE_TIMEOUT_SEC,
+                    )
+                )
                 generated_rows = generated.get("content") if isinstance(generated, dict) else []
                 if not isinstance(generated_rows, list) or len(generated_rows) == 0:
                     raise RuntimeError("No parsed rows returned")
@@ -5755,6 +5762,11 @@ def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id
                     current_user=user,
                 )
                 success += 1
+            except asyncio.TimeoutError:
+                failed += 1
+                errors.append(
+                    f"{scene_label}: scene processing exceeded {SCENE_AI_SHOTS_BATCH_PER_SCENE_TIMEOUT_SEC}s timeout"
+                )
             except Exception as e:
                 failed += 1
                 errors.append(f"{scene_label}: {str(e)}")
@@ -7974,7 +7986,16 @@ def get_assets(
 ):
     safe_skip = max(int(skip or 0), 0)
     safe_limit = max(1, min(int(limit or 300), 500))
-    query = db.query(Asset).filter(Asset.user_id == current_user.id)
+    accessible_project_ids = _resolve_accessible_project_ids_for_user(db, current_user)
+    accessible_project_owner_ids = [
+        owner_id
+        for (owner_id,) in db.query(Project.owner_id).filter(Project.id.in_(accessible_project_ids)).all()
+        if owner_id is not None
+    ]
+    accessible_project_id_set = set(int(pid) for pid in accessible_project_ids)
+    visible_owner_ids = sorted(set([int(current_user.id)] + [int(x) for x in accessible_project_owner_ids]))
+
+    query = db.query(Asset).filter(Asset.user_id.in_(visible_owner_ids))
     if type:
         query = query.filter(Asset.type == type)
     
@@ -8017,36 +8038,48 @@ def get_assets(
 
         return True
 
-    has_meta_filters = bool(project_id or entity_id or shot_id or scene_id)
+    def _is_asset_accessible(asset_row: Asset, meta: Dict[str, Any]) -> bool:
+        owner_id = int(asset_row.user_id or 0)
+        if owner_id == int(current_user.id):
+            return True
+
+        # Shared-project assets are visible only when they are explicitly tied to an accessible project.
+        project_meta_id = meta.get('project_id')
+        try:
+            project_meta_id_int = int(project_meta_id)
+        except Exception:
+            return False
+
+        return project_meta_id_int in accessible_project_id_set
+
     ordered_query = query.order_by(Asset.created_at.desc())
 
-    if not has_meta_filters:
-        filtered_assets = ordered_query.offset(safe_skip).limit(safe_limit).all()
-    else:
-        filtered_assets: List[Asset] = []
-        scan_offset = 0
-        matched_skipped = 0
-        batch_size = min(1000, max(200, safe_limit * 3))
+    filtered_assets: List[Asset] = []
+    scan_offset = 0
+    matched_skipped = 0
+    batch_size = min(1000, max(200, safe_limit * 3))
 
-        while len(filtered_assets) < safe_limit:
-            batch = ordered_query.offset(scan_offset).limit(batch_size).all()
-            if not batch:
+    while len(filtered_assets) < safe_limit:
+        batch = ordered_query.offset(scan_offset).limit(batch_size).all()
+        if not batch:
+            break
+
+        for asset_row in batch:
+            meta = _meta_dict(asset_row.meta_info)
+            if not _is_asset_accessible(asset_row, meta):
+                continue
+            if not _matches_meta_filters(meta):
+                continue
+
+            if matched_skipped < safe_skip:
+                matched_skipped += 1
+                continue
+
+            filtered_assets.append(asset_row)
+            if len(filtered_assets) >= safe_limit:
                 break
 
-            for asset_row in batch:
-                meta = _meta_dict(asset_row.meta_info)
-                if not _matches_meta_filters(meta):
-                    continue
-
-                if matched_skipped < safe_skip:
-                    matched_skipped += 1
-                    continue
-
-                filtered_assets.append(asset_row)
-                if len(filtered_assets) >= safe_limit:
-                    break
-
-            scan_offset += len(batch)
+        scan_offset += len(batch)
 
     # Enrichment Logic for Grouping
     project_ids = set()
