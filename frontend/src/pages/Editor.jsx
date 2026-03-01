@@ -9179,6 +9179,8 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     const [viewingEntity, setViewingEntity] = useState(null);
     const [isBatchGeneratingEntities, setIsBatchGeneratingEntities] = useState(false);
     const [batchEntityProgress, setBatchEntityProgress] = useState(null);
+    const [isBatchAnalyzingEntities, setIsBatchAnalyzingEntities] = useState(false);
+    const [batchAnalyzeProgress, setBatchAnalyzeProgress] = useState(null);
     const [isReconstructingEntity, setIsReconstructingEntity] = useState(false);
     const [reconstructProgress, setReconstructProgress] = useState(null);
     const [pickerConfig, setPickerConfig] = useState({ isOpen: false, callback: null });
@@ -9251,8 +9253,9 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         
         try {
             const updated = await analyzeEntityImage(entity.id);
-            setViewingEntity(updated);
+            setViewingEntity(prev => (prev?.id === updated.id ? updated : prev));
             setEntities(prev => prev.map(e => e.id === updated.id ? updated : e));
+            setAllEntities(prev => prev.map(e => e.id === updated.id ? updated : e));
             if (onLog) onLog("Subject updated from analysis.", "success");
         } catch (e) {
             console.error(e);
@@ -9260,6 +9263,67 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
             if (onLog) onLog("Analysis failed.", "error");
         } finally {
             setIsAnalyzingEntity(false);
+        }
+    };
+
+    const handleBatchAnalyzeExistingSubjects = async () => {
+        const targets = allEntities.filter(item => item?.id && String(item?.image_url || '').trim());
+        if (targets.length === 0) {
+            alert(t('当前没有可分析的已配图主体。', 'No subjects with images available for analysis.'));
+            return;
+        }
+
+        const confirmed = await confirmUiMessage(t(
+            `将批量分析并反写 ${targets.length} 个已有图片主体信息，是否继续？`,
+            `Analyze and write back metadata for ${targets.length} subjects with existing images?`
+        ));
+        if (!confirmed) return;
+
+        setIsBatchAnalyzingEntities(true);
+        setBatchAnalyzeProgress({ current: 0, total: targets.length, status: t('准备开始...', 'Preparing...') });
+
+        let successCount = 0;
+        let failedCount = 0;
+
+        try {
+            for (let idx = 0; idx < targets.length; idx += 1) {
+                const entity = targets[idx];
+                const current = idx + 1;
+                setBatchAnalyzeProgress({
+                    current,
+                    total: targets.length,
+                    status: t(`分析中：${entity?.name || entity?.name_en || entity?.id}`, `Analyzing: ${entity?.name || entity?.name_en || entity?.id}`),
+                });
+
+                try {
+                    const updated = await analyzeEntityImage(entity.id);
+                    setAllEntities(prev => prev.map(e => e.id === updated.id ? updated : e));
+                    setEntities(prev => prev.map(e => e.id === updated.id ? updated : e));
+                    setViewingEntity(prev => (prev?.id === updated.id ? updated : prev));
+                    successCount += 1;
+                } catch (err) {
+                    failedCount += 1;
+                    if (onLog) {
+                        onLog(
+                            t(
+                                `批量分析失败：${entity?.name || entity?.name_en || entity?.id} - ${err?.response?.data?.detail || err?.message || 'Unknown error'}`,
+                                `Batch analyze failed: ${entity?.name || entity?.name_en || entity?.id} - ${err?.response?.data?.detail || err?.message || 'Unknown error'}`
+                            ),
+                            'error'
+                        );
+                    }
+                }
+            }
+
+            const summary = t(
+                `批量分析完成：成功 ${successCount}，失败 ${failedCount}`,
+                `Batch analyze complete: ${successCount} succeeded, ${failedCount} failed`
+            );
+            if (onLog) onLog(summary, failedCount > 0 ? 'warning' : 'success');
+            alert(summary);
+        } finally {
+            setIsBatchAnalyzingEntities(false);
+            setBatchAnalyzeProgress(null);
         }
     };
 
@@ -9835,21 +9899,39 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                              </>
                          ) : (
                              <>
-                                <Wand2 size={12} /> {t('自动补全全部图片', 'Auto-Fill All Images')}
+                                <Wand2 size={12} /> {t('批量补图', 'Fill Images')}
                              </>
                          )}
+                    </button>
+                    <button
+                        onClick={handleBatchAnalyzeExistingSubjects}
+                        disabled={isBatchAnalyzingEntities || isBatchGeneratingEntities || isReconstructingEntity || isAnalyzingEntity}
+                        className="px-3 py-2 text-xs font-bold uppercase rounded-md bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-200 flex items-center gap-2 disabled:opacity-50 transition-all border border-indigo-400/20"
+                        title={t('批量分析所有已有图片的主体并反写信息', 'Batch analyze all subjects with existing images and write back metadata')}
+                    >
+                        {isBatchAnalyzingEntities ? (
+                            <>
+                                <RefreshCw className="animate-spin" size={12} />
+                                {t('批量分析中', 'Batch Analyzing')} {batchAnalyzeProgress ? `${batchAnalyzeProgress.current}/${batchAnalyzeProgress.total}` : '...'}
+                            </>
+                        ) : (
+                            <>
+                                <Sparkles size={12} /> {t('批量分析', 'Analyze Images')}
+                            </>
+                        )}
                     </button>
 
                     <div className="flex space-x-1 bg-card border border-white/10 p-1 rounded-lg">
                         {[
-                            { key: 'character', label: t('角色', 'Characters') },
-                            { key: 'environment', label: t('环境', 'Environments') },
-                            { key: 'prop', label: t('道具', 'Props') },
-                        ].map(({ key, label }) => (
+                            { key: 'character', label: t('角色', 'Char'), title: t('角色', 'Characters') },
+                            { key: 'environment', label: t('环境', 'Env'), title: t('环境', 'Environments') },
+                            { key: 'prop', label: t('道具', 'Prop'), title: t('道具', 'Props') },
+                        ].map(({ key, label, title }) => (
                             <button 
                                 key={key}
                                 onClick={() => setSubTab(key)}
                                 className={`px-4 py-2 text-xs font-bold uppercase rounded-md transition-all ${subTab === key ? 'bg-primary text-black' : 'hover:bg-white/5 text-muted-foreground'}`}
+                                title={title}
                             >
                                 {label} ({subjectCategoryStats[key] || 0})
                             </button>
@@ -9866,6 +9948,15 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                          {batchEntityProgress.status}
                     </span>
                     <span className="font-mono">{Math.round((batchEntityProgress.current / batchEntityProgress.total) * 100)}%</span>
+                </div>
+            )}
+            {isBatchAnalyzingEntities && batchAnalyzeProgress && (
+                <div className="mb-4 bg-indigo-500/10 border border-indigo-400/20 rounded-lg p-3 flex items-center justify-between text-xs text-indigo-200">
+                    <span className="font-bold flex items-center gap-2">
+                        <RefreshCw className="animate-spin" size={12} />
+                        {batchAnalyzeProgress.status}
+                    </span>
+                    <span className="font-mono">{Math.round((batchAnalyzeProgress.current / batchAnalyzeProgress.total) * 100)}%</span>
                 </div>
             )}
             
@@ -13076,20 +13167,23 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                         <button
                             onClick={() => setShotSortMode('updated_desc')}
                             className={`px-3 py-1.5 rounded text-xs border ${shotSortMode === 'updated_desc' ? 'bg-primary/20 text-primary border-primary/30' : 'bg-white/5 text-white border-white/10 hover:bg-white/10'}`}
+                            title={t('按修改时间排序', 'Sort by modified time')}
                         >
-                            {t('按修改时间', 'By Modified Time')}
+                            {t('时间', 'Modified')}
                         </button>
                         <button
                             onClick={() => setShotSortMode('hierarchy')}
                             className={`px-3 py-1.5 rounded text-xs border ${shotSortMode === 'hierarchy' ? 'bg-primary/20 text-primary border-primary/30' : 'bg-white/5 text-white border-white/10 hover:bg-white/10'}`}
+                            title={t('按集/场景/镜头排序', 'Sort by episode/scene/shot')}
                         >
-                            {t('按集/场景/镜头', 'By Episode/Scene/Shot')}
+                            {t('层级', 'Hierarchy')}
                         </button>
                         <button
                             onClick={() => setShotSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
                             className="px-3 py-1.5 rounded text-xs border bg-white/5 text-white border-white/10 hover:bg-white/10"
+                            title={t('切换排序方向', 'Toggle sort direction')}
                         >
-                            {shotSortDirection === 'asc' ? t('升序', 'Ascending') : t('降序', 'Descending')}
+                            {shotSortDirection === 'asc' ? t('升序', 'Asc') : t('降序', 'Desc')}
                         </button>
                     </div>
                 </div>
