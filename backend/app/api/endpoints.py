@@ -86,6 +86,37 @@ VIDEO_SUBMIT_IDEMPOTENCY_TTL_SECONDS = max(30, int(os.getenv("VIDEO_SUBMIT_IDEMP
 VIDEO_JOB_FILE_DIR = os.path.join(settings.UPLOAD_DIR, "_video_jobs")
 VIDEO_JOB_TASKS: Dict[str, asyncio.Task] = {}
 
+SHOT_MEDIA_BATCH_CANCEL_EVENTS: Dict[int, threading.Event] = {}
+SHOT_MEDIA_BATCH_CANCEL_LOCK = threading.Lock()
+
+
+def _get_shot_media_batch_cancel_event(episode_id: int, create: bool = True) -> Optional[threading.Event]:
+    eid = int(episode_id)
+    with SHOT_MEDIA_BATCH_CANCEL_LOCK:
+        event = SHOT_MEDIA_BATCH_CANCEL_EVENTS.get(eid)
+        if not event and create:
+            event = threading.Event()
+            SHOT_MEDIA_BATCH_CANCEL_EVENTS[eid] = event
+        return event
+
+
+def _set_shot_media_batch_cancel_requested(episode_id: int) -> None:
+    event = _get_shot_media_batch_cancel_event(episode_id, create=True)
+    if event:
+        event.set()
+
+
+def _reset_shot_media_batch_cancel_requested(episode_id: int) -> None:
+    event = _get_shot_media_batch_cancel_event(episode_id, create=True)
+    if event:
+        event.clear()
+
+
+def _clear_shot_media_batch_cancel_event(episode_id: int) -> None:
+    eid = int(episode_id)
+    with SHOT_MEDIA_BATCH_CANCEL_LOCK:
+        SHOT_MEDIA_BATCH_CANCEL_EVENTS.pop(eid, None)
+
 
 def _image_job_file_path(job_id: str) -> str:
     safe_job_id = re.sub(r"[^a-zA-Z0-9_-]", "", str(job_id or "").strip())
@@ -11479,6 +11510,9 @@ def stop_generation_job(
         db.add(episode)
         db.commit()
 
+        if safe_kind == "shot-media-batch":
+            _set_shot_media_batch_cancel_requested(int(episode.id))
+
         return {
             "ok": True,
             "kind": safe_kind,
@@ -11795,6 +11829,28 @@ def _find_previous_shot_end_frame_url(db: Session, episode_id: int, shot_id: int
 
 def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], user_id: int) -> None:
     db = SessionLocal()
+    cancel_event = _get_shot_media_batch_cancel_event(int(episode_id), create=True)
+
+    class _BatchStopRequested(Exception):
+        pass
+
+    async def _run_cancellable(coro: Any) -> Any:
+        task = asyncio.create_task(coro)
+        try:
+            while True:
+                done, _ = await asyncio.wait({task}, timeout=0.5)
+                if task in done:
+                    return await task
+                if cancel_event and cancel_event.is_set():
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+                    raise _BatchStopRequested("Stop requested")
+        finally:
+            if not task.done():
+                task.cancel()
     try:
         episode = db.query(Episode).filter(Episode.id == episode_id).first()
         user = db.query(User).filter(User.id == user_id).first()
@@ -11847,6 +11903,8 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
             _persist_shot_media_batch_status(db, latest_episode, latest_status)
 
         def _is_stop_requested() -> bool:
+            if cancel_event and cancel_event.is_set():
+                return True
             latest_episode = _read_latest_episode()
             if not latest_episode:
                 return True
@@ -11915,7 +11973,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             shot_name=shot.shot_name,
                             asset_type="start_frame",
                         )
-                        asyncio.run(generate_image_endpoint(req=start_req, current_user=user, db=db))
+                        asyncio.run(_run_cancellable(generate_image_endpoint(req=start_req, current_user=user, db=db)))
                         shot = db.query(Shot).filter(Shot.id == shot.id).first() or shot
 
                 if _is_stop_requested():
@@ -11954,7 +12012,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             shot_name=shot.shot_name,
                             asset_type="end_frame",
                         )
-                        asyncio.run(generate_image_endpoint(req=end_req, current_user=user, db=db))
+                        asyncio.run(_run_cancellable(generate_image_endpoint(req=end_req, current_user=user, db=db)))
                         shot = db.query(Shot).filter(Shot.id == shot.id).first() or shot
                         tech = _parse_shot_tech(shot)
                         end_frame_url = str(tech.get("end_frame_url") or "").strip()
@@ -12058,9 +12116,12 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             shot_name=shot.shot_name,
                             asset_type="video",
                         )
-                        asyncio.run(generate_video_endpoint(req=video_req, current_user=user, db=db))
+                        asyncio.run(_run_cancellable(generate_video_endpoint(req=video_req, current_user=user, db=db)))
 
                 success += 1
+            except _BatchStopRequested:
+                _persist_stopped_status()
+                return
             except Exception as e:
                 shot_ok = False
                 failed += 1
@@ -12113,6 +12174,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
         except Exception:
             pass
     finally:
+        _clear_shot_media_batch_cancel_event(int(episode_id))
         db.close()
 
 
@@ -12168,6 +12230,7 @@ def start_shot_media_batch_job(
         "finished_at": None,
     }
     _persist_shot_media_batch_status(db, episode, status_payload)
+    _reset_shot_media_batch_cancel_requested(int(episode_id))
 
     worker = threading.Thread(
         target=_run_shot_media_batch_job,
@@ -12213,6 +12276,7 @@ def stop_shot_media_batch_job(
     status_payload["updated_at"] = now_iso
     status_payload["message"] = "Stop requested"
     _persist_shot_media_batch_status(db, episode, status_payload)
+    _set_shot_media_batch_cancel_requested(int(episode_id))
     return status_payload
 
 class MontageItem(BaseModel):
