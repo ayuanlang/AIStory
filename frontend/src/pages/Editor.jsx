@@ -16542,7 +16542,7 @@ const Editor = ({
 
     const isJobPoolItemStoppable = (item) => {
         const statusLower = String(item?.status || '').toLowerCase();
-        return !['succeeded', 'failed', 'canceled', 'cancelled', 'error'].includes(statusLower);
+        return !['succeeded', 'completed', 'failed', 'canceled', 'cancelled', 'error', 'stopped', 'idle', 'partial'].includes(statusLower);
     };
 
     const runningJobPoolItems = (jobPoolData?.items || []).filter(isJobPoolItemStoppable);
@@ -16929,6 +16929,10 @@ const Editor = ({
                                 <option value="all">all</option>
                                 <option value="image">image</option>
                                 <option value="video">video</option>
+                                <option value="episode-scenes">episode-scenes</option>
+                                <option value="episode-scripts">episode-scripts</option>
+                                <option value="scene-ai-shots-batch">scene-ai-shots-batch</option>
+                                <option value="shot-media-batch">shot-media-batch</option>
                             </select>
                             <label className="flex items-center gap-1 text-muted-foreground">
                                 <input

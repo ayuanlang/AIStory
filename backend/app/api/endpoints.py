@@ -10928,21 +10928,121 @@ def get_generate_video_job_status(
     }
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def _normalize_batch_job_status(payload: Dict[str, Any]) -> str:
+    status_raw = str(payload.get("status") or "").strip().lower()
+    if status_raw in {"running", "queued", "completed", "failed", "stopped", "canceled", "cancelled", "error", "idle", "partial"}:
+        return status_raw
+
+    if bool(payload.get("running")):
+        return "running"
+
+    if bool(payload.get("stopped_by_user")) or bool(payload.get("stop_requested")):
+        return "canceled"
+
+    failed = _safe_int(payload.get("failed"), 0)
+    success = _safe_int(payload.get("success"), 0)
+    generated = _safe_int(payload.get("generated"), 0)
+    completed = _safe_int(payload.get("completed"), 0)
+    total = _safe_int(payload.get("total") or payload.get("episodes_in_run"), 0)
+
+    if failed > 0 and (success > 0 or generated > 0):
+        return "partial"
+    if failed > 0:
+        return "failed"
+
+    if bool(payload.get("generation_success")):
+        return "completed"
+
+    if total > 0 and completed >= total:
+        return "completed"
+    if completed > 0 and total == 0 and failed == 0:
+        return "completed"
+
+    return "idle"
+
+
+def _extract_target_id_from_job_id(job_id: str) -> Optional[int]:
+    stable = str(job_id or "").strip()
+    if not stable:
+        return None
+    m = re.search(r"(\d+)$", stable)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except Exception:
+        return None
+
+
+def _build_batch_job_item(
+    *,
+    kind: str,
+    job_id: str,
+    payload: Dict[str, Any],
+    user_id: Optional[int],
+    username: Optional[str],
+) -> Dict[str, Any]:
+    status = _normalize_batch_job_status(payload)
+    started_at = payload.get("started_at") or payload.get("created_at")
+    finished_at = payload.get("finished_at")
+    updated_at = payload.get("updated_at")
+    created_at = started_at or updated_at or datetime.utcnow().isoformat()
+
+    error_text = ""
+    errors = payload.get("errors")
+    if isinstance(errors, list) and errors:
+        error_text = str(errors[-1])
+    if not error_text:
+        error_text = str(payload.get("error") or "").strip()
+    if not error_text and status == "partial":
+        error_text = "Partially failed"
+
+    return {
+        "kind": kind,
+        "job_id": job_id,
+        "status": status,
+        "user_id": user_id,
+        "username": username,
+        "created_at": created_at,
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "error": error_text,
+        "has_task": bool(payload.get("running")),
+    }
+
+
 @router.get("/generate/jobs/pool")
 def get_generation_job_pool(
     kind: str = "all",
     running_only: bool = False,
     limit: int = 200,
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     safe_kind = str(kind or "all").strip().lower()
-    if safe_kind not in {"all", "image", "video"}:
-        raise HTTPException(status_code=400, detail="kind must be one of: all, image, video")
+    allowed_kinds = {
+        "all",
+        "image",
+        "video",
+        "episode-scenes",
+        "episode-scripts",
+        "scene-ai-shots-batch",
+        "shot-media-batch",
+    }
+    if safe_kind not in allowed_kinds:
+        raise HTTPException(status_code=400, detail="kind must be one of: all, image, video, episode-scenes, episode-scripts, scene-ai-shots-batch, shot-media-batch")
 
     safe_limit = max(1, min(int(limit or 200), 500))
 
     items: List[Dict[str, Any]] = []
-    final_statuses = {"succeeded", "failed", "canceled", "cancelled", "error"}
+    final_statuses = {"succeeded", "completed", "failed", "canceled", "cancelled", "error", "stopped", "idle", "partial"}
 
     if safe_kind in {"all", "image"}:
         with IMAGE_JOB_LOCK:
@@ -10963,6 +11063,100 @@ def get_generation_job_pool(
                 item["kind"] = "video"
                 item["has_task"] = job_id in VIDEO_JOB_TASKS
                 items.append(item)
+
+    include_batch_kinds = {"episode-scenes", "episode-scripts", "scene-ai-shots-batch", "shot-media-batch"}
+    if safe_kind in {"all", *include_batch_kinds}:
+        if current_user.is_superuser:
+            projects = db.query(Project).all()
+        else:
+            accessible_project_ids = _resolve_accessible_project_ids_for_user(db, current_user)
+            if not accessible_project_ids:
+                projects = []
+            else:
+                projects = db.query(Project).filter(Project.id.in_(accessible_project_ids)).all()
+
+        owner_ids = sorted({int(p.user_id) for p in projects if p and p.user_id is not None})
+        owners_by_id: Dict[int, str] = {}
+        if owner_ids:
+            owner_rows = db.query(User).filter(User.id.in_(owner_ids)).all()
+            owners_by_id = {int(row.id): str(row.username or "") for row in owner_rows}
+
+        project_ids = [int(p.id) for p in projects]
+        project_owner_by_id = {int(p.id): int(p.user_id) for p in projects if p.user_id is not None}
+        project_owner_name_by_id = {
+            int(p.id): owners_by_id.get(int(p.user_id), "")
+            for p in projects
+            if p.user_id is not None
+        }
+
+        if safe_kind in {"all", "episode-scripts"}:
+            for project in projects:
+                payload = None
+                try:
+                    gi = dict(project.global_info or {})
+                    candidate = gi.get("episode_script_generation_status")
+                    if isinstance(candidate, dict):
+                        payload = dict(candidate)
+                except Exception:
+                    payload = None
+                if not payload:
+                    continue
+
+                items.append(
+                    _build_batch_job_item(
+                        kind="episode-scripts",
+                        job_id=f"episode-scripts:{int(project.id)}",
+                        payload=payload,
+                        user_id=project_owner_by_id.get(int(project.id)),
+                        username=project_owner_name_by_id.get(int(project.id)),
+                    )
+                )
+
+        if project_ids and safe_kind in {"all", "episode-scenes", "scene-ai-shots-batch", "shot-media-batch"}:
+            episodes = db.query(Episode).filter(Episode.project_id.in_(project_ids)).all()
+            for episode in episodes:
+                owner_id = project_owner_by_id.get(int(episode.project_id))
+                owner_name = project_owner_name_by_id.get(int(episode.project_id))
+                info = dict(episode.episode_info or {})
+
+                if safe_kind in {"all", "episode-scenes"}:
+                    payload = info.get(EPISODE_SCENE_GEN_STATUS_KEY)
+                    if isinstance(payload, dict):
+                        items.append(
+                            _build_batch_job_item(
+                                kind="episode-scenes",
+                                job_id=f"episode-scenes:{int(episode.id)}",
+                                payload=dict(payload),
+                                user_id=owner_id,
+                                username=owner_name,
+                            )
+                        )
+
+                if safe_kind in {"all", "scene-ai-shots-batch"}:
+                    payload = info.get(SCENE_AI_SHOTS_BATCH_STATUS_KEY)
+                    if isinstance(payload, dict):
+                        items.append(
+                            _build_batch_job_item(
+                                kind="scene-ai-shots-batch",
+                                job_id=f"scene-ai-shots-batch:{int(episode.id)}",
+                                payload=dict(payload),
+                                user_id=owner_id,
+                                username=owner_name,
+                            )
+                        )
+
+                if safe_kind in {"all", "shot-media-batch"}:
+                    payload = info.get(SHOT_MEDIA_BATCH_STATUS_KEY)
+                    if isinstance(payload, dict):
+                        items.append(
+                            _build_batch_job_item(
+                                kind="shot-media-batch",
+                                job_id=f"shot-media-batch:{int(episode.id)}",
+                                payload=dict(payload),
+                                user_id=owner_id,
+                                username=owner_name,
+                            )
+                        )
 
     if not current_user.is_superuser:
         items = [item for item in items if item.get("user_id") == current_user.id]
@@ -11005,11 +11199,99 @@ def get_generation_job_pool(
 def stop_generation_job(
     kind: str,
     job_id: str,
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     safe_kind = str(kind or "").strip().lower()
-    if safe_kind not in {"image", "video"}:
-        raise HTTPException(status_code=400, detail="kind must be image or video")
+    if safe_kind not in {"image", "video", "episode-scenes", "episode-scripts", "scene-ai-shots-batch", "shot-media-batch"}:
+        raise HTTPException(status_code=400, detail="kind must be one of: image, video, episode-scenes, episode-scripts, scene-ai-shots-batch, shot-media-batch")
+
+    if safe_kind in {"episode-scenes", "scene-ai-shots-batch", "shot-media-batch", "episode-scripts"}:
+        target_id = _extract_target_id_from_job_id(job_id)
+        if not target_id:
+            raise HTTPException(status_code=400, detail="Invalid job_id")
+
+        now_iso = datetime.utcnow().isoformat()
+
+        if safe_kind == "episode-scripts":
+            project = db.query(Project).filter(Project.id == target_id).first()
+            if not project:
+                raise HTTPException(status_code=404, detail="Job not found")
+            _require_project_access(db, int(project.id), current_user)
+
+            gi = dict(project.global_info or {})
+            payload = gi.get("episode_script_generation_status")
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=404, detail="Job not found")
+
+            if not bool(payload.get("running")):
+                return {
+                    "ok": True,
+                    "kind": safe_kind,
+                    "job_id": job_id,
+                    "status": _normalize_batch_job_status(payload),
+                    "message": "Job already finished",
+                }
+
+            payload["stop_requested"] = True
+            payload["stop_requested_at"] = payload.get("stop_requested_at") or now_iso
+            payload["updated_at"] = now_iso
+            payload["message"] = "Stop requested from job pool"
+            gi["episode_script_generation_status"] = payload
+            project.global_info = gi
+            db.add(project)
+            db.commit()
+
+            return {
+                "ok": True,
+                "kind": safe_kind,
+                "job_id": job_id,
+                "status": "running",
+                "message": "Stop requested",
+            }
+
+        episode = db.query(Episode).filter(Episode.id == target_id).first()
+        if not episode:
+            raise HTTPException(status_code=404, detail="Job not found")
+        _require_project_access(db, int(episode.project_id), current_user)
+
+        if safe_kind == "episode-scenes":
+            status_key = EPISODE_SCENE_GEN_STATUS_KEY
+        elif safe_kind == "scene-ai-shots-batch":
+            status_key = SCENE_AI_SHOTS_BATCH_STATUS_KEY
+        else:
+            status_key = SHOT_MEDIA_BATCH_STATUS_KEY
+
+        info = dict(episode.episode_info or {})
+        payload = info.get(status_key)
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        if not bool(payload.get("running")):
+            return {
+                "ok": True,
+                "kind": safe_kind,
+                "job_id": job_id,
+                "status": _normalize_batch_job_status(payload),
+                "message": "Job already finished",
+            }
+
+        payload["stop_requested"] = True
+        payload["stop_requested_at"] = payload.get("stop_requested_at") or now_iso
+        payload["updated_at"] = now_iso
+        payload["message"] = "Stop requested from job pool"
+        info[status_key] = payload
+        episode.episode_info = info
+        db.add(episode)
+        db.commit()
+
+        return {
+            "ok": True,
+            "kind": safe_kind,
+            "job_id": job_id,
+            "status": "running",
+            "message": "Stop requested",
+        }
 
     if safe_kind == "image":
         lock = IMAGE_JOB_LOCK
