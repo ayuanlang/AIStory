@@ -5534,6 +5534,13 @@ def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id
         failed = 0
         errors: List[str] = []
 
+        def _stop_requested() -> bool:
+            latest_episode = db.query(Episode).filter(Episode.id == episode_id).first()
+            if not latest_episode:
+                return True
+            latest_status = _read_scene_ai_shots_batch_status(latest_episode)
+            return bool(latest_status.get("stop_requested"))
+
         for sid in scene_ids:
             episode = db.query(Episode).filter(Episode.id == episode_id).first()
             if not episode:
@@ -5563,6 +5570,19 @@ def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id
                 generated_rows = generated.get("content") if isinstance(generated, dict) else []
                 if not isinstance(generated_rows, list) or len(generated_rows) == 0:
                     raise RuntimeError("No parsed rows returned")
+
+                if _stop_requested():
+                    latest_after_generate = _read_scene_ai_shots_batch_status(episode)
+                    latest_after_generate["running"] = False
+                    latest_after_generate["completed"] = completed
+                    latest_after_generate["success"] = success
+                    latest_after_generate["failed"] = failed
+                    latest_after_generate["errors"] = errors
+                    latest_after_generate["finished_at"] = datetime.utcnow().isoformat()
+                    latest_after_generate["stopped_by_user"] = True
+                    latest_after_generate["message"] = "Stopped by user request"
+                    _persist_scene_ai_shots_batch_status(db, episode, latest_after_generate)
+                    return
 
                 apply_scene_ai_result(
                     scene_id=sid,
@@ -10700,22 +10720,36 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
         failed = 0
         errors: List[str] = []
 
+        def _persist_stopped_status() -> None:
+            latest_episode = db.query(Episode).filter(Episode.id == episode_id).first()
+            if not latest_episode:
+                return
+            latest_status = _read_shot_media_batch_status(latest_episode)
+            latest_status["running"] = False
+            latest_status["completed"] = completed
+            latest_status["success"] = success
+            latest_status["failed"] = failed
+            latest_status["errors"] = errors
+            latest_status["stopped_by_user"] = True
+            latest_status["message"] = "Stopped by user request"
+            latest_status["finished_at"] = datetime.utcnow().isoformat()
+            latest_status["updated_at"] = latest_status["finished_at"]
+            _persist_shot_media_batch_status(db, latest_episode, latest_status)
+
+        def _is_stop_requested() -> bool:
+            latest_episode = db.query(Episode).filter(Episode.id == episode_id).first()
+            if not latest_episode:
+                return True
+            latest_status = _read_shot_media_batch_status(latest_episode)
+            return bool(latest_status.get("stop_requested"))
+
         for shot in target_shots:
             episode = db.query(Episode).filter(Episode.id == episode_id).first()
             if not episode:
                 break
             latest = _read_shot_media_batch_status(episode)
             if bool(latest.get("stop_requested")):
-                latest["running"] = False
-                latest["completed"] = completed
-                latest["success"] = success
-                latest["failed"] = failed
-                latest["errors"] = errors
-                latest["stopped_by_user"] = True
-                latest["message"] = "Stopped by user request"
-                latest["finished_at"] = datetime.utcnow().isoformat()
-                latest["updated_at"] = latest["finished_at"]
-                _persist_shot_media_batch_status(db, episode, latest)
+                _persist_stopped_status()
                 return
 
             shot_label = str(shot.shot_id or shot.shot_name or f"#{shot.id}")
@@ -10732,6 +10766,10 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
 
                 need_start = overwrite_existing or not str(shot.image_url or "").strip()
                 need_end = overwrite_existing or not end_frame_url
+
+                if _is_stop_requested():
+                    _persist_stopped_status()
+                    return
 
                 if need_start:
                     start_prompt_raw = str(shot.start_frame or shot.video_content or "").strip()
@@ -10770,6 +10808,10 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                         asyncio.run(generate_image_endpoint(req=start_req, current_user=user, db=db))
                         shot = db.query(Shot).filter(Shot.id == shot.id).first() or shot
 
+                if _is_stop_requested():
+                    _persist_stopped_status()
+                    return
+
                 if need_end:
                     end_prompt_raw = str(shot.end_frame or "").strip()
                     if end_prompt_raw:
@@ -10806,6 +10848,10 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                         shot = db.query(Shot).filter(Shot.id == shot.id).first() or shot
                         tech = _parse_shot_tech(shot)
                         end_frame_url = str(tech.get("end_frame_url") or "").strip()
+
+                if _is_stop_requested():
+                    _persist_stopped_status()
+                    return
 
                 if mode == "videos":
                     need_video = overwrite_existing or not str(shot.video_url or "").strip()
