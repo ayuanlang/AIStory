@@ -10952,6 +10952,20 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _parse_iso_datetime(value: Any) -> Optional[datetime]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
+        dt = datetime.fromisoformat(normalized)
+        if dt.tzinfo is not None:
+            return dt.astimezone(tz=None).replace(tzinfo=None)
+        return dt
+    except Exception:
+        return None
+
+
 def _normalize_batch_job_status(payload: Dict[str, Any]) -> str:
     if bool(payload.get("stopped_by_user")) or bool(payload.get("stop_requested")):
         return "canceled"
@@ -11212,6 +11226,158 @@ def get_generation_job_pool(
     }
 
 
+@router.post("/generate/jobs/repair-history")
+def repair_generation_job_history(
+    kind: str = "all",
+    older_than_minutes: int = 120,
+    dry_run: bool = True,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    safe_kind = str(kind or "all").strip().lower()
+    allowed_kinds = {"all", "episode-scenes", "episode-scripts", "scene-ai-shots-batch", "shot-media-batch"}
+    if safe_kind not in allowed_kinds:
+        raise HTTPException(status_code=400, detail="kind must be one of: all, episode-scenes, episode-scripts, scene-ai-shots-batch, shot-media-batch")
+
+    safe_older_than_minutes = max(10, min(int(older_than_minutes or 120), 60 * 24 * 14))
+    cutoff_dt = datetime.utcnow() - timedelta(minutes=safe_older_than_minutes)
+    now_iso = datetime.utcnow().isoformat()
+
+    if current_user.is_superuser:
+        projects = db.query(Project).all()
+    else:
+        accessible_project_ids = _resolve_accessible_project_ids_for_user(db, current_user)
+        if not accessible_project_ids:
+            projects = []
+        else:
+            projects = db.query(Project).filter(Project.id.in_(accessible_project_ids)).all()
+
+    project_ids = [int(p.id) for p in projects]
+    project_owner_by_id = {int(p.id): int(p.owner_id) for p in projects if p.owner_id is not None}
+
+    def _can_touch_project(project_id: int) -> bool:
+        if current_user.is_superuser:
+            return True
+        owner_id = project_owner_by_id.get(int(project_id))
+        return owner_id == current_user.id
+
+    repaired = 0
+    scanned = 0
+    touched_projects: set[int] = set()
+    touched_episodes: set[int] = set()
+    samples: List[Dict[str, Any]] = []
+
+    if safe_kind in {"all", "episode-scripts"}:
+        for project in projects:
+            if not _can_touch_project(int(project.id)):
+                continue
+
+            gi = dict(project.global_info or {})
+            payload = gi.get("episode_script_generation_status")
+            if not isinstance(payload, dict):
+                continue
+
+            scanned += 1
+            normalized = _normalize_batch_job_status(payload)
+            if normalized != "running":
+                continue
+
+            anchor_dt = _parse_iso_datetime(payload.get("updated_at") or payload.get("started_at") or payload.get("created_at"))
+            should_repair = bool(payload.get("stop_requested")) or (anchor_dt is not None and anchor_dt <= cutoff_dt)
+            if not should_repair:
+                continue
+
+            if len(samples) < 20:
+                samples.append({
+                    "kind": "episode-scripts",
+                    "job_id": f"episode-scripts:{int(project.id)}",
+                    "reason": "stop_requested" if bool(payload.get("stop_requested")) else f"stale>{safe_older_than_minutes}m",
+                    "updated_at": payload.get("updated_at"),
+                    "started_at": payload.get("started_at"),
+                })
+
+            if not dry_run:
+                payload["running"] = False
+                payload["status"] = "canceled"
+                payload["stopped_by_user"] = bool(payload.get("stop_requested") or payload.get("stopped_by_user"))
+                payload["finished_at"] = payload.get("finished_at") or now_iso
+                payload["updated_at"] = now_iso
+                payload["message"] = "Repaired stale historical job"
+                gi["episode_script_generation_status"] = payload
+                project.global_info = gi
+                db.add(project)
+                repaired += 1
+                touched_projects.add(int(project.id))
+
+    if project_ids and safe_kind in {"all", "episode-scenes", "scene-ai-shots-batch", "shot-media-batch"}:
+        episodes = db.query(Episode).filter(Episode.project_id.in_(project_ids)).all()
+
+        def _maybe_repair_episode_status(episode: Episode, status_key: str, kind_name: str) -> None:
+            nonlocal repaired, scanned
+            if not _can_touch_project(int(episode.project_id)):
+                return
+
+            info = dict(episode.episode_info or {})
+            payload = info.get(status_key)
+            if not isinstance(payload, dict):
+                return
+
+            scanned += 1
+            normalized = _normalize_batch_job_status(payload)
+            if normalized != "running":
+                return
+
+            anchor_dt = _parse_iso_datetime(payload.get("updated_at") or payload.get("started_at") or payload.get("created_at"))
+            should_repair = bool(payload.get("stop_requested")) or (anchor_dt is not None and anchor_dt <= cutoff_dt)
+            if not should_repair:
+                return
+
+            if len(samples) < 20:
+                samples.append({
+                    "kind": kind_name,
+                    "job_id": f"{kind_name}:{int(episode.id)}",
+                    "reason": "stop_requested" if bool(payload.get("stop_requested")) else f"stale>{safe_older_than_minutes}m",
+                    "updated_at": payload.get("updated_at"),
+                    "started_at": payload.get("started_at"),
+                })
+
+            if not dry_run:
+                payload["running"] = False
+                payload["status"] = "canceled"
+                payload["stopped_by_user"] = bool(payload.get("stop_requested") or payload.get("stopped_by_user"))
+                payload["finished_at"] = payload.get("finished_at") or now_iso
+                payload["updated_at"] = now_iso
+                payload["message"] = "Repaired stale historical job"
+                info[status_key] = payload
+                episode.episode_info = info
+                db.add(episode)
+                repaired += 1
+                touched_episodes.add(int(episode.id))
+
+        for episode in episodes:
+            if safe_kind in {"all", "episode-scenes"}:
+                _maybe_repair_episode_status(episode, EPISODE_SCENE_GEN_STATUS_KEY, "episode-scenes")
+            if safe_kind in {"all", "scene-ai-shots-batch"}:
+                _maybe_repair_episode_status(episode, SCENE_AI_SHOTS_BATCH_STATUS_KEY, "scene-ai-shots-batch")
+            if safe_kind in {"all", "shot-media-batch"}:
+                _maybe_repair_episode_status(episode, SHOT_MEDIA_BATCH_STATUS_KEY, "shot-media-batch")
+
+    if not dry_run and (touched_projects or touched_episodes):
+        db.commit()
+
+    return {
+        "ok": True,
+        "dry_run": bool(dry_run),
+        "kind": safe_kind,
+        "older_than_minutes": safe_older_than_minutes,
+        "scanned": scanned,
+        "repaired": repaired if not dry_run else len(samples),
+        "touched_projects": len(touched_projects),
+        "touched_episodes": len(touched_episodes),
+        "samples": samples,
+    }
+
+
 @router.post("/generate/jobs/{kind}/{job_id}/stop")
 def stop_generation_job(
     kind: str,
@@ -11409,10 +11575,28 @@ def _read_shot_media_batch_status(episode: Episode) -> Dict[str, Any]:
 
 
 def _persist_shot_media_batch_status(db: Session, episode: Episode, status_payload: Dict[str, Any]) -> None:
-    info = dict(episode.episode_info or {})
-    info[SHOT_MEDIA_BATCH_STATUS_KEY] = status_payload
-    episode.episode_info = info
-    db.add(episode)
+    latest_episode = (
+        db.query(Episode)
+        .execution_options(populate_existing=True)
+        .filter(Episode.id == int(episode.id))
+        .first()
+    )
+    target_episode = latest_episode or episode
+
+    info = dict(target_episode.episode_info or {})
+    existing_status = info.get(SHOT_MEDIA_BATCH_STATUS_KEY)
+    merged_status = dict(status_payload or {})
+
+    if isinstance(existing_status, dict) and bool(existing_status.get("stop_requested")):
+        merged_status["stop_requested"] = True
+        if existing_status.get("stop_requested_at") and not merged_status.get("stop_requested_at"):
+            merged_status["stop_requested_at"] = existing_status.get("stop_requested_at")
+        if not merged_status.get("stopped_by_user"):
+            merged_status["stopped_by_user"] = bool(existing_status.get("stopped_by_user"))
+
+    info[SHOT_MEDIA_BATCH_STATUS_KEY] = merged_status
+    target_episode.episode_info = info
+    db.add(target_episode)
     db.commit()
 
 
@@ -11637,8 +11821,17 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
         failed = 0
         errors: List[str] = []
 
+        def _read_latest_episode() -> Optional[Episode]:
+            db.expire_all()
+            return (
+                db.query(Episode)
+                .execution_options(populate_existing=True)
+                .filter(Episode.id == episode_id)
+                .first()
+            )
+
         def _persist_stopped_status() -> None:
-            latest_episode = db.query(Episode).filter(Episode.id == episode_id).first()
+            latest_episode = _read_latest_episode()
             if not latest_episode:
                 return
             latest_status = _read_shot_media_batch_status(latest_episode)
@@ -11654,14 +11847,14 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
             _persist_shot_media_batch_status(db, latest_episode, latest_status)
 
         def _is_stop_requested() -> bool:
-            latest_episode = db.query(Episode).filter(Episode.id == episode_id).first()
+            latest_episode = _read_latest_episode()
             if not latest_episode:
                 return True
             latest_status = _read_shot_media_batch_status(latest_episode)
             return bool(latest_status.get("stop_requested"))
 
         for shot in target_shots:
-            episode = db.query(Episode).filter(Episode.id == episode_id).first()
+            episode = _read_latest_episode()
             if not episode:
                 break
             latest = _read_shot_media_batch_status(episode)
@@ -11874,7 +12067,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                 errors.append(f"{shot_label}: {str(e)}")
 
             completed += 1
-            episode = db.query(Episode).filter(Episode.id == episode_id).first()
+            episode = _read_latest_episode()
             if not episode:
                 break
             latest = _read_shot_media_batch_status(episode)
@@ -11888,7 +12081,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
             )
             _persist_shot_media_batch_status(db, episode, latest)
 
-        episode = db.query(Episode).filter(Episode.id == episode_id).first()
+        episode = _read_latest_episode()
         if episode:
             final_status = _read_shot_media_batch_status(episode)
             final_status["running"] = False
@@ -11902,7 +12095,13 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
             _persist_shot_media_batch_status(db, episode, final_status)
     except Exception as e:
         try:
-            episode = db.query(Episode).filter(Episode.id == episode_id).first()
+            db.expire_all()
+            episode = (
+                db.query(Episode)
+                .execution_options(populate_existing=True)
+                .filter(Episode.id == episode_id)
+                .first()
+            )
             if episode:
                 status_payload = _read_shot_media_batch_status(episode)
                 status_payload["running"] = False
