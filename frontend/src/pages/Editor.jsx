@@ -3572,7 +3572,13 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             return t('AI Scene Analysis 发生过截断，系统已尝试自动续写。', 'AI Scene Analysis was truncated and auto-continuation was attempted.');
         }
         if (normalized === 'ANALYSIS_JSON_INVALID') {
-            return t('AI Scene Analysis 的 JSON 完整性校验失败（可能不完整或格式无效）。', 'AI Scene Analysis JSON integrity check failed (possibly incomplete or invalid).');
+            return t('AI Scene Analysis 检测到部分 JSON 不完整；将继续按可解析内容执行后续流程。', 'AI Scene Analysis detected partially invalid JSON; continuing with parseable content.');
+        }
+        if (normalized === 'ANALYSIS_SUBJECTS_UNVERIFIED') {
+            return t('Subject 一致性无法从 JSON 完整校验（非阻断，流程继续）。', 'Subject consistency could not be fully verified from JSON (non-blocking, flow continues).');
+        }
+        if (normalized === 'ANALYSIS_SUBJECTS_INCOMPLETE') {
+            return t('Subject 一致性告警：场景中出现的部分实体未在 JSON 中完整覆盖（非阻断）。', 'Subject consistency warning: some scene subjects are missing in JSON entities (non-blocking).');
         }
         return '';
     }, [t]);

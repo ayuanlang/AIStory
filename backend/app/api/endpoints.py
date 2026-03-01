@@ -607,6 +607,8 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
 
             json_candidate = ""
             json_expected = False
+            explicit_json_response = False
+            parseable_json_block_count = 0
 
             if text.startswith("```"):
                 lowered = text.lower()
@@ -620,6 +622,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             if not json_candidate:
                 if text.startswith("{") or text.startswith("["):
                     json_expected = True
+                    explicit_json_response = True
                     json_candidate = text
                 else:
                     first_obj = text.find("{")
@@ -632,6 +635,21 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     elif first_arr != -1 and last_arr > first_arr:
                         json_expected = True
                         json_candidate = text[first_arr:last_arr + 1].strip()
+
+            # Non-blocking fallback: count parseable fenced JSON blocks in mixed markdown outputs.
+            try:
+                fence_re = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
+                for m in fence_re.finditer(text):
+                    candidate = str(m.group(1) or "").strip()
+                    if not candidate:
+                        continue
+                    try:
+                        json.loads(candidate)
+                        parseable_json_block_count += 1
+                    except Exception:
+                        continue
+            except Exception:
+                parseable_json_block_count = 0
 
             json_valid = None
             json_error = None
@@ -654,7 +672,10 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 warning_codes.append("ANALYSIS_OUTPUT_CONTINUED")
                 warnings.append("Analysis response was split by length limits and auto-continuation was applied.")
 
-            if json_expected and json_valid is False:
+            # Only flag JSON invalid for explicit pure-JSON responses.
+            # Mixed markdown + partial JSON should stay non-blocking.
+            should_flag_json_invalid = bool(json_expected and json_valid is False and explicit_json_response)
+            if should_flag_json_invalid:
                 warning_codes.append("ANALYSIS_JSON_INVALID")
                 warnings.append("Analysis returned invalid or incomplete JSON. Please review before applying.")
 
@@ -665,6 +686,115 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "json_expected": json_expected,
                 "json_valid": json_valid,
                 "json_error": json_error,
+                "explicit_json_response": explicit_json_response,
+                "parseable_json_block_count": parseable_json_block_count,
+                "warning_codes": warning_codes,
+                "warnings": warnings,
+            }
+
+        def _normalize_subject_name(value: Any) -> str:
+            text = str(value or "").strip()
+            if not text:
+                return ""
+            text = re.sub(r"^(?:CHAR|PROP|ENV)\s*:\s*", "", text, flags=re.IGNORECASE)
+            text = text.strip()
+            if text.startswith("[") and text.endswith("]"):
+                text = text[1:-1].strip()
+            text = text.lstrip("@").strip()
+            text = re.sub(r"\s+", " ", text)
+            return text
+
+        def _extract_subjects_from_analysis_text(text: str) -> List[str]:
+            raw = str(text or "")
+            if not raw:
+                return []
+            patterns = [
+                re.compile(r"CHAR\s*:\s*\[@([^\]]+)\]", re.IGNORECASE),
+                re.compile(r"PROP\s*:\s*\[([^\]]+)\]", re.IGNORECASE),
+                re.compile(r"ENV\s*:\s*\[([^\]]+)\]", re.IGNORECASE),
+            ]
+            found: List[str] = []
+            seen = set()
+            for pattern in patterns:
+                for m in pattern.finditer(raw):
+                    normalized = _normalize_subject_name(m.group(1))
+                    key = normalized.lower()
+                    if normalized and key not in seen:
+                        seen.add(key)
+                        found.append(normalized)
+            return found
+
+        def _extract_entities_from_json_candidates(text: str) -> Dict[str, List[Dict[str, Any]]]:
+            payload: Dict[str, List[Dict[str, Any]]] = {
+                "characters": [],
+                "props": [],
+                "environments": [],
+            }
+            raw = str(text or "")
+            if not raw:
+                return payload
+
+            candidates: List[str] = []
+            fence_re = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
+            for m in fence_re.finditer(raw):
+                candidate = str(m.group(1) or "").strip()
+                if candidate:
+                    candidates.append(candidate)
+
+            trimmed = raw.strip()
+            if trimmed.startswith("{") and trimmed.endswith("}"):
+                candidates.append(trimmed)
+
+            seen_candidate = set()
+            for candidate in candidates:
+                key = candidate[:2000]
+                if key in seen_candidate:
+                    continue
+                seen_candidate.add(key)
+                try:
+                    obj = json.loads(candidate)
+                except Exception:
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+                for section in ("characters", "props", "environments"):
+                    items = obj.get(section)
+                    if isinstance(items, list):
+                        payload[section].extend([x for x in items if isinstance(x, dict)])
+
+            return payload
+
+        def _detect_subject_consistency_warnings(text: str) -> Dict[str, Any]:
+            markdown_subjects = _extract_subjects_from_analysis_text(text)
+            entities_payload = _extract_entities_from_json_candidates(text)
+
+            json_subjects: List[str] = []
+            for section in ("characters", "props", "environments"):
+                for item in entities_payload.get(section, []):
+                    normalized = _normalize_subject_name(item.get("name") or item.get("name_en") or "")
+                    if normalized:
+                        json_subjects.append(normalized)
+
+            markdown_set = {s.lower(): s for s in markdown_subjects}
+            json_set = {s.lower(): s for s in json_subjects}
+            missing = [display for key, display in markdown_set.items() if key not in json_set]
+
+            warning_codes: List[str] = []
+            warnings: List[str] = []
+            if len(markdown_set) > 0 and len(json_set) == 0:
+                warning_codes.append("ANALYSIS_SUBJECTS_UNVERIFIED")
+                warnings.append("Subject consistency check could not be verified from JSON sections; flow continues with parseable content.")
+            elif len(missing) > 0:
+                warning_codes.append("ANALYSIS_SUBJECTS_INCOMPLETE")
+                warnings.append(
+                    "Subject consistency warning: some subjects found in scene text are missing in entity JSON (non-blocking). "
+                    + f"Missing: {', '.join(missing[:20])}"
+                )
+
+            return {
+                "markdown_subject_count": len(markdown_set),
+                "json_subject_count": len(json_set),
+                "missing_subjects": missing,
                 "warning_codes": warning_codes,
                 "warnings": warnings,
             }
@@ -1185,10 +1315,34 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 raise
         
         response_payload: Dict[str, Any] = {"result": result_content, "meta": debug_meta}
+
+        subject_consistency_meta = _detect_subject_consistency_warnings(result_content)
+        debug_meta["subject_consistency"] = subject_consistency_meta
+
+        sc_warning_codes = subject_consistency_meta.get("warning_codes") or []
+        sc_warnings = subject_consistency_meta.get("warnings") or []
+
         if integrity_meta.get("warnings"):
             response_payload["warnings"] = integrity_meta.get("warnings")
         if integrity_meta.get("warning_codes"):
             response_payload["warning_codes"] = integrity_meta.get("warning_codes")
+
+        if sc_warnings:
+            response_payload["warnings"] = [
+                *list(response_payload.get("warnings") or []),
+                *list(sc_warnings),
+            ]
+        if sc_warning_codes:
+            response_payload["warning_codes"] = [
+                *list(response_payload.get("warning_codes") or []),
+                *list(sc_warning_codes),
+            ]
+
+        if response_payload.get("warnings"):
+            response_payload["warnings"] = list(dict.fromkeys([str(x or "").strip() for x in response_payload["warnings"] if str(x or "").strip()]))
+        if response_payload.get("warning_codes"):
+            response_payload["warning_codes"] = list(dict.fromkeys([str(x or "").strip() for x in response_payload["warning_codes"] if str(x or "").strip()]))
+
         if integrity_meta.get("warning_codes") or integrity_meta.get("warnings"):
             try:
                 logger.warning(
@@ -1196,6 +1350,16 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     getattr(request, "episode_id", None),
                     integrity_meta.get("warning_codes") or [],
                     integrity_meta.get("warnings") or [],
+                )
+            except Exception:
+                pass
+        if sc_warning_codes or sc_warnings:
+            try:
+                logger.warning(
+                    "[analyze_scene] subject consistency warning episode_id=%s codes=%s warnings=%s",
+                    getattr(request, "episode_id", None),
+                    sc_warning_codes,
+                    sc_warnings,
                 )
             except Exception:
                 pass

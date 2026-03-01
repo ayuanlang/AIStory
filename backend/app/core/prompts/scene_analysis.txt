@@ -269,6 +269,10 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 | EP01 | EP01_SC01 | 1 | {Name} | {Times} | **{Stage} (核心舞台)**: 中文描述。<br>**{Environment Context}**: 中文描述。<br>**{Layout}**: 中文描述。<br>**{Axis}**: 中文描述（含观察方向与是否跨线）。<br>**{Observer View}**: 机位站位 + 朝向 + 轴线侧（e.g., 沿轴正向看向{Stage}）。<br>**{Split Reason}**: 拆分原因。<br>**{Beats}**:<br>1. {镜头} 机位在ENV:[Bed]脚端左侧，朝向{Stage}；{空间} CHAR:[@Char A]在ENV:[Bed]右侧边缘坐姿；{角色-镜头关系} CHAR:[@Char A]位于中景偏右；{主体关系} CHAR:[@Char A]侧对CHAR:[@Char B]并看向其胸前，未接触；{动作变化过程} CHAR:[@Char A]前倾半步并抬手；-> {新状态} 与CHAR:[@Char B]近距对峙。 | {Original} | `{Env Name}` | `NEW / REUSE / VARIANT_OF` | `{Base Env Name / Ref ID}` | `仅写相对变化项；REUSE=No visual delta` | {Entry Snapshot} | {Exit Snapshot} | `CHAR:[@Char A]`, `CHAR:[@Char B]` | `PROP:[Prop]` |
 
 ### Subject Index（紧跟 Part 1）
+- **严禁省略 Scene Subjects（Hard Rule）**：Part 1 每个 Scene 中凡在 `{Beats}`、`Linked Characters`、`Key Props`、`Environment Name` 出现的实体，必须进入 Subject Index 与 Part 2；禁止“只写代表人物/主角”替代全量实体。
+- **出现即纳入（Mandatory）**：只要实体在任一 Scene 中被提及或可见参与（含被对视、被交互、被引用、作为环境容器），就必须计入；不得因戏份轻重、省略台词、镜头时长短而忽略。
+- **逐场闭环（Mandatory）**：每个 Scene 的实体集合必须满足：`Scene实体集合 ⊆ Subject Index ∩ Part2(JSON)`；任一差集均判无效，必须重写。
+- **禁止代表化（Forbidden）**：禁止用“群演/其他人/若干道具/背景角色”等统称替代具体已出现实体；若剧本明确出现可识别对象，必须给出稳定实体名并保持逐字符一致。
 - 先输出去重 Subject 列表，覆盖 Part 1 全部角色/道具/环境。
 - `subject_no` 全局唯一连续（建议 `S001...`）。
 - `subject_type` 仅允许：`character/prop/environment`。
@@ -286,6 +290,9 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 ### Part 2: Entities JSON (Strict Schema)
 
 #### Part 2 共同硬约束（含 Subject 依赖关系）
+- **Scene Subjects 零遗漏硬约束（Mandatory）**：Part 2 的 `characters/props/environments` 必须完整覆盖 Part 1 所有 Scene 中已出现实体；不得只保留“核心代表项”。
+- **一致性判定口径（Mandatory）**：以 Part 1 实体出现集为主键集，逐项核对 Subject Index 与 Part 2。若存在 `Part1出现但Part2缺失`，结果无效。
+- **命名一致（Mandatory）**：Part 1、Subject Index、Part 2 三处名称必须可一一映射且逐字符一致（仅允许 Part 2A `name/name_en` 去壳，不允许语义替换）。
 - 每个实体（character / prop / environment）都必须包含：`visual_dependencies` 与 `dependency_strategy`。
 - `visual_dependencies`：
   - `[]` 表示原创主资产（无上游依赖）；
