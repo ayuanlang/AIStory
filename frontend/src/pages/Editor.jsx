@@ -11663,89 +11663,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         writeGenerationStateStorage(generatingStateByShot);
     }, [generatingStateByShot, writeGenerationStateStorage]);
 
-    useEffect(() => {
-        if (!activeEpisode?.id) return;
-        let cancelled = false;
-
-        const resumePendingVideoJobs = async () => {
-            const pending = readVideoJobStateStorage();
-            const entries = Object.entries(pending);
-            if (entries.length === 0) return;
-
-            onLog?.(`Resuming ${entries.length} pending video job(s) for this episode...`, 'info');
-
-            for (const [shotId, payload] of entries) {
-                if (cancelled) break;
-
-                const stableShotId = String(shotId || '').trim();
-                const jobId = String(payload?.jobId || '').trim();
-                if (!stableShotId || !jobId) {
-                    clearPendingVideoJob(stableShotId);
-                    continue;
-                }
-
-                setShotGeneratingState(stableShotId, 'video', true);
-
-                while (!cancelled) {
-                    try {
-                        const status = await getVideoGenerationJobStatus(jobId);
-                        const phase = String(status?.status || '').toLowerCase();
-
-                        if (phase === 'succeeded') {
-                            const resultUrl = String(status?.result?.url || '').trim();
-                            if (resultUrl) {
-                                const newData = { video_url: resultUrl };
-                                try {
-                                    await onUpdateShot(stableShotId, newData);
-                                } catch (persistErr) {
-                                    console.warn('Resume video job save failed:', persistErr);
-                                }
-                                setEditingShot(prev => (prev && String(prev.id) === stableShotId ? { ...prev, ...newData } : prev));
-                                onLog?.(`Recovered video generation completed for shot ${stableShotId}.`, 'success');
-                            }
-                            clearPendingVideoJob(stableShotId);
-                            setShotGeneratingState(stableShotId, 'video', false);
-                            await refreshShots();
-                            break;
-                        }
-
-                        if (phase === 'failed' || phase === 'error' || phase === 'canceled' || phase === 'cancelled') {
-                            clearPendingVideoJob(stableShotId);
-                            setShotGeneratingState(stableShotId, 'video', false);
-                            onLog?.(`Recovered video generation failed for shot ${stableShotId}: ${status?.error || 'unknown error'}`, 'error');
-                            break;
-                        }
-                    } catch (e) {
-                        const detail = e?.response?.data?.detail || e?.message || '';
-                        if (String(detail).toLowerCase().includes('job not found')) {
-                            clearPendingVideoJob(stableShotId);
-                            setShotGeneratingState(stableShotId, 'video', false);
-                            onLog?.(`Recovered video job missing for shot ${stableShotId}; cleared pending state.`, 'warning');
-                            break;
-                        }
-                    }
-
-                    await new Promise(resolve => setTimeout(resolve, 2000));
-                }
-            }
-        };
-
-        resumePendingVideoJobs();
-
-        return () => {
-            cancelled = true;
-        };
-    }, [
-        activeEpisode?.id,
-        clearPendingVideoJob,
-        onLog,
-        onUpdateShot,
-        readVideoJobStateStorage,
-        refreshShots,
-        setEditingShot,
-        setShotGeneratingState,
-    ]);
-
     const currentGeneratingState = editingShot?.id
         ? (generatingStateByShot[String(editingShot.id)] || { start: false, end: false, video: false, startAt: 0, endAt: 0, videoAt: 0 })
         : { start: false, end: false, video: false };
@@ -12113,6 +12030,89 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             console.error("Failed to refresh shots", e);
         }
     }, [activeEpisode?.id, selectedSceneId, sceneCodeFilter, shotIdFilter]);
+
+    useEffect(() => {
+        if (!activeEpisode?.id) return;
+        let cancelled = false;
+
+        const resumePendingVideoJobs = async () => {
+            const pending = readVideoJobStateStorage();
+            const entries = Object.entries(pending);
+            if (entries.length === 0) return;
+
+            onLog?.(`Resuming ${entries.length} pending video job(s) for this episode...`, 'info');
+
+            for (const [shotId, payload] of entries) {
+                if (cancelled) break;
+
+                const stableShotId = String(shotId || '').trim();
+                const jobId = String(payload?.jobId || '').trim();
+                if (!stableShotId || !jobId) {
+                    clearPendingVideoJob(stableShotId);
+                    continue;
+                }
+
+                setShotGeneratingState(stableShotId, 'video', true);
+
+                while (!cancelled) {
+                    try {
+                        const status = await getVideoGenerationJobStatus(jobId);
+                        const phase = String(status?.status || '').toLowerCase();
+
+                        if (phase === 'succeeded') {
+                            const resultUrl = String(status?.result?.url || '').trim();
+                            if (resultUrl) {
+                                const newData = { video_url: resultUrl };
+                                try {
+                                    await onUpdateShot(stableShotId, newData);
+                                } catch (persistErr) {
+                                    console.warn('Resume video job save failed:', persistErr);
+                                }
+                                setEditingShot(prev => (prev && String(prev.id) === stableShotId ? { ...prev, ...newData } : prev));
+                                onLog?.(`Recovered video generation completed for shot ${stableShotId}.`, 'success');
+                            }
+                            clearPendingVideoJob(stableShotId);
+                            setShotGeneratingState(stableShotId, 'video', false);
+                            await refreshShots();
+                            break;
+                        }
+
+                        if (phase === 'failed' || phase === 'error' || phase === 'canceled' || phase === 'cancelled') {
+                            clearPendingVideoJob(stableShotId);
+                            setShotGeneratingState(stableShotId, 'video', false);
+                            onLog?.(`Recovered video generation failed for shot ${stableShotId}: ${status?.error || 'unknown error'}`, 'error');
+                            break;
+                        }
+                    } catch (e) {
+                        const detail = e?.response?.data?.detail || e?.message || '';
+                        if (String(detail).toLowerCase().includes('job not found')) {
+                            clearPendingVideoJob(stableShotId);
+                            setShotGeneratingState(stableShotId, 'video', false);
+                            onLog?.(`Recovered video job missing for shot ${stableShotId}; cleared pending state.`, 'warning');
+                            break;
+                        }
+                    }
+
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                }
+            }
+        };
+
+        resumePendingVideoJobs();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [
+        activeEpisode?.id,
+        clearPendingVideoJob,
+        onLog,
+        onUpdateShot,
+        readVideoJobStateStorage,
+        refreshShots,
+        setEditingShot,
+        setShotGeneratingState,
+    ]);
 
     const handleManualRebindMediaSlots = useCallback(async () => {
         if (!projectId || !activeEpisode?.id || isManualRebindingMedia) return;
