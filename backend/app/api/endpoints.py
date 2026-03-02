@@ -477,6 +477,61 @@ def _can_use_system_settings(user: User) -> bool:
     return bool((user.credits or 0) > 0 or user.is_superuser or user.is_system)
 
 
+def _log_batch_sys_event(
+    *,
+    kind: str,
+    phase: str,
+    user_id: int,
+    user_name: str,
+    project_id: Optional[int] = None,
+    episode_id: Optional[int] = None,
+    job_id: Optional[str] = None,
+    item_id: Optional[int] = None,
+    item_label: Optional[str] = None,
+    result: Optional[str] = None,
+    message: Optional[str] = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> None:
+    action_kind = str(kind or "batch").strip().replace("-", "_").upper()
+    action_phase = str(phase or "event").strip().replace("-", "_").upper()
+    action = f"BATCH_{action_kind}_{action_phase}"
+    details_payload: Dict[str, Any] = {
+        "kind": kind,
+        "phase": phase,
+        "job_id": job_id,
+        "project_id": project_id,
+        "episode_id": episode_id,
+        "item_id": item_id,
+        "item_label": item_label,
+        "result": result,
+        "message": message,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    if isinstance(extra, dict) and extra:
+        details_payload["extra"] = extra
+
+    log_db = SessionLocal()
+    try:
+        log_action(
+            log_db,
+            user_id=int(user_id),
+            user_name=str(user_name or f"user_{user_id}"),
+            action=action,
+            details=json.dumps(details_payload, ensure_ascii=False, default=str),
+        )
+    except Exception as e:
+        logger.warning(
+            "[batch_syslog] failed action=%s kind=%s phase=%s job_id=%s err=%s",
+            action,
+            kind,
+            phase,
+            job_id,
+            e,
+        )
+    finally:
+        log_db.close()
+
+
 def get_system_api_setting(
     db: Session,
     provider: str = None,
@@ -3779,6 +3834,9 @@ def _run_episode_scene_generation_job(episode_id: int, req_payload: Dict[str, An
         if not episode or not user:
             return
 
+        job_id = f"episode-scenes:{int(episode_id)}"
+        user_name = str(user.username or f"user_{user_id}")
+
         latest = _read_episode_scene_generation_status(episode)
         if bool(latest.get("stop_requested")):
             latest["running"] = False
@@ -3787,6 +3845,17 @@ def _run_episode_scene_generation_job(episode_id: int, req_payload: Dict[str, An
             latest["finished_at"] = datetime.utcnow().isoformat()
             latest["updated_at"] = latest["finished_at"]
             _persist_episode_scene_generation_status(db, episode, latest)
+            _log_batch_sys_event(
+                kind="episode-scenes",
+                phase="end",
+                user_id=user_id,
+                user_name=user_name,
+                project_id=episode.project_id,
+                episode_id=episode_id,
+                job_id=job_id,
+                result="canceled",
+                message="Stopped before generation started",
+            )
             return
 
         req = ScriptScenesGenerateRequest(**(req_payload or {}))
@@ -3810,6 +3879,21 @@ def _run_episode_scene_generation_job(episode_id: int, req_payload: Dict[str, An
             status_payload["updated_at"] = datetime.utcnow().isoformat()
             status_payload["finished_at"] = status_payload["updated_at"]
             _persist_episode_scene_generation_status(db, episode, status_payload)
+            _log_batch_sys_event(
+                kind="episode-scenes",
+                phase="end",
+                user_id=user_id,
+                user_name=user_name,
+                project_id=episode.project_id,
+                episode_id=episode_id,
+                job_id=job_id,
+                result="completed",
+                message="Scene generation completed",
+                extra={
+                    "scenes_created": int(status_payload.get("scenes_created") or 0),
+                    "status": status_payload.get("status"),
+                },
+            )
     except Exception as e:
         try:
             episode = db.query(Episode).filter(Episode.id == episode_id).first()
@@ -3821,6 +3905,17 @@ def _run_episode_scene_generation_job(episode_id: int, req_payload: Dict[str, An
                 status_payload["updated_at"] = datetime.utcnow().isoformat()
                 status_payload["finished_at"] = status_payload["updated_at"]
                 _persist_episode_scene_generation_status(db, episode, status_payload)
+                _log_batch_sys_event(
+                    kind="episode-scenes",
+                    phase="end",
+                    user_id=user_id,
+                    user_name=str((user.username if 'user' in locals() and user else "") or f"user_{user_id}"),
+                    project_id=episode.project_id,
+                    episode_id=episode_id,
+                    job_id=f"episode-scenes:{int(episode_id)}",
+                    result="failed",
+                    message=str(e),
+                )
         except Exception:
             pass
     finally:
@@ -4281,6 +4376,20 @@ def start_episode_scenes_generation_job(
         "finished_at": None,
     }
     _persist_episode_scene_generation_status(db, episode, status_payload)
+    _log_batch_sys_event(
+        kind="episode-scenes",
+        phase="start",
+        user_id=current_user.id,
+        user_name=current_user.username,
+        project_id=episode.project_id,
+        episode_id=episode_id,
+        job_id=f"episode-scenes:{int(episode_id)}",
+        result="running",
+        message="Batch task started",
+        extra={
+            "request": req.model_dump(),
+        },
+    )
 
     worker = threading.Thread(
         target=_run_episode_scene_generation_job,
@@ -4347,6 +4456,17 @@ def stop_episode_scenes_generation_job(
     status_payload["updated_at"] = now_iso
     status_payload["message"] = "Force stopped"
     _persist_episode_scene_generation_status(db, episode, status_payload)
+    _log_batch_sys_event(
+        kind="episode-scenes",
+        phase="stop",
+        user_id=current_user.id,
+        user_name=current_user.username,
+        project_id=episode.project_id,
+        episode_id=episode_id,
+        job_id=f"episode-scenes:{int(episode_id)}",
+        result="canceled",
+        message="Force stopped by user",
+    )
     return status_payload
 
 
@@ -5967,6 +6087,10 @@ def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id
         if not episode or not user:
             return
 
+        user_name = str(user.username or f"user_{user_id}")
+        project_id = int(episode.project_id)
+        job_id = f"scene-ai-shots-batch:{int(episode_id)}"
+
         scene_label_map: Dict[int, str] = {}
         for sid in scene_ids:
             sc = db.query(Scene).filter(Scene.id == sid, Scene.episode_id == episode_id).first()
@@ -6010,6 +6134,18 @@ def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id
                 latest["stopped_by_user"] = True
                 latest["message"] = "Stopped by user request"
                 _persist_scene_ai_shots_batch_status(db, episode, latest)
+                _log_batch_sys_event(
+                    kind="scene-ai-shots-batch",
+                    phase="end",
+                    user_id=user_id,
+                    user_name=user_name,
+                    project_id=project_id,
+                    episode_id=episode_id,
+                    job_id=job_id,
+                    result="canceled",
+                    message="Stopped by user request",
+                    extra={"completed": completed, "success": success, "failed": failed},
+                )
                 return
 
             scene_label = scene_label_map.get(sid) or f"#{sid}"
@@ -6042,6 +6178,18 @@ def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id
                     latest_after_generate["stopped_by_user"] = True
                     latest_after_generate["message"] = "Stopped by user request"
                     _persist_scene_ai_shots_batch_status(db, episode, latest_after_generate)
+                    _log_batch_sys_event(
+                        kind="scene-ai-shots-batch",
+                        phase="end",
+                        user_id=user_id,
+                        user_name=user_name,
+                        project_id=project_id,
+                        episode_id=episode_id,
+                        job_id=job_id,
+                        result="canceled",
+                        message="Stopped by user request",
+                        extra={"completed": completed, "success": success, "failed": failed},
+                    )
                     return
 
                 apply_scene_ai_result(
@@ -6051,14 +6199,53 @@ def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id
                     current_user=user,
                 )
                 success += 1
+                _log_batch_sys_event(
+                    kind="scene-ai-shots-batch",
+                    phase="item",
+                    user_id=user_id,
+                    user_name=user_name,
+                    project_id=project_id,
+                    episode_id=episode_id,
+                    job_id=job_id,
+                    item_id=sid,
+                    item_label=scene_label,
+                    result="success",
+                    message="Scene AI shots generated",
+                )
             except asyncio.TimeoutError:
                 failed += 1
                 errors.append(
                     f"{scene_label}: scene processing exceeded {SCENE_AI_SHOTS_BATCH_PER_SCENE_TIMEOUT_SEC}s timeout"
                 )
+                _log_batch_sys_event(
+                    kind="scene-ai-shots-batch",
+                    phase="item",
+                    user_id=user_id,
+                    user_name=user_name,
+                    project_id=project_id,
+                    episode_id=episode_id,
+                    job_id=job_id,
+                    item_id=sid,
+                    item_label=scene_label,
+                    result="failed",
+                    message=f"scene processing exceeded {SCENE_AI_SHOTS_BATCH_PER_SCENE_TIMEOUT_SEC}s timeout",
+                )
             except Exception as e:
                 failed += 1
                 errors.append(f"{scene_label}: {str(e)}")
+                _log_batch_sys_event(
+                    kind="scene-ai-shots-batch",
+                    phase="item",
+                    user_id=user_id,
+                    user_name=user_name,
+                    project_id=project_id,
+                    episode_id=episode_id,
+                    job_id=job_id,
+                    item_id=sid,
+                    item_label=scene_label,
+                    result="failed",
+                    message=str(e),
+                )
 
             completed += 1
             episode = db.query(Episode).filter(Episode.id == episode_id).first()
@@ -6086,6 +6273,18 @@ def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id
             final_status["stopped_by_user"] = bool(final_status.get("stop_requested"))
             final_status["message"] = f"Batch done: success {success}, failed {failed}"
             _persist_scene_ai_shots_batch_status(db, episode, final_status)
+            _log_batch_sys_event(
+                kind="scene-ai-shots-batch",
+                phase="end",
+                user_id=user_id,
+                user_name=user_name,
+                project_id=project_id,
+                episode_id=episode_id,
+                job_id=job_id,
+                result="completed",
+                message=final_status.get("message"),
+                extra={"completed": completed, "success": success, "failed": failed},
+            )
     except Exception as e:
         try:
             episode = db.query(Episode).filter(Episode.id == episode_id).first()
@@ -6097,6 +6296,17 @@ def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id
                 failed_status["message"] = f"Batch failed: {str(e)}"
                 failed_status["errors"] = list(failed_status.get("errors") or []) + [str(e)]
                 _persist_scene_ai_shots_batch_status(db, episode, failed_status)
+                _log_batch_sys_event(
+                    kind="scene-ai-shots-batch",
+                    phase="end",
+                    user_id=user_id,
+                    user_name=str((user.username if 'user' in locals() and user else "") or f"user_{user_id}"),
+                    project_id=int(episode.project_id),
+                    episode_id=episode_id,
+                    job_id=f"scene-ai-shots-batch:{int(episode_id)}",
+                    result="failed",
+                    message=str(e),
+                )
         except Exception:
             pass
     finally:
@@ -6152,6 +6362,18 @@ def start_scene_ai_shots_batch(
         "finished_at": None,
     }
     _persist_scene_ai_shots_batch_status(db, episode, status_payload)
+    _log_batch_sys_event(
+        kind="scene-ai-shots-batch",
+        phase="start",
+        user_id=current_user.id,
+        user_name=current_user.username,
+        project_id=episode.project_id,
+        episode_id=episode_id,
+        job_id=f"scene-ai-shots-batch:{int(episode_id)}",
+        result="running",
+        message="Batch task started",
+        extra={"scene_ids": scene_ids, "total": len(scene_ids)},
+    )
 
     worker = threading.Thread(
         target=_run_scene_ai_shots_batch_job,
@@ -6221,6 +6443,17 @@ def stop_scene_ai_shots_batch(
     status_payload["updated_at"] = now_iso
     status_payload["message"] = "Force stopped"
     _persist_scene_ai_shots_batch_status(db, episode, status_payload)
+    _log_batch_sys_event(
+        kind="scene-ai-shots-batch",
+        phase="stop",
+        user_id=current_user.id,
+        user_name=current_user.username,
+        project_id=episode.project_id,
+        episode_id=episode_id,
+        job_id=f"scene-ai-shots-batch:{int(episode_id)}",
+        result="canceled",
+        message="Force stopped by user",
+    )
     return status_payload
 
 @router.post("/scenes/{scene_id}/ai_generate_shots")
@@ -12051,6 +12284,10 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
         if not episode or not user:
             return
 
+        user_name = str(user.username or f"user_{user_id}")
+        project_id = int(episode.project_id)
+        job_id = f"shot-media-batch:{int(episode_id)}"
+
         episode_info = episode.episode_info if isinstance(episode.episode_info, dict) else {}
         e_global_info = episode_info.get("e_global_info", {}) if isinstance(episode_info, dict) else {}
         global_style = str((e_global_info or {}).get("Global_Style") or "").strip()
@@ -12095,6 +12332,18 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
             latest_status["finished_at"] = datetime.utcnow().isoformat()
             latest_status["updated_at"] = latest_status["finished_at"]
             _persist_shot_media_batch_status(db, latest_episode, latest_status)
+            _log_batch_sys_event(
+                kind="shot-media-batch",
+                phase="end",
+                user_id=user_id,
+                user_name=user_name,
+                project_id=project_id,
+                episode_id=episode_id,
+                job_id=job_id,
+                result="canceled",
+                message="Stopped by user request",
+                extra={"completed": completed, "success": success, "failed": failed},
+            )
 
         def _is_stop_requested() -> bool:
             if cancel_event and cancel_event.is_set():
@@ -12313,6 +12562,20 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                         asyncio.run(_run_cancellable(generate_video_endpoint(req=video_req, current_user=user, db=db)))
 
                 success += 1
+                _log_batch_sys_event(
+                    kind="shot-media-batch",
+                    phase="item",
+                    user_id=user_id,
+                    user_name=user_name,
+                    project_id=project_id,
+                    episode_id=episode_id,
+                    job_id=job_id,
+                    item_id=int(shot.id),
+                    item_label=shot_label,
+                    result="success",
+                    message="Shot media generated",
+                    extra={"mode": mode},
+                )
             except _BatchStopRequested:
                 _persist_stopped_status()
                 return
@@ -12320,6 +12583,20 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                 shot_ok = False
                 failed += 1
                 errors.append(f"{shot_label}: {str(e)}")
+                _log_batch_sys_event(
+                    kind="shot-media-batch",
+                    phase="item",
+                    user_id=user_id,
+                    user_name=user_name,
+                    project_id=project_id,
+                    episode_id=episode_id,
+                    job_id=job_id,
+                    item_id=int(shot.id),
+                    item_label=shot_label,
+                    result="failed",
+                    message=str(e),
+                    extra={"mode": mode},
+                )
 
             completed += 1
             episode = _read_latest_episode()
@@ -12348,6 +12625,18 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
             final_status["finished_at"] = final_status["updated_at"]
             final_status["message"] = f"Batch done: success {success}, failed {failed}"
             _persist_shot_media_batch_status(db, episode, final_status)
+            _log_batch_sys_event(
+                kind="shot-media-batch",
+                phase="end",
+                user_id=user_id,
+                user_name=user_name,
+                project_id=project_id,
+                episode_id=episode_id,
+                job_id=job_id,
+                result="completed",
+                message=final_status.get("message"),
+                extra={"completed": completed, "success": success, "failed": failed, "mode": mode},
+            )
     except Exception as e:
         try:
             db.expire_all()
@@ -12365,6 +12654,17 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                 status_payload["message"] = f"Batch failed: {str(e)}"
                 status_payload["errors"] = list(status_payload.get("errors") or []) + [str(e)]
                 _persist_shot_media_batch_status(db, episode, status_payload)
+                _log_batch_sys_event(
+                    kind="shot-media-batch",
+                    phase="end",
+                    user_id=user_id,
+                    user_name=str((user.username if 'user' in locals() and user else "") or f"user_{user_id}"),
+                    project_id=int(episode.project_id),
+                    episode_id=episode_id,
+                    job_id=f"shot-media-batch:{int(episode_id)}",
+                    result="failed",
+                    message=str(e),
+                )
         except Exception:
             pass
     finally:
@@ -12426,6 +12726,23 @@ def start_shot_media_batch_job(
         "finished_at": None,
     }
     _persist_shot_media_batch_status(db, episode, status_payload)
+    _log_batch_sys_event(
+        kind="shot-media-batch",
+        phase="start",
+        user_id=current_user.id,
+        user_name=current_user.username,
+        project_id=episode.project_id,
+        episode_id=episode_id,
+        job_id=f"shot-media-batch:{int(episode_id)}",
+        result="running",
+        message="Batch task started",
+        extra={
+            "shot_ids": shot_ids,
+            "total": len(shot_ids),
+            "mode": mode,
+            "overwrite_existing": bool(req.overwrite_existing),
+        },
+    )
     _reset_shot_media_batch_cancel_requested(int(episode_id))
 
     worker = threading.Thread(
@@ -12496,6 +12813,17 @@ def stop_shot_media_batch_job(
     status_payload["message"] = "Force stopped"
     _persist_shot_media_batch_status(db, episode, status_payload)
     _set_shot_media_batch_cancel_requested(int(episode_id))
+    _log_batch_sys_event(
+        kind="shot-media-batch",
+        phase="stop",
+        user_id=current_user.id,
+        user_name=current_user.username,
+        project_id=episode.project_id,
+        episode_id=episode_id,
+        job_id=f"shot-media-batch:{int(episode_id)}",
+        result="canceled",
+        message="Force stopped by user",
+    )
     return status_payload
 
 class MontageItem(BaseModel):
