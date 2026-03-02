@@ -4,6 +4,7 @@ import logging
 import smtplib
 from email.message import EmailMessage
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import OperationalError
 from sqlalchemy import or_, and_
 from app.db.session import get_db, SessionLocal
 from app.models.all_models import Project, ProjectShare, User, Episode, Scene, Shot, Entity, Asset, APISetting, SystemAPISetting, ScriptSegment, PricingRule, TransactionHistory
@@ -3054,35 +3055,46 @@ def read_projects(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    shared_project_ids = [
-        row[0]
-        for row in db.query(ProjectShare.project_id).filter(ProjectShare.user_id == current_user.id).all()
-    ]
-    projects = (
-        db.query(Project)
-        .filter(
-            or_(
-                Project.owner_id == current_user.id,
-                Project.id.in_(shared_project_ids),
+    def _query_with(session: Session) -> List[Project]:
+        shared_project_ids = [
+            row[0]
+            for row in session.query(ProjectShare.project_id).filter(ProjectShare.user_id == current_user.id).all()
+        ]
+        result = (
+            session.query(Project)
+            .filter(
+                or_(
+                    Project.owner_id == current_user.id,
+                    Project.id.in_(shared_project_ids),
+                )
             )
+            .order_by(Project.created_at.desc(), Project.id.desc())
+            .offset(skip)
+            .limit(limit)
+            .all()
         )
-        .order_by(Project.created_at.desc(), Project.id.desc())
-        .offset(skip)
-        .limit(limit)
-        .all()
-    )
-    for p in projects:
-        p.cover_image = get_project_cover_image(db, p.id)
-        _attach_project_flags(p, current_user)
-        # Populate alias field
-        if p.global_info:
-             p.aspectRatio = p.global_info.get('aspectRatio')
-        p.description = (p.global_info or {}).get("notes")
-        
-        # Debug logging
-        # logger.info(f"Project {p.id}: Cover={p.cover_image}")
-        
-    return projects
+        for p in result:
+            p.cover_image = get_project_cover_image(session, p.id)
+            _attach_project_flags(p, current_user)
+            if p.global_info:
+                p.aspectRatio = p.global_info.get('aspectRatio')
+            p.description = (p.global_info or {}).get("notes")
+        return result
+
+    try:
+        return _query_with(db)
+    except OperationalError as e:
+        logger.warning("[read_projects] transient db OperationalError, retrying once: %s", e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+        retry_db = SessionLocal()
+        try:
+            return _query_with(retry_db)
+        finally:
+            retry_db.close()
 
 
 @router.get("/projects/{project_id}", response_model=ProjectOut)
