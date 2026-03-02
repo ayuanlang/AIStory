@@ -734,6 +734,13 @@ export const stopGenerationJob = async (kind, jobId) => {
     return response?.data || {};
 };
 
+export const stopAllGenerationJobs = async (kind = 'all') => {
+    const response = await api.post('/generate/jobs/stop-all', null, {
+        params: { kind },
+    });
+    return response?.data || {};
+};
+
 export const generateImage = async (prompt, provider = null, ref_image_url = null, options = {}, negative_prompt = null) => {
     const effectiveNegativePrompt = String(negative_prompt ?? options?.negative_prompt ?? '').trim();
     const payload = { prompt, provider, ref_image_url, ...options, ...(effectiveNegativePrompt ? { negative_prompt: effectiveNegativePrompt } : {}) };

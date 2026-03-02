@@ -209,6 +209,7 @@ import {
     getVideoGenerationJobStatus,
     getGenerationJobPool,
     stopGenerationJob,
+    stopAllGenerationJobs,
     stopShotMediaBatch,
     saveProjectStoryGeneratorGlobalInput,
     exportProjectStoryGlobalPackage,
@@ -15698,6 +15699,7 @@ const Editor = ({
     const [jobPoolLoading, setJobPoolLoading] = useState(false);
     const [jobPoolStoppingId, setJobPoolStoppingId] = useState('');
     const [jobPoolStoppingAll, setJobPoolStoppingAll] = useState(false);
+    const [jobPoolStoppingAllApi, setJobPoolStoppingAllApi] = useState(false);
     const [jobPoolStopLimit, setJobPoolStopLimit] = useState('20');
     const [jobPoolFilterKind, setJobPoolFilterKind] = useState('all');
     const [jobPoolRunningOnly, setJobPoolRunningOnly] = useState(true);
@@ -16719,6 +16721,31 @@ const Editor = ({
         }
     };
 
+    const handleStopAllJobsFromApi = async () => {
+        if (jobPoolStoppingAllApi) return;
+        const targetKind = String(jobPoolFilterKind || 'all').trim().toLowerCase() || 'all';
+        const ok = await confirmUiMessage(t(
+            `确认调用“停止全部任务”接口？\n范围：${targetKind}`,
+            `Call stop-all endpoint now?\nScope: ${targetKind}`
+        ));
+        if (!ok) return;
+
+        setJobPoolStoppingAllApi(true);
+        try {
+            const res = await stopAllGenerationJobs(targetKind);
+            const stopped = Number(res?.stopped || 0);
+            addLog(t(
+                `已请求停止全部任务：kind=${targetKind}，停止 ${stopped} 个。`,
+                `Stop-all requested: kind=${targetKind}, stopped ${stopped}.`
+            ), 'warning');
+        } catch (e) {
+            addLog(`Failed to stop-all (${targetKind}): ${e?.response?.data?.detail || e?.message || 'unknown error'}`, 'error');
+        } finally {
+            setJobPoolStoppingAllApi(false);
+            await refreshGenerationJobPool();
+        }
+    };
+
     const activeEpisode = episodes.find(e => e.id === activeEpisodeId);
     const activeEpisodeIndex = activeEpisode ? episodes.findIndex((episode) => episode.id === activeEpisode.id) : -1;
     const activeEpisodeLabel = activeEpisode
@@ -17073,13 +17100,22 @@ const Editor = ({
                                 {jobPoolStoppingAll ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Square className="w-3.5 h-3.5" />}
                                 {jobPoolStoppingAll ? t('批量停止中...', 'Stopping...') : t('批量停止', 'Batch Stop')}
                             </button>
+                            <button
+                                onClick={handleStopAllJobsFromApi}
+                                disabled={jobPoolStoppingAllApi}
+                                className={`px-3 py-1.5 rounded text-white flex items-center gap-1 disabled:opacity-50 ${jobPoolStoppingAllApi ? 'bg-red-600/40' : 'bg-red-600/25 hover:bg-red-600/35'}`}
+                                title={t('直接调用后端 stop-all 接口', 'Directly call backend stop-all endpoint')}
+                            >
+                                {jobPoolStoppingAllApi ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Square className="w-3.5 h-3.5" />}
+                                {jobPoolStoppingAllApi ? t('接口停止中...', 'Stopping via API...') : t('停止全部（接口）', 'Stop All (API)')}
+                            </button>
                             <label className="flex items-center gap-1 text-muted-foreground">
                                 {t('阈值', 'Limit')}
                                 <select
                                     value={jobPoolStopLimit}
                                     onChange={(e) => setJobPoolStopLimit(e.target.value)}
                                     className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white"
-                                    disabled={jobPoolStoppingAll}
+                                    disabled={jobPoolStoppingAll || jobPoolStoppingAllApi}
                                 >
                                     <option value="10">10</option>
                                     <option value="20">20</option>
