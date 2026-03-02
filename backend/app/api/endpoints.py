@@ -12412,6 +12412,45 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
             latest_status = _read_shot_media_batch_status(latest_episode)
             return bool(latest_status.get("stop_requested") or latest_status.get("force_stopped"))
 
+        async def _run_stage_with_retry(coro_factory: Any, stage_label: str, shot_label: str, max_attempts: int = 3) -> Any:
+            last_error: Optional[Exception] = None
+            for attempt in range(1, max_attempts + 1):
+                if _is_stop_requested():
+                    raise _BatchStopRequested("Stop requested")
+
+                if attempt > 1:
+                    latest_episode = _read_latest_episode()
+                    if latest_episode:
+                        latest_status = _read_shot_media_batch_status(latest_episode)
+                        latest_status["message"] = f"Retrying {stage_label} for shot {shot_label} ({attempt}/{max_attempts})..."
+                        latest_status["updated_at"] = datetime.utcnow().isoformat()
+                        _persist_shot_media_batch_status(db, latest_episode, latest_status)
+
+                try:
+                    return await _run_cancellable(coro_factory())
+                except _BatchStopRequested:
+                    raise
+                except Exception as exc:
+                    last_error = exc
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
+
+                    if attempt < max_attempts:
+                        logger.warning(
+                            "[shot_media_batch] stage retry | stage=%s shot=%s attempt=%s/%s error=%s",
+                            stage_label,
+                            shot_label,
+                            attempt,
+                            max_attempts,
+                            exc,
+                        )
+                        await asyncio.sleep(min(4, attempt))
+                        continue
+
+            raise Exception(f"{stage_label} failed after {max_attempts} attempts: {last_error}")
+
         for shot in target_shots:
             episode = _read_latest_episode()
             if not episode:
@@ -12483,7 +12522,11 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             shot_name=shot.shot_name,
                             asset_type="start_frame",
                         )
-                        asyncio.run(_run_cancellable(_run_generate_image(req=start_req, current_user=user, db=db)))
+                        asyncio.run(_run_stage_with_retry(
+                            lambda: _run_generate_image(req=start_req, current_user=user, db=db),
+                            "start_frame",
+                            shot_label,
+                        ))
                         shot = db.query(Shot).filter(Shot.id == shot.id).first() or shot
 
                 if _is_stop_requested():
@@ -12531,7 +12574,11 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             shot_name=shot.shot_name,
                             asset_type="end_frame",
                         )
-                        asyncio.run(_run_cancellable(_run_generate_image(req=end_req, current_user=user, db=db)))
+                        asyncio.run(_run_stage_with_retry(
+                            lambda: _run_generate_image(req=end_req, current_user=user, db=db),
+                            "end_frame",
+                            shot_label,
+                        ))
                         shot = db.query(Shot).filter(Shot.id == shot.id).first() or shot
                         tech = _parse_shot_tech(shot)
                         end_frame_url = str(tech.get("end_frame_url") or "").strip()
@@ -12644,7 +12691,11 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             shot_name=shot.shot_name,
                             asset_type="video",
                         )
-                        asyncio.run(_run_cancellable(generate_video_endpoint(req=video_req, current_user=user, db=db)))
+                        asyncio.run(_run_stage_with_retry(
+                            lambda: _run_generate_video(req=video_req, current_user=user, db=db),
+                            "video",
+                            shot_label,
+                        ))
 
                 success += 1
                 _log_batch_sys_event(
@@ -12665,6 +12716,10 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                 _persist_stopped_status()
                 return
             except Exception as e:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
                 shot_ok = False
                 failed += 1
                 errors.append(f"{shot_label}: {str(e)}")
