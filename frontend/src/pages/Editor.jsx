@@ -5459,6 +5459,18 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         if (!activeEpisode?.id) return;
         let cancelled = false;
 
+        const probeShotVideoUrl = async (shotId) => {
+            try {
+                const rows = await fetchEpisodeShots(activeEpisode.id);
+                const matched = Array.isArray(rows)
+                    ? rows.find((row) => String(row?.id) === String(shotId))
+                    : null;
+                return String(matched?.video_url || '').trim();
+            } catch {
+                return '';
+            }
+        };
+
         const hydrate = async () => {
             const status = await pollSceneGenStatus();
             if (cancelled || !status) return;
@@ -12078,9 +12090,28 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                         }
 
                         if (phase === 'failed' || phase === 'error' || phase === 'canceled' || phase === 'cancelled') {
+                            const resultUrl = String(status?.result?.url || '').trim();
+                            const serverBoundVideoUrl = resultUrl || await probeShotVideoUrl(stableShotId);
+                            if (serverBoundVideoUrl) {
+                                const newData = { video_url: serverBoundVideoUrl };
+                                try {
+                                    await onUpdateShot(stableShotId, newData);
+                                } catch (persistErr) {
+                                    console.warn('Resume video job save failed:', persistErr);
+                                }
+                                setEditingShot(prev => (prev && String(prev.id) === stableShotId ? { ...prev, ...newData } : prev));
+                                onLog?.(`Recovered video generation completed for shot ${stableShotId}.`, 'success');
+                                clearPendingVideoJob(stableShotId);
+                                setShotGeneratingState(stableShotId, 'video', false);
+                                await refreshShots();
+                                break;
+                            }
+
                             clearPendingVideoJob(stableShotId);
                             setShotGeneratingState(stableShotId, 'video', false);
-                            onLog?.(`Recovered video generation failed for shot ${stableShotId}: ${status?.error || 'unknown error'}`, 'error');
+                            const errMsg = String(status?.error || 'unknown error');
+                            const tone = String(phase).startsWith('cancel') ? 'warning' : 'error';
+                            onLog?.(`Recovered video generation failed for shot ${stableShotId}: ${errMsg}`, tone);
                             break;
                         }
                     } catch (e) {
@@ -13526,6 +13557,21 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
         const { text: submitPrompt } = injectEntityFeatures(rawPrompt, isManual);
 
+        let createdVideoJobId = '';
+
+        const isClientInterruptionError = (err) => {
+            const msg = String(
+                err?.code || err?.name || err?.message || err?.response?.data?.detail || ''
+            ).toLowerCase();
+            return (
+                msg.includes('canceled')
+                || msg.includes('cancelled')
+                || msg.includes('aborted')
+                || msg.includes('econnaborted')
+                || msg.includes('network error')
+            );
+        };
+
         onLog?.('Generating Video...', 'info');
         try {
             const tech = JSON.parse(editingShot.technical_notes || '{}');
@@ -13630,6 +13676,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 asset_type: 'video',
                 negative_prompt: buildEntityNegativePrompt(rawPrompt, null, entities),
                 on_job_created: (jobId) => {
+                    createdVideoJobId = String(jobId || '').trim();
                     setPendingVideoJob(targetShotId, jobId);
                 },
             }, apiKeyframes);
@@ -13655,9 +13702,14 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 }
             }
         } catch (e) {
-             clearPendingVideoJob(targetShotId);
-             onLog?.(`Generation failed: ${e.message}`, 'error');
-             showNotification(`Generation failed: ${e.message}`, 'error');
+             if (createdVideoJobId && isClientInterruptionError(e)) {
+                 onLog?.('Video job is still running on server; it will auto-resume when you return.', 'warning');
+                 showNotification('Video job continues in background.', 'info');
+             } else {
+                 clearPendingVideoJob(targetShotId);
+                 onLog?.(`Generation failed: ${e.message}`, 'error');
+                 showNotification(`Generation failed: ${e.message}`, 'error');
+             }
         } finally {
             setShotGeneratingState(targetShotId, 'video', false);
         }
