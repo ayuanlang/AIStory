@@ -11446,7 +11446,14 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const [isStoppingShotBatch, setIsStoppingShotBatch] = useState(false);
     const [isManualRebindingMedia, setIsManualRebindingMedia] = useState(false);
     const [translatingPromptField, setTranslatingPromptField] = useState('');
-    const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0, status: '', stopRequested: false }); // Progress tracking
+    const [batchProgress, setBatchProgress] = useState({
+        current: 0,
+        total: 0,
+        status: '',
+        stopRequested: false,
+        currentShotLabel: '',
+        currentAssetLabel: '',
+    }); // Progress tracking
     const shotBatchStatusTimerRef = useRef(null);
     const [activeSources, setActiveSources] = useState({ Image: 'unset', Video: 'unset' });
     const [localKeyframes, setLocalKeyframes] = useState([]);
@@ -13721,6 +13728,17 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             const status = await getShotMediaBatchStatus(activeEpisode.id);
             if (!status || typeof status !== 'object') return null;
 
+            const rawAssetType = String(status.current_asset_type || '').trim().toLowerCase();
+            const currentAssetLabel = String(status.current_asset_label || '').trim() || (
+                rawAssetType === 'start_frame'
+                    ? t('起始帧', 'Start Frame')
+                    : rawAssetType === 'end_frame'
+                        ? t('结束帧', 'End Frame')
+                        : rawAssetType === 'video'
+                            ? t('视频', 'Video')
+                            : ''
+            );
+
             const running = Boolean(status.running);
             setIsBatchGenerating(running);
             setBatchProgress({
@@ -13728,6 +13746,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 total: Number(status.total || 0),
                 status: String(status.message || ''),
                 stopRequested: Boolean(status.stop_requested),
+                currentShotLabel: String(status.current_shot_label || ''),
+                currentAssetLabel,
             });
 
             if (!running && shotBatchStatusTimerRef.current) {
@@ -13747,11 +13767,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         let cancelled = false;
 
         const hydrate = async () => {
-            const status = await pollShotBatchStatus();
-            if (cancelled || !status) return;
-            if (status.running && !shotBatchStatusTimerRef.current) {
+            if (!shotBatchStatusTimerRef.current) {
                 shotBatchStatusTimerRef.current = setInterval(pollShotBatchStatus, 1500);
             }
+            const status = await pollShotBatchStatus();
+            if (cancelled || !status) return;
         };
 
         hydrate();
@@ -13773,6 +13793,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 ...prev,
                 stopRequested: true,
                 status: res?.message || prev.status || t('已请求停止，等待当前镜头完成后中止。', 'Stop requested. Waiting for current shot to finish.'),
+                currentAssetLabel: prev.currentAssetLabel || '',
             }));
             await pollShotBatchStatus();
             onLog?.(`Shot batch: ${res?.message || 'stop requested'}`, 'warning');
@@ -13832,6 +13853,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 total: shots.length,
                 status: mode === 'videos' ? 'Video batch started...' : 'Keyframe batch started...',
                 stopRequested: false,
+                currentShotLabel: '',
+                currentAssetLabel: '',
             });
             onLog?.(
                 mode === 'videos'
@@ -13981,7 +14004,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
                         {/* Progress Indicator - Moved outside overflow-hidden container */}
                         {isBatchGenerating && batchProgress.total > 0 && (
-                            <div className="absolute left-full top-0 ml-2 z-50 bg-black/80 px-3 py-2 rounded-md border border-primary/20 backdrop-blur-md shadow-xl min-w-[180px]">
+                            <div className="absolute left-full top-0 ml-2 z-50 bg-black/85 px-3 py-2 rounded-md border border-primary/20 backdrop-blur-md shadow-xl min-w-[340px] max-w-[420px]">
                                 <div className="flex items-center justify-between mb-1">
                                     <span className="text-[10px] font-bold text-primary">{t('批处理进度', 'Batch Processing')}</span>
                                     <span className="text-[10px] text-white font-mono">{Math.round((batchProgress.current / batchProgress.total) * 100)}%</span>
@@ -13992,8 +14015,22 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                         style={{ width: `${(batchProgress.current / batchProgress.total) * 100}%` }}
                                     ></div>
                                 </div>
+                                <div className="space-y-1 mb-1.5 text-[10px] text-white/90">
+                                    {batchProgress.currentShotLabel && (
+                                        <div className="break-words">
+                                            <span className="text-muted-foreground">{t('镜头', 'Shot')}: </span>
+                                            <span>{batchProgress.currentShotLabel}</span>
+                                        </div>
+                                    )}
+                                    {batchProgress.currentAssetLabel && (
+                                        <div className="break-words">
+                                            <span className="text-muted-foreground">{t('图片', 'Asset')}: </span>
+                                            <span>{batchProgress.currentAssetLabel}</span>
+                                        </div>
+                                    )}
+                                </div>
                                 {batchProgress.status && (
-                                    <div className="text-[9px] text-muted-foreground truncate max-w-[160px]" title={batchProgress.status}>
+                                    <div className="text-[9px] text-muted-foreground break-words leading-relaxed" title={batchProgress.status}>
                                         {batchProgress.status}
                                     </div>
                                 )}

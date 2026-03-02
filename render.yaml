@@ -20,9 +20,7 @@ services:
         --workers ${WEB_CONCURRENCY:-3} \
         --timeout ${GUNICORN_TIMEOUT:-180} \
         --graceful-timeout ${GUNICORN_GRACEFUL_TIMEOUT:-420} \
-        --keep-alive ${GUNICORN_KEEPALIVE:-15} \
-        --max-requests ${GUNICORN_MAX_REQUESTS:-2000} \
-        --max-requests-jitter ${GUNICORN_MAX_REQUESTS_JITTER:-200}
+        --keep-alive ${GUNICORN_KEEPALIVE:-15}
     envVars:
       - key: PYTHON_VERSION
         value: 3.10.0
@@ -46,10 +44,6 @@ services:
         value: "420"
       - key: GUNICORN_KEEPALIVE
         value: "15"
-      - key: GUNICORN_MAX_REQUESTS
-        value: "0"
-      - key: GUNICORN_MAX_REQUESTS_JITTER
-        value: "0"
       - key: DB_POOL_SIZE
         value: "5"
       - key: DB_MAX_OVERFLOW

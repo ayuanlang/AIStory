@@ -26,7 +26,7 @@ import bcrypt
 import re
 import json
 from datetime import datetime, timedelta
-from jose import jwt
+from jose import jwt, JWTError
 from app.core.config import settings
 from app.core.entity_token import normalize_entity_token
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -55,6 +55,35 @@ from slowapi.util import get_remote_address
 limiter = Limiter(key_func=get_remote_address)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/login/access-token")
+
+
+def get_current_claims(token: str = Depends(oauth2_scheme)) -> Dict[str, Any]:
+    credentials_exception = HTTPException(
+        status_code=401,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+    except JWTError:
+        raise credentials_exception
+
+    username = str(payload.get("sub") or payload.get("uname") or "").strip()
+    if not username:
+        raise credentials_exception
+
+    uid_raw = payload.get("uid")
+    try:
+        user_id = int(uid_raw) if uid_raw is not None else None
+    except Exception:
+        user_id = None
+
+    is_superuser = bool(payload.get("is_superuser") or payload.get("superuser"))
+    return {
+        "username": username,
+        "user_id": user_id,
+        "is_superuser": is_superuser,
+    }
 
 def verify_password(plain_password, hashed_password):
     return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
@@ -10682,6 +10711,12 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
             },
         )
 
+        # Ensure the current DB transaction/connection is released before long upstream call.
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
         # Assuming generate_image returns {"url": "...", ...}
         result = await media_service.generate_image(
             prompt=req.prompt, 
@@ -10868,7 +10903,7 @@ async def submit_generate_image_endpoint(
 @router.get("/generate/image/jobs/{job_id}")
 def get_generate_image_job_status(
     job_id: str,
-    current_user: User = Depends(get_current_user),
+    current_claims: Dict[str, Any] = Depends(get_current_claims),
 ):
     with IMAGE_JOB_LOCK:
         job = dict(IMAGE_JOB_STORE.get(job_id) or {})
@@ -10890,7 +10925,15 @@ def get_generate_image_job_status(
         raise HTTPException(status_code=404, detail="Job not found")
 
     owner_id = job.get("user_id")
-    if not current_user.is_superuser and owner_id != current_user.id:
+    owner_username = str(job.get("username") or "").strip()
+    current_user_id = current_claims.get("user_id")
+    current_username = str(current_claims.get("username") or "").strip()
+    is_superuser = bool(current_claims.get("is_superuser"))
+    is_owner = (
+        (current_user_id is not None and owner_id == current_user_id)
+        or (owner_username and owner_username == current_username)
+    )
+    if not is_superuser and not is_owner:
         raise HTTPException(status_code=403, detail="Not authorized")
 
     return {
@@ -11179,6 +11222,11 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
             req.keyframes,
         )
 
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
         result = await media_service.generate_video(
             prompt=prompt_text,
             negative_prompt=req.negative_prompt,
@@ -11349,7 +11397,7 @@ async def submit_generate_video_endpoint(
 @router.get("/generate/video/jobs/{job_id}")
 def get_generate_video_job_status(
     job_id: str,
-    current_user: User = Depends(get_current_user),
+    current_claims: Dict[str, Any] = Depends(get_current_claims),
 ):
     with VIDEO_JOB_LOCK:
         job = dict(VIDEO_JOB_STORE.get(job_id) or {})
@@ -11371,7 +11419,15 @@ def get_generate_video_job_status(
         raise HTTPException(status_code=404, detail="Job not found")
 
     owner_id = job.get("user_id")
-    if not current_user.is_superuser and owner_id != current_user.id:
+    owner_username = str(job.get("username") or "").strip()
+    current_user_id = current_claims.get("user_id")
+    current_username = str(current_claims.get("username") or "").strip()
+    is_superuser = bool(current_claims.get("is_superuser"))
+    is_owner = (
+        (current_user_id is not None and owner_id == current_user_id)
+        or (owner_username and owner_username == current_username)
+    )
+    if not is_superuser and not is_owner:
         raise HTTPException(status_code=403, detail="Not authorized")
 
     return {
@@ -12328,6 +12384,8 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
             latest_status["failed"] = failed
             latest_status["errors"] = errors
             latest_status["stopped_by_user"] = True
+            latest_status["current_asset_type"] = None
+            latest_status["current_asset_label"] = ""
             latest_status["message"] = "Stopped by user request"
             latest_status["finished_at"] = datetime.utcnow().isoformat()
             latest_status["updated_at"] = latest_status["finished_at"]
@@ -12385,6 +12443,15 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                 if need_start:
                     start_prompt_raw = str(shot.start_frame or shot.video_content or "").strip()
                     if start_prompt_raw:
+                        latest = _read_shot_media_batch_status(episode)
+                        latest["current_shot_id"] = shot.id
+                        latest["current_shot_label"] = shot_label
+                        latest["current_asset_type"] = "start_frame"
+                        latest["current_asset_label"] = "Start Frame"
+                        latest["message"] = f"Processing shot {shot_label} · Start Frame..."
+                        latest["updated_at"] = datetime.utcnow().isoformat()
+                        _persist_shot_media_batch_status(db, episode, latest)
+
                         start_ref_index_map = _compute_subject_ref_index_map(start_prompt_raw, entity_lookup)
                         logger.info(
                             "[shot_media_batch] subject_ref_index_map asset=start_frame shot_id=%s shot_label=%s map=%s",
@@ -12416,7 +12483,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             shot_name=shot.shot_name,
                             asset_type="start_frame",
                         )
-                        asyncio.run(_run_cancellable(generate_image_endpoint(req=start_req, current_user=user, db=db)))
+                        asyncio.run(_run_cancellable(_run_generate_image(req=start_req, current_user=user, db=db)))
                         shot = db.query(Shot).filter(Shot.id == shot.id).first() or shot
 
                 if _is_stop_requested():
@@ -12426,6 +12493,15 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                 if need_end:
                     end_prompt_raw = str(shot.end_frame or "").strip()
                     if end_prompt_raw:
+                        latest = _read_shot_media_batch_status(episode)
+                        latest["current_shot_id"] = shot.id
+                        latest["current_shot_label"] = shot_label
+                        latest["current_asset_type"] = "end_frame"
+                        latest["current_asset_label"] = "End Frame"
+                        latest["message"] = f"Processing shot {shot_label} · End Frame..."
+                        latest["updated_at"] = datetime.utcnow().isoformat()
+                        _persist_shot_media_batch_status(db, episode, latest)
+
                         end_ref_index_map = _compute_subject_ref_index_map(end_prompt_raw, entity_lookup)
                         logger.info(
                             "[shot_media_batch] subject_ref_index_map asset=end_frame shot_id=%s shot_label=%s map=%s",
@@ -12455,7 +12531,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             shot_name=shot.shot_name,
                             asset_type="end_frame",
                         )
-                        asyncio.run(_run_cancellable(generate_image_endpoint(req=end_req, current_user=user, db=db)))
+                        asyncio.run(_run_cancellable(_run_generate_image(req=end_req, current_user=user, db=db)))
                         shot = db.query(Shot).filter(Shot.id == shot.id).first() or shot
                         tech = _parse_shot_tech(shot)
                         end_frame_url = str(tech.get("end_frame_url") or "").strip()
@@ -12467,6 +12543,15 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                 if mode == "videos":
                     need_video = overwrite_existing or not str(shot.video_url or "").strip()
                     if need_video:
+                        latest = _read_shot_media_batch_status(episode)
+                        latest["current_shot_id"] = shot.id
+                        latest["current_shot_label"] = shot_label
+                        latest["current_asset_type"] = "video"
+                        latest["current_asset_label"] = "Video"
+                        latest["message"] = f"Processing shot {shot_label} · Video..."
+                        latest["updated_at"] = datetime.utcnow().isoformat()
+                        _persist_shot_media_batch_status(db, episode, latest)
+
                         video_prompt_raw = str(shot.video_content or shot.prompt or "").strip() or "Video motion"
                         video_ref_index_map = _compute_subject_ref_index_map(video_prompt_raw, entity_lookup)
                         logger.info(
@@ -12607,6 +12692,8 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
             latest["success"] = success
             latest["failed"] = failed
             latest["errors"] = errors
+            latest["current_asset_type"] = None
+            latest["current_asset_label"] = ""
             latest["updated_at"] = datetime.utcnow().isoformat()
             latest["message"] = (
                 f"Progress {completed}/{total}" if shot_ok else f"Progress {completed}/{total} (with errors)"
@@ -12621,6 +12708,8 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
             final_status["success"] = success
             final_status["failed"] = failed
             final_status["errors"] = errors
+            final_status["current_asset_type"] = None
+            final_status["current_asset_label"] = ""
             final_status["updated_at"] = datetime.utcnow().isoformat()
             final_status["finished_at"] = final_status["updated_at"]
             final_status["message"] = f"Batch done: success {success}, failed {failed}"
@@ -12652,6 +12741,8 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                 status_payload["updated_at"] = datetime.utcnow().isoformat()
                 status_payload["finished_at"] = status_payload["updated_at"]
                 status_payload["message"] = f"Batch failed: {str(e)}"
+                status_payload["current_asset_type"] = None
+                status_payload["current_asset_label"] = ""
                 status_payload["errors"] = list(status_payload.get("errors") or []) + [str(e)]
                 _persist_shot_media_batch_status(db, episode, status_payload)
                 _log_batch_sys_event(
@@ -12715,6 +12806,8 @@ def start_shot_media_batch_job(
         "failed": 0,
         "current_shot_id": None,
         "current_shot_label": "",
+        "current_asset_type": None,
+        "current_asset_label": "",
         "message": "Batch task started",
         "errors": [],
         "stop_requested": False,
@@ -12778,6 +12871,8 @@ def get_shot_media_batch_job_status(
         status_payload["stopped_by_user"] = True
         status_payload["current_shot_id"] = None
         status_payload["current_shot_label"] = ""
+        status_payload["current_asset_type"] = None
+        status_payload["current_asset_label"] = ""
         status_payload["updated_at"] = now_iso
         status_payload["finished_at"] = status_payload.get("finished_at") or now_iso
         status_payload["message"] = "Recovered orphaned task state (no active worker)"
@@ -12808,6 +12903,8 @@ def stop_shot_media_batch_job(
     status_payload["stopped_by_user"] = True
     status_payload["running"] = False
     status_payload["status"] = "canceled"
+    status_payload["current_asset_type"] = None
+    status_payload["current_asset_label"] = ""
     status_payload["finished_at"] = status_payload.get("finished_at") or now_iso
     status_payload["updated_at"] = now_iso
     status_payload["message"] = "Force stopped"
