@@ -118,6 +118,16 @@ def _is_episode_worker_alive(store: Dict[int, threading.Thread], lock: threading
         return alive
 
 
+def _is_stale_running_payload(payload: Dict[str, Any], stale_minutes: int = 10) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    anchor = payload.get("updated_at") or payload.get("started_at") or payload.get("created_at")
+    anchor_dt = _parse_iso_datetime(anchor)
+    if not anchor_dt:
+        return False
+    return anchor_dt <= (datetime.utcnow() - timedelta(minutes=max(1, int(stale_minutes))))
+
+
 def _get_shot_media_batch_cancel_event(episode_id: int, create: bool = True) -> Optional[threading.Event]:
     eid = int(episode_id)
     with SHOT_MEDIA_BATCH_CANCEL_LOCK:
@@ -4293,7 +4303,11 @@ def get_episode_scenes_generation_job_status(
         raise HTTPException(status_code=404, detail="Episode not found")
     _require_project_access(db, episode.project_id, current_user)
     status_payload = _read_episode_scene_generation_status(episode)
-    if bool(status_payload.get("running")) and not _is_episode_worker_alive(EPISODE_SCENE_JOB_THREADS, EPISODE_SCENE_JOB_THREADS_LOCK, int(episode_id)):
+    if (
+        bool(status_payload.get("running"))
+        and _is_stale_running_payload(status_payload, stale_minutes=10)
+        and not _is_episode_worker_alive(EPISODE_SCENE_JOB_THREADS, EPISODE_SCENE_JOB_THREADS_LOCK, int(episode_id))
+    ):
         now_iso = datetime.utcnow().isoformat()
         status_payload["running"] = False
         status_payload["status"] = "canceled"
@@ -6161,7 +6175,11 @@ def get_scene_ai_shots_batch_status(
         raise HTTPException(status_code=404, detail="Episode not found")
     _require_project_access(db, episode.project_id, current_user)
     status_payload = _read_scene_ai_shots_batch_status(episode)
-    if bool(status_payload.get("running")) and not _is_episode_worker_alive(SCENE_AI_SHOTS_BATCH_THREADS, SCENE_AI_SHOTS_BATCH_THREADS_LOCK, int(episode_id)):
+    if (
+        bool(status_payload.get("running"))
+        and _is_stale_running_payload(status_payload, stale_minutes=10)
+        and not _is_episode_worker_alive(SCENE_AI_SHOTS_BATCH_THREADS, SCENE_AI_SHOTS_BATCH_THREADS_LOCK, int(episode_id))
+    ):
         now_iso = datetime.utcnow().isoformat()
         status_payload["running"] = False
         status_payload["status"] = "canceled"
@@ -12431,7 +12449,11 @@ def get_shot_media_batch_job_status(
         raise HTTPException(status_code=404, detail="Episode not found")
     _require_project_access(db, episode.project_id, current_user)
     status_payload = _read_shot_media_batch_status(episode)
-    if bool(status_payload.get("running")) and not _is_episode_worker_alive(SHOT_MEDIA_BATCH_THREADS, SHOT_MEDIA_BATCH_THREADS_LOCK, int(episode_id)):
+    if (
+        bool(status_payload.get("running"))
+        and _is_stale_running_payload(status_payload, stale_minutes=10)
+        and not _is_episode_worker_alive(SHOT_MEDIA_BATCH_THREADS, SHOT_MEDIA_BATCH_THREADS_LOCK, int(episode_id))
+    ):
         now_iso = datetime.utcnow().isoformat()
         status_payload["running"] = False
         status_payload["status"] = "canceled"
