@@ -10122,7 +10122,6 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         }
 
         const epInfo = currentEpisode?.episode_info || {};
-        const preferredImageSize = getEpisodePreferredImageSize(epInfo);
         
         // If undefined, ensure we pass empty object to avoid crash in utils
         // Use allEntities for resolution to ensure cross-type references work
@@ -10189,6 +10188,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
 
         // Use shared utility for prompt processing
         const epInfo = currentEpisode?.episode_info || {};
+        const preferredImageSize = getEpisodePreferredImageSize(epInfo);
         // prompt likely already has suffixes appended from initialization, 
         // but we run processPrompt again in case user added new variables.
         // Use allEntities for resolution
