@@ -649,21 +649,40 @@ const downloadMediaToLocal = async (url, fallbackName) => {
     URL.revokeObjectURL(objectUrl);
 };
 
+const isTransientPollingError = (error) => {
+    const status = Number(error?.response?.status || 0);
+    if (status === 408 || status === 409 || status === 429) return true;
+    if (status >= 500 && status < 600) return true;
+    const code = String(error?.code || '').toUpperCase();
+    return code === 'ECONNABORTED' || code === 'ERR_NETWORK';
+};
+
 const pollImageJobUntilDone = async (jobId, { timeoutMs = 10 * 60 * 1000, pollIntervalMs = 2000 } = {}) => {
     const start = Date.now();
+    let intervalMs = Math.max(1000, Number(pollIntervalMs || 2000));
+    const maxIntervalMs = 8000;
     while (Date.now() - start < timeoutMs) {
-        const response = await api.get(`/generate/image/jobs/${jobId}`);
-        const data = response?.data || {};
-        const status = String(data.status || '').toLowerCase();
+        try {
+            const response = await api.get(`/generate/image/jobs/${jobId}`);
+            const data = response?.data || {};
+            const status = String(data.status || '').toLowerCase();
 
-        if (status === 'succeeded') {
-            return data.result || {};
-        }
-        if (status === 'failed') {
-            throw new Error(data.error || 'Image generation job failed');
-        }
+            if (status === 'succeeded') {
+                return data.result || {};
+            }
+            if (status === 'failed') {
+                throw new Error(data.error || 'Image generation job failed');
+            }
 
-        await sleep(pollIntervalMs);
+            await sleep(intervalMs);
+            intervalMs = Math.min(maxIntervalMs, Math.round(intervalMs * 1.25));
+        } catch (error) {
+            if (!isTransientPollingError(error)) {
+                throw error;
+            }
+            await sleep(Math.min(maxIntervalMs, Math.round(intervalMs * 1.5)));
+            intervalMs = Math.min(maxIntervalMs, Math.round(intervalMs * 1.5));
+        }
     }
 
     throw new Error('Image generation timed out while polling job status');
@@ -671,19 +690,30 @@ const pollImageJobUntilDone = async (jobId, { timeoutMs = 10 * 60 * 1000, pollIn
 
 const pollVideoJobUntilDone = async (jobId, { timeoutMs = VIDEO_JOB_TIMEOUT_MS_DEFAULT, pollIntervalMs = 2000 } = {}) => {
     const start = Date.now();
+    let intervalMs = Math.max(1000, Number(pollIntervalMs || 2000));
+    const maxIntervalMs = 8000;
     while (Date.now() - start < timeoutMs) {
-        const response = await api.get(`/generate/video/jobs/${jobId}`);
-        const data = response?.data || {};
-        const status = String(data.status || '').toLowerCase();
+        try {
+            const response = await api.get(`/generate/video/jobs/${jobId}`);
+            const data = response?.data || {};
+            const status = String(data.status || '').toLowerCase();
 
-        if (status === 'succeeded') {
-            return data.result || {};
-        }
-        if (status === 'failed') {
-            throw new Error(data.error || 'Video generation job failed');
-        }
+            if (status === 'succeeded') {
+                return data.result || {};
+            }
+            if (status === 'failed') {
+                throw new Error(data.error || 'Video generation job failed');
+            }
 
-        await sleep(pollIntervalMs);
+            await sleep(intervalMs);
+            intervalMs = Math.min(maxIntervalMs, Math.round(intervalMs * 1.25));
+        } catch (error) {
+            if (!isTransientPollingError(error)) {
+                throw error;
+            }
+            await sleep(Math.min(maxIntervalMs, Math.round(intervalMs * 1.5)));
+            intervalMs = Math.min(maxIntervalMs, Math.round(intervalMs * 1.5));
+        }
     }
 
     throw new Error('Video generation timed out while polling job status');

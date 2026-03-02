@@ -14002,20 +14002,20 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                             )}
                         </div>
 
-                        {/* Progress Indicator - Moved outside overflow-hidden container */}
+                        {/* Progress Indicator */}
                         {isBatchGenerating && batchProgress.total > 0 && (
-                            <div className="absolute left-full top-0 ml-2 z-50 bg-black/85 px-3 py-2 rounded-md border border-primary/20 backdrop-blur-md shadow-xl min-w-[340px] max-w-[420px]">
-                                <div className="flex items-center justify-between mb-1">
-                                    <span className="text-[10px] font-bold text-primary">{t('批处理进度', 'Batch Processing')}</span>
-                                    <span className="text-[10px] text-white font-mono">{Math.round((batchProgress.current / batchProgress.total) * 100)}%</span>
+                            <div className="fixed right-4 top-20 z-[70] bg-black/90 px-4 py-3 rounded-lg border border-primary/30 backdrop-blur-md shadow-2xl w-[560px] max-w-[92vw]">
+                                <div className="flex items-center justify-between mb-2">
+                                    <span className="text-xs font-bold text-primary tracking-wide">{t('批处理进度', 'Batch Processing')}</span>
+                                    <span className="text-xs text-white font-mono">{batchProgress.current}/{batchProgress.total} · {Math.round((batchProgress.current / batchProgress.total) * 100)}%</span>
                                 </div>
-                                <div className="w-full h-1 bg-white/10 rounded-full overflow-hidden mb-1.5">
+                                <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden mb-2">
                                     <div 
                                         className="h-full bg-primary transition-all duration-300 ease-out"
                                         style={{ width: `${(batchProgress.current / batchProgress.total) * 100}%` }}
                                     ></div>
                                 </div>
-                                <div className="space-y-1 mb-1.5 text-[10px] text-white/90">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-1 mb-2 text-xs text-white/90">
                                     {batchProgress.currentShotLabel && (
                                         <div className="break-words">
                                             <span className="text-muted-foreground">{t('镜头', 'Shot')}: </span>
@@ -14028,9 +14028,15 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                             <span>{batchProgress.currentAssetLabel}</span>
                                         </div>
                                     )}
+                                    {batchProgress.stopRequested && (
+                                        <div className="break-words">
+                                            <span className="text-muted-foreground">{t('停止', 'Stop')}: </span>
+                                            <span>{t('已请求停止', 'Stop requested')}</span>
+                                        </div>
+                                    )}
                                 </div>
                                 {batchProgress.status && (
-                                    <div className="text-[9px] text-muted-foreground break-words leading-relaxed" title={batchProgress.status}>
+                                    <div className="text-[11px] text-muted-foreground break-words leading-relaxed max-h-20 overflow-auto custom-scrollbar" title={batchProgress.status}>
                                         {batchProgress.status}
                                     </div>
                                 )}
