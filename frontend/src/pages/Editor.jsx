@@ -13734,7 +13734,19 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     };
 
     const startShotBatchByMode = async (mode) => {
-        if (!activeEpisode?.id || shots.length === 0) return;
+        if (!activeEpisode?.id) {
+            const msg = t('请先选择分集。', 'Please select an episode first.');
+            onLog?.(msg, 'warning');
+            alert(msg);
+            return;
+        }
+
+        if (!Array.isArray(shots) || shots.length === 0) {
+            const msg = t('当前没有可批量处理的镜头。请先在 Scenes 中生成并应用镜头，或选择包含镜头的场景。', 'No shots available for batch processing. Generate/apply shots from Scenes first, or select a scene that has shots.');
+            onLog?.(msg, 'warning');
+            alert(msg);
+            return;
+        }
 
         const latest = await pollShotBatchStatus();
         if (latest?.running) {
@@ -13748,9 +13760,17 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         if (!ok) return;
 
         try {
+            const targetShotIds = shots.map((shot) => shot.id).filter(Boolean);
+            if (targetShotIds.length === 0) {
+                const msg = t('当前镜头尚未保存到数据库，无法批量执行。请先保存镜头。', 'Current shots are not saved to database yet, cannot run batch. Please save shots first.');
+                onLog?.(msg, 'warning');
+                alert(msg);
+                return;
+            }
+
             await startShotMediaBatch(activeEpisode.id, {
                 mode,
-                shot_ids: shots.map((shot) => shot.id).filter(Boolean),
+                shot_ids: targetShotIds,
                 overwrite_existing: false,
             });
 
