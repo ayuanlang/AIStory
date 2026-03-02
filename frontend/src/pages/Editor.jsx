@@ -699,7 +699,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
             if (status.running) {
                 setShowEpisodeScriptsProgressModal(true);
                 if (!episodeScriptsStatusTimerRef.current) {
-                    episodeScriptsStatusTimerRef.current = setInterval(pollEpisodeScriptsStatus, 1500);
+                    episodeScriptsStatusTimerRef.current = setInterval(pollEpisodeScriptsStatus, 3000);
                 }
             } else if (episodeScriptsStatusTimerRef.current && !isGeneratingEpisodeScripts) {
                 clearInterval(episodeScriptsStatusTimerRef.current);
@@ -1533,7 +1533,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
             episodeScriptsStatusTimerRef.current = null;
         }
 
-        episodeScriptsStatusTimerRef.current = setInterval(pollEpisodeScriptsStatus, 1500);
+        episodeScriptsStatusTimerRef.current = setInterval(pollEpisodeScriptsStatus, 3000);
         pollEpisodeScriptsStatus();
 
         try {
@@ -1627,7 +1627,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
             addLog?.(res?.message || 'Stop requested for episode scripts task.', 'warning');
             const status = await pollEpisodeScriptsStatus();
             if (status?.running && !episodeScriptsStatusTimerRef.current) {
-                episodeScriptsStatusTimerRef.current = setInterval(pollEpisodeScriptsStatus, 1500);
+                episodeScriptsStatusTimerRef.current = setInterval(pollEpisodeScriptsStatus, 3000);
             }
         } catch (e) {
             const detail = e?.response?.data?.detail || e?.message || String(e);
@@ -5475,7 +5475,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             const status = await pollSceneGenStatus();
             if (cancelled || !status) return;
             if (status.running && !sceneGenStatusTimerRef.current) {
-                sceneGenStatusTimerRef.current = setInterval(pollSceneGenStatus, 1500);
+                sceneGenStatusTimerRef.current = setInterval(pollSceneGenStatus, 3000);
             }
         };
 
@@ -5537,7 +5537,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 clearInterval(sceneGenStatusTimerRef.current);
                 sceneGenStatusTimerRef.current = null;
             }
-            sceneGenStatusTimerRef.current = setInterval(pollSceneGenStatus, 1500);
+            sceneGenStatusTimerRef.current = setInterval(pollSceneGenStatus, 3000);
             await pollSceneGenStatus();
         } catch (e) {
             console.error(e);
@@ -8761,7 +8761,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
             const status = await pollBatchAiShotsStatus();
             if (cancelled || !status) return;
             if (status.running && !batchAiShotsStatusTimerRef.current) {
-                batchAiShotsStatusTimerRef.current = setInterval(pollBatchAiShotsStatus, 1500);
+                batchAiShotsStatusTimerRef.current = setInterval(pollBatchAiShotsStatus, 3000);
             }
         };
 
@@ -8834,7 +8834,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                 clearInterval(batchAiShotsStatusTimerRef.current);
                 batchAiShotsStatusTimerRef.current = null;
             }
-            batchAiShotsStatusTimerRef.current = setInterval(pollBatchAiShotsStatus, 1500);
+            batchAiShotsStatusTimerRef.current = setInterval(pollBatchAiShotsStatus, 3000);
             pollBatchAiShotsStatus();
         } catch (e) {
             const detail = e?.response?.data?.detail || e?.message || 'Batch start failed';
@@ -13768,7 +13768,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
         const hydrate = async () => {
             if (!shotBatchStatusTimerRef.current) {
-                shotBatchStatusTimerRef.current = setInterval(pollShotBatchStatus, 1500);
+                shotBatchStatusTimerRef.current = setInterval(pollShotBatchStatus, 3000);
             }
             const status = await pollShotBatchStatus();
             if (cancelled || !status) return;
@@ -13867,7 +13867,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 clearInterval(shotBatchStatusTimerRef.current);
                 shotBatchStatusTimerRef.current = null;
             }
-            shotBatchStatusTimerRef.current = setInterval(pollShotBatchStatus, 1500);
+            shotBatchStatusTimerRef.current = setInterval(pollShotBatchStatus, 3000);
             await pollShotBatchStatus();
         } catch (e) {
             const detail = e?.response?.data?.detail || e?.message || 'batch start failed';
@@ -14004,7 +14004,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
                         {/* Progress Indicator */}
                         {isBatchGenerating && batchProgress.total > 0 && (
-                            <div className="fixed right-4 top-20 z-[70] bg-black/90 px-4 py-3 rounded-lg border border-primary/30 backdrop-blur-md shadow-2xl w-[560px] max-w-[92vw]">
+                            <div className="fixed right-4 top-20 z-[70] bg-black/90 px-4 py-3 rounded-lg border border-primary/30 backdrop-blur-md shadow-2xl w-[1120px] max-w-[92vw]">
                                 <div className="flex items-center justify-between mb-2">
                                     <span className="text-xs font-bold text-primary tracking-wide">{t('批处理进度', 'Batch Processing')}</span>
                                     <span className="text-xs text-white font-mono">{batchProgress.current}/{batchProgress.total} · {Math.round((batchProgress.current / batchProgress.total) * 100)}%</span>

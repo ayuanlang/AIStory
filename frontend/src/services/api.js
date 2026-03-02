@@ -657,10 +657,10 @@ const isTransientPollingError = (error) => {
     return code === 'ECONNABORTED' || code === 'ERR_NETWORK';
 };
 
-const pollImageJobUntilDone = async (jobId, { timeoutMs = 10 * 60 * 1000, pollIntervalMs = 2000 } = {}) => {
+const pollImageJobUntilDone = async (jobId, { timeoutMs = 10 * 60 * 1000, pollIntervalMs = 3000 } = {}) => {
     const start = Date.now();
-    let intervalMs = Math.max(1000, Number(pollIntervalMs || 2000));
-    const maxIntervalMs = 8000;
+    let intervalMs = Math.max(2000, Number(pollIntervalMs || 3000));
+    const maxIntervalMs = 12000;
     while (Date.now() - start < timeoutMs) {
         try {
             const response = await api.get(`/generate/image/jobs/${jobId}`);
@@ -688,10 +688,10 @@ const pollImageJobUntilDone = async (jobId, { timeoutMs = 10 * 60 * 1000, pollIn
     throw new Error('Image generation timed out while polling job status');
 };
 
-const pollVideoJobUntilDone = async (jobId, { timeoutMs = VIDEO_JOB_TIMEOUT_MS_DEFAULT, pollIntervalMs = 2000 } = {}) => {
+const pollVideoJobUntilDone = async (jobId, { timeoutMs = VIDEO_JOB_TIMEOUT_MS_DEFAULT, pollIntervalMs = 3000 } = {}) => {
     const start = Date.now();
-    let intervalMs = Math.max(1000, Number(pollIntervalMs || 2000));
-    const maxIntervalMs = 8000;
+    let intervalMs = Math.max(2000, Number(pollIntervalMs || 3000));
+    const maxIntervalMs = 12000;
     while (Date.now() - start < timeoutMs) {
         try {
             const response = await api.get(`/generate/video/jobs/${jobId}`);
@@ -771,7 +771,7 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
 
     const result = await pollImageJobUntilDone(jobId, {
         timeoutMs: Number(options?.job_timeout_ms || 10 * 60 * 1000),
-        pollIntervalMs: Number(options?.job_poll_interval_ms || 2000),
+        pollIntervalMs: Number(options?.job_poll_interval_ms || 3000),
     });
 
     if (shouldAutoDownloadForRequest(options) && result?.url) {
@@ -845,7 +845,7 @@ export const generateVideo = async (prompt, provider = null, ref_image_url = nul
 
     const result = await pollVideoJobUntilDone(jobId, {
         timeoutMs: normalizeVideoJobTimeoutMs(job_timeout_ms),
-        pollIntervalMs: Number(job_poll_interval_ms || 2000),
+        pollIntervalMs: Number(job_poll_interval_ms || 3000),
     });
 
     if (shouldAutoDownloadForRequest(options) && result?.url) {

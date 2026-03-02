@@ -116,6 +116,9 @@ VIDEO_SUBMIT_IDEMPOTENCY_TTL_SECONDS = max(30, int(os.getenv("VIDEO_SUBMIT_IDEMP
 VIDEO_JOB_FILE_DIR = os.path.join(settings.UPLOAD_DIR, "_video_jobs")
 VIDEO_JOB_TASKS: Dict[str, asyncio.Task] = {}
 
+IMAGE_JOB_MAX_RUNNING_SECONDS = max(120, int(os.getenv("IMAGE_JOB_MAX_RUNNING_SECONDS", "900")))
+VIDEO_JOB_MAX_RUNNING_SECONDS = max(120, int(os.getenv("VIDEO_JOB_MAX_RUNNING_SECONDS", "1200")))
+
 SHOT_MEDIA_BATCH_CANCEL_EVENTS: Dict[int, threading.Event] = {}
 SHOT_MEDIA_BATCH_CANCEL_LOCK = threading.Lock()
 EPISODE_SCENE_JOB_THREADS: Dict[int, threading.Thread] = {}
@@ -10812,13 +10815,23 @@ async def _run_generate_image_job(job_id: str, user_id: int, req_payload: Dict[s
 
         req_obj = GenerationRequest(**req_payload)
         _set_image_job(job_id, status="running", started_at=datetime.utcnow().isoformat())
-        result = await _run_generate_image(req_obj, user, db)
+        result = await asyncio.wait_for(
+            _run_generate_image(req_obj, user, db),
+            timeout=IMAGE_JOB_MAX_RUNNING_SECONDS,
+        )
         _set_image_job(
             job_id,
             status="succeeded",
             finished_at=datetime.utcnow().isoformat(),
             result=result,
             error=None,
+        )
+    except asyncio.TimeoutError:
+        _set_image_job(
+            job_id,
+            status="failed",
+            finished_at=datetime.utcnow().isoformat(),
+            error=f"image job timed out after {IMAGE_JOB_MAX_RUNNING_SECONDS}s",
         )
     except asyncio.CancelledError:
         _set_image_job(
@@ -10846,6 +10859,53 @@ async def _run_generate_image_job(job_id: str, user_id: int, req_payload: Dict[s
         with IMAGE_JOB_LOCK:
             IMAGE_JOB_TASKS.pop(job_id, None)
         db.close()
+
+
+def _resolve_job_elapsed_seconds(job: Dict[str, Any]) -> Optional[int]:
+    anchor = job.get("started_at") or job.get("created_at")
+    anchor_dt = _parse_iso_datetime(anchor)
+    if not anchor_dt:
+        return None
+    return max(0, int((datetime.utcnow() - anchor_dt).total_seconds()))
+
+
+def _maybe_finalize_stuck_job(
+    *,
+    kind: str,
+    job_id: str,
+    job: Dict[str, Any],
+    set_job_func: Any,
+    task_store: Dict[str, asyncio.Task],
+    lock: threading.Lock,
+    timeout_seconds: int,
+) -> Dict[str, Any]:
+    status = str(job.get("status") or "").strip().lower()
+    if status not in {"queued", "running"}:
+        return job
+
+    elapsed_seconds = _resolve_job_elapsed_seconds(job)
+    if elapsed_seconds is None or elapsed_seconds < timeout_seconds:
+        return job
+
+    timeout_message = f"{kind} job timed out after {elapsed_seconds}s (limit={timeout_seconds}s)"
+    set_job_func(
+        job_id,
+        status="failed",
+        finished_at=datetime.utcnow().isoformat(),
+        error=timeout_message,
+    )
+
+    with lock:
+        task_ref = task_store.get(job_id)
+    if task_ref:
+        try:
+            task_ref.cancel()
+        except Exception:
+            pass
+
+    with lock:
+        updated = dict((IMAGE_JOB_STORE if kind == "image" else VIDEO_JOB_STORE).get(job_id) or {})
+    return updated or job
 
 
 @router.post("/generate/image/submit")
@@ -10923,6 +10983,27 @@ def get_generate_image_job_status(
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+
+    image_status = str(job.get("status") or "").strip().lower()
+    if image_status in {"queued", "running"}:
+        elapsed_seconds = _resolve_job_elapsed_seconds(job)
+        if elapsed_seconds is not None and elapsed_seconds >= IMAGE_JOB_MAX_RUNNING_SECONDS:
+            timeout_message = f"image job timed out after {elapsed_seconds}s (limit={IMAGE_JOB_MAX_RUNNING_SECONDS}s)"
+            _set_image_job(
+                job_id,
+                status="failed",
+                finished_at=datetime.utcnow().isoformat(),
+                error=timeout_message,
+            )
+            with IMAGE_JOB_LOCK:
+                task_ref = IMAGE_JOB_TASKS.get(job_id)
+            if task_ref:
+                try:
+                    task_ref.cancel()
+                except Exception:
+                    pass
+            with IMAGE_JOB_LOCK:
+                job = dict(IMAGE_JOB_STORE.get(job_id) or job)
 
     owner_id = job.get("user_id")
     owner_username = str(job.get("username") or "").strip()
@@ -11306,13 +11387,23 @@ async def _run_generate_video_job(job_id: str, user_id: int, req_payload: Dict[s
 
         req_obj = VideoGenerationRequest(**req_payload)
         _set_video_job(job_id, status="running", started_at=datetime.utcnow().isoformat())
-        result = await _run_generate_video(req_obj, user, db)
+        result = await asyncio.wait_for(
+            _run_generate_video(req_obj, user, db),
+            timeout=VIDEO_JOB_MAX_RUNNING_SECONDS,
+        )
         _set_video_job(
             job_id,
             status="succeeded",
             finished_at=datetime.utcnow().isoformat(),
             result=result,
             error=None,
+        )
+    except asyncio.TimeoutError:
+        _set_video_job(
+            job_id,
+            status="failed",
+            finished_at=datetime.utcnow().isoformat(),
+            error=f"video job timed out after {VIDEO_JOB_MAX_RUNNING_SECONDS}s",
         )
     except asyncio.CancelledError:
         _set_video_job(
@@ -11417,6 +11508,27 @@ def get_generate_video_job_status(
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+
+    video_status = str(job.get("status") or "").strip().lower()
+    if video_status in {"queued", "running"}:
+        elapsed_seconds = _resolve_job_elapsed_seconds(job)
+        if elapsed_seconds is not None and elapsed_seconds >= VIDEO_JOB_MAX_RUNNING_SECONDS:
+            timeout_message = f"video job timed out after {elapsed_seconds}s (limit={VIDEO_JOB_MAX_RUNNING_SECONDS}s)"
+            _set_video_job(
+                job_id,
+                status="failed",
+                finished_at=datetime.utcnow().isoformat(),
+                error=timeout_message,
+            )
+            with VIDEO_JOB_LOCK:
+                task_ref = VIDEO_JOB_TASKS.get(job_id)
+            if task_ref:
+                try:
+                    task_ref.cancel()
+                except Exception:
+                    pass
+            with VIDEO_JOB_LOCK:
+                job = dict(VIDEO_JOB_STORE.get(job_id) or job)
 
     owner_id = job.get("user_id")
     owner_username = str(job.get("username") or "").strip()
@@ -12050,6 +12162,148 @@ def stop_generation_job(
         "job_id": job_id,
         "status": "canceled",
         "message": "Stop requested",
+    }
+
+
+@router.post("/generate/jobs/stop-all")
+def stop_all_generation_jobs(
+    kind: str = "all",
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    safe_kind = str(kind or "all").strip().lower()
+    allowed_kinds = {"all", "image", "video", "episode-scenes", "episode-scripts", "scene-ai-shots-batch", "shot-media-batch"}
+    if safe_kind not in allowed_kinds:
+        raise HTTPException(status_code=400, detail="kind must be one of: all, image, video, episode-scenes, episode-scripts, scene-ai-shots-batch, shot-media-batch")
+
+    now_iso = datetime.utcnow().isoformat()
+    stopped = 0
+    touched: List[str] = []
+
+    def _can_access_project(project_id: int) -> bool:
+        if current_user.is_superuser:
+            return True
+        try:
+            _require_project_access(db, int(project_id), current_user)
+            return True
+        except Exception:
+            return False
+
+    if safe_kind in {"all", "image"}:
+        with IMAGE_JOB_LOCK:
+            _prune_image_jobs_locked()
+            image_ids = [jid for jid, payload in IMAGE_JOB_STORE.items() if str((payload or {}).get("status") or "").lower() in {"queued", "running"}]
+        for jid in image_ids:
+            with IMAGE_JOB_LOCK:
+                payload = dict(IMAGE_JOB_STORE.get(jid) or {})
+                task_ref = IMAGE_JOB_TASKS.get(jid)
+            owner_id = payload.get("user_id")
+            if not current_user.is_superuser and owner_id != current_user.id:
+                continue
+            _set_image_job(jid, status="canceled", finished_at=now_iso, error="Cancelled by stop-all")
+            if task_ref:
+                try:
+                    task_ref.cancel()
+                except Exception:
+                    pass
+            stopped += 1
+            touched.append(f"image:{jid}")
+
+    if safe_kind in {"all", "video"}:
+        with VIDEO_JOB_LOCK:
+            _prune_video_jobs_locked()
+            video_ids = [jid for jid, payload in VIDEO_JOB_STORE.items() if str((payload or {}).get("status") or "").lower() in {"queued", "running"}]
+        for jid in video_ids:
+            with VIDEO_JOB_LOCK:
+                payload = dict(VIDEO_JOB_STORE.get(jid) or {})
+                task_ref = VIDEO_JOB_TASKS.get(jid)
+            owner_id = payload.get("user_id")
+            if not current_user.is_superuser and owner_id != current_user.id:
+                continue
+            _set_video_job(jid, status="canceled", finished_at=now_iso, error="Cancelled by stop-all")
+            if task_ref:
+                try:
+                    task_ref.cancel()
+                except Exception:
+                    pass
+            stopped += 1
+            touched.append(f"video:{jid}")
+
+    if safe_kind in {"all", "episode-scripts"}:
+        projects = db.query(Project).all() if current_user.is_superuser else db.query(Project).filter(Project.owner_id == current_user.id).all()
+        for project in projects:
+            if not _can_access_project(int(project.id)):
+                continue
+            gi = dict(project.global_info or {})
+            payload = gi.get("episode_script_generation_status")
+            if not isinstance(payload, dict):
+                continue
+            if str(payload.get("status") or "").lower() in {"succeeded", "completed", "failed", "canceled", "cancelled", "error", "stopped", "idle", "partial"} and not bool(payload.get("running")):
+                continue
+            payload["stop_requested"] = True
+            payload["stop_requested_at"] = payload.get("stop_requested_at") or now_iso
+            payload["force_stopped"] = True
+            payload["running"] = False
+            payload["status"] = "canceled"
+            payload["stopped_by_user"] = True
+            payload["finished_at"] = payload.get("finished_at") or now_iso
+            payload["updated_at"] = now_iso
+            payload["message"] = "Force stopped from stop-all"
+            gi["episode_script_generation_status"] = payload
+            project.global_info = gi
+            db.add(project)
+            stopped += 1
+            touched.append(f"episode-scripts:{int(project.id)}")
+
+    if safe_kind in {"all", "episode-scenes", "scene-ai-shots-batch", "shot-media-batch"}:
+        episodes = db.query(Episode).all()
+        for episode in episodes:
+            if not _can_access_project(int(episode.project_id)):
+                continue
+            info = dict(episode.episode_info or {})
+            key_pairs = []
+            if safe_kind in {"all", "episode-scenes"}:
+                key_pairs.append((EPISODE_SCENE_GEN_STATUS_KEY, "episode-scenes"))
+            if safe_kind in {"all", "scene-ai-shots-batch"}:
+                key_pairs.append((SCENE_AI_SHOTS_BATCH_STATUS_KEY, "scene-ai-shots-batch"))
+            if safe_kind in {"all", "shot-media-batch"}:
+                key_pairs.append((SHOT_MEDIA_BATCH_STATUS_KEY, "shot-media-batch"))
+
+            changed = False
+            for status_key, kind_name in key_pairs:
+                payload = info.get(status_key)
+                if not isinstance(payload, dict):
+                    continue
+                if str(payload.get("status") or "").lower() in {"succeeded", "completed", "failed", "canceled", "cancelled", "error", "stopped", "idle", "partial"} and not bool(payload.get("running")):
+                    continue
+                payload["stop_requested"] = True
+                payload["stop_requested_at"] = payload.get("stop_requested_at") or now_iso
+                payload["force_stopped"] = True
+                payload["running"] = False
+                payload["status"] = "canceled"
+                payload["stopped_by_user"] = True
+                payload["finished_at"] = payload.get("finished_at") or now_iso
+                payload["updated_at"] = now_iso
+                payload["message"] = "Force stopped from stop-all"
+                info[status_key] = payload
+                changed = True
+                stopped += 1
+                touched.append(f"{kind_name}:{int(episode.id)}")
+                if kind_name == "shot-media-batch":
+                    _set_shot_media_batch_cancel_requested(int(episode.id))
+
+            if changed:
+                episode.episode_info = info
+                db.add(episode)
+
+    db.commit()
+
+    return {
+        "ok": True,
+        "kind": safe_kind,
+        "stopped": stopped,
+        "items": touched[:200],
+        "message": "Stop-all requested",
     }
 
 
