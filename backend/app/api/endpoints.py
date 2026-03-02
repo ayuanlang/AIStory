@@ -6155,6 +6155,8 @@ def get_scene_ai_shots_batch_status(
         status_payload["status"] = "canceled"
         status_payload["force_stopped"] = True
         status_payload["stopped_by_user"] = True
+        status_payload["current_scene_id"] = None
+        status_payload["current_scene_label"] = ""
         status_payload["updated_at"] = now_iso
         status_payload["finished_at"] = status_payload.get("finished_at") or now_iso
         status_payload["message"] = "Recovered orphaned task state (no active worker)"
@@ -11769,11 +11771,12 @@ def _persist_shot_media_batch_status(db: Session, episode: Episode, status_paylo
     existing_status = info.get(SHOT_MEDIA_BATCH_STATUS_KEY)
     merged_status = dict(status_payload or {})
     has_incoming_force_flag = "force_stopped" in merged_status
+    has_incoming_stop_flag = "stop_requested" in merged_status
 
     if isinstance(existing_status, dict) and bool(existing_status.get("force_stopped")) and not has_incoming_force_flag:
         merged_status["force_stopped"] = True
 
-    if isinstance(existing_status, dict) and bool(existing_status.get("stop_requested")):
+    if isinstance(existing_status, dict) and bool(existing_status.get("stop_requested")) and not has_incoming_stop_flag:
         merged_status["stop_requested"] = True
         if existing_status.get("stop_requested_at") and not merged_status.get("stop_requested_at"):
             merged_status["stop_requested_at"] = existing_status.get("stop_requested_at")
@@ -12422,6 +12425,8 @@ def get_shot_media_batch_job_status(
         status_payload["status"] = "canceled"
         status_payload["force_stopped"] = True
         status_payload["stopped_by_user"] = True
+        status_payload["current_shot_id"] = None
+        status_payload["current_shot_label"] = ""
         status_payload["updated_at"] = now_iso
         status_payload["finished_at"] = status_payload.get("finished_at") or now_iso
         status_payload["message"] = "Recovered orphaned task state (no active worker)"
