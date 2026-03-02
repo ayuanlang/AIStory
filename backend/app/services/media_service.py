@@ -31,6 +31,8 @@ import logging
 logger = logging.getLogger("media_service")
 # ... imports ...
 
+DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS = min(600, max(300, int(os.getenv("VIDEO_POLL_TIMEOUT_SECONDS", "600"))))
+
 class MediaGenerationService:
 # ...
     DOUBAO_MIN_IMAGE_PIXELS = 3_686_400
@@ -987,15 +989,15 @@ class MediaGenerationService:
             if payload["model"] and "1-5-pro" in payload["model"]:
                 payload["generate_audio"] = True
 
-            poll_timeout_seconds = 600
+            poll_timeout_seconds = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS
             poll_interval_seconds = 2
             try:
                 if tool_conf.get("poll_timeout_seconds") is not None:
-                    poll_timeout_seconds = max(60, int(tool_conf.get("poll_timeout_seconds")))
+                    poll_timeout_seconds = min(600, max(60, int(tool_conf.get("poll_timeout_seconds"))))
                 elif tool_conf.get("timeout") is not None:
-                    poll_timeout_seconds = max(60, int(tool_conf.get("timeout")))
+                    poll_timeout_seconds = min(600, max(60, int(tool_conf.get("timeout"))))
             except Exception:
-                poll_timeout_seconds = 600
+                poll_timeout_seconds = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS
 
             try:
                 if tool_conf.get("poll_interval_seconds") is not None:
@@ -1911,7 +1913,7 @@ class MediaGenerationService:
             print(f"[{log_tag}] Exception: {e}")
             return {"error": str(e), "submit_failed": True}
 
-    async def _submit_and_poll_video(self, url, payload, api_key, log_tag, extra_metadata=None, poll_timeout_seconds: int = 600, poll_interval_seconds: int = 2):
+    async def _submit_and_poll_video(self, url, payload, api_key, log_tag, extra_metadata=None, poll_timeout_seconds: int = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS, poll_interval_seconds: int = 2):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         
         def _post(): return requests.post(url, json=payload, headers=headers, timeout=60, verify=False)

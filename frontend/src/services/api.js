@@ -8,6 +8,22 @@ export const api = axios.create({
   timeout: 300000, // 5 minutes timeout for long generation tasks
 });
 
+const VIDEO_JOB_TIMEOUT_MS_DEFAULT = (() => {
+    const parsed = Number(import.meta?.env?.VITE_VIDEO_JOB_TIMEOUT_MS || 10 * 60 * 1000);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        return 10 * 60 * 1000;
+    }
+    return Math.min(10 * 60 * 1000, Math.max(60 * 1000, parsed));
+})();
+
+const normalizeVideoJobTimeoutMs = (value) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        return VIDEO_JOB_TIMEOUT_MS_DEFAULT;
+    }
+    return Math.min(10 * 60 * 1000, Math.max(60 * 1000, parsed));
+};
+
 const buildApiErrorMessage = (error) => {
     const responseData = error?.response?.data;
     const detail = responseData?.detail;
@@ -653,7 +669,7 @@ const pollImageJobUntilDone = async (jobId, { timeoutMs = 10 * 60 * 1000, pollIn
     throw new Error('Image generation timed out while polling job status');
 };
 
-const pollVideoJobUntilDone = async (jobId, { timeoutMs = 15 * 60 * 1000, pollIntervalMs = 2000 } = {}) => {
+const pollVideoJobUntilDone = async (jobId, { timeoutMs = VIDEO_JOB_TIMEOUT_MS_DEFAULT, pollIntervalMs = 2000 } = {}) => {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
         const response = await api.get(`/generate/video/jobs/${jobId}`);
@@ -798,7 +814,7 @@ export const generateVideo = async (prompt, provider = null, ref_image_url = nul
     }
 
     const result = await pollVideoJobUntilDone(jobId, {
-        timeoutMs: Number(job_timeout_ms || 15 * 60 * 1000),
+        timeoutMs: normalizeVideoJobTimeoutMs(job_timeout_ms),
         pollIntervalMs: Number(job_poll_interval_ms || 2000),
     });
 
