@@ -63,7 +63,7 @@
 - 参考图作用域锁定（Reference Scope Lock, Mandatory）：参考图仅用于继承“空间结构/材质/光照风格锚点”，禁止继承原构图与原背景主次。
 - Delta 覆盖优先级（Delta Override Priority, Mandatory）：`Visible Set` / `Excluded Set` / `Depth Role Reassignment` 的约束优先级高于参考图；冲突时必须以 Delta 为准。
 - Delta 至少覆盖：
-  - `Camera Position/Direction`
+  - `Viewpoint Anchor/Viewing Direction`
   - `Axis Side`
   - `Background Set Change`
   - `Lighting Direction Change`
@@ -72,7 +72,7 @@
 - 未列入 Delta 的项默认与 Base 一致，禁止隐式改动。
 - Delta 顺序强制：`CPD -> AS -> BG -> LD -> FR -> DP`。
 - 固定写法：
-  `Environment Delta = {Camera Position/Direction: ..., Axis Side: ..., Background Set Change: ..., Lighting Direction Change: ..., Framing Change: ..., Dynamic Parts State: ...}`。
+  `Environment Delta = {Viewpoint Anchor/Viewing Direction: ..., Axis Side: ..., Background Set Change: ..., Lighting Direction Change: ..., Framing Change: ..., Dynamic Parts State: ...}`。
 - 观察方向切换（Front ↔ Reverse / 门内看外 ↔ 门外看内）为高优先级变体，必须额外满足：
   - `CPD` 必须写成“新机位落点 + 新朝向目标 + 与 Base 的相对关系（opposite side / reverse axis）”；
   - `AS` 必须明确从哪一侧切到哪一侧（如 `left -> right`）；
@@ -88,19 +88,19 @@
 - 层级迁移失败防呆（Anti-Failure Guard）：若反向结果仍保留 Base 前景/中景主体为当前前景主锚点、未后移到背景，判为无效 Delta，必须重写。
 - 强约束附加句（推荐）：`Reference usage scope: structure/material/lighting style only; ignore base composition and original background dominance.`
 - 方向切换推荐写法（可直接复用）：
-  `Environment Delta = {Camera Position/Direction: camera moved to opposite axis side behind ENV:[AudienceArea], now facing ENV:[MainStage] entrance; Axis Side: left -> right; Background Set Change: Visible Set = [stage portal, curtain rail, front seats], Excluded Set = [backstage corridor, rear exit door]; Lighting Direction Change: key light now front-right motivated by stage practicals; Framing Change: wide-to-mid with stage portal centered; Dynamic Parts State: None}`。
+  `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint moved to opposite axis side behind ENV:[AudienceArea], now facing ENV:[MainStage] entrance; Axis Side: left -> right; Background Set Change: Visible Set = [stage portal, curtain rail, front seats], Excluded Set = [backstage corridor, rear exit door]; Lighting Direction Change: key light now front-right motivated by stage practicals; Framing Change: wide-to-mid with stage portal centered; Dynamic Parts State: None}`。
 - 层级重排示例（Base 前景后移为当前背景）：
-  `Environment Delta = {Camera Position/Direction: camera moved behind ENV:[DeskZone], now facing ENV:[EntranceCorridor]; Axis Side: left -> right; Background Set Change: Visible Set = [entrance door, corridor wall lamps, visitor chairs], Excluded Set = [window wall panorama, skyline glass reflection as dominant backdrop]; Lighting Direction Change: key shifts to back-right from window spill; Framing Change: medium shot with ENV:[EntranceDoor] and visitor chairs as MG anchor, desk edge no longer dominant; Depth Role Reassignment: Base FG/MG:[DeskEdge, DeskFrontPlane] -> Current BG:[DeskEdge, DeskFrontPlane]; Base BG:[EntranceDoor, CorridorWall] -> Current MG:[EntranceDoor, VisitorChairs]; Dynamic Parts State: None}`。
+  `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint moved behind ENV:[DeskZone], now facing ENV:[EntranceCorridor]; Axis Side: left -> right; Background Set Change: Visible Set = [entrance door, corridor wall lamps, visitor chairs], Excluded Set = [window wall panorama, skyline glass reflection as dominant backdrop]; Lighting Direction Change: key shifts to back-right from window spill; Framing Change: medium shot with ENV:[EntranceDoor] and visitor chairs as MG anchor, desk edge no longer dominant; Depth Role Reassignment: Base FG/MG:[DeskEdge, DeskFrontPlane] -> Current BG:[DeskEdge, DeskFrontPlane]; Base BG:[EntranceDoor, CorridorWall] -> Current MG:[EntranceDoor, VisitorChairs]; Dynamic Parts State: None}`。
 - 方向切换 Few-shot A（门内看外 -> 门外看内）：
-  `Environment Delta = {Camera Position/Direction: camera moved from inside doorway threshold to exterior corridor side, now facing inward to ENV:[RoomEntrance]; Axis Side: right -> left; Background Set Change: Visible Set = [door frame interior edge, corridor wall lamps, entry mat], Excluded Set = [window-side bookshelf, bed corner, inner desk area]; Lighting Direction Change: key light switches to corridor practicals from camera-left; Framing Change: medium-wide with doorway centered and room depth behind; Dynamic Parts State: PROP:[Door](Open -> Half-Open, reason: CHAR:[@Guard] pushes it and pauses to listen)}`。
+  `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint moved from inside doorway threshold to exterior corridor side, now facing inward to ENV:[RoomEntrance]; Axis Side: right -> left; Background Set Change: Visible Set = [door frame interior edge, corridor wall lamps, entry mat], Excluded Set = [window-side bookshelf, bed corner, inner desk area]; Lighting Direction Change: key light switches to corridor practicals from camera-left; Framing Change: medium-wide with doorway centered and room depth behind; Dynamic Parts State: PROP:[Door](Open -> Half-Open, reason: CHAR:[@Guard] pushes it and pauses to listen)}`。
 - 方向切换 Few-shot B（街道正向 -> 街道反向）：
-  `Environment Delta = {Camera Position/Direction: camera relocated to opposite sidewalk across traffic lane, now facing reverse toward ENV:[CrosswalkJunction]; Axis Side: left -> right; Background Set Change: Visible Set = [crosswalk signal pole, storefront neon, bus-stop shelter], Excluded Set = [alley dumpster row, rear parking gate, service entrance shutter]; Lighting Direction Change: key light becomes back-right from street signage and vehicle headlights; Framing Change: wide shot with crosswalk signal as new composition anchor; Dynamic Parts State: None}`。
+  `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint relocated to opposite sidewalk across traffic lane, now facing reverse toward ENV:[CrosswalkJunction]; Axis Side: left -> right; Background Set Change: Visible Set = [crosswalk signal pole, storefront neon, bus-stop shelter], Excluded Set = [alley dumpster row, rear parking gate, service entrance shutter]; Lighting Direction Change: key light becomes back-right from street signage and vehicle headlights; Framing Change: wide shot with crosswalk signal as new composition anchor; Dynamic Parts State: None}`。
 - `Dynamic Parts State` 非 `None` 时必须写 `Before -> After + reason`。
   - 合规：`Dynamic Parts State: PROP:[Door](Open -> Closed, reason: CHAR:[@Character A] closes it quietly to avoid detection)`。
   - 不合规：`Dynamic Parts State: Door: Closed`。
   - 不合规改写：`Dynamic Parts State: PROP:[Door](Open -> Closed, reason: CHAR:[@Character A] shuts the door before hiding behind the cabinet)`。
 - `REUSE` 默认模板：
-  `Environment Delta = {Camera Position/Direction: None, Axis Side: None, Background Set Change: None, Lighting Direction Change: None, Framing Change: None, Dynamic Parts State: None}`。
+  `Environment Delta = {Viewpoint Anchor/Viewing Direction: None, Axis Side: None, Background Set Change: None, Lighting Direction Change: None, Framing Change: None, Dynamic Parts State: None}`。
   仅可在可变部件确有变化时让 `DP` 非 `None`。
 
 #### 背景覆盖与可行性
@@ -138,8 +138,8 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - 下游交付约束（Shot 级）：上述 OTS 双 Beat 在 `shot_generator` 阶段必须落成两个独立 Shot（`Cam-01` / `Cam-02`），不得并镜。
 - OTS 同场双环境规则：当 OTS 正反打在同一 Scene 内执行时，这两个 Beat 必须分别绑定不同环境变体（如 `ENV:[..._OTS_A]` / `ENV:[..._OTS_B]`），并显式标注 `Cam-01/Cam-02` 与 `Axis Side` 变化。
 - 每个 Beat 必须写：
-  1) 镜头位置（camera position）
-  2) 镜头朝向（shooting direction）
+  1) 视点落位（viewpoint anchor）
+  2) 观察朝向（viewing direction）
   3) 角色-镜头关系（景深层、左右、朝向、接近/远离）
   4) 镜头参数（至少景别或镜高/俯仰）
 - 机位/朝向变化时必须写触发原因与变化后视角。
@@ -182,8 +182,9 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 
 ### 0) 生图提示词清晰性
 - 所有 `generation_prompt_en`（Environment/Character/Prop）必须显式包含：
-  - `{Camera Position}`
-  - `{Shooting Direction}`
+  - `{Viewpoint Anchor}`
+  - `{Viewing Direction}`
+- 默认禁止器材入画：除非剧情明确要求“摄像设备作为道具”，否则不得把 `camera/camcorder/lens rig/tripod/operator` 写成画面实体。
 - Subject 生图提示词仅用于描述“最终要生成的画面”，禁止夹带生成原因、推理逻辑、解释性说明或流程话术。
 - 禁止写法（示例）：`because...`, `in order to...`, `to ensure...`, `reason: ...`, `logic: ...`, `explain...`，以及中文“因为/为了/逻辑是/原因是/这样做是为了”。
 - 禁止方向模糊词（如 `somewhere`, `around`）。
@@ -204,7 +205,7 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - 单实体 `generation_prompt_en` 建议 1–4 句。
 
 ### 1) Environment Prompt Template
-`[Global Style]. {Base Environment Reference}: 【base_env_name / reference image id】. {Environment Delta}: 【only changed items; if REUSE write 'None'】. {Camera Position}: 【exact placement in/around environment】. {Shooting Direction}: 【Front/Reverse/Side + facing target/vector】. {Camera Setup}: 【Height/Angle/Framing】. {Composition Layers}: 【FG: elements + depth relation; MG: primary structure/subject anchor; BG: distant structure/light anchor; Primary Subject + Secondary Subject】. {Lighting Setup}: 【key/fill/back source position + quality + intensity + color temperature】. {Lens & Focus Baseline}: 【focal length family + DOF strategy】. {Grain/Noise Strategy}: 【clean digital / fine film grain / medium grain + shadow readability】. Atmosphere: 【mood keywords】. Details: 【materials, textures】. **No humans or characters present.**`
+`[Global Style]. {Base Environment Reference}: 【base_env_name / reference image id】. {Environment Delta}: 【only changed items; if REUSE write 'None'】. {Viewpoint Anchor}: 【exact observer placement in/around environment】. {Viewing Direction}: 【Front/Reverse/Side + facing target/vector】. {Camera Setup}: 【Height/Angle/Framing】. {Composition Layers}: 【FG: elements + depth relation; MG: primary structure/subject anchor; BG: distant structure/light anchor; Primary Subject + Secondary Subject】. {Lighting Setup}: 【key/fill/back source position + quality + intensity + color temperature】. {Lens & Focus Baseline}: 【focal length family + DOF strategy】. {Grain/Noise Strategy}: 【clean digital / fine film grain / medium grain + shadow readability】. Atmosphere: 【mood keywords】. Details: 【materials, textures】. **No humans or characters present.**`
 
 - 变体写作必须 Delta-only；可追溯 Base；Delta 顺序必须合法。
 - 缩写映射：`CPD/AS/BG/LD/FR/DP`。
@@ -214,7 +215,7 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - 风格映射必须动态，真人剧避免“游戏感”。
 
 ### 2) Character Prompt Template
-`[Global Style] 6-view character sheet for 【Name】. {Camera Position}: 【studio camera placement for sheet capture】. {Shooting Direction}: 【for each panel explicitly mark Front/Back/Side/3-4 + facing】. {Lighting Setup}: 【key/fill/rim source position + quality + intensity + color temperature】. {Lens & Focus}: 【focal length (e.g. 35mm/50mm/85mm) + depth of field strategy】. {Grain/Noise Strategy}: 【clean digital / fine film grain / medium film grain + shadow noise control】. Structure: 6-view layout (Front, Back, Side, 3/4, Close-up, Detail). Appearance: 【Age, Body Type, ethnicity】. Attire: 【Clothing details, footwear】. Anchors: 【Signature features e.g. scar, accessory】. Consistency: T-pose/Neutral pose. Background: White.`
+`[Global Style] 6-view character sheet for 【Name】. {Viewpoint Anchor}: 【studio observer placement for sheet capture】. {Viewing Direction}: 【for each panel explicitly mark Front/Back/Side/3-4 + facing】. {Lighting Setup}: 【key/fill/rim source position + quality + intensity + color temperature】. {Lens & Focus}: 【focal length (e.g. 35mm/50mm/85mm) + depth of field strategy】. {Grain/Noise Strategy}: 【clean digital / fine film grain / medium film grain + shadow noise control】. Structure: 6-view layout (Front, Back, Side, 3/4, Close-up, Detail). Appearance: 【Age, Body Type, ethnicity】. Attire: 【Clothing details, footwear】. Anchors: 【Signature features e.g. scar, accessory】. Consistency: T-pose/Neutral pose. Background: White.`
 
 - 全身像硬规则（Mandatory）：角色 `generation_prompt_en` 必须明确为 full-body framing，人物从头到脚完整入镜，双脚与鞋子清晰可见（shoes fully visible）。
 - 鞋子可见硬规则（Mandatory）：不得使用会裁切鞋子的构图（如 waist-up / bust shot / knee crop）作为角色资产主图；若需近景，仅可作为附加 panel，且必须保留至少一个全身含鞋 panel。
@@ -233,7 +234,7 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - 锚点仅可用稳定身份特征；禁用表情、瞬时姿态、暂态光影、机位错觉、运动模糊等。
 
 ### 3) Prop Prompt Template
-`[Global Style] Prop Asset: 【Name】. {Camera Position}: 【exact studio/object-relative placement】. {Shooting Direction}: 【Front/Reverse/Side/Top or Isometric facing】. {Lighting Setup}: 【key/fill/rim source position + quality + intensity + color temperature】. {Lens & Focus}: 【focal length + DOF strategy】. {Grain/Noise Strategy}: 【clean digital / fine film grain / medium grain】. View: 【Angle e.g. Isometric/Front】. Material: 【Texture details】. Wear & Tear: 【Condition】. Background: White.`
+`[Global Style] Prop Asset: 【Name】. {Viewpoint Anchor}: 【exact studio/object-relative observer placement】. {Viewing Direction}: 【Front/Reverse/Side/Top or Isometric facing】. {Lighting Setup}: 【key/fill/rim source position + quality + intensity + color temperature】. {Lens & Focus}: 【focal length + DOF strategy】. {Grain/Noise Strategy}: 【clean digital / fine film grain / medium grain】. View: 【Angle e.g. Isometric/Front】. Material: 【Texture details】. Wear & Tear: 【Condition】. Background: White.`
 
 - 未给定风格时注入默认道具审美回退语义。
 - 道具风格映射必须跟随剧本风格，真人剧强调真实材质与磨损。

@@ -34,12 +34,13 @@
   - 道具：优先呈现精致工艺、清晰材质、现代设计感，避免廉价或模糊质感。
   - 环境：优先呈现高级材质、干净构图、层次光影与统一色彩策略。
   - **锚定不牺牲原则**：任何“好看化”都不能削弱实体锚定；角色/道具/环境的可识别特征必须明确、稳定、可复现。
-- **机位与朝向强制 (Camera Position & Direction Mandate)**：所有用于图片/视频生成的英文提示词（`Start Frame` / `Video Content` / `End Frame` / `Keyframes`）都必须明确写出：
-  1) **机位位置**（相对 `[Environment Anchor]` 的具体落点）；
-  2) **拍摄方向**（镜头朝向谁/哪里，且可判定 Front/Reverse/Side）。
+- **视点与朝向强制 (Viewpoint & Direction Mandate)**：所有用于图片/视频生成的英文提示词（`Start Frame` / `Video Content` / `End Frame` / `Keyframes`）都必须明确写出：
+  1) **视点落位**（相对 `[Environment Anchor]` 的具体观察位置）；
+  2) **观察方向**（视线朝向谁/哪里，且可判定 Front/Reverse/Side）。
   - 禁止仅写抽象相机词（如 "cinematic shot"）而不写位置与朝向。
   - 禁止模糊方向词（如 "somewhere behind", "around there"）。
-  - 推荐固定短语：`{Camera Position}: ... in [Environment Anchor]` + `{Shooting Direction}: ... facing ...`.
+  - **反误解约束 (No Physical Camera Prop, 强制)**：`viewpoint/vantage/framing` 仅表示“观察位置与取景关系”，**不是**画内道具。除非剧情明确要求，严禁出现“camera / 摄像机 / 镜头设备”作为画面实体。
+  - 推荐固定短语：`{Viewpoint Anchor}: ... in [Environment Anchor]` + `{Viewing Direction}: ... facing ...`.
     - **所有格特殊规则 (Possessive Exemption)**：当需要表达“角色的...”时（例如 `CHAR:[@RoleName]`'s hand），请直接书写 `CHAR:[@RoleName]'s`。这种形式会被系统识别并**跳过描述注入**，从而避免语法错误。这是**唯一**允许 Skipping Injection 的情况。请善用此规则来描述局部特写（e.g., `Close up of CHAR:[@RoleName]'s eyes`）。
 - **Bracket Safety (括号安全，强制)**：在 Start/Video/End 的英文描述中，方括号 `[]` 内**只能出现**本 Scene 输入提供的实体名称：`[Environment Anchor]`、`Linked Characters`、`Key Props`（以及允许的泛指占位如 `[Unidentified Man]`）。严禁在 `[]` 内新造“窗/门/桌/路灯”等未资产化对象名；这些应以自然语言名词短语描述（不加括号），否则会触发 AI 幻觉与主体漂移。
 - **@Subject 命名强制 (Subject @ Tag Mandate, 强制)**：凡属于角色/说话主体/动作执行主体的实体名，必须写成 `CHAR:[@Name]`（如 `CHAR:[@Character A]`、`CHAR:[@Kael]`）。若出现未加 `@` 的角色名，判定为不合规并必须重写。
@@ -338,8 +339,8 @@
 ### 2. 画面描述规范 (Visual Description)
 必须描述中加入标签化字段，避免歧义。
 - **Tag 格式**：使用 `{Tag: Value}`。
-  - `{Camera Position: exact placement relative to [Environment Anchor]}`
-  - `{Shooting Direction: front/reverse/side + facing target/vector}`
+  - `{Viewpoint Anchor: exact observer placement relative to [Environment Anchor]}`
+  - `{Viewing Direction: front/reverse/side + facing target/vector}`
   - `{Camera: Focal Length, Angle, Stability, Framing}`
   - `{Image Fidelity: Noise/Grain Strategy + Anti-Copy Constraint from references}`
   - `{Lighting: Style, Source}`
@@ -392,7 +393,8 @@
   - **初始锚定原则**：此处定义的是**动作开始时**的机位。Video Content 的运镜必须由此出发。
 - **必须包含 (Mandatory Elements)**：
   - **[Global Style]**：所有描述必须以 `[Global Style]` 开头。
-  - **{Camera Position} + {Shooting Direction} (强制同时出现)**：必须同时给出机位落点与拍摄朝向，缺一不可。
+  - **{Viewpoint Anchor} + {Viewing Direction} (强制同时出现)**：必须同时给出视点落位与观察朝向，缺一不可。
+  - **禁止器材入画 (No Gear in Frame)**：默认不得写出 camera/camcorder/lens rig/tripod/operator 等器材实体；若剧情确有器材道具，必须显式标注“作为道具出现”，避免被误注入。
   - **角色朝向显式化 (Facing Declaration, 强制)**：在 Start Frame 中，每个可见核心角色都必须明确写出其相对镜头朝向；不得省略。
     - 可用枚举：`Facing Camera`（正对镜头）/ `Back to Lens`（背对镜头）/ `Profile Left`（左侧对）/ `Profile Right`（右侧对）/ `3/4 View Left` / `3/4 View Right`。
     - 禁止模糊词：如 `facing sideways`、`turned a bit`、`angled`、`partially facing` 等不可判定表达。
