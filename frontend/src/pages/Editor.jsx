@@ -483,6 +483,19 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
         foreshadowing: "",
         extra_notes: "",
     });
+    const [promoInput, setPromoInput] = useState({
+        promo_type: "企业宣传 / Corporate Promotion",
+        episodes_count: 6,
+        campaign_objective: "",
+        target_audience: "",
+        key_message: "",
+        core_highlights: "",
+        credibility_proof: "",
+        hook_opening: "",
+        conversion_cta: "",
+        channel_context: "",
+        constraints: "",
+    });
     const [isGeneratingGlobalStory, setIsGeneratingGlobalStory] = useState(false);
     const [isGeneratingEpisodeScripts, setIsGeneratingEpisodeScripts] = useState(false);
     const [isStoppingEpisodeScripts, setIsStoppingEpisodeScripts] = useState(false);
@@ -492,6 +505,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
     const [isImportingStoryPackage, setIsImportingStoryPackage] = useState(false);
     const [novelImportText, setNovelImportText] = useState('');
     const [showGlobalStoryGuide, setShowGlobalStoryGuide] = useState(false);
+    const [projectTab, setProjectTab] = useState('overview');
     const storyPackageFileInputRef = useRef(null);
     const episodeScriptsStatusTimerRef = useRef(null);
     const globalStoryAutosaveTimerRef = useRef(null);
@@ -852,6 +866,13 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                          }));
                      }
 
+                     if (merged.promo_generator_input && typeof merged.promo_generator_input === 'object') {
+                        setPromoInput(prev => ({
+                            ...prev,
+                            ...merged.promo_generator_input,
+                        }));
+                     }
+
                      // Avoid immediately auto-saving right after hydration
                      skipNextGlobalStoryAutosaveRef.current = true;
 
@@ -1125,6 +1146,10 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                     ...globalStoryInput,
                     episodes_count: Number(globalStoryInput.episodes_count || 0) || 0,
                 },
+                promo_generator_input: {
+                    ...promoInput,
+                    episodes_count: Number(promoInput.episodes_count || 0) || 0,
+                },
                 character_canon_input: {
                     name: canonName || '',
                     selected_tag_ids: Array.isArray(canonSelectedTagIds) ? canonSelectedTagIds : [],
@@ -1141,6 +1166,101 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
         } catch (e) {
             console.error("Failed to save", e);
             alert(`Failed to save: ${e?.message || 'Unknown error'}`);
+        }
+    };
+
+    const handleGeneratePromoFramework = async () => {
+        setIsGeneratingGlobalStory(true);
+        try {
+            const episodesCount = Number(promoInput.episodes_count || 0) || 0;
+            if (episodesCount <= 0) {
+                alert('Please set a valid Episodes Count for Promo Generator.');
+                return;
+            }
+
+            const payload = {
+                mode: 'global',
+                episodes_count: episodesCount,
+                script_title: info.script_title,
+                type: promoInput.promo_type || info.type,
+                language: info.language,
+                base_positioning: info.base_positioning,
+                Global_Style: info.Global_Style,
+                background: [
+                    `Campaign Objective: ${promoInput.campaign_objective || ''}`,
+                    `Target Audience: ${promoInput.target_audience || ''}`,
+                    `Channel Context: ${promoInput.channel_context || ''}`,
+                ].join('\n'),
+                setup: [
+                    `Hook Opening: ${promoInput.hook_opening || ''}`,
+                    `Core Message: ${promoInput.key_message || ''}`,
+                ].join('\n'),
+                development: [
+                    `Core Highlights: ${promoInput.core_highlights || ''}`,
+                    `Credibility Proof: ${promoInput.credibility_proof || ''}`,
+                ].join('\n'),
+                turning_points: `Differentiation & Persuasion Pivot: ${promoInput.key_message || ''}`,
+                climax: `Flagship Demonstration / Emotional Peak: ${promoInput.core_highlights || ''}`,
+                resolution: `Conversion CTA: ${promoInput.conversion_cta || ''}`,
+                suspense: `Retention Hook for Next Episode / Segment: ${promoInput.conversion_cta || ''}`,
+                foreshadowing: `Brand/Message anchors to repeat: ${promoInput.key_message || ''}`,
+                extra_notes: [
+                    `Promo Type: ${promoInput.promo_type || ''}`,
+                    `Constraints: ${promoInput.constraints || ''}`,
+                ].join('\n'),
+            };
+
+            const updated = await generateProjectStoryGlobal(id, payload);
+            setProject(updated);
+            if (updated?.global_info) {
+                const merged = {
+                    ...info,
+                    ...updated.global_info,
+                    promo_generator_input: {
+                        ...promoInput,
+                        episodes_count: episodesCount,
+                    },
+                    tech_params: {
+                        visual_standard: {
+                            ...info.tech_params.visual_standard,
+                            ...(updated.global_info.tech_params?.visual_standard || {})
+                        }
+                    }
+                };
+                merged.type = normalizeProjectEpisodeType(merged.type);
+                merged.language = normalizeProjectEpisodeLanguage(merged.language);
+                merged.base_positioning = normalizeProjectEpisodeBasePositioning(merged.base_positioning);
+                merged.Global_Style = normalizeProjectEpisodeGlobalStyle(merged.Global_Style);
+                merged.tone = normalizeProjectEpisodeTone(merged.tone);
+                merged.lighting = normalizeProjectEpisodeLighting(merged.lighting);
+                if (merged.tech_params?.visual_standard) {
+                    merged.tech_params.visual_standard.quality = normalizeProjectEpisodeQuality(merged.tech_params.visual_standard.quality);
+                }
+                setInfo(merged);
+            }
+
+            setGlobalStoryInput(prev => ({
+                ...prev,
+                episodes_count: episodesCount,
+            }));
+
+            await updateProject(id, {
+                global_info: {
+                    ...(updated?.global_info || info || {}),
+                    promo_generator_input: {
+                        ...promoInput,
+                        episodes_count: episodesCount,
+                    },
+                }
+            });
+
+            alert('Promo framework generated and saved. You can now generate episode scripts.');
+        } catch (e) {
+            console.error(e);
+            const readable = formatProviderModelEndpointError(e);
+            alert(`Failed to generate promo framework:\n${readable}`);
+        } finally {
+            setIsGeneratingGlobalStory(false);
         }
     };
 
@@ -1645,7 +1765,23 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                 </button>
             </div>
 
+            <div className="mb-6 flex items-center gap-2">
+                <button
+                    onClick={() => setProjectTab('overview')}
+                    className={`px-4 py-2 rounded-lg text-sm font-bold ${projectTab === 'overview' ? 'bg-white text-black' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                >
+                    {t('项目总览', 'Project Overview')}
+                </button>
+                <button
+                    onClick={() => setProjectTab('story_generator')}
+                    className={`px-4 py-2 rounded-lg text-sm font-bold ${projectTab === 'story_generator' ? 'bg-white text-black' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                >
+                    {t('故事生成器', 'Story Generator')}
+                </button>
+            </div>
+
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-8 w-full">
+                {projectTab === 'overview' && (
                 <div className="bg-card border border-white/10 p-6 rounded-xl space-y-6">
                     <h3 className="text-lg font-semibold text-primary border-b border-white/10 pb-2">{t('基本信息', 'Basic Information')}</h3>
 
@@ -1694,8 +1830,10 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                         />
                     </div>
                 </div>
+                )}
 
                 {/* Technical & Visual Params */}
+                {projectTab === 'overview' && (
                 <div className="bg-card border border-white/10 p-6 rounded-xl space-y-6">
                     <h3 className="text-lg font-semibold text-primary border-b border-white/10 pb-2">{t('技术与视觉参数', 'Technical & Visual Parameters')}</h3>
                     
@@ -1764,8 +1902,10 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                         />
                     </div>
                 </div>
+                )}
 
                 {/* Story Generator (Global) */}
+                {projectTab === 'story_generator' && (
                 <div className="bg-card border border-white/10 p-6 rounded-xl space-y-4 xl:col-span-2">
                     <div className="flex items-center justify-between gap-3">
                         <h3 className="text-lg font-semibold text-primary">{t('故事生成器（全局 / 项目）', 'Story Generator (Global / Project)')}</h3>
@@ -1903,6 +2043,90 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                                 <div className="mt-2 text-xs text-white/80 space-y-2">
                                     <div>
                                         中文（建议流程）：
+
+                                    {projectTab === 'story_generator' && (
+                                    <div className="bg-card border border-white/10 p-6 rounded-xl space-y-4 xl:col-span-2">
+                                        <div className="flex items-center justify-between gap-3">
+                                            <h3 className="text-lg font-semibold text-primary">{t('宣传片生成器（企业 / 产品 / 文旅）', 'Promo Generator (Corporate / Product / Tourism)')}</h3>
+                                            <div className="flex items-center gap-2">
+                                                <button
+                                                    onClick={handleGeneratePromoFramework}
+                                                    disabled={isGeneratingGlobalStory}
+                                                    className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${isGeneratingGlobalStory ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                                    title={t('根据宣传目标生成宣传框架（写入全局框架区）', 'Generate promo framework and write to global framework output')}
+                                                >
+                                                    {isGeneratingGlobalStory ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('生成中...', 'Generating...')}</> : <><Sparkles className="w-4 h-4" /> {t('生成宣传框架', 'Generate Promo Framework')}</>}
+                                                </button>
+                                                <button
+                                                    onClick={handleGenerateEpisodeScripts}
+                                                    disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts}
+                                                    className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${(episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                                    title={t('使用当前宣传框架生成分集剧本', 'Generate episode scripts using current promo framework')}
+                                                >
+                                                    {episodeScriptsRunning ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('生成中...', 'Generating...')}</> : <><Wand2 className="w-4 h-4" /> {t('生成分集剧本', 'Generate Episode Scripts')}</>}
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                            <InputGroup
+                                                idPrefix={prefix}
+                                                label={t('宣传类型', 'Promo Type')}
+                                                value={promoInput.promo_type}
+                                                onChange={v => setPromoInput(prev => ({ ...prev, promo_type: v }))}
+                                                list={[
+                                                    '企业宣传 / Corporate Promotion',
+                                                    '商品宣传 / Product Promotion',
+                                                    '文旅宣传 / Cultural Tourism Promotion',
+                                                ]}
+                                            />
+                                            <InputGroup
+                                                idPrefix={prefix}
+                                                label={t('集数', 'Episodes Count')}
+                                                value={String(promoInput.episodes_count || '')}
+                                                onChange={v => setPromoInput(prev => ({ ...prev, episodes_count: Number(v || 0) }))}
+                                                list={['3', '5', '6', '8', '10', '12']}
+                                            />
+
+                                            <div className="sm:col-span-2">
+                                                <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('传播目标', 'Campaign Objective')}</label>
+                                                <textarea className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none" value={promoInput.campaign_objective} onChange={(e) => setPromoInput(prev => ({ ...prev, campaign_objective: e.target.value }))} placeholder={t('例如：提升品牌信任、拉新转化、目的地种草', 'e.g., lift brand trust, acquire new users, destination awareness')} />
+                                            </div>
+                                            <div className="sm:col-span-2">
+                                                <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('目标受众', 'Target Audience')}</label>
+                                                <textarea className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none" value={promoInput.target_audience} onChange={(e) => setPromoInput(prev => ({ ...prev, target_audience: e.target.value }))} placeholder={t('受众画像、痛点、决策场景', 'Audience persona, pain points, decision context')} />
+                                            </div>
+                                            <div className="sm:col-span-2">
+                                                <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('核心信息', 'Key Message')}</label>
+                                                <textarea className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none" value={promoInput.key_message} onChange={(e) => setPromoInput(prev => ({ ...prev, key_message: e.target.value }))} placeholder={t('一句话价值主张 + 记忆点', 'One-line value proposition + memory anchor')} />
+                                            </div>
+                                            <div className="sm:col-span-2">
+                                                <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('核心亮点', 'Core Highlights')}</label>
+                                                <textarea className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none" value={promoInput.core_highlights} onChange={(e) => setPromoInput(prev => ({ ...prev, core_highlights: e.target.value }))} placeholder={t('产品/企业/目的地亮点，建议 3-6 条', 'Product/corporate/destination highlights, ideally 3-6 points')} />
+                                            </div>
+                                            <div className="sm:col-span-2">
+                                                <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('可信证明', 'Credibility Proof')}</label>
+                                                <textarea className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none" value={promoInput.credibility_proof} onChange={(e) => setPromoInput(prev => ({ ...prev, credibility_proof: e.target.value }))} placeholder={t('数据、案例、权威背书、用户证言', 'Data, case studies, authority endorsements, user testimonials')} />
+                                            </div>
+                                            <div>
+                                                <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('开场钩子', 'Hook Opening')}</label>
+                                                <textarea className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none" value={promoInput.hook_opening} onChange={(e) => setPromoInput(prev => ({ ...prev, hook_opening: e.target.value }))} placeholder={t('前 3-8 秒抓眼点', 'Attention hook in first 3-8 seconds')} />
+                                            </div>
+                                            <div>
+                                                <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('转化动作', 'Conversion CTA')}</label>
+                                                <textarea className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none" value={promoInput.conversion_cta} onChange={(e) => setPromoInput(prev => ({ ...prev, conversion_cta: e.target.value }))} placeholder={t('预约、咨询、下单、到店、关注等', 'Book, inquire, purchase, visit, follow, etc.')} />
+                                            </div>
+                                            <div>
+                                                <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('传播场景', 'Channel Context')}</label>
+                                                <textarea className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none" value={promoInput.channel_context} onChange={(e) => setPromoInput(prev => ({ ...prev, channel_context: e.target.value }))} placeholder={t('抖音/小红书/官网/展会等场景与时长约束', 'Channels and duration constraints (TikTok/Rednote/web/expo, etc.)')} />
+                                            </div>
+                                            <div>
+                                                <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('约束条件', 'Constraints')}</label>
+                                                <textarea className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none" value={promoInput.constraints} onChange={(e) => setPromoInput(prev => ({ ...prev, constraints: e.target.value }))} placeholder={t('合规边界、禁用词、素材边界、语气要求', 'Compliance limits, forbidden claims, asset limits, tone requirements')} />
+                                            </div>
+                                        </div>
+                                    </div>
+                                    )}
                                         <ol className="list-decimal ml-4 mt-1 space-y-1">
                                             <li>先写 Background / World：世界规则、时代地点、核心矛盾来源。</li>
                                             <li>再写 Setup：开场钩子 + 诱因事件 + 主角做出不可逆选择。</li>
@@ -2155,8 +2379,10 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                         />
                     </div>
                 </div>
+                )}
 
                 {/* Character Canon (Project) */}
+                {projectTab === 'story_generator' && (
                 <div className="bg-card border border-white/10 p-6 rounded-xl space-y-4 xl:col-span-2">
                     <div className="flex items-center justify-between gap-3">
                         <h3 className="text-lg font-semibold text-primary">{t('角色设定集（项目）', 'Character Canon (Project)')}</h3>
@@ -2227,6 +2453,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                         />
                     </div>
                 </div>
+                )}
             </div>
 
             {showEpisodeScriptsProgressModal && (
@@ -4093,13 +4320,150 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         }
     };
 
+    const collectMarkdownTableBlocks = (text) => {
+        const source = String(text || '');
+        const lines = source.split('\n');
+        const blocks = [];
+        let current = [];
+
+        const flush = () => {
+            if (current.length >= 2) {
+                blocks.push(current.join('\n').trim());
+            }
+            current = [];
+        };
+
+        for (const rawLine of lines) {
+            const line = String(rawLine || '').trim();
+            if (line.startsWith('|') && line.includes('|')) {
+                current.push(line);
+            } else {
+                flush();
+            }
+        }
+        flush();
+
+        return blocks;
+    };
+
+    const validateAutoSceneTableImport = (text) => {
+        const blocks = collectMarkdownTableBlocks(text);
+
+        if (blocks.length === 0) {
+            return {
+                ok: false,
+                reason: t('未检测到可导入的 Scenes Markdown 表格。', 'No importable Scenes markdown table detected.'),
+            };
+        }
+        const splitCells = (line) => {
+            const cells = String(line || '').split('|').map(c => c.trim());
+            if (cells[0] === '') cells.shift();
+            if (cells[cells.length - 1] === '') cells.pop();
+            return cells;
+        };
+        const normalize = (value) => String(value || '').toLowerCase().replace(/[\s_\-./()]/g, '');
+        const isSeparatorLine = (line) => /\|\s*:?-{3,}:?/.test(line) || /^[\s\|:\-]*$/.test(line);
+        const findColIdx = (normalizedHeaders, patterns) => normalizedHeaders.findIndex((h) => patterns.some(p => h.includes(p)));
+        const esc = (val) => String(val || '').replace(/\|/g, '\\|').replace(/\n/g, '<br>');
+
+        let outputHeaders = null;
+        let outputHeaderMap = null;
+        const outputRows = [];
+        let acceptedTables = 0;
+        let droppedTables = 0;
+        let droppedRows = 0;
+
+        for (const block of blocks) {
+            const lines = String(block || '').split('\n').map(v => String(v || '').trim()).filter(Boolean);
+            if (lines.length < 2) {
+                droppedTables += 1;
+                continue;
+            }
+
+            const headers = splitCells(lines[0]);
+            const normalizedHeaders = headers.map(normalize);
+            const sceneIdIdx = findColIdx(normalizedHeaders, ['sceneid', '场景id']);
+            const coreInfoIdx = findColIdx(normalizedHeaders, ['coresceneinfo', '核心场景信息']);
+            const originalIdx = findColIdx(normalizedHeaders, ['originalscripttext', '原始剧本文本', 'scripttext']);
+
+            if (sceneIdIdx < 0 || coreInfoIdx < 0 || originalIdx < 0) {
+                droppedTables += 1;
+                continue;
+            }
+
+            acceptedTables += 1;
+            if (!outputHeaders) {
+                outputHeaders = headers;
+                outputHeaderMap = new Map(normalizedHeaders.map((h, idx) => [h, idx]));
+            }
+
+            const sourceHeaderMap = new Map(normalizedHeaders.map((h, idx) => [h, idx]));
+            for (let i = 1; i < lines.length; i++) {
+                const line = lines[i];
+                if (isSeparatorLine(line)) continue;
+
+                const cells = splitCells(line);
+                while (cells.length < headers.length) cells.push('');
+
+                const sceneId = String(cells[sceneIdIdx] || '').trim();
+                const coreInfo = String(cells[coreInfoIdx] || '').trim();
+                const originalText = String(cells[originalIdx] || '').trim();
+                if (!sceneId || (!coreInfo && !originalText)) {
+                    droppedRows += 1;
+                    continue;
+                }
+
+                const mappedRow = outputHeaders.map((h) => {
+                    const key = normalize(h);
+                    const idx = sourceHeaderMap.has(key) ? sourceHeaderMap.get(key) : -1;
+                    return idx >= 0 ? String(cells[idx] || '') : '';
+                });
+                outputRows.push(mappedRow);
+            }
+        }
+
+        if (!outputHeaders || outputRows.length === 0) {
+            return {
+                ok: false,
+                reason: t('未找到合格的 Scenes 表数据（可能缺少必需列或有效行）。', 'No valid Scenes table data found (required columns or valid rows may be missing).'),
+            };
+        }
+
+        const headerLine = `| ${outputHeaders.map(esc).join(' | ')} |`;
+        const sepLine = `| ${outputHeaders.map(() => '---').join(' | ')} |`;
+        const rowLines = outputRows.map((r) => `| ${r.map(esc).join(' | ')} |`);
+        const tableText = [headerLine, sepLine, ...rowLines].join('\n');
+
+        let warning = '';
+        if (droppedTables > 0 || droppedRows > 0 || blocks.length > 1) {
+            warning = t(
+                `已过滤非法数据：保留 ${acceptedTables} 张合格表，丢弃 ${droppedTables} 张不合格表、${droppedRows} 行不合格数据。`,
+                `Invalid data filtered: kept ${acceptedTables} valid table(s), dropped ${droppedTables} invalid table(s) and ${droppedRows} invalid row(s).`
+            );
+        }
+
+        return { ok: true, tableText, warning };
+    };
+
     const doImportText = async (text, importType = 'auto') => {
         if (typeof onImportText !== 'function') {
             if (onLog) onLog('Import is not available in this context.', 'warning');
             return;
         }
         try {
-            await onImportText(text || '', importType);
+            let payload = text || '';
+            if (importType === 'auto') {
+                const check = validateAutoSceneTableImport(payload);
+                if (!check.ok) {
+                    if (onLog) onLog(`Import blocked: ${check.reason}`, 'warning');
+                    alert(check.reason);
+                    return;
+                }
+                if (check.warning && onLog) onLog(check.warning, 'warning');
+                payload = check.tableText;
+            }
+
+            await onImportText(payload, importType);
         } catch (e) {
             if (onLog) onLog(`Import failed: ${e.message}`, 'error');
         }
@@ -4122,7 +4486,20 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         });
 
         if (onLog) onLog('Auto-importing analysis result...', 'process');
-        await onImportText(analyzedText || '', 'auto');
+        const check = validateAutoSceneTableImport(analyzedText || '');
+        if (!check.ok) {
+            if (onLog) onLog(`Auto-import blocked: ${check.reason}`, 'warning');
+            setAnalysisFlowStatus({
+                phase: 'warning',
+                message: check.reason,
+            });
+            alert(check.reason);
+            return;
+        }
+
+        if (check.warning && onLog) onLog(check.warning, 'warning');
+
+        await onImportText(check.tableText || '', 'auto');
         if (onLog) onLog('Auto-import finished.', 'success');
 
         if (switchToScenes && typeof onSwitchToScenes === 'function') {
@@ -4194,8 +4571,43 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         return [headerLine, sepLine, ...rowLines].join('\n');
     };
 
+    const extractScenesTableBlock = useCallback((text) => {
+        if (!text || typeof text !== 'string') return '';
+
+        const fullText = String(text);
+        const headingMatch = fullText.match(/###\s*Part\s*1\s*:\s*Scenes\s*Table[^\n]*/i);
+        const scopedText = headingMatch ? fullText.slice(headingMatch.index) : fullText;
+        const lines = scopedText.split('\n');
+
+        let started = false;
+        const tableLines = [];
+
+        for (const rawLine of lines) {
+            const line = String(rawLine || '');
+            const trimmed = line.trim();
+
+            if (!started) {
+                if (trimmed.startsWith('|') && trimmed.includes('|')) {
+                    started = true;
+                    tableLines.push(trimmed);
+                }
+                continue;
+            }
+
+            if (trimmed.startsWith('|') && trimmed.includes('|')) {
+                tableLines.push(trimmed);
+                continue;
+            }
+
+            if (tableLines.length >= 2) break;
+        }
+
+        return tableLines.join('\n').trim();
+    }, []);
+
     const normalizeLlmMarkdownTable = useCallback((text) => {
-        const parsed = parseMarkdownTable(text);
+        const sceneTableText = extractScenesTableBlock(text);
+        const parsed = parseMarkdownTable(sceneTableText);
         if (!parsed) return '';
 
         const normalizeHeader = (h) => String(h || '').toLowerCase().replace(/[\s_.\-]/g, '');
@@ -4214,7 +4626,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         });
 
         return buildMarkdownTable(parsed.headers, normalizedRows);
-    }, [parseMarkdownTable, buildMarkdownTable]);
+    }, [extractScenesTableBlock, parseMarkdownTable, buildMarkdownTable]);
 
     const llmMarkdownTableText = useMemo(() => normalizeLlmMarkdownTable(llmResultContent), [llmResultContent, normalizeLlmMarkdownTable]);
     const llmMarkdownTable = useMemo(() => parseMarkdownTable(llmMarkdownTableText), [llmMarkdownTableText]);

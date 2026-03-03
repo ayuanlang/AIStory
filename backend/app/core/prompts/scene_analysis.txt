@@ -275,6 +275,8 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - 仅输出最终结果，不含 conversational text。
 - 固定顺序：`Part 1 -> Subject Index -> Part 2 -> Final Consistency Report`。
 - 输出前必须移除推理语句、`<think>` 与代码围栏。
+- **Output Workspace 显示约束（Mandatory）**：全文最多只允许 **1 张 Markdown 表**，且该表必须是 `Part 1: Scenes Table`。
+- **禁止混表（Hard Rule）**：`Subject Index` 与 `Part 2` 不得使用 Markdown 表格展示；请分别使用“编号列表/键值列表 + JSON”。
 
 ### Part 1: Scenes Table (Markdown)
 - `Core Scene Info` 至少包含：`{Stage}`, `{Environment Context}`, `{Layout}`, `{Axis}`, `{Observer View}`, `{Beats}`。
@@ -296,13 +298,13 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | EP01 | EP01_SC01 | 1 | {Name} | {Times} | **{Stage} (核心舞台)**: 中文描述。<br>**{Environment Context}**: 中文描述。<br>**{Layout}**: 中文描述。<br>**{Axis}**: 中文描述（含观察方向与是否跨线）。<br>**{Observer View}**: 机位站位 + 朝向 + 轴线侧（e.g., 沿轴正向看向{Stage}）。<br>**{Split Reason}**: 拆分原因。<br>**{Beats}**:<br>1. {镜头} 机位在ENV:[Bed]脚端左侧，朝向{Stage}；{空间} CHAR:[@Char A]在ENV:[Bed]右侧边缘坐姿；{角色-镜头关系} CHAR:[@Char A]位于中景偏右；{主体关系} CHAR:[@Char A]侧对CHAR:[@Char B]并看向其胸前，未接触；{动作变化过程} CHAR:[@Char A]前倾半步并抬手；-> {新状态} 与CHAR:[@Char B]近距对峙。 | {Original} | `{Env Name}` | `NEW / REUSE / VARIANT_OF` | `{Base Env Name / Ref ID}` | `仅写相对变化项；REUSE=No visual delta` | {Entry Snapshot} | {Exit Snapshot} | `CHAR:[@Char A]`, `CHAR:[@Char B]` | `PROP:[Prop]` |
 
-### Subject Index（紧跟 Part 1）
+### Subject Index（紧跟 Part 1，非 Markdown 表）
 - **严禁省略 Scene Subjects（Hard Rule）**：Part 1 每个 Scene 中凡在 `{Beats}`、`Linked Characters`、`Key Props`、`Environment Name` 出现的实体，必须进入 Subject Index 与 Part 2；禁止“只写代表人物/主角”替代全量实体。
 - **出现即纳入（Mandatory）**：只要实体在任一 Scene 中被提及或可见参与（含被对视、被交互、被引用、作为环境容器），就必须计入；不得因戏份轻重、省略台词、镜头时长短而忽略。
 - **逐场闭环（Mandatory）**：每个 Scene 的实体集合必须满足：`Scene实体集合 ⊆ Subject Index ∩ Part2(JSON)`；任一差集均判无效，必须重写。
 - **禁止代表化（Forbidden）**：禁止用“群演/其他人/若干道具/背景角色”等统称替代具体已出现实体；若剧本明确出现可识别对象，必须给出稳定实体名并保持逐字符一致。
 - **剧本实体映射必填（Mandatory）**：Subject Index 每行必须标注该 subject 覆盖了剧本中的哪个实体（人名/物名/地点名/称谓或其稳定别称），用于可审计追踪。
-- 先输出去重 Subject 列表，覆盖 Part 1 全部角色/道具/环境。
+- 先输出去重 Subject 列表，覆盖 Part 1 全部角色/道具/环境（使用编号列表，不得用 Markdown 表）。
 - `subject_no` 全局唯一连续（建议 `S001...`）。
 - `subject_type` 仅允许：`character/prop/environment`。
 - `subject_name_exact` 与 Part 1 实体名逐字符一致。
@@ -313,11 +315,10 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - Part 2 每个实体必须回填 `subject_no` 并与 Subject Index 一一映射。
 - 若 `subject_name_exact=CHAR:[@Name]`，则 Part 2A 的 `name/name_en` 仅做净化（移除包装），不得改写字符本体。
 
-| subject_no | subject_type | subject_name_exact | script_entity_coverage |
-| :--- | :--- | :--- | :--- |
-| S001 | character | CHAR:[@Char A] | 剧本实体：李明（主语“他”） |
-| S002 | prop | PROP:[Sword] | 剧本实体：长剑 |
-| S003 | environment | ENV:[LivingRoom_Front_Mid_Day] | 剧本实体：<场所名=客厅>；<物体1=桌子>; <物体2=沙发>; <物体3=落地灯>; <物体4=电视柜> |
+- Subject Index 输出示例（编号列表）：
+  1. `subject_no=S001 | subject_type=character | subject_name_exact=CHAR:[@Char A] | script_entity_coverage=剧本实体：李明（主语“他”）`
+  2. `subject_no=S002 | subject_type=prop | subject_name_exact=PROP:[Sword] | script_entity_coverage=剧本实体：长剑`
+  3. `subject_no=S003 | subject_type=environment | subject_name_exact=ENV:[LivingRoom_Front_Mid_Day] | script_entity_coverage=剧本实体：<场所名=客厅>；<物体1=桌子>; <物体2=沙发>; <物体3=落地灯>; <物体4=电视柜>`
 
 ### Part 2: Entities JSON (Strict Schema)
 
