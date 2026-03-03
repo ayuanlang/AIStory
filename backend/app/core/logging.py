@@ -4,7 +4,7 @@ import time
 import re
 from typing import Optional
 from fastapi import Request
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.types import ASGIApp, Scope, Receive, Send
 from jose import jwt, JWTError
 from app.core.config import settings
 
@@ -168,11 +168,18 @@ def get_user_from_token(auth_header: str):
     except JWTError:
         return {"user_id": None, "username": "Guest"}
 
-class LoggingMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
+class LoggingMiddleware:
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
         start_time = time.time()
-        
-        # 1. Identify Function
+        request = Request(scope, receive=receive)
+
         method = request.method
         path = request.url.path
         func_name = get_function_name(method, path)
@@ -189,11 +196,10 @@ class LoggingMiddleware(BaseHTTPMiddleware):
             "/healthz",
         }
         is_noise = path in noise_exact or any(path.startswith(p) for p in noise_prefixes)
-        
-        # 2. Extract Client Info
-        client_host = request.client.host if request.client else "unknown"
-        
-        # 3. Extract User (Best Effort)
+
+        client = scope.get("client")
+        client_host = client[0] if client and isinstance(client, tuple) else "unknown"
+
         username = "Guest"
         user_id = None
         auth = request.headers.get("Authorization")
@@ -203,9 +209,16 @@ class LoggingMiddleware(BaseHTTPMiddleware):
             user_id = user.get("user_id")
 
         project_id = _resolve_project_id_for_logging(path, request)
+        response_status: Optional[int] = None
+
+        async def send_wrapper(message):
+            nonlocal response_status
+            if message.get("type") == "http.response.start":
+                response_status = int(message.get("status") or 0)
+            await send(message)
 
         try:
-            response = await call_next(request)
+            await self.app(scope, receive, send_wrapper)
         except Exception as e:
             process_ms = int((time.time() - start_time) * 1000)
             if not is_noise:
@@ -218,42 +231,31 @@ class LoggingMiddleware(BaseHTTPMiddleware):
             raise
 
         process_ms = int((time.time() - start_time) * 1000)
+        status_code = response_status or 0
 
-        # 4. Log every API endpoint call with key access factors and result status.
-        # Skip noisy static /uploads requests.
         if not is_noise:
-            if is_polling_suppressed and 200 <= response.status_code < 400:
-                return response
+            if is_polling_suppressed and 200 <= status_code < 400:
+                return
 
             action = func_name or f"API Call: {method} {path}"
             content_length = request.headers.get("content-length")
             size_part = f" | ReqBytes: {content_length}" if content_length else ""
 
-            if 200 <= response.status_code < 400:
+            if 200 <= status_code < 400:
                 logger.info(
                     f"API Result | UserID: {user_id} | Username: {username} | ProjectID: {project_id} | "
                     f"Action: {action} | Method: {method} | Path: {path} | "
-                    f"Status: {response.status_code} | IP: {client_host} | Time: {process_ms}ms{size_part}"
+                    f"Status: {status_code} | IP: {client_host} | Time: {process_ms}ms{size_part}"
                 )
-            elif 400 <= response.status_code < 500:
+            elif 400 <= status_code < 500:
                 logger.warning(
                     f"API Result | UserID: {user_id} | Username: {username} | ProjectID: {project_id} | "
                     f"Action: {action} | Method: {method} | Path: {path} | "
-                    f"Status: {response.status_code} | IP: {client_host} | Time: {process_ms}ms{size_part}"
+                    f"Status: {status_code} | IP: {client_host} | Time: {process_ms}ms{size_part}"
                 )
             else:
                 logger.error(
                     f"API Result | UserID: {user_id} | Username: {username} | ProjectID: {project_id} | "
                     f"Action: {action} | Method: {method} | Path: {path} | "
-                    f"Status: {response.status_code} | IP: {client_host} | Time: {process_ms}ms{size_part}"
+                    f"Status: {status_code} | IP: {client_host} | Time: {process_ms}ms{size_part}"
                 )
-
-        # 5. Fallback for non-API 5xxs (rare but useful)
-        elif response.status_code >= 500 and (not is_noise):
-            logger.error(
-                f"System Error | UserID: {user_id} | Username: {username} | ProjectID: {project_id} | "
-                f"Path: {method} {path} | Status: {response.status_code} | "
-                f"IP: {client_host} | Time: {process_ms}ms"
-            )
-
-        return response
