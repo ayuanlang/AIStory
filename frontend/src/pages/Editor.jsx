@@ -233,6 +233,22 @@ import {
     sourceBadgeText,
     formatProviderModelEndpointError,
 } from './editor/editorConfig';
+import {
+    PROJECT_EP_TYPE_OPTIONS,
+    PROJECT_EP_LANGUAGE_OPTIONS,
+    PROJECT_EP_BASE_POSITIONING_OPTIONS,
+    PROJECT_EP_GLOBAL_STYLE_OPTIONS,
+    PROJECT_EP_TONE_OPTIONS,
+    PROJECT_EP_LIGHTING_OPTIONS,
+    PROJECT_EP_QUALITY_OPTIONS,
+    normalizeProjectEpisodeType,
+    normalizeProjectEpisodeLanguage,
+    normalizeProjectEpisodeBasePositioning,
+    normalizeProjectEpisodeGlobalStyle,
+    normalizeProjectEpisodeTone,
+    normalizeProjectEpisodeLighting,
+    normalizeProjectEpisodeQuality,
+} from './editor/projectOptionConfig';
 
 // RefineControl moved to components/RefineControl.jsx
 import { processPrompt } from '../lib/promptUtils';
@@ -372,194 +388,9 @@ const DEFAULT_CANON_TAG_CATEGORIES = [
             { id: 'age_7', label: '年龄不详/看不出', detail: '刻意模糊年龄，神秘感与距离感更强' },
         ],
     },
-    {
-        key: 'wardrobe',
-        title: '穿搭/造型（主角塑造）',
-        options: [
-            { id: 'wardrobe_1', label: '干练', detail: '收腰西装或衬衫+长裤，剪裁利落' },
-            { id: 'wardrobe_2', label: '优雅', detail: '简洁连衣裙或套装，配饰克制' },
-            { id: 'wardrobe_3', label: '都市时髦', detail: '大衣/风衣+高跟或短靴，层次感' },
-            { id: 'wardrobe_4', label: '禁欲风', detail: '高领/长袖/长裤，颜色克制但极有气场' },
-            { id: 'wardrobe_5', label: '轻奢', detail: '面料有质感，细节讲究，不浮夸' },
-            { id: 'wardrobe_m1', label: '绅士', detail: '合身西装/大衣，领带或领结点到为止' },
-            { id: 'wardrobe_m2', label: '冷酷街头', detail: '黑色夹克/皮衣+短靴，线条硬' },
-            { id: 'wardrobe_m3', label: '少年感男主', detail: '白衬衫/针织衫/运动外套，干净清爽' },
-        ],
-    },
-    {
-        key: 'clothing_items',
-        title: '衣着/单品（常用标签）',
-        options: [
-            { id: 'cloth_1', label: '白衬衫', detail: '干净克制，越简单越高级' },
-            { id: 'cloth_2', label: '黑高领', detail: '禁欲、冷感、气场强' },
-            { id: 'cloth_3', label: '西装', detail: '合身剪裁，肩线清晰' },
-            { id: 'cloth_4', label: '大衣/风衣', detail: '压气场，走路带风' },
-            { id: 'cloth_5', label: '丝质/缎面', detail: '微光泽，性感但不露骨' },
-            { id: 'cloth_6', label: '皮衣/夹克', detail: '硬朗、叛逆、酷感' },
-            { id: 'cloth_7', label: '短裙/开衩', detail: '腿部线条更突出（注意尺度克制）' },
-            { id: 'cloth_8', label: '高跟鞋', detail: '气场与身材比例拉长' },
-            { id: 'cloth_9', label: '短靴', detail: '利落、都市、行动感' },
-            { id: 'cloth_10', label: '配饰克制', detail: '少而精，提升高级感' },
-        ],
-    },
-    {
-        key: 'combat_wear',
-        title: '战斗服装/战甲（服饰）',
-        options: [
-            { id: 'cwear_1', label: '战甲/盔甲', detail: '金属/皮革甲胄，防护与威慑感' },
-            { id: 'cwear_2', label: '轻甲', detail: '更灵活，线条更贴身、利落' },
-            { id: 'cwear_3', label: '战术背心/防弹衣', detail: '现代作战感，功能性口袋与模块' },
-            { id: 'cwear_4', label: '制服/作战服', detail: '军警/特勤气质，纪律与专业' },
-            { id: 'cwear_5', label: '披风/斗篷', detail: '英雄感/隐匿感，镜头层次更强' },
-            { id: 'cwear_6', label: '护臂/护腕', detail: '近战细节，硬朗质感' },
-            { id: 'cwear_7', label: '护膝/护腿', detail: '实战磨损感更真实' },
-            { id: 'cwear_8', label: '作战靴', detail: '落地更稳，压迫感与行动感兼具' },
-            { id: 'cwear_9', label: '战术腰带/枪套', detail: '装备挂载，专业度更高' },
-        ],
-    },
-    {
-        key: 'ancient_wear',
-        title: '古装服装/服饰',
-        options: [
-            { id: 'awear_1', label: '汉服（襦裙/交领）', detail: '飘逸层次，古风气质' },
-            { id: 'awear_2', label: '长袍/直裾', detail: '文人/谋士感，克制内敛' },
-            { id: 'awear_3', label: '官服/朝服', detail: '礼制等级与权力感更明确' },
-            { id: 'awear_4', label: '锦衣/华服', detail: '贵气、纹样精致、用料讲究' },
-            { id: 'awear_5', label: '夜行衣', detail: '暗色贴身，隐秘与危险感（不强调动作）' },
-            { id: 'awear_6', label: '甲胄（古代战甲）', detail: '甲片/扎甲，历史质感强' },
-            { id: 'awear_7', label: '披风/披肩', detail: '身份感与镜头层次' },
-            { id: 'awear_8', label: '发冠/发簪', detail: '阶层与礼制体现' },
-            { id: 'awear_9', label: '腰带/玉佩', detail: '点明身份与品味' },
-            { id: 'awear_10', label: '绣鞋/靴', detail: '细节完成度更高，时代感更真' },
-        ],
-    },
-    {
-        key: 'hair_makeup',
-        title: '妆发/细节（主角塑造）',
-        options: [
-            { id: 'hm_1', label: '红唇', detail: '饱和但干净的红，气场拉满' },
-            { id: 'hm_2', label: '淡妆', detail: '伪素颜，重点是皮肤干净与眼神' },
-            { id: 'hm_3', label: '眼妆', detail: '眼尾微上扬，强调眼神锋利/勾人' },
-            { id: 'hm_4', label: '长发', detail: '发丝有光泽，发型不凌乱' },
-            { id: 'hm_5', label: '短发', detail: '轮廓利落，露出颈部线条' },
-            { id: 'hm_m1', label: '寸头/短寸', detail: '干净利落，突出眉骨与眼神' },
-            { id: 'hm_m2', label: '胡渣', detail: '微微胡渣，成熟感与危险感' },
-        ],
-    },
-    {
-        key: 'vibe',
-        title: '气质/表现（主角塑造）',
-        options: [
-            { id: 'vibe_1', label: '神秘', detail: '信息不一次说完，表情留白' },
-            { id: 'vibe_2', label: '冷峻', detail: '少笑，语气短，目光锐利' },
-            { id: 'vibe_3', label: '阳光', detail: '笑意自然，语气轻快，亲和力强' },
-            { id: 'vibe_4', label: '专业感', detail: '用词准确，动作克制，目标导向' },
-            { id: 'vibe_5', label: '强势', detail: '话语有控制力，场面压得住' },
-            { id: 'vibe_6', label: '脆弱感', detail: '瞬间的停顿/回避眼神，让人心软' },
-        ],
-    },
-    {
-        key: 'nation',
-        title: '国籍/地区（设定）',
-        options: [
-            { id: 'nation_1', label: '中国', detail: '可细分：北方/南方口音与习惯' },
-            { id: 'nation_2', label: '日本', detail: '克制礼貌、边界感明显' },
-            { id: 'nation_3', label: '韩国', detail: '时尚敏感、表达更直接' },
-            { id: 'nation_4', label: '美国', detail: '表达直接、个人主义、行动优先' },
-            { id: 'nation_5', label: '英国', detail: '措辞克制、礼貌疏离、幽默冷' },
-            { id: 'nation_6', label: '法国', detail: '松弛浪漫、审美挑剔、有锋芒' },
-            { id: 'nation_7', label: '意大利', detail: '热情外放、注重衣着与手势' },
-        ],
-    },
-    {
-        key: 'ethnicity',
-        title: '人种/族裔（设定）',
-        options: [
-            { id: 'eth_1', label: '东亚', detail: '例如：中/日/韩常见审美与轮廓特点' },
-            { id: 'eth_2', label: '白人/欧洲裔', detail: '骨相立体、肤色与发色范围更广' },
-            { id: 'eth_3', label: '黑人/非洲裔', detail: '五官张力强、体态与气场更突出' },
-            { id: 'eth_4', label: '拉丁裔', detail: '热烈、自信、风格表达更强' },
-            { id: 'eth_5', label: '南亚裔', detail: '深邃眼神、配饰审美更鲜明' },
-            { id: 'eth_6', label: '中东/阿拉伯裔', detail: '浓眉深眼、轮廓强、气场浓烈' },
-            { id: 'eth_7', label: '混血', detail: '特征融合，辨识度高' },
-        ],
-    },
 ];
 
-const DEFAULT_CANON_IDENTITY_CATEGORIES = [
-    {
-        key: 'lead_role',
-        title: '主角定位/戏份',
-        options: [
-            { id: 'lead_f', label: '女主角', detail: '故事核心视角/情感主线' },
-            { id: 'lead_m', label: '男主角', detail: '故事核心视角/推动行动线' },
-            { id: 'lead_2', label: '第二主角', detail: '重要支线/关键转折' },
-            { id: 'antagonist', label: '反派/对立面', detail: '推进冲突与悬念' },
-        ],
-    },
-    {
-        key: 'occupation',
-        title: '职业/身份',
-        options: [
-            { id: 'occ_ceo', label: 'CEO/总裁', detail: '强掌控、决策快、社交资源丰富' },
-            { id: 'occ_police', label: '刑警/警探', detail: '行动派、观察力强、压力承受高' },
-            { id: 'occ_lawyer', label: '律师', detail: '逻辑强、措辞锋利、擅长博弈' },
-            { id: 'occ_doctor', label: '医生', detail: '专业冷静、情绪克制、同理心' },
-            { id: 'occ_artist', label: '艺术家', detail: '审美敏感、情绪浓、反差感' },
-            { id: 'occ_student', label: '大学生', detail: '成长线明显、少年感/少女感' },
-            { id: 'occ_model', label: '模特/艺人', detail: '镜头感强、曝光与舆论压力' },
-        ],
-    },
-    {
-        key: 'combat_identity',
-        title: '战斗身份/背景',
-        options: [
-            { id: 'cid_1', label: '军人/士兵', detail: '训练有素，服从命令，纪律感强' },
-            { id: 'cid_2', label: '特勤/特种', detail: '高压任务，处事克制专业' },
-            { id: 'cid_3', label: '雇佣兵', detail: '利益驱动，实战经验丰富' },
-            { id: 'cid_4', label: '杀手/刺客', detail: '隐秘、冷静、边界感强' },
-            { id: 'cid_5', label: '保镖/护卫', detail: '保护优先，风险评估与站位意识强' },
-            { id: 'cid_6', label: '武术家', detail: '以技服人，克制与底线清晰' },
-            { id: 'cid_7', label: '赏金猎人', detail: '规则感强，灰色地带的执行者' },
-            { id: 'cid_8', label: '黑帮打手', detail: '狠劲、街头经验与威慑' },
-        ],
-    },
-    {
-        key: 'ancient_identity',
-        title: '古装身份/阵营',
-        options: [
-            { id: 'aid_1', label: '将军/统帅', detail: '威望与军纪，杀伐果断' },
-            { id: 'aid_2', label: '侍卫/禁军', detail: '守护要员/皇权，纪律严' },
-            { id: 'aid_3', label: '捕快/衙役', detail: '基层执法，江湖味更浓' },
-            { id: 'aid_4', label: '县令/官员', detail: '规则执行者，权力与人情博弈' },
-            { id: 'aid_5', label: '世家公子/小姐', detail: '礼制与家族利益牵引，克制体面' },
-            { id: 'aid_6', label: '王爷/皇子', detail: '权力中心，处处试探与算计' },
-            { id: 'aid_7', label: '宫女/太监', detail: '宫廷生态，信息与生存技巧' },
-            { id: 'aid_8', label: '门派弟子/修行者', detail: '师门规矩、江湖恩怨、阵营牵连' },
-            { id: 'aid_9', label: '侠客/游侠', detail: '行走江湖，讲义气也有底线' },
-        ],
-    },
-    {
-        key: 'status',
-        title: '社会身份/阶层',
-        options: [
-            { id: 'st_elite', label: '上层精英', detail: '资源多、社交圈高、习惯克制' },
-            { id: 'st_middle', label: '中产专业人士', detail: '稳健务实、重效率与边界' },
-            { id: 'st_grass', label: '草根逆袭', detail: '韧性强、行动强、野心明确' },
-            { id: 'st_mysterious', label: '身份成谜', detail: '信息分层揭示，悬念强' },
-        ],
-    },
-    {
-        key: 'personality_arc',
-        title: '主角弧光/关键词',
-        options: [
-            { id: 'arc_redemption', label: '救赎', detail: '背负过去，逐步修复与和解' },
-            { id: 'arc_growth', label: '成长', detail: '从稚嫩到成熟的可见变化' },
-            { id: 'arc_revenge', label: '复仇', detail: '目标明确，情绪压抑与爆发' },
-            { id: 'arc_power', label: '权力', detail: '争夺与控制、规则博弈' },
-        ],
-    },
-];
+const DEFAULT_CANON_IDENTITY_CATEGORIES = [];
 
 const canonOptionValue = (opt) => `${opt.label}：${opt.detail}`;
 
@@ -588,7 +419,6 @@ const normalizeCanonTagCategories = (raw) => {
     return normalized.length > 0 ? normalized : null;
 };
 
-// Mock Data / Placeholders for Tabs
 const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], uiLang = 'en' }) => {
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
     const [project, setProject] = useState(null);
@@ -596,22 +426,22 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
     const [info, setInfo] = useState({
         script_title: "",
         series_episode: "",
-        base_positioning: "Modern Workplace",
-        type: "Live Action (Realism/Cinematic 8K)",
-        Global_Style: "Photorealistic, Cinematic Lighting, 8k, Masterpiece",
+        base_positioning: "现代职场 / Modern Workplace",
+        type: "实拍（写实/电影感8K） / Live Action (Realism/Cinematic 8K)",
+        Global_Style: "写实电影感，8k杰作 / Photorealistic, Cinematic Lighting, 8k, Masterpiece",
         tech_params: {
             visual_standard: {
                 horizontal_resolution: "1080",
                 vertical_resolution: "1920",
                 frame_rate: "24",
                 aspect_ratio: "9:16",
-                quality: "Ultra High",
+                quality: "超高 / Ultra High",
                 image_size: "1K"
             }
         },
-        tone: "Skin Tone Optimized, Dreamy",
-        lighting: "Butterfly Light, Soft Light",
-        language: "English",
+        tone: "肤色优化，梦幻感 / Skin Tone Optimized, Dreamy",
+        lighting: "蝴蝶光，柔光 / Butterfly Light, Soft Light",
+        language: "英文 / English",
         borrowed_films: [],
         character_relationships: "",
         notes: "",
@@ -671,14 +501,12 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
         if (!id) return null;
         try {
             const status = await getProjectEpisodeScriptsStatus(id);
-            if (status && typeof status === 'object') {
-                setEpisodeScriptsProgress(status);
-                return status;
-            }
-        } catch (e) {
-            // Ignore transient polling errors
+            setEpisodeScriptsProgress(status || null);
+            return status || null;
+        } catch (error) {
+            console.warn('Failed to poll episode scripts status', error);
+            return null;
         }
-        return null;
     }, [id]);
 
     useEffect(() => {
@@ -1004,6 +832,15 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                          if (data?.title && String(data.title).trim().length > 0) {
                              merged.script_title = String(data.title).trim();
                          }
+                     }
+                     merged.type = normalizeProjectEpisodeType(merged.type);
+                     merged.language = normalizeProjectEpisodeLanguage(merged.language);
+                     merged.base_positioning = normalizeProjectEpisodeBasePositioning(merged.base_positioning);
+                     merged.Global_Style = normalizeProjectEpisodeGlobalStyle(merged.Global_Style);
+                     merged.tone = normalizeProjectEpisodeTone(merged.tone);
+                     merged.lighting = normalizeProjectEpisodeLighting(merged.lighting);
+                     if (merged.tech_params?.visual_standard) {
+                         merged.tech_params.visual_standard.quality = normalizeProjectEpisodeQuality(merged.tech_params.visual_standard.quality);
                      }
                      setInfo(merged);
 
@@ -1342,6 +1179,15 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                         }
                     }
                 };
+                merged.type = normalizeProjectEpisodeType(merged.type);
+                merged.language = normalizeProjectEpisodeLanguage(merged.language);
+                merged.base_positioning = normalizeProjectEpisodeBasePositioning(merged.base_positioning);
+                merged.Global_Style = normalizeProjectEpisodeGlobalStyle(merged.Global_Style);
+                merged.tone = normalizeProjectEpisodeTone(merged.tone);
+                merged.lighting = normalizeProjectEpisodeLighting(merged.lighting);
+                if (merged.tech_params?.visual_standard) {
+                    merged.tech_params.visual_standard.quality = normalizeProjectEpisodeQuality(merged.tech_params.visual_standard.quality);
+                }
                 setInfo(merged);
             }
             alert('Global story framework generated and saved to Overview.');
@@ -1695,7 +1541,22 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
     };
 
     const updateField = (key, value) => {
-        setInfo(prev => ({ ...prev, [key]: value }));
+        setInfo(prev => ({
+            ...prev,
+            [key]: key === 'type'
+                ? normalizeProjectEpisodeType(value)
+                : key === 'language'
+                    ? normalizeProjectEpisodeLanguage(value)
+                    : key === 'base_positioning'
+                        ? normalizeProjectEpisodeBasePositioning(value)
+                        : key === 'Global_Style'
+                            ? normalizeProjectEpisodeGlobalStyle(value)
+                            : key === 'tone'
+                                ? normalizeProjectEpisodeTone(value)
+                                : key === 'lighting'
+                                    ? normalizeProjectEpisodeLighting(value)
+                        : value,
+        }));
     };
 
     const updateTech = (key, value) => {
@@ -1705,7 +1566,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                 ...prev.tech_params,
                 visual_standard: {
                     ...prev.tech_params.visual_standard,
-                    [key]: value
+                    [key]: key === 'quality' ? normalizeProjectEpisodeQuality(value) : value
                 }
             }
         }));
@@ -1797,24 +1658,13 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                             label={t('类型', 'Type')}
                             value={info.type}
                             onChange={v => updateField('type', v)}
-                            list={[
-                                "Live Action",
-                                "Live Action (Realism/Cinematic 8K)",
-                                "2D Animation",
-                                "3D Animation",
-                                "Stop Motion",
-                                "Tokusatsu",
-                                "Stage Play",
-                                "CG Animation",
-                                "Mixed Media",
-                                "Documentary"
-                            ]}
+                            list={PROJECT_EP_TYPE_OPTIONS}
                         />
                          <InputGroup idPrefix={prefix}
                             label={t('语言', 'Language')}
                             value={info.language}
                             onChange={v => updateField('language', v)}
-                            list={["Chinese", "English", "Bilingual (CN/EN)", "Japanese", "Korean", "French", "Spanish", "German", "Other"]}
+                                     list={PROJECT_EP_LANGUAGE_OPTIONS}
                         />
                     </div>
 
@@ -1822,7 +1672,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                         label={t('基础定位', 'Base Positioning')}
                         value={info.base_positioning}
                         onChange={v => updateField('base_positioning', v)}
-                        list={["Urban Romance", "Sci-Fi Adventure", "Mystery / Thriller", "Period / Wuxia", "Fantasy Epic", "Modern Workplace", "High School / Youth", "Cyberpunk", "Horror", "Comedy", "Drama", "Action", "Historical"]}
+                        list={PROJECT_EP_BASE_POSITIONING_OPTIONS}
                         placeholder={t('例如：都市爱情 / 科幻', 'e.g. Urban Romance / Sci-Fi')}
                     />
 
@@ -1831,23 +1681,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                         value={info.Global_Style}
                         onChange={v => updateField('Global_Style', v)}
                         multi={true}
-                        list={[
-                            "Photorealistic, Cinematic Lighting, 8k, Masterpiece",
-                            "Hyperrealistic Portrait, RAW Photo, Ultra Detailed",
-                            "Cyberpunk",
-                            "Minimalist",
-                            "Photorealistic",
-                            "Disney Style",
-                            "Ghibli Style",
-                            "Film Noir",
-                            "Steampunk",
-                            "Watercolor",
-                            "Oil Painting",
-                            "Pixel Art",
-                            "Vaporwave",
-                            "Gothic",
-                            "Surrealism"
-                        ]}
+                        list={PROJECT_EP_GLOBAL_STYLE_OPTIONS}
                     />
 
                     <div>
@@ -1899,7 +1733,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                             label={t('质量等级', 'Quality')} 
                             value={info.tech_params?.visual_standard?.quality} 
                             onChange={v => updateTech('quality', v)} 
-                            list={["Ultra High", "High", "Medium", "Low", "Draft"]} 
+                                     list={PROJECT_EP_QUALITY_OPTIONS} 
                         />
                     </div>
 
@@ -1909,54 +1743,14 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                             value={info.tone} 
                             onChange={v => updateField('tone', v)} 
                             multi={true}
-                            list={[
-                                "Cool", 
-                                "Warm", 
-                                "Neutral", 
-                                "High Contrast", 
-                                "Dark / Moody", 
-                                "Dreamy", 
-                                "Vibrant", 
-                                "Desaturated", 
-                                "Pastel", 
-                                "Gritty",
-                                "Skin Tone Optimized",
-                                "Film Presence", 
-                                "Muted Tones",
-                                "Skin Tone Optimized, Dreamy",
-                                "Film Presence, Muted Tones",
-                                "Neutral, High Contrast",
-                                "Dark / Moody, Gritty",
-                                "Vibrant, High Contrast"
-                            ]} 
+                            list={PROJECT_EP_TONE_OPTIONS} 
                         />
                         <InputGroup idPrefix={prefix}
                             label={t('光照', 'Lighting')} 
                             value={info.lighting} 
                             onChange={v => updateField('lighting', v)} 
                             multi={true}
-                            list={[
-                                "Natural Light", 
-                                "Soft Light", 
-                                "Hard Light", 
-                                "Rim Light", 
-                                "Rembrandt", 
-                                "Neon / Cyber", 
-                                "Cinematic", 
-                                "Low Key", 
-                                "High Key", 
-                                "Volumetric",
-                                "Butterfly Light",
-                                "Studio Light",
-                                "Golden Hour", 
-                                "Window Light", 
-                                "Split Light",
-                                "Butterfly Light, Soft Light",
-                                "Rembrandt, Volumetric",
-                                "Cinematic, Rim Light, Volumetric",
-                                "Studio Light, Hard Light",
-                                "Natural Light, Window Light"
-                            ]} 
+                            list={PROJECT_EP_LIGHTING_OPTIONS} 
                         />
                     </div>
 
@@ -2904,22 +2698,22 @@ const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'en' }) =
         e_global_info: {
             script_title: "",
             series_episode: "",
-            base_positioning: "Modern Workplace",
-            type: "Live Action (Realism/Cinematic 8K)",
-            Global_Style: "Photorealistic, Cinematic Lighting, 8k, Masterpiece",
+            base_positioning: "现代职场 / Modern Workplace",
+            type: "实拍（写实/电影感8K） / Live Action (Realism/Cinematic 8K)",
+            Global_Style: "写实电影感，8k杰作 / Photorealistic, Cinematic Lighting, 8k, Masterpiece",
             tech_params: {
                 visual_standard: {
                     horizontal_resolution: "3840",
                     vertical_resolution: "2160",
                     frame_rate: "24",
                     aspect_ratio: "9:16",
-                    quality: "Ultra High",
+                    quality: "超高 / Ultra High",
                     image_size: "4K"
                 }
             },
-            tone: "Skin Tone Optimized, Dreamy",
+            tone: "肤色优化，梦幻感 / Skin Tone Optimized, Dreamy",
             lighting: "",
-            language: "English",
+            language: "英文 / English",
             borrowed_films: ["King Kong (2005)", "Joker (2019)", "The Truman Show"],
             notes: ""
         },
@@ -2967,6 +2761,15 @@ const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'en' }) =
                          ...loaded.e_global_info.tech_params.visual_standard
                      }
                  };
+             }
+             merged.e_global_info.type = normalizeProjectEpisodeType(merged.e_global_info.type);
+             merged.e_global_info.language = normalizeProjectEpisodeLanguage(merged.e_global_info.language);
+             merged.e_global_info.base_positioning = normalizeProjectEpisodeBasePositioning(merged.e_global_info.base_positioning);
+             merged.e_global_info.Global_Style = normalizeProjectEpisodeGlobalStyle(merged.e_global_info.Global_Style);
+             merged.e_global_info.tone = normalizeProjectEpisodeTone(merged.e_global_info.tone);
+             merged.e_global_info.lighting = normalizeProjectEpisodeLighting(merged.e_global_info.lighting);
+             if (merged.e_global_info.tech_params?.visual_standard) {
+                 merged.e_global_info.tech_params.visual_standard.quality = normalizeProjectEpisodeQuality(merged.e_global_info.tech_params.visual_standard.quality);
              }
              
              setInfo(merged);
@@ -3137,8 +2940,12 @@ const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'en' }) =
         const nextGlobalInfo = {
             ...info.e_global_info,
             ...sourceGlobalInfo,
-            ...(mappedTone !== undefined ? { tone: mappedTone } : {}),
-            ...(mappedLighting !== undefined ? { lighting: mappedLighting } : {}),
+            type: normalizeProjectEpisodeType(sourceGlobalInfo.type ?? info.e_global_info.type),
+            language: normalizeProjectEpisodeLanguage(sourceGlobalInfo.language ?? info.e_global_info.language),
+            base_positioning: normalizeProjectEpisodeBasePositioning(sourceGlobalInfo.base_positioning ?? info.e_global_info.base_positioning),
+            Global_Style: normalizeProjectEpisodeGlobalStyle(sourceGlobalInfo.Global_Style ?? info.e_global_info.Global_Style),
+            ...(mappedTone !== undefined ? { tone: normalizeProjectEpisodeTone(mappedTone) } : {}),
+            ...(mappedLighting !== undefined ? { lighting: normalizeProjectEpisodeLighting(mappedLighting) } : {}),
             tech_params: {
                 ...info.e_global_info.tech_params,
                 ...sourceTechParamsNonEmpty,
@@ -3146,6 +2953,11 @@ const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'en' }) =
                     ...info.e_global_info.tech_params?.visual_standard,
                     ...sourceVisualStandardNonEmpty,
                     ...mappedVisualStandard,
+                    quality: normalizeProjectEpisodeQuality(
+                        sourceVisualStandardNonEmpty.quality
+                        ?? mappedVisualStandard.quality
+                        ?? info.e_global_info.tech_params?.visual_standard?.quality
+                    ),
                 },
             },
         };
@@ -3171,7 +2983,19 @@ const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'en' }) =
             ...prev,
             e_global_info: {
                 ...prev.e_global_info,
-                [key]: value
+                [key]: key === 'type'
+                    ? normalizeProjectEpisodeType(value)
+                    : key === 'language'
+                        ? normalizeProjectEpisodeLanguage(value)
+                        : key === 'base_positioning'
+                            ? normalizeProjectEpisodeBasePositioning(value)
+                            : key === 'Global_Style'
+                                ? normalizeProjectEpisodeGlobalStyle(value)
+                                : key === 'tone'
+                                    ? normalizeProjectEpisodeTone(value)
+                                    : key === 'lighting'
+                                        ? normalizeProjectEpisodeLighting(value)
+                            : value
             }
         }));
     };
@@ -3185,7 +3009,7 @@ const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'en' }) =
                     ...prev.e_global_info.tech_params,
                     visual_standard: {
                         ...prev.e_global_info.tech_params.visual_standard,
-                        [key]: value
+                        [key]: key === 'quality' ? normalizeProjectEpisodeQuality(value) : value
                     }
                 }
             }
@@ -3234,7 +3058,7 @@ const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'en' }) =
                         label={t('基础定位', 'Base Positioning')} 
                         value={data.base_positioning} 
                         onChange={v => updateField('base_positioning', v)} 
-                        list={["Urban Romance", "Sci-Fi Adventure", "Mystery / Thriller", "Period / Wuxia", "Fantasy Epic", "Modern Workplace", "High School / Youth", "Cyberpunk", "Horror", "Comedy", "Drama", "Action", "Historical"]}
+                        list={PROJECT_EP_BASE_POSITIONING_OPTIONS}
                         placeholder={t('例如：悬疑 / 惊悚', 'e.g. Mystery / Thriller')}
                     />
                     
@@ -3243,24 +3067,13 @@ const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'en' }) =
                             label={t('类型', 'Type')} 
                             value={data.type} 
                             onChange={v => updateField('type', v)} 
-                            list={[
-                                "Live Action", 
-                                "Live Action (Realism/Cinematic 8K)",
-                                "2D Animation", 
-                                "3D Animation", 
-                                "Stop Motion", 
-                                "Tokusatsu", 
-                                "Stage Play", 
-                                "CG Animation", 
-                                "Mixed Media", 
-                                "Documentary"
-                            ]} 
+                            list={PROJECT_EP_TYPE_OPTIONS} 
                         />
                         <InputGroup idPrefix={prefix}
                             label={t('语言', 'Language')} 
                             value={data.language} 
                             onChange={v => updateField('language', v)} 
-                            list={["Chinese", "English", "Bilingual (CN/EN)", "Japanese", "Korean", "French", "Spanish", "German", "Other"]} 
+                            list={PROJECT_EP_LANGUAGE_OPTIONS} 
                         />
                     </div>
                     
@@ -3269,23 +3082,7 @@ const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'en' }) =
                         value={data.Global_Style} 
                         onChange={v => updateField('Global_Style', v)} 
                         multi={true}
-                        list={[
-                            "Photorealistic, Cinematic Lighting, 8k, Masterpiece",
-                            "Hyperrealistic Portrait, RAW Photo, Ultra Detailed",
-                            "Cyberpunk", 
-                            "Minimalist", 
-                            "Photorealistic", 
-                            "Disney Style", 
-                            "Ghibli Style", 
-                            "Film Noir", 
-                            "Steampunk", 
-                            "Watercolor", 
-                            "Oil Painting", 
-                            "Pixel Art", 
-                            "Vaporwave", 
-                            "Gothic", 
-                            "Surrealism"
-                        ]}
+                        list={PROJECT_EP_GLOBAL_STYLE_OPTIONS}
                         placeholder={t('例如：赛博朋克', 'e.g. Cyberpunk')}
                     />
 
@@ -3312,7 +3109,7 @@ const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'en' }) =
                     <div className="grid grid-cols-3 gap-4">
                          <InputGroup idPrefix={prefix} label={t('帧率', 'Frame Rate')} value={data.tech_params?.visual_standard?.frame_rate} onChange={v => updateTech('frame_rate', v)} list={["24", "30", "60"]} />
                          <InputGroup idPrefix={prefix} label={t('画幅比例', 'Aspect Ratio')} value={data.tech_params?.visual_standard?.aspect_ratio} onChange={v => updateTech('aspect_ratio', v)} list={["16:9", "2.35:1", "4:3", "9:16", "1:1"]} />
-                         <InputGroup idPrefix={prefix} label={t('质量等级', 'Quality')} value={data.tech_params?.visual_standard?.quality} onChange={v => updateTech('quality', v)} list={["Ultra High", "High", "Medium", "Low", "Draft"]} />
+                         <InputGroup idPrefix={prefix} label={t('质量等级', 'Quality')} value={data.tech_params?.visual_standard?.quality} onChange={v => updateTech('quality', v)} list={PROJECT_EP_QUALITY_OPTIONS} />
                         <InputGroup idPrefix={prefix} label={t('图像尺寸', 'Image Size')} value={data.tech_params?.visual_standard?.image_size} onChange={v => updateTech('image_size', v)} list={["1K", "2K", "4K"]} />
                     </div>
 
@@ -3322,54 +3119,14 @@ const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'en' }) =
                             value={data.tone} 
                             onChange={v => updateField('tone', v)} 
                             multi={true}
-                            list={[
-                                "Cool", 
-                                "Warm", 
-                                "Neutral", 
-                                "High Contrast", 
-                                "Dark / Moody", 
-                                "Dreamy", 
-                                "Vibrant", 
-                                "Desaturated", 
-                                "Pastel", 
-                                "Gritty",
-                                "Skin Tone Optimized",
-                                "Film Presence", 
-                                "Muted Tones",
-                                "Skin Tone Optimized, Dreamy",
-                                "Film Presence, Muted Tones",
-                                "Neutral, High Contrast",
-                                "Dark / Moody, Gritty",
-                                "Vibrant, High Contrast"
-                            ]}
+                                     list={PROJECT_EP_TONE_OPTIONS}
                          />
                          <InputGroup idPrefix={prefix}
                             label={t('光照', 'Lighting')} 
                             value={data.lighting} 
                             onChange={v => updateField('lighting', v)} 
                             multi={true}
-                            list={[
-                                "Natural Light", 
-                                "Soft Light", 
-                                "Hard Light", 
-                                "Rim Light", 
-                                "Rembrandt", 
-                                "Neon / Cyber", 
-                                "Cinematic", 
-                                "Low Key", 
-                                "High Key", 
-                                "Volumetric",
-                                "Butterfly Light",
-                                "Studio Light",
-                                "Golden Hour", 
-                                "Window Light", 
-                                "Split Light",
-                                "Butterfly Light, Soft Light",
-                                "Rembrandt, Volumetric",
-                                "Cinematic, Rim Light, Volumetric",
-                                "Studio Light, Hard Light",
-                                "Natural Light, Window Light"
-                            ]}
+                                     list={PROJECT_EP_LIGHTING_OPTIONS}
                          />
                     </div>
 

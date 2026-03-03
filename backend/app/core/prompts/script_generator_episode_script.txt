@@ -33,6 +33,26 @@ Rules:
 - Environment Description Boundary (Mandatory): do NOT describe environment visual details/layout/decor/lighting style. Keep only minimal scene label context (e.g., location/time) needed for story continuity.
 - Scene-Environment Authority (Mandatory): treat scene-level environment as authoritative for downstream shot generation. This stage defines only minimal narrative location labels and state handoff; do NOT redesign or rename environment variants for shot stage.
 - Environment Change Fallback (Mandatory): if a beat implies background-set shift / axis reversal / observer-direction rebuild beyond current scene environment semantics, mark it as a new scene boundary in this draft (new `scene_id` + new handoff), instead of letting downstream shots patch environment ad hoc.
+- Pre-Generation Type Analysis & Benchmarking (Mandatory): before writing any script body, you MUST classify the content type and align writing tactics with matched high-quality abstract references.
+  - Candidate types (open set, examples include): `真人故事片` / `2D故事片` / `文旅宣传` / `商品宣传` / `企业宣传`.
+  - Type set is NOT limited to the above examples; infer additional valid content types/subtypes from project context when needed.
+  - Out-of-list type decision priority (when type is not in examples):
+    1) Primary classify by script objective: story dramatization / message communication / persuasive conversion.
+    2) Then refine by narrative form: fiction / documentary / mixed media / animation / live-action hybrid.
+    3) Then refine by target audience and expected action/emotional response.
+    4) Resolve one explicit `Primary Type` + optional `Secondary Type` before writing scenes, and keep this mapping stable throughout the episode.
+  - Type conflict resolution (mandatory, when upstream and local intents differ):
+    1) Respect local script-level locked type first, then Episode Story DNA type decision, then Global Story DNA default.
+    2) Local script intent may override upstream type mapping for this episode execution when objective evidence supports it.
+    3) Never violate non-overridable hard boundaries: tone/rating safety, legal/compliance limits, world logic and continuity constraints.
+    4) If conflict remains, choose the conservative continuity-safe path and keep the most-local locked `Primary Type` unchanged.
+  - Determine one `Primary Type` and optional `Secondary Type`; script execution style must obey this decision.
+  - Benchmark scope: abstract craft patterns from Hollywood/international narrative films and top multinational campaign films of similar type.
+  - Allowed extraction: pacing, hook timing, conflict escalation cadence, reveal rhythm, emotional payoff pattern, CTA/message cadence (for promo types).
+  - Forbidden: copying any specific copyrighted character names, plot lines, signature scenes, or trademark dialogue.
+  - Type-priority rule:
+    - Story film types (`真人故事片` / `2D故事片`): prioritize character arc pressure, reversal density, scene-level causal tension, climax catharsis.
+    - Promo types (`文旅宣传` / `商品宣传` / `企业宣传`): prioritize message clarity, persuasion proof flow, trust-building emotion, conversion-oriented ending hook.
 - Do NOT separate dialogue and action into different blocks. Write them interleaved in time order, character-driven.
 - Keep the draft production-friendly: each scene should be readable and not overly long.
 - Hierarchical continuity contract (mandatory):
@@ -81,6 +101,14 @@ Rules:
 
 Output format (Markdown):
 # {episode_number}-{episode_title}
+
+## -1) 类型研判与参考执行（必须先写）
+- Primary Type（主类型）: ...
+- Secondary Type（可选）: ...
+- Benchmark Pattern Set（抽象参考模式）:
+  - Hollywood / International Narrative Pattern: ...
+  - Multinational Campaign Pattern: ...
+- Script Execution Rules（本集脚本执行规则）: ...
 
 ## Logline
 - (1-2 sentences)

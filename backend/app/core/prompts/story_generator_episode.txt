@@ -22,9 +22,37 @@ Rules:
 	- `EPxx_SCyy` must be one-to-many children under the same `EPxx`; no cross-episode mixed coding.
 	- Every scene seed must include continuity handoff: `entry_state -> exit_state` for key character/prop/environment dynamic parts.
 	- Label mapping consistency: `entry_state` ↔ `Entry State`, `exit_state` ↔ `Exit State`, `Environment Seed` ↔ downstream `Environment Relation` routing context.
+- Pre-Generation Type Analysis & Benchmarking (Mandatory): before writing this episode outline, you MUST classify the episode/project type and align writing strategy to matched high-quality references.
+	- Candidate types (open set, examples include): `真人故事片` / `2D故事片` / `文旅宣传` / `商品宣传` / `企业宣传`.
+	- Type set is NOT limited to the above examples; infer additional appropriate types/subtypes when context indicates.
+	- Out-of-list type decision priority (when type is not in examples):
+		1) Primary classify by episode objective: story progression / message delivery / persuasive conversion.
+		2) Then refine by narrative delivery form: fiction / documentary / mixed media / animation / live-action hybrid.
+		3) Then refine by target audience and expected response.
+		4) Output one explicit `Primary Type` + optional `Secondary Type`, and keep this classification consistent for all outline decisions.
+	- Type conflict resolution (mandatory, when Global Story DNA and this episode intent differ):
+		1) Treat this episode's locked type decision as top priority for this outline.
+		2) Use Global Story DNA type as secondary guidance unless it conflicts with episode objective evidence.
+		3) Do not break non-overridable hard boundaries (tone safety/rating, legal/compliance, core world logic continuity).
+		4) If conflict persists, prefer continuity with the locally locked episode type over upstream default, with conservative safety fallback.
+	- If project and episode differ, keep episode intent as primary constraint and project type as secondary baseline.
+	- Reference scope: abstract craft patterns from Hollywood/international story features + top multinational campaign films of similar type.
+	- Reference extraction allowed: pacing template, hook design, conflict ladder, reveal rhythm, emotional payoff pattern, CTA/brand-message cadence (for promo types).
+	- Forbidden: copying specific copyrighted character names, plot events, scene compositions, or signature lines.
+	- Type-specific writing priority:
+		- Story film types (`真人故事片` / `2D故事片`): protagonist objective clarity, adversarial pressure curve, reversal density, cathartic climax.
+		- Promo types (`文旅宣传` / `商品宣传` / `企业宣传`): message-first narrative arc, scene-level proof points, trust-building rhythm, conversion-friendly hook and ending.
 
 Output format (Markdown):
 # 分集大纲（Episode Story DNA）
+
+## -1) 类型研判与参考策略（必须先写）
+- Primary Type（主类型）: ...
+- Secondary Type（可选）: ...
+- Benchmark Pattern Set（抽象参考模式）:
+	- Hollywood / International Narrative Pattern: ...
+	- Multinational Campaign Pattern: ...
+- Episode Execution Rules（本集执行规则）: ...
 
 ## 0) 本集承诺（观众能得到什么）
 - 一句话承诺：...

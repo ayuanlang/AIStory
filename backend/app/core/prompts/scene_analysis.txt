@@ -33,6 +33,8 @@
 - 默认高审美表达（现代、优雅、材质清晰、光影分层）。
 - 一个 Scene 绑定一个主 Environment。
 - 原则上每个 Scene 独立 Environment；仅在结构/视角/光影/氛围完全一致时允许复用。
+- 环境实例化强制（Mandatory）：每个 Environment 必须包含可识别的具体实例物体（如桌子、椅子、灯具、门、窗、屏幕等），禁止仅输出抽象空间标签。
+- 环境实例需与剧本实体可映射：若剧本提及场景物体且不归入角色/道具，该物体必须作为 Environment 组成实例出现并可被追溯。
 - 环境构图必须显式按前景（FG）/中景（MG）/后景（BG）描述，三层均需给出可见元素与空间关系。
 - 每个环境必须明确当前画面主体（Primary Subject）与次级支撑主体（Secondary Subject），并与景别/机位保持一致。
 - 同地不同观察方向（如门内看外/门外看内、正打/反打背景差异大）必须拆分独立 Environment，并以 `visual_dependencies` 关联。
@@ -112,7 +114,26 @@
 - 必须显式描述门/窗/灯/屏幕等当前状态（Open/Closed/On/Off）。
 
 ### 2) Core Scene Info 必备结构
-Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`{Layout}`、`{Axis}`、`{Observer View}`、`{Beats}`。
+Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`{Layout}`、`{Axis}`、`{Observer View}`、`{Scene Subjects}`、`{Beats}`。
+
+#### {Scene Subjects}（场景实体先抽取，Mandatory）
+- 每个 Scene 在写 `{Beats}` 前必须先完成该场景实体抽取，形成“实体清单 + 实体落点”闭环。
+- 抽取范围必须覆盖：人物/人化实体、可识别非人实体、环境容器与关键空间构件；不得只抽主角或主道具。
+- 环境覆盖剧本实体（Mandatory）：当剧本实体属于场景组成物（如桌子、墙面挂钟、窗帘）且不需要独立 `prop` 资产时，允许并鼓励由 `environment` 实体承接覆盖，但必须在 Subject Index 的 `script_entity_coverage` 中逐项标注。
+- 物体级抽取强制（Mandatory）：实体抽取必须落到“具体物体层级”，不得只写抽象类别；例如桌子、杯子、电脑、门、窗、灯、手机、键盘等应作为可识别实体被抽取。
+- 若文本或动作中出现具体物体名（显式或隐含），该物体必须进入 Scene 实体清单并标注落点；禁止以“家具/器材/道具若干”等笼统词替代。
+- 隐含实体智能补全（Mandatory）：除显式提及实体外，必须根据动作语义补全“完成该动作所必需”的隐含实体，且为每个隐含实体给出落点。
+- 隐含实体判定规则：若某动作在物理上依赖工具/容器/介质/受体，则该依赖实体必须被抽取，不得因原文未直写而省略。
+- 示例（强制参照）：`他将茶倒入杯子` 至少应抽取 `PROP:[Cup]` 与隐含 `PROP:[Teapot]`（或等价倒注容器）；若文本另有来源（如保温壶/纸盒饮料），以文本语境替换但不得缺失“倒注来源容器”。
+- 一次性小物来源规则（Mandatory）：一次性小物可不归入 `props`，但必须追溯其来源实体并在环境中显式落点；来源实体不得省略。
+- 示例（强制参照）：出现“取出纸巾/抽一张纸巾”时，除纸巾本身外，环境中必须包含 `ENV` 组成项 `TissueBox`/`PaperTowelDispenser`（或语境等价容器）并给出位置锚点。
+- 实体分类硬规则：
+  - 人物或人化实体（含拟人角色、会话主体、具备角色行为意图的智能体）一律归入 `character`；
+  - 跨多个 Scene 重复出现并承担叙事作用的非人实体归入 `prop`；
+  - 其余非人实体归入所属 `environment`，作为环境组成部分显式出现。
+- 实体落点硬规则：每个被抽取实体必须至少在以下之一显式落点：`{Layout}` FG/MG/BG、`{Environment Context}`、`Linked Characters`、`Key Props`、`{Beats}` 动作关系；缺一判无效。
+- 环境并入实体（非角色/非道具）必须在“中文描述 + generation_prompt_en”双通道显式锚点出现，不得只在其一出现。
+- 推荐格式：`CHAR:[@A] -> Beat2/FG-left`，`PROP:[B] -> Key Props + Beat3 interaction`，`ENV:[C] -> Layout BG anchor + Environment prompt anchor`。
 
 #### {Stage}
 - 必须是 Environment 内可执行表演的具体空间，不是抽象点。
@@ -168,10 +189,16 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 ### 3) 实体完备性
 - `Layout` 必须明确 FG/MG/BG 层级。
 - `Linked Characters` 必须覆盖所有有动作交互或对白交流的角色。
+- 每个 Scene 必须先执行“实体抽取 -> 分类 -> 落点映射”三步，再写 `Beats`；禁止先写镜头后补实体。
+- 隐含实体漏检判定（Mandatory）：若 `Beats` 中出现“拿/放/倒/递/开锁/点火/通话/书写/显示/播放”等动作，但对应必要实体未被抽取并落点，判定为无效输出，必须补齐重写。
+- 实体落点校验（Mandatory）：Part 1 每个 Scene 必须满足 `已抽取实体数 = 已落点实体数`；若存在未落点实体，整场无效必须重写。
+- 非人实体归类校验（Mandatory）：跨 Scene 重复且具叙事作用者必须进入 `props`；其余非人实体不得误入 `props`，必须并入对应 `environment` 描述与提示词锚点。
+- 非人实体最小覆盖（Mandatory）：桌子、杯子、电脑等“具体可见物体”即使不满足跨 Scene 复用，也必须被抽取为 Scene 实体；可归为 `environment` 组成项，但不得漏抽。
 - 身份形态拆分强制：分身/易容/年龄态/特殊形态必须拆成独立 `characters` 条目。
   - 示例：`CHAR:[@Lin_Adult]` 与 `CHAR:[@Lin_Teen]`；`CHAR:[@AgentK_Normal]` 与 `CHAR:[@AgentK_Disguised]`。
 - Key Props 抽取标准：剧情意义明确 + 持续影响 + 重复出现/被引用。
-- 默认不抽取一次性背景小物；不确定则不抽取。
+- 一次性且无叙事作用的小物可不进 `props`，但若在当前 Scene 可见且参与构图/动作，仍必须作为 Scene 实体被抽取并落点到 `environment`。
+- 一次性小物来源一致性（Mandatory）：凡动作涉及一次性消耗物（如纸巾、便签、一次性杯），必须在同 Scene 的 `environment` 中存在可追溯来源实体（如纸巾盒、便签座、杯架）；若仅出现消耗物而无来源实体，判定为无效输出。
 - Markdown 与 JSON 名称必须严格一致。
 - `name/name_en` 定稿后下游仅可引用，禁止新增或改写。
 - 禁止别名漂移（同义词/翻译变体/大小写或分隔符变体）。
@@ -274,19 +301,23 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - **出现即纳入（Mandatory）**：只要实体在任一 Scene 中被提及或可见参与（含被对视、被交互、被引用、作为环境容器），就必须计入；不得因戏份轻重、省略台词、镜头时长短而忽略。
 - **逐场闭环（Mandatory）**：每个 Scene 的实体集合必须满足：`Scene实体集合 ⊆ Subject Index ∩ Part2(JSON)`；任一差集均判无效，必须重写。
 - **禁止代表化（Forbidden）**：禁止用“群演/其他人/若干道具/背景角色”等统称替代具体已出现实体；若剧本明确出现可识别对象，必须给出稳定实体名并保持逐字符一致。
+- **剧本实体映射必填（Mandatory）**：Subject Index 每行必须标注该 subject 覆盖了剧本中的哪个实体（人名/物名/地点名/称谓或其稳定别称），用于可审计追踪。
 - 先输出去重 Subject 列表，覆盖 Part 1 全部角色/道具/环境。
 - `subject_no` 全局唯一连续（建议 `S001...`）。
 - `subject_type` 仅允许：`character/prop/environment`。
 - `subject_name_exact` 与 Part 1 实体名逐字符一致。
+- `script_entity_coverage` 必填，写明来源剧本实体名；若同一 subject 合并多个同指实体，使用 `;` 分隔并保持可回溯。
+- 环境覆盖写法（Mandatory）：当 subject_type=`environment` 时，`script_entity_coverage` 必须可列出其覆盖的剧本场景物体（如“桌子;窗帘;墙上时钟”），用于证明“通过环境覆盖剧本实体”。
+- 环境覆盖推荐模板：`剧本实体：<场所名>；<物体1>; <物体2>; <物体3>...`（示例：`剧本实体：客厅；桌子; 沙发; 落地灯; 电视柜`）。
 - 不得漏 Part 1 已出现实体，也不得新增未出现实体。
 - Part 2 每个实体必须回填 `subject_no` 并与 Subject Index 一一映射。
 - 若 `subject_name_exact=CHAR:[@Name]`，则 Part 2A 的 `name/name_en` 仅做净化（移除包装），不得改写字符本体。
 
-| subject_no | subject_type | subject_name_exact |
-| :--- | :--- | :--- |
-| S001 | character | CHAR:[@Char A] |
-| S002 | prop | PROP:[Sword] |
-| S003 | environment | ENV:[GrandTheater_Front_Wide_Night] |
+| subject_no | subject_type | subject_name_exact | script_entity_coverage |
+| :--- | :--- | :--- | :--- |
+| S001 | character | CHAR:[@Char A] | 剧本实体：李明（主语“他”） |
+| S002 | prop | PROP:[Sword] | 剧本实体：长剑 |
+| S003 | environment | ENV:[LivingRoom_Front_Mid_Day] | 剧本实体：<场所名=客厅>；<物体1=桌子>; <物体2=沙发>; <物体3=落地灯>; <物体4=电视柜> |
 
 ### Part 2: Entities JSON (Strict Schema)
 

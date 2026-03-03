@@ -27,9 +27,38 @@ Rules:
 	- In section "分集规划", every episode line must begin with its canonical episode ID.
 	- In section "分集规划", every episode line must include a concrete episode title in `number-title` form (e.g., `1-暗门`, `2-回声协议`), non-empty and story-specific; no placeholders like `Episode x` / `第x集` / `Untitled` / `TBD`.
 	- For each episode, also provide 2-4 Core Venue Seeds (venue family names) and continuity anchors (must-track character/prop threads) for downstream scene coding.
+- Pre-Generation Type Analysis & Benchmarking (Mandatory): before generating any story framework, you MUST first classify the project into one primary content type and optional secondary type, then benchmark against high-quality similar works.
+	- Candidate types (open set, examples include): `真人故事片` / `2D故事片` / `文旅宣传` / `商品宣传` / `企业宣传`.
+	- Type set is NOT limited to the above examples; you may infer additional valid content types/subtypes from user intent and context.
+	- Out-of-list type decision priority (when type is not in examples):
+		1) Primary classify by core objective: story-expression / message-persuasion / information-explanation.
+		2) Then refine by narrative form: fiction / documentary / mixed media / animation / live-action hybrid.
+		3) Then refine by audience & conversion intent: entertainment / brand trust / product conversion / public communication.
+		4) Finally map to one explicit `Primary Type` + optional `Secondary Type`, and keep this mapping consistent through all downstream outputs.
+	- Type conflict resolution (mandatory, when Project/Episode/Script intents disagree):
+		1) Treat Script-level locked `Primary Type` as highest execution priority, then Episode-level decision, then Project-level default.
+		2) Allow local/script intent to override upstream type mapping for execution, while still honoring non-overridable hard boundaries (tone safety/rating boundary, legal/compliance boundary).
+		3) Use Project-level type mainly as strategic baseline when no stronger local evidence exists.
+		4) If unresolved, fall back to continuity with the most-local locked type (`Script` > `Episode` > `Project`) using the safer interpretation.
+	- You may also map to adjacent cinematic categories when needed (e.g., documentary-style branded film, mixed live-action+CG promo), but primary type must be explicit.
+	- Benchmarking source scope: prioritize widely recognized Hollywood feature storytelling patterns and top-tier multinational brand/corporate campaign film patterns (narrative structure, emotional arc, message delivery rhythm, reveal/punch cadence, CTA style when relevant).
+	- Do NOT copy specific copyrighted plot lines, character setups, or signature scenes; extract only abstract narrative strategies and craft patterns.
+	- Ensure benchmark strategy is type-consistent:
+		- Story films (`真人故事片` / `2D故事片`): prioritize character arc, conflict escalation, midpoint reversal, climax payoff.
+		- Promo films (`文旅宣传` / `商品宣传` / `企业宣传`): prioritize brand/message clarity, audience hook in first beats, scene-level persuasion flow, emotional proof + conversion-oriented ending.
 
 Output format (Markdown):
 # 故事框架（全局 Story DNA）
+
+## -2) 类型研判与参考基线（必须先写）
+- Primary Type（主类型）: ...
+- Secondary Type（可选）: ...
+- Type Rationale（判定依据）: ...
+- Benchmark Profile（抽象参考画像）:
+	- Hollywood / International Narrative Patterns: ...
+	- Multinational Campaign Film Patterns: ...
+	- Must-Use Craft Rules for This Project: ...
+- Differentiation Guardrails（避免同质化）: ...
 
 ## -1) 项目概览 → 全局风格与硬约束（必须先写，供后续所有剧本/分镜遵循）
 - 你读取到的项目基本信息（从输入提炼）：
