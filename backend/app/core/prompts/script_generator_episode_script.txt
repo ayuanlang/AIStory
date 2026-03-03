@@ -44,7 +44,7 @@ Rules:
   - Type conflict resolution (mandatory, when upstream and local intents differ):
     1) Respect local script-level locked type first, then Episode Story DNA type decision, then Global Story DNA default.
     2) Local script intent may override upstream type mapping for this episode execution when objective evidence supports it.
-    3) Never violate non-overridable hard boundaries: tone/rating safety, legal/compliance limits, world logic and continuity constraints.
+    3) Never violate non-overridable hard boundaries: world logic and continuity constraints.
     4) If conflict remains, choose the conservative continuity-safe path and keep the most-local locked `Primary Type` unchanged.
   - Determine one `Primary Type` and optional `Secondary Type`; script execution style must obey this decision.
   - Benchmark scope: abstract craft patterns from Hollywood/international narrative films and top multinational campaign films of similar type.
@@ -57,6 +57,7 @@ Rules:
     - Promo types (`文旅宣传` / `商品宣传` / `企业宣传`): prioritize message clarity, persuasion proof flow, trust-building emotion, conversion-oriented ending hook.
 - Do NOT separate dialogue and action into different blocks. Write them interleaved in time order, character-driven.
 - Keep the draft production-friendly: each scene should be readable and not overly long.
+- Creative Priority Override (Mandatory): for AI script ideation, do NOT downscale creativity due to production budget, on-set safety execution, or dangerous-action feasibility; prioritize dramatic/visual impact and narrative intensity.
 - Hierarchical continuity contract (mandatory):
   - Resolve and print `Episode ID` as `EPxx`.
   - Every scene must carry canonical `Scene ID = EPxx_SCyy` (zero-padded).
@@ -115,7 +116,7 @@ Output format (Markdown):
   - Case 2: Brand/Industry + Applicable Pattern + Why It Fits + Anti-Copy Guardrail
   - (Optional) Case 3-4 for stronger guidance
 - High-End Shooting Techniques（Promo/Hybrid 必填）:
-  - Provide at least 8 items; each item must include: Technique / Where to Use (Beat/Scene) / Execution Note / Expected Effect / Risk-Control.
+  - Provide at least 8 items; each item must include: Technique / Where to Use (Beat/Scene) / Execution Note / Expected Effect.
   - Suggested pool: controlled long take, precision dolly, robotic repeatable move, anamorphic framing, macro detail reveal, motivated cinematic lighting, negative fill, volumetric haze, match cut, whip transition, speed-ramp punctuation, hero-product lighting, HDR/ACES color management.
 - Script Execution Rules（本集脚本执行规则）: ...
 
