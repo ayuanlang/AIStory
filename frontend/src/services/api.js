@@ -798,8 +798,14 @@ export const stopAllGenerationJobs = async (kind = 'all') => {
 };
 
 export const generateImage = async (prompt, provider = null, ref_image_url = null, options = {}, negative_prompt = null) => {
+    const {
+        job_timeout_ms,
+        job_poll_interval_ms,
+        on_job_created,
+        ...requestOptions
+    } = options || {};
     const effectiveNegativePrompt = String(negative_prompt ?? options?.negative_prompt ?? '').trim();
-    const payload = { prompt, provider, ref_image_url, ...options, ...(effectiveNegativePrompt ? { negative_prompt: effectiveNegativePrompt } : {}) };
+    const payload = { prompt, provider, ref_image_url, ...requestOptions, ...(effectiveNegativePrompt ? { negative_prompt: effectiveNegativePrompt } : {}) };
     const idempotencyKey = getOrCreateImageSubmitIdempotencyKey(payload, options?.idempotency_key);
 
     let submitResp;
@@ -831,10 +837,17 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
     if (!jobId) {
         throw new Error('Missing image job_id from submit response');
     }
+    if (typeof on_job_created === 'function') {
+        try {
+            on_job_created(jobId);
+        } catch {
+            // ignore callback errors
+        }
+    }
 
     const result = await pollImageJobUntilDone(jobId, {
-        timeoutMs: Number(options?.job_timeout_ms || 10 * 60 * 1000),
-        pollIntervalMs: Number(options?.job_poll_interval_ms || 3000),
+        timeoutMs: Number(job_timeout_ms || 10 * 60 * 1000),
+        pollIntervalMs: Number(job_poll_interval_ms || 3000),
     });
 
     if (shouldAutoDownloadForRequest(options) && result?.url) {

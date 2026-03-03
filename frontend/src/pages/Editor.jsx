@@ -11459,6 +11459,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const shotBatchStatusTimerRef = useRef(null);
     const activeResumeVideoJobsRef = useRef(new Set());
     const pausedResumeVideoJobsRef = useRef({});
+    const pendingImageJobsRef = useRef({});
     const [activeSources, setActiveSources] = useState({ Image: 'unset', Video: 'unset' });
     const [localKeyframes, setLocalKeyframes] = useState([]);
     const generationStateStorageKey = useMemo(() => {
@@ -11675,6 +11676,28 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         const all = readVideoJobStateStorage();
         return String(all?.[stableShotId]?.jobId || '').trim();
     }, [readVideoJobStateStorage]);
+
+    const setPendingImageJob = useCallback((shotId, kind, jobId) => {
+        const stableShotId = String(shotId || '').trim();
+        const stableKind = kind === 'end' ? 'end' : 'start';
+        const stableJobId = String(jobId || '').trim();
+        if (!stableShotId || !stableJobId) return;
+        pendingImageJobsRef.current[`${stableShotId}:${stableKind}`] = stableJobId;
+    }, []);
+
+    const getPendingImageJobId = useCallback((shotId, kind) => {
+        const stableShotId = String(shotId || '').trim();
+        const stableKind = kind === 'end' ? 'end' : 'start';
+        if (!stableShotId) return '';
+        return String(pendingImageJobsRef.current[`${stableShotId}:${stableKind}`] || '').trim();
+    }, []);
+
+    const clearPendingImageJob = useCallback((shotId, kind) => {
+        const stableShotId = String(shotId || '').trim();
+        const stableKind = kind === 'end' ? 'end' : 'start';
+        if (!stableShotId) return;
+        delete pendingImageJobsRef.current[`${stableShotId}:${stableKind}`];
+    }, []);
 
     useEffect(() => {
         hasHydratedGenerationStateRef.current = false;
@@ -13400,6 +13423,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const handleGenerateStartFrame = async (promptOverride = null) => {
         if (!editingShot) return;
         const targetShotId = editingShot.id;
+        let createdImageJobId = '';
 
         // Check inherit logic - Inherit from previous End Frame
         const currentPrompt = String(promptOverride || editingShot.start_frame || '').trim();
@@ -13516,9 +13540,14 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     shot_name: editingShot.shot_name,
                     asset_type: 'start_frame',
                         ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
-                    negative_prompt: buildEntityNegativePrompt(rawPrompt, null, entities)
+                    negative_prompt: buildEntityNegativePrompt(rawPrompt, null, entities),
+                    on_job_created: (jobId) => {
+                        createdImageJobId = String(jobId || '').trim();
+                        setPendingImageJob(targetShotId, 'start', jobId);
+                    },
                 });
                 if (res && res.url) {
+                    clearPendingImageJob(targetShotId, 'start');
                     // Save original prompt to DB (user view), but image was generated with context
                     const newData = { image_url: res.url, start_frame: rawPrompt };
                     await onUpdateShot(targetShotId, newData);
@@ -13531,18 +13560,24 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 }
             } catch (e) {
                 console.error(`Attempt ${attempts} failed:`, e);
+                if (createdImageJobId) {
+                    clearPendingImageJob(targetShotId, 'start');
+                    createdImageJobId = '';
+                }
                 if (attempts >= maxAttempts) {
                     onLog?.(`Generation failed after ${maxAttempts} attempts: ${e.message}`, 'error');
                     showNotification(`Generation failed: ${e.message}`, 'error');
                 }
             }
         }
+        clearPendingImageJob(targetShotId, 'start');
         setShotGeneratingState(targetShotId, 'start', false);
     };
 
     const handleGenerateEndFrame = async (promptOverride = null) => {
         if (!editingShot) return;
         const targetShotId = editingShot.id;
+        let createdImageJobId = '';
         setShotGeneratingState(targetShotId, 'end', true);
         abortGenerationRef.current = false;
 
@@ -13606,9 +13641,14 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     shot_name: editingShot.shot_name,
                     asset_type: 'end_frame',
                     ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
-                    negative_prompt: buildEntityNegativePrompt(rawPrompt, null, entities)
+                    negative_prompt: buildEntityNegativePrompt(rawPrompt, null, entities),
+                    on_job_created: (jobId) => {
+                        createdImageJobId = String(jobId || '').trim();
+                        setPendingImageJob(targetShotId, 'end', jobId);
+                    },
                 });
                 if (res && res.url) {
+                    clearPendingImageJob(targetShotId, 'end');
                     tech.end_frame_url = res.url;
                     tech.video_gen_mode = 'start_end'; // Auto-switch to Start+End
                     const newData = { technical_notes: JSON.stringify(tech), end_frame: rawPrompt };
@@ -13622,14 +13662,46 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 }
             } catch (e) {
                 console.error(`Attempt ${attempts} failed:`, e);
+                if (createdImageJobId) {
+                    clearPendingImageJob(targetShotId, 'end');
+                    createdImageJobId = '';
+                }
                 if (attempts >= maxAttempts) {
                     onLog?.(`Generation failed after ${maxAttempts} attempts: ${e.message}`, 'error');
                     showNotification(`Generation failed: ${e.message}`, 'error');
                 }
             }
         }
+        clearPendingImageJob(targetShotId, 'end');
         setShotGeneratingState(targetShotId, 'end', false);
     };
+
+    const handleForceStopShotImage = useCallback(async (kind) => {
+        const stableKind = kind === 'end' ? 'end' : 'start';
+        const stableShotId = String(editingShot?.id || '').trim();
+        if (!stableShotId) return;
+
+        abortGenerationRef.current = true;
+        setShotGeneratingState(stableShotId, stableKind, false);
+
+        const jobId = getPendingImageJobId(stableShotId, stableKind);
+        if (!jobId) {
+            onLog?.(t('已停止前端重试循环。未检测到可停止的后端图片任务。', 'Stopped local retry loop. No active backend image job found.'), 'warning');
+            return;
+        }
+
+        try {
+            const res = await stopGenerationJob('image', jobId);
+            onLog?.(res?.message || t('已请求停止图片任务。', 'Image stop requested.'), 'warning');
+            showNotification(t('已请求停止图片任务', 'Image stop requested'), 'warning');
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'unknown error';
+            onLog?.(`${t('停止图片任务失败', 'Failed to stop image task')}: ${detail}`, 'error');
+            showNotification(`${t('停止失败', 'Stop failed')}: ${detail}`, 'error');
+        } finally {
+            clearPendingImageJob(stableShotId, stableKind);
+        }
+    }, [clearPendingImageJob, editingShot?.id, getPendingImageJobId, onLog, setShotGeneratingState, t]);
 
     const handleGenerateVideo = async (promptOverride = null) => {
         if (!editingShot) return;
@@ -14416,7 +14488,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 </button>
                                                 {currentGeneratingState.start && (
                                                     <button 
-                                                        onClick={() => abortGenerationRef.current = true}
+                                                        onClick={() => handleForceStopShotImage('start')}
                                                         className="text-[10px] px-2 py-0.5 rounded flex items-center gap-1 bg-red-500/20 text-red-400 hover:bg-red-500/30 border border-red-500/30"
                                                         title={t('停止重试循环', 'Stop Retry Loop')}
                                                     >
@@ -14561,7 +14633,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 </button>
                                                 {currentGeneratingState.end && (
                                                     <button 
-                                                        onClick={() => abortGenerationRef.current = true}
+                                                        onClick={() => handleForceStopShotImage('end')}
                                                         className="text-[10px] px-2 py-0.5 rounded flex items-center gap-1 bg-red-500/20 text-red-400 hover:bg-red-500/30 border border-red-500/30"
                                                         title={t('停止重试循环', 'Stop Retry Loop')}
                                                     >
