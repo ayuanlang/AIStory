@@ -16,6 +16,64 @@ const VIDEO_JOB_TIMEOUT_MS_DEFAULT = (() => {
     return Math.min(10 * 60 * 1000, Math.max(60 * 1000, parsed));
 })();
 
+const VIDEO_STATUS_MAX_CONCURRENT = (() => {
+    const parsed = Number(import.meta?.env?.VITE_VIDEO_STATUS_MAX_CONCURRENT || 2);
+    if (!Number.isFinite(parsed)) return 2;
+    return Math.max(1, Math.min(4, Math.floor(parsed)));
+})();
+
+let videoStatusInFlight = 0;
+const videoStatusWaitQueue = [];
+const videoStatusSingleFlight = new Map();
+
+const acquireVideoStatusSlot = async () => {
+    if (videoStatusInFlight < VIDEO_STATUS_MAX_CONCURRENT) {
+        videoStatusInFlight += 1;
+        return;
+    }
+    await new Promise((resolve) => {
+        videoStatusWaitQueue.push(resolve);
+    });
+    videoStatusInFlight += 1;
+};
+
+const releaseVideoStatusSlot = () => {
+    videoStatusInFlight = Math.max(0, videoStatusInFlight - 1);
+    const next = videoStatusWaitQueue.shift();
+    if (typeof next === 'function') {
+        next();
+    }
+};
+
+const fetchVideoJobStatusLimited = async (jobId) => {
+    const stableJobId = String(jobId || '').trim();
+    if (!stableJobId) {
+        throw new Error('Missing video job id');
+    }
+
+    const existing = videoStatusSingleFlight.get(stableJobId);
+    if (existing) {
+        return existing;
+    }
+
+    const pending = (async () => {
+        await acquireVideoStatusSlot();
+        try {
+            const response = await api.get(`/generate/video/jobs/${stableJobId}`);
+            return response?.data || {};
+        } finally {
+            releaseVideoStatusSlot();
+        }
+    })();
+
+    videoStatusSingleFlight.set(stableJobId, pending);
+    try {
+        return await pending;
+    } finally {
+        videoStatusSingleFlight.delete(stableJobId);
+    }
+};
+
 const normalizeVideoJobTimeoutMs = (value) => {
     const parsed = Number(value);
     if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -694,8 +752,7 @@ const pollVideoJobUntilDone = async (jobId, { timeoutMs = VIDEO_JOB_TIMEOUT_MS_D
     const maxIntervalMs = 12000;
     while (Date.now() - start < timeoutMs) {
         try {
-            const response = await api.get(`/generate/video/jobs/${jobId}`);
-            const data = response?.data || {};
+            const data = await fetchVideoJobStatusLimited(jobId);
             const status = String(data.status || '').toLowerCase();
 
             if (status === 'succeeded') {
@@ -720,8 +777,7 @@ const pollVideoJobUntilDone = async (jobId, { timeoutMs = VIDEO_JOB_TIMEOUT_MS_D
 };
 
 export const getVideoGenerationJobStatus = async (jobId) => {
-    const response = await api.get(`/generate/video/jobs/${jobId}`);
-    return response?.data || {};
+    return await fetchVideoJobStatusLimited(jobId);
 };
 
 export const getGenerationJobPool = async (params = {}) => {
