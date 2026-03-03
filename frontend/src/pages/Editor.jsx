@@ -1114,6 +1114,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
             try {
                 const payload = {
                     mode: 'global',
+                    generator_kind: 'story',
                     episodes_count: Number(globalStoryInput.episodes_count || 0) || 0,
                     background: globalStoryInput.background,
                     setup: globalStoryInput.setup,
@@ -1180,6 +1181,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
 
             const payload = {
                 mode: 'global',
+                generator_kind: 'promo',
                 episodes_count: episodesCount,
                 script_title: info.script_title,
                 type: promoInput.promo_type || info.type,
@@ -1269,6 +1271,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
         try {
             const payload = {
                 mode: 'global',
+                generator_kind: 'story',
                 episodes_count: Number(globalStoryInput.episodes_count || 0),
                 // Project Overview / Basic Information (forward to LLM)
                 script_title: info.script_title,
@@ -1347,6 +1350,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
             setGlobalStoryInput(mergedStoryInput);
             await saveProjectStoryGeneratorGlobalInput(id, {
                 mode: 'global',
+                generator_kind: 'story',
                 episodes_count: Number(mergedStoryInput.episodes_count || 0) || 0,
                 background: mergedStoryInput.background,
                 setup: mergedStoryInput.setup,
@@ -1505,6 +1509,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
 
         try {
             const overwriteExisting = Boolean(forceStart);
+            const generatorKind = projectTab === 'promo_generator' ? 'promo' : 'story';
             const modeLabel = retryFailedOnly
                 ? 'retry-failed-only'
                 : (overwriteExisting ? 'force-generate-all' : 'generate-missing-only');
@@ -1519,10 +1524,11 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
 
             addLog?.(`Generating episode scripts (${modeLabel}, target 1..${n})... (This may take several minutes)`, 'process');
             addLog?.(
-                `[DEBUG][Before API] Generate Episode Scripts payload: ${JSON.stringify({ episodes_count: n, overwrite_existing: overwriteExisting, retry_failed_only: retryFailedOnly })}`,
+                `[DEBUG][Before API] Generate Episode Scripts payload: ${JSON.stringify({ generator_kind: generatorKind, episodes_count: n, overwrite_existing: overwriteExisting, retry_failed_only: retryFailedOnly })}`,
                 'info'
             );
             const res = await generateProjectEpisodeScripts(id, {
+                generator_kind: generatorKind,
                 episodes_count: n,
                 overwrite_existing: overwriteExisting,
                 retry_failed_only: retryFailedOnly,
@@ -1777,6 +1783,12 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                     className={`px-4 py-2 rounded-lg text-sm font-bold ${projectTab === 'story_generator' ? 'bg-white text-black' : 'bg-white/10 text-white hover:bg-white/20'}`}
                 >
                     {t('故事生成器', 'Story Generator')}
+                </button>
+                <button
+                    onClick={() => setProjectTab('promo_generator')}
+                    className={`px-4 py-2 rounded-lg text-sm font-bold ${projectTab === 'promo_generator' ? 'bg-white text-black' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                >
+                    {t('宣传片生成器', 'Promo Generator')}
                 </button>
             </div>
 
@@ -2043,90 +2055,6 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                                 <div className="mt-2 text-xs text-white/80 space-y-2">
                                     <div>
                                         中文（建议流程）：
-
-                                    {projectTab === 'story_generator' && (
-                                    <div className="bg-card border border-white/10 p-6 rounded-xl space-y-4 xl:col-span-2">
-                                        <div className="flex items-center justify-between gap-3">
-                                            <h3 className="text-lg font-semibold text-primary">{t('宣传片生成器（企业 / 产品 / 文旅）', 'Promo Generator (Corporate / Product / Tourism)')}</h3>
-                                            <div className="flex items-center gap-2">
-                                                <button
-                                                    onClick={handleGeneratePromoFramework}
-                                                    disabled={isGeneratingGlobalStory}
-                                                    className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${isGeneratingGlobalStory ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
-                                                    title={t('根据宣传目标生成宣传框架（写入全局框架区）', 'Generate promo framework and write to global framework output')}
-                                                >
-                                                    {isGeneratingGlobalStory ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('生成中...', 'Generating...')}</> : <><Sparkles className="w-4 h-4" /> {t('生成宣传框架', 'Generate Promo Framework')}</>}
-                                                </button>
-                                                <button
-                                                    onClick={handleGenerateEpisodeScripts}
-                                                    disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts}
-                                                    className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${(episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
-                                                    title={t('使用当前宣传框架生成分集剧本', 'Generate episode scripts using current promo framework')}
-                                                >
-                                                    {episodeScriptsRunning ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('生成中...', 'Generating...')}</> : <><Wand2 className="w-4 h-4" /> {t('生成分集剧本', 'Generate Episode Scripts')}</>}
-                                                </button>
-                                            </div>
-                                        </div>
-
-                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                            <InputGroup
-                                                idPrefix={prefix}
-                                                label={t('宣传类型', 'Promo Type')}
-                                                value={promoInput.promo_type}
-                                                onChange={v => setPromoInput(prev => ({ ...prev, promo_type: v }))}
-                                                list={[
-                                                    '企业宣传 / Corporate Promotion',
-                                                    '商品宣传 / Product Promotion',
-                                                    '文旅宣传 / Cultural Tourism Promotion',
-                                                ]}
-                                            />
-                                            <InputGroup
-                                                idPrefix={prefix}
-                                                label={t('集数', 'Episodes Count')}
-                                                value={String(promoInput.episodes_count || '')}
-                                                onChange={v => setPromoInput(prev => ({ ...prev, episodes_count: Number(v || 0) }))}
-                                                list={['3', '5', '6', '8', '10', '12']}
-                                            />
-
-                                            <div className="sm:col-span-2">
-                                                <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('传播目标', 'Campaign Objective')}</label>
-                                                <textarea className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none" value={promoInput.campaign_objective} onChange={(e) => setPromoInput(prev => ({ ...prev, campaign_objective: e.target.value }))} placeholder={t('例如：提升品牌信任、拉新转化、目的地种草', 'e.g., lift brand trust, acquire new users, destination awareness')} />
-                                            </div>
-                                            <div className="sm:col-span-2">
-                                                <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('目标受众', 'Target Audience')}</label>
-                                                <textarea className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none" value={promoInput.target_audience} onChange={(e) => setPromoInput(prev => ({ ...prev, target_audience: e.target.value }))} placeholder={t('受众画像、痛点、决策场景', 'Audience persona, pain points, decision context')} />
-                                            </div>
-                                            <div className="sm:col-span-2">
-                                                <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('核心信息', 'Key Message')}</label>
-                                                <textarea className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none" value={promoInput.key_message} onChange={(e) => setPromoInput(prev => ({ ...prev, key_message: e.target.value }))} placeholder={t('一句话价值主张 + 记忆点', 'One-line value proposition + memory anchor')} />
-                                            </div>
-                                            <div className="sm:col-span-2">
-                                                <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('核心亮点', 'Core Highlights')}</label>
-                                                <textarea className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none" value={promoInput.core_highlights} onChange={(e) => setPromoInput(prev => ({ ...prev, core_highlights: e.target.value }))} placeholder={t('产品/企业/目的地亮点，建议 3-6 条', 'Product/corporate/destination highlights, ideally 3-6 points')} />
-                                            </div>
-                                            <div className="sm:col-span-2">
-                                                <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('可信证明', 'Credibility Proof')}</label>
-                                                <textarea className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none" value={promoInput.credibility_proof} onChange={(e) => setPromoInput(prev => ({ ...prev, credibility_proof: e.target.value }))} placeholder={t('数据、案例、权威背书、用户证言', 'Data, case studies, authority endorsements, user testimonials')} />
-                                            </div>
-                                            <div>
-                                                <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('开场钩子', 'Hook Opening')}</label>
-                                                <textarea className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none" value={promoInput.hook_opening} onChange={(e) => setPromoInput(prev => ({ ...prev, hook_opening: e.target.value }))} placeholder={t('前 3-8 秒抓眼点', 'Attention hook in first 3-8 seconds')} />
-                                            </div>
-                                            <div>
-                                                <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('转化动作', 'Conversion CTA')}</label>
-                                                <textarea className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none" value={promoInput.conversion_cta} onChange={(e) => setPromoInput(prev => ({ ...prev, conversion_cta: e.target.value }))} placeholder={t('预约、咨询、下单、到店、关注等', 'Book, inquire, purchase, visit, follow, etc.')} />
-                                            </div>
-                                            <div>
-                                                <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('传播场景', 'Channel Context')}</label>
-                                                <textarea className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none" value={promoInput.channel_context} onChange={(e) => setPromoInput(prev => ({ ...prev, channel_context: e.target.value }))} placeholder={t('抖音/小红书/官网/展会等场景与时长约束', 'Channels and duration constraints (TikTok/Rednote/web/expo, etc.)')} />
-                                            </div>
-                                            <div>
-                                                <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('约束条件', 'Constraints')}</label>
-                                                <textarea className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none" value={promoInput.constraints} onChange={(e) => setPromoInput(prev => ({ ...prev, constraints: e.target.value }))} placeholder={t('合规边界、禁用词、素材边界、语气要求', 'Compliance limits, forbidden claims, asset limits, tone requirements')} />
-                                            </div>
-                                        </div>
-                                    </div>
-                                    )}
                                         <ol className="list-decimal ml-4 mt-1 space-y-1">
                                             <li>先写 Background / World：世界规则、时代地点、核心矛盾来源。</li>
                                             <li>再写 Setup：开场钩子 + 诱因事件 + 主角做出不可逆选择。</li>
@@ -2377,6 +2305,64 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                             readOnly
                             placeholder={t('（生成后，这里会显示提取出的全局风格与硬性约束。）', '(After generation, extracted global style & hard constraints will appear here.)')}
                         />
+                    </div>
+                </div>
+                )}
+
+                {projectTab === 'promo_generator' && (
+                <div className="bg-card border border-white/10 p-6 rounded-xl space-y-4 xl:col-span-2">
+                    <div className="flex items-center justify-between gap-3">
+                        <h3 className="text-lg font-semibold text-primary">{t('宣传片生成器（企业 / 产品 / 文旅）', 'Promo Generator (Corporate / Product / Tourism)')}</h3>
+                        <div className="flex items-center gap-2">
+                            <button
+                                onClick={handleGeneratePromoFramework}
+                                disabled={isGeneratingGlobalStory}
+                                className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${isGeneratingGlobalStory ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                            >
+                                {isGeneratingGlobalStory ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('生成中...', 'Generating...')}</> : <><Sparkles className="w-4 h-4" /> {t('生成宣传框架', 'Generate Promo Framework')}</>}
+                            </button>
+                            <button
+                                onClick={handleGenerateEpisodeScripts}
+                                disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts}
+                                className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${(episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                            >
+                                {episodeScriptsRunning ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('生成中...', 'Generating...')}</> : <><Wand2 className="w-4 h-4" /> {t('生成分集剧本', 'Generate Episode Scripts')}</>}
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <InputGroup
+                            idPrefix={prefix}
+                            label={t('宣传类型', 'Promo Type')}
+                            value={promoInput.promo_type}
+                            onChange={v => setPromoInput(prev => ({ ...prev, promo_type: v }))}
+                            list={[
+                                '企业宣传 / Corporate Promotion',
+                                '商品宣传 / Product Promotion',
+                                '文旅宣传 / Cultural Tourism Promotion',
+                            ]}
+                        />
+                        <InputGroup
+                            idPrefix={prefix}
+                            label={t('集数', 'Episodes Count')}
+                            value={String(promoInput.episodes_count || '')}
+                            onChange={v => setPromoInput(prev => ({ ...prev, episodes_count: Number(v || 0) }))}
+                            list={['3', '5', '6', '8', '10', '12']}
+                        />
+
+                        <div className="sm:col-span-2">
+                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('传播目标', 'Campaign Objective')}</label>
+                            <textarea className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none" value={promoInput.campaign_objective} onChange={(e) => setPromoInput(prev => ({ ...prev, campaign_objective: e.target.value }))} />
+                        </div>
+                        <div className="sm:col-span-2">
+                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('目标受众', 'Target Audience')}</label>
+                            <textarea className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none" value={promoInput.target_audience} onChange={(e) => setPromoInput(prev => ({ ...prev, target_audience: e.target.value }))} />
+                        </div>
+                        <div className="sm:col-span-2">
+                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('核心信息', 'Key Message')}</label>
+                            <textarea className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none" value={promoInput.key_message} onChange={(e) => setPromoInput(prev => ({ ...prev, key_message: e.target.value }))} />
+                        </div>
                     </div>
                 </div>
                 )}
@@ -9866,6 +9852,9 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     const [refImage, setRefImage] = useState(null);
     const [refSelectionMode, setRefSelectionMode] = useState(null); // 'assets'
     const [assets, setAssets] = useState([]);
+    const [assetKeyword, setAssetKeyword] = useState('');
+    const [assetProjectFilter, setAssetProjectFilter] = useState('all');
+    const [assetImageTypeFilter, setAssetImageTypeFilter] = useState('all');
     const [availableProviders, setAvailableProviders] = useState([]);
     const [activeSourceImage, setActiveSourceImage] = useState('unset');
     const [viewingEntity, setViewingEntity] = useState(null);
@@ -10291,6 +10280,10 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     const handleOpenImageModal = (entity, defaultTab = 'library') => {
         setSelectedEntity(entity);
         setImageModalTab(defaultTab); // This might cause render before prompt is set?
+        setAssetKeyword('');
+        setAssetImageTypeFilter('all');
+        const currentProjectKey = String(projectId || '').trim();
+        setAssetProjectFilter(currentProjectKey || 'all');
         
         // Prefill prompt with processed template
         let rawPrompt = entity.generation_prompt_en || '';
@@ -10339,11 +10332,118 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     const loadAssets = async () => {
         try {
             const data = await fetchAssets();
-            setAssets(data.filter(a => a.type === 'image'));
+            const imageAssets = data.filter(a => a.type === 'image');
+            setAssets(imageAssets);
+
+            const currentProjectKey = String(projectId || '').trim();
+            if (!currentProjectKey) return;
+
+            const hasCurrentProjectAssets = imageAssets.some((asset) => {
+                const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
+                return String(meta.project_id || '').trim() === currentProjectKey;
+            });
+            if (hasCurrentProjectAssets) {
+                setAssetProjectFilter(currentProjectKey);
+            }
         } catch (e) {
             console.error(e);
         }
     };
+
+    const getAssetMeta = useCallback((asset) => {
+        if (!asset || typeof asset !== 'object') return {};
+        const meta = asset.meta_info;
+        return meta && typeof meta === 'object' ? meta : {};
+    }, []);
+
+    const getAssetProjectId = useCallback((asset) => {
+        const meta = getAssetMeta(asset);
+        const idVal = meta.project_id;
+        return String(idVal || '').trim();
+    }, [getAssetMeta]);
+
+    const getAssetProjectLabel = useCallback((asset) => {
+        const meta = getAssetMeta(asset);
+        const projectId = String(meta.project_id || '').trim();
+        const projectTitle = String(meta.project_title || '').trim();
+        if (projectTitle && projectId) return `${projectTitle} (#${projectId})`;
+        if (projectTitle) return projectTitle;
+        if (projectId) return `Project #${projectId}`;
+        return t('未标注项目', 'Unassigned Project');
+    }, [getAssetMeta, t]);
+
+    const getAssetImageType = useCallback((asset) => {
+        const meta = getAssetMeta(asset);
+        return String(
+            meta.asset_type ||
+            meta.frame_type ||
+            meta.subject_type ||
+            meta.entity_type ||
+            meta.category ||
+            ''
+        ).trim().toLowerCase();
+    }, [getAssetMeta]);
+
+    const assetProjectOptions = useMemo(() => {
+        const map = new Map();
+        for (const asset of assets || []) {
+            const projectId = getAssetProjectId(asset);
+            if (!projectId) continue;
+            if (!map.has(projectId)) {
+                map.set(projectId, getAssetProjectLabel(asset));
+            }
+        }
+        return Array.from(map.entries())
+            .map(([value, label]) => ({ value, label }))
+            .sort((a, b) => a.label.localeCompare(b.label));
+    }, [assets, getAssetProjectId, getAssetProjectLabel]);
+
+    const assetImageTypeOptions = useMemo(() => {
+        const set = new Set();
+        for (const asset of assets || []) {
+            const typeName = getAssetImageType(asset);
+            if (typeName) set.add(typeName);
+        }
+        return Array.from(set).sort((a, b) => a.localeCompare(b));
+    }, [assets, getAssetImageType]);
+
+    const filteredAssets = useMemo(() => {
+        const keyword = String(assetKeyword || '').trim().toLowerCase();
+        return (assets || []).filter((asset) => {
+            const projectId = getAssetProjectId(asset);
+            if (assetProjectFilter !== 'all' && projectId !== assetProjectFilter) return false;
+
+            const imageType = getAssetImageType(asset);
+            if (assetImageTypeFilter !== 'all' && imageType !== assetImageTypeFilter) return false;
+
+            if (!keyword) return true;
+            const meta = getAssetMeta(asset);
+            const haystack = [
+                asset?.name,
+                asset?.filename,
+                asset?.remark,
+                asset?.url,
+                meta?.project_title,
+                meta?.project_id,
+                meta?.asset_type,
+                meta?.frame_type,
+                meta?.subject_type,
+                meta?.entity_type,
+                meta?.category,
+            ]
+                .map(v => String(v || '').toLowerCase())
+                .join(' ');
+            return haystack.includes(keyword);
+        });
+    }, [
+        assets,
+        assetKeyword,
+        assetProjectFilter,
+        assetImageTypeFilter,
+        getAssetProjectId,
+        getAssetImageType,
+        getAssetMeta,
+    ]);
 
     // Image Handlers
     const  handleSelectAsset = async (asset) => {
@@ -11265,8 +11365,49 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
 
                             <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
                                 {imageModalTab === 'library' && (
-                                    <div className="grid grid-cols-4 gap-4">
-                                        {assets.map(asset => (
+                                    <div>
+                                        <div className="mb-3 grid grid-cols-1 sm:grid-cols-[1fr_180px_180px_auto] gap-2">
+                                            <input
+                                                type="text"
+                                                value={assetKeyword}
+                                                onChange={(e) => setAssetKeyword(e.target.value)}
+                                                placeholder={t('搜索素材名称/项目/类型/备注', 'Search name/project/type/remark')}
+                                                className="bg-black/40 border border-white/10 rounded-md px-3 py-2 text-xs text-white focus:border-primary/50 outline-none"
+                                            />
+                                            <select
+                                                value={assetProjectFilter}
+                                                onChange={(e) => setAssetProjectFilter(e.target.value)}
+                                                className="bg-black/40 border border-white/10 rounded-md px-2 py-2 text-xs text-white focus:border-primary/50 outline-none"
+                                            >
+                                                <option value="all">{t('全部项目', 'All Projects')}</option>
+                                                {assetProjectOptions.map((item) => (
+                                                    <option key={item.value} value={item.value}>{item.label}</option>
+                                                ))}
+                                            </select>
+                                            <select
+                                                value={assetImageTypeFilter}
+                                                onChange={(e) => setAssetImageTypeFilter(e.target.value)}
+                                                className="bg-black/40 border border-white/10 rounded-md px-2 py-2 text-xs text-white focus:border-primary/50 outline-none"
+                                            >
+                                                <option value="all">{t('全部图片类型', 'All Image Types')}</option>
+                                                {assetImageTypeOptions.map((typeName) => (
+                                                    <option key={typeName} value={typeName}>{typeName}</option>
+                                                ))}
+                                            </select>
+                                            <button
+                                                onClick={() => {
+                                                    setAssetKeyword('');
+                                                    setAssetProjectFilter('all');
+                                                    setAssetImageTypeFilter('all');
+                                                }}
+                                                className="px-3 py-2 rounded-md text-xs font-bold bg-white/10 hover:bg-white/20 text-white"
+                                            >
+                                                {t('重置', 'Reset')}
+                                            </button>
+                                        </div>
+
+                                        <div className="grid grid-cols-4 gap-4">
+                                        {filteredAssets.map(asset => (
                                             <div 
                                                 key={asset.id} 
                                                 onClick={() => handleSelectAsset(asset)}
@@ -11276,11 +11417,12 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                                 <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                                             </div>
                                         ))}
-                                        {assets.length === 0 && (
+                                        {filteredAssets.length === 0 && (
                                             <div className="col-span-4 py-12 text-center text-muted-foreground">
-                                                {t('素材库中未找到图片', 'No images found in library')}
+                                                {t('没有匹配筛选条件的素材', 'No assets matched current filters')}
                                             </div>
                                         )}
+                                        </div>
                                     </div>
                                 )}
 
@@ -11496,9 +11638,38 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                                              <span className="text-xs font-bold text-muted-foreground ml-2">{t('从素材中选择', 'Select from Assets')}</span>
                                                              <button onClick={() => setRefSelectionMode(null)}><X size={14} className="text-white/50 hover:text-white"/></button>
                                                          </div>
+                                                         <div className="px-2 py-2 border-b border-white/10 bg-black/20 grid grid-cols-1 sm:grid-cols-[1fr_130px_130px] gap-2">
+                                                             <input
+                                                                 type="text"
+                                                                 value={assetKeyword}
+                                                                 onChange={(e) => setAssetKeyword(e.target.value)}
+                                                                 placeholder={t('搜索素材', 'Search assets')}
+                                                                 className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
+                                                             />
+                                                             <select
+                                                                 value={assetProjectFilter}
+                                                                 onChange={(e) => setAssetProjectFilter(e.target.value)}
+                                                                 className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
+                                                             >
+                                                                 <option value="all">{t('全部项目', 'All Projects')}</option>
+                                                                 {assetProjectOptions.map((item) => (
+                                                                     <option key={item.value} value={item.value}>{item.label}</option>
+                                                                 ))}
+                                                             </select>
+                                                             <select
+                                                                 value={assetImageTypeFilter}
+                                                                 onChange={(e) => setAssetImageTypeFilter(e.target.value)}
+                                                                 className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
+                                                             >
+                                                                 <option value="all">{t('全部类型', 'All Types')}</option>
+                                                                 {assetImageTypeOptions.map((typeName) => (
+                                                                     <option key={typeName} value={typeName}>{typeName}</option>
+                                                                 ))}
+                                                             </select>
+                                                         </div>
                                                          <div className="flex-1 overflow-y-auto p-2 custom-scrollbar">
                                                              <div className="grid grid-cols-4 gap-2">
-                                                                 {assets.map(asset => (
+                                                                 {filteredAssets.map(asset => (
                                                                      <div 
                                                                          key={asset.id} 
                                                                          onClick={() => {
@@ -11511,7 +11682,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                                                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                                                                      </div>
                                                                  ))}
-                                                                 {assets.length === 0 && (
+                                                                 {filteredAssets.length === 0 && (
                                                                      <div className="col-span-4 py-8 text-center text-xs text-muted-foreground">{t('未找到素材', 'No assets found')}</div>
                                                                  )}
                                                              </div>

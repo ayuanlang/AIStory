@@ -50,6 +50,8 @@ Rules:
   - Benchmark scope: abstract craft patterns from Hollywood/international narrative films and top multinational campaign films of similar type.
   - Allowed extraction: pacing, hook timing, conflict escalation cadence, reveal rhythm, emotional payoff pattern, CTA/message cadence (for promo types).
   - Forbidden: copying any specific copyrighted character names, plot lines, signature scenes, or trademark dialogue.
+  - Promo/Hybrid mandatory extension: include 2-4 international large-enterprise campaign benchmark references as method-level guidance only (no copied wording, no shot-by-shot cloning).
+  - Promo/Hybrid mandatory extension: include an executable high-end filming-technique list for this episode.
   - Type-priority rule:
     - Story film types (`真人故事片` / `2D故事片`): prioritize character arc pressure, reversal density, scene-level causal tension, climax catharsis.
     - Promo types (`文旅宣传` / `商品宣传` / `企业宣传`): prioritize message clarity, persuasion proof flow, trust-building emotion, conversion-oriented ending hook.
@@ -108,6 +110,13 @@ Output format (Markdown):
 - Benchmark Pattern Set（抽象参考模式）:
   - Hollywood / International Narrative Pattern: ...
   - Multinational Campaign Pattern: ...
+- International Enterprise Benchmark Cases（Promo/Hybrid 必填）:
+  - Case 1: Brand/Industry + Applicable Pattern + Why It Fits + Anti-Copy Guardrail
+  - Case 2: Brand/Industry + Applicable Pattern + Why It Fits + Anti-Copy Guardrail
+  - (Optional) Case 3-4 for stronger guidance
+- High-End Shooting Techniques（Promo/Hybrid 必填）:
+  - Provide at least 8 items; each item must include: Technique / Where to Use (Beat/Scene) / Execution Note / Expected Effect / Risk-Control.
+  - Suggested pool: controlled long take, precision dolly, robotic repeatable move, anamorphic framing, macro detail reveal, motivated cinematic lighting, negative fill, volumetric haze, match cut, whip transition, speed-ramp punctuation, hero-product lighting, HDR/ACES color management.
 - Script Execution Rules（本集脚本执行规则）: ...
 
 ## Logline

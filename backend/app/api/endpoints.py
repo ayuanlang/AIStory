@@ -347,6 +347,85 @@ def _build_ref_display_names(value: Any, limit: int = 20) -> List[str]:
     return names
 
 
+_PROMO_TYPE_HINTS = (
+    "宣传",
+    "推广",
+    "营销",
+    "品牌",
+    "campaign",
+    "promotion",
+    "promotional",
+    "advert",
+    "advertising",
+    "brand",
+    "corporate",
+    "product",
+    "tourism",
+    "cta",
+    "conversion",
+)
+
+
+def _looks_like_promo_type(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    if not text:
+        return False
+    return any(token in text for token in _PROMO_TYPE_HINTS)
+
+
+def _has_promo_generator_input(global_info: Any) -> bool:
+    gi = dict(global_info or {})
+    promo_input = gi.get("promo_generator_input")
+    if not isinstance(promo_input, dict):
+        return False
+
+    for key in (
+        "promo_type",
+        "campaign_objective",
+        "target_audience",
+        "key_message",
+        "core_highlights",
+        "conversion_cta",
+    ):
+        if str(promo_input.get(key) or "").strip():
+            return True
+    return False
+
+
+def _should_use_promo_prompts(global_info: Any, req_type: Any = None, req_extra_notes: Any = None) -> bool:
+    gi = dict(global_info or {})
+
+    if _looks_like_promo_type(req_type):
+        return True
+
+    if _looks_like_promo_type(req_extra_notes):
+        return True
+
+    if _has_promo_generator_input(gi):
+        return True
+
+    saved_story_input = gi.get("story_generator_global_input")
+    if isinstance(saved_story_input, dict):
+        if _looks_like_promo_type(saved_story_input.get("type")):
+            return True
+        if _looks_like_promo_type(saved_story_input.get("extra_notes")):
+            return True
+
+    if _looks_like_promo_type(gi.get("type")):
+        return True
+
+    return False
+
+
+def _normalize_generator_kind(value: Any) -> Optional[str]:
+    raw = str(value or "").strip().lower()
+    if raw in {"promo", "promotion", "promotional"}:
+        return "promo"
+    if raw in {"story", "narrative", "film"}:
+        return "story"
+    return None
+
+
 def _log_shot_submit_debug(kind: str, req: Any, refs: Any = None, extra: Optional[Dict[str, Any]] = None) -> None:
     if not _is_shot_submit_debug_enabled():
         return
@@ -2671,12 +2750,6 @@ async def generate_project_story_dna_global(
         raise HTTPException(status_code=400, detail="episodes_count is required")
 
     prompt_dir = os.path.join(str(settings.BASE_DIR), "app", "core", "prompts")
-    prompt_path = os.path.join(prompt_dir, "story_generator_global.txt")
-    if not os.path.exists(prompt_path):
-        logger.error(f"Story generator prompt not found at: {prompt_path}")
-        raise HTTPException(status_code=404, detail="Prompt file 'story_generator_global.txt' not found.")
-    with open(prompt_path, "r", encoding="utf-8") as f:
-        sys_prompt = f.read()
 
     # Prefer request payload (latest UI state), fall back to saved global_info.
     script_title = (req.script_title or gi_existing.get("script_title") or "").strip()
@@ -2684,6 +2757,25 @@ async def generate_project_story_dna_global(
     language = (req.language or gi_existing.get("language") or "").strip()
     base_positioning = (req.base_positioning or gi_existing.get("base_positioning") or "").strip()
     global_style = (req.Global_Style or gi_existing.get("Global_Style") or gi_existing.get("global_style") or "").strip()
+    generator_kind = _normalize_generator_kind(req.generator_kind)
+
+    if generator_kind == "promo":
+        prompt_filename = "promo_generator_global.txt"
+    elif generator_kind == "story":
+        prompt_filename = "story_generator_global.txt"
+    else:
+        prompt_filename = "promo_generator_global.txt" if _should_use_promo_prompts(
+            gi_existing,
+            req_type=project_type,
+            req_extra_notes=req.extra_notes,
+        ) else "story_generator_global.txt"
+
+    prompt_path = os.path.join(prompt_dir, prompt_filename)
+    if not os.path.exists(prompt_path):
+        logger.error(f"Story generator prompt not found at: {prompt_path}")
+        raise HTTPException(status_code=404, detail=f"Prompt file '{prompt_filename}' not found.")
+    with open(prompt_path, "r", encoding="utf-8") as f:
+        sys_prompt = f.read()
 
     user_prompt = (
         f"Mode: global\n"
@@ -3429,6 +3521,7 @@ class EpisodeOut(BaseModel):
 
 
 class ProjectEpisodeScriptsGenerateRequest(BaseModel):
+    generator_kind: Optional[str] = None  # promo | story
     episodes_count: Optional[int] = None
     overwrite_existing: bool = False
     retry_failed_only: bool = False
@@ -3806,6 +3899,7 @@ async def generate_project_character_profile(
 
 class StoryGeneratorRequest(BaseModel):
     mode: str  # 'global' | 'episode'
+    generator_kind: Optional[str] = None  # promo | story
     episodes_count: Optional[int] = None
     episode_number: Optional[int] = None
     # Project Overview / Basic Information (optional but should be forwarded to LLM when provided)
@@ -4162,7 +4256,17 @@ async def generate_episode_story_dna(
         # Backward compatible: allow generating global from any episode, but store to project.global_info
         if not req.episodes_count or int(req.episodes_count) <= 0:
             raise HTTPException(status_code=400, detail="episodes_count is required for global mode")
-        prompt_filename = "story_generator_global.txt"
+        generator_kind = _normalize_generator_kind(req.generator_kind)
+        if generator_kind == "promo":
+            prompt_filename = "promo_generator_global.txt"
+        elif generator_kind == "story":
+            prompt_filename = "story_generator_global.txt"
+        else:
+            prompt_filename = "promo_generator_global.txt" if _should_use_promo_prompts(
+                project.global_info,
+                req_type=req.type,
+                req_extra_notes=req.extra_notes,
+            ) else "story_generator_global.txt"
     else:
         if not req.episode_number or int(req.episode_number) <= 0:
             raise HTTPException(status_code=400, detail="episode_number is required for episode mode")
@@ -4555,6 +4659,7 @@ async def generate_project_episode_scripts_from_global_framework(
     call_meta = {
         "project_id": project_id,
         "user_id": current_user.id,
+        "generator_kind": req.generator_kind,
         "episodes_count": req.episodes_count,
         "overwrite_existing": req.overwrite_existing,
         "retry_failed_only": req.retry_failed_only,
@@ -4741,13 +4846,20 @@ async def generate_project_episode_scripts_from_global_framework(
     )
 
     prompt_dir = os.path.join(str(settings.BASE_DIR), "app", "core", "prompts")
-    prompt_path = os.path.join(prompt_dir, "script_generator_episode_script.txt")
+    generator_kind = _normalize_generator_kind(req.generator_kind)
+    if generator_kind == "promo":
+        prompt_filename = "promo_generator_episode_script.txt"
+    elif generator_kind == "story":
+        prompt_filename = "script_generator_episode_script.txt"
+    else:
+        prompt_filename = "promo_generator_episode_script.txt" if _should_use_promo_prompts(gi) else "script_generator_episode_script.txt"
+    prompt_path = os.path.join(prompt_dir, prompt_filename)
     if not os.path.exists(prompt_path):
         logger.error(f"Episode script generator prompt not found at: {prompt_path}")
         logger.info(
-            f"[generate_episode_scripts] RESPONSE success=False status_code=404 project_id={project_id} detail=Prompt file script_generator_episode_script.txt not found"
+            f"[generate_episode_scripts] RESPONSE success=False status_code=404 project_id={project_id} detail=Prompt file {prompt_filename} not found"
         )
-        raise HTTPException(status_code=404, detail="Prompt file 'script_generator_episode_script.txt' not found.")
+        raise HTTPException(status_code=404, detail=f"Prompt file '{prompt_filename}' not found.")
     with open(prompt_path, "r", encoding="utf-8") as f:
         sys_prompt = f.read()
 
@@ -4797,6 +4909,7 @@ async def generate_project_episode_scripts_from_global_framework(
     run_status = {
         "project_id": project_id,
         "running": True,
+        "prompt_filename": prompt_filename,
         "mode": "retry_failed_only" if req.retry_failed_only else "full",
         "started_at": started_at_iso,
         "updated_at": started_at_iso,
@@ -4986,7 +5099,10 @@ async def generate_project_episode_scripts_from_global_framework(
             ep.script_content = content
             ei = dict(ep.episode_info or {})
             ei["episode_script_generated_at"] = datetime.utcnow().isoformat()
-            ei["episode_script_source"] = "project_global_framework_plus_project_character_canon"
+            if prompt_filename == "promo_generator_episode_script.txt":
+                ei["episode_script_source"] = "promo_global_framework_plus_project_character_canon"
+            else:
+                ei["episode_script_source"] = "project_global_framework_plus_project_character_canon"
             ep.episode_info = ei
             db.add(ep)
             db.commit()

@@ -21,9 +21,11 @@ Goal: keep `Episode -> Scene -> Shot` hierarchical continuity deterministic and 
 | Stage | Required Output Keys/Labels | Downstream Consumer | Mapping Notes |
 | :--- | :--- | :--- | :--- |
 | `story_generator_global.txt` | `EPxx` in episode plan lines | Episode Outline | Global only sets canonical episode coding policy and venue/continuity seeds. |
+| `promo_generator_global.txt` | `EPxx` + promo goal/style/beat/copy/visual/duration strategy | Promo Episode Script | Dedicated global framework for promo campaigns (corporate/product/tourism/public messaging). |
 | `story_generator_episode.txt` | `episode_id`, `scene_id`, `Entry State -> Exit State`, `Environment Seed` | Scene List + Episode Script | `entry_state` ↔ `Entry State`; `exit_state` ↔ `Exit State`; `Environment Seed` routes into `Environment Relation` decisions downstream. |
 | `script_generator_scenes.txt` | `episode_id`, `scene_id`, `scene_no`, `scene_name`, `original_script_text`, `core_scene_info`, `environment_name`(story-level), `linked_characters`, `key_props`, `entry_state`, `exit_state` | Scene Analysis + DB scene records | Story-only scene breakdown stage. `environment_name` is narrative location seed only; do not output `Environment Relation/Base/Delta` engineering here. |
 | `script_generator_episode_script.txt` | `Scene ID`, `Environment Relation`, `Base Environment Reference`, `Environment Delta`, `Observer View`, `Entry State`, `Exit State`, beat-level structure | Scene Analysis + Shot Generation | Markdown label form mirrors snake_case JSON form from scene list stage. |
+| `promo_generator_episode_script.txt` | Promo objective/style/beat/copy/visual/duration + `Scene ID`/`Entry State`/`Exit State` | Promo episodic delivery + scene pipeline | Dedicated episode script prompt for promo generator; keeps campaign execution dimensions explicit. |
 | `scene_analysis.txt` | `Episode ID`, `Scene ID`, `Environment Relation`, `Base Environment Reference`, `Environment Delta`, `Observer View`, `Entry State`, `Exit State` + validation checks | Shot Generation + entity extraction | Includes mandatory continuity checks, base-delta inheritance checks, observer-POV checks, and state-handoff verification. |
 | `shot_generator.txt` | `Scene ID`, `Shot ID` | Final shot table | Requires `Shot ID` prefix to exactly match row `Scene ID` (`EPxx_SCyy`). |
 

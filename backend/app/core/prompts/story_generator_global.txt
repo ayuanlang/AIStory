@@ -43,6 +43,8 @@ Rules:
 	- You may also map to adjacent cinematic categories when needed (e.g., documentary-style branded film, mixed live-action+CG promo), but primary type must be explicit.
 	- Benchmarking source scope: prioritize widely recognized Hollywood feature storytelling patterns and top-tier multinational brand/corporate campaign film patterns (narrative structure, emotional arc, message delivery rhythm, reveal/punch cadence, CTA style when relevant).
 	- Do NOT copy specific copyrighted plot lines, character setups, or signature scenes; extract only abstract narrative strategies and craft patterns.
+	- For promo-oriented or hybrid projects, you MUST provide explicit international large-enterprise campaign benchmark references (abstract guidance only, no verbatim copying).
+	- For promo-oriented or hybrid projects, you MUST provide a practical list of premium/high-end filming techniques that can be directly executed.
 	- Ensure benchmark strategy is type-consistent:
 		- Story films (`真人故事片` / `2D故事片`): prioritize character arc, conflict escalation, midpoint reversal, climax payoff.
 		- Promo films (`文旅宣传` / `商品宣传` / `企业宣传`): prioritize brand/message clarity, audience hook in first beats, scene-level persuasion flow, emotional proof + conversion-oriented ending.
@@ -58,6 +60,13 @@ Output format (Markdown):
 	- Hollywood / International Narrative Patterns: ...
 	- Multinational Campaign Film Patterns: ...
 	- Must-Use Craft Rules for This Project: ...
+- International Enterprise Benchmark Cases（国际大企业案例参考，Promo/Hybrid 必填）:
+	- Case 1: Brand/Industry + Campaign Pattern + What to Borrow + Anti-Copy Guardrail
+	- Case 2: Brand/Industry + Campaign Pattern + What to Borrow + Anti-Copy Guardrail
+	- Case 3: Brand/Industry + Campaign Pattern + What to Borrow + Anti-Copy Guardrail
+- High-End Filming Techniques（高端拍摄技巧，Promo/Hybrid 必填）:
+	- Provide at least 10 items; each item must include: Technique / Best Use / Expected Effect / Cost-Risk Note.
+	- Suggested pool: stabilized long take, precision dolly, robotic repeatable move, anamorphic framing, macro texture reveal, long-lens compression, motivated cinematic lighting, negative fill shaping, volumetric atmosphere, match-cut transition, speed-ramp punctuation, HDR/ACES color workflow.
 - Differentiation Guardrails（避免同质化）: ...
 
 ## -1) 项目概览 → 全局风格与硬约束（必须先写，供后续所有剧本/分镜遵循）
