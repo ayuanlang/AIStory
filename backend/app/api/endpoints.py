@@ -315,6 +315,38 @@ def _normalize_ref_list(value: Any) -> List[str]:
     return []
 
 
+def _extract_ref_display_name(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urllib.parse.urlparse(raw)
+        path = urllib.parse.unquote(parsed.path or "")
+        base_name = os.path.basename(path.rstrip("/"))
+        if base_name:
+            return base_name
+        if parsed.netloc:
+            return parsed.netloc
+    except Exception:
+        pass
+    return raw
+
+
+def _build_ref_display_names(value: Any, limit: int = 20) -> List[str]:
+    refs = _normalize_ref_list(value)
+    names: List[str] = []
+    seen: set = set()
+    for ref in refs:
+        name = _extract_ref_display_name(ref)
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+        if len(names) >= limit:
+            break
+    return names
+
+
 def _log_shot_submit_debug(kind: str, req: Any, refs: Any = None, extra: Optional[Dict[str, Any]] = None) -> None:
     if not _is_shot_submit_debug_enabled():
         return
@@ -333,6 +365,7 @@ def _log_shot_submit_debug(kind: str, req: Any, refs: Any = None, extra: Optiona
             "prompt_len": len(str(getattr(req, "prompt", "") or "")),
             "ref_count": len(final_refs),
             "refs": final_refs,
+            "ref_names": _build_ref_display_names(final_refs),
         }
         if extra:
             payload.update(extra)
@@ -11336,6 +11369,14 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
             flat_refs.append(req.last_frame_url.strip())
 
         flat_refs = [x for x in dict.fromkeys([str(x).strip() for x in flat_refs if str(x).strip()]) if x]
+        ref_names = _build_ref_display_names(flat_refs)
+        logger.info(
+            "[GenerateVideo] refs | shot_id=%s shot_number=%s ref_count=%s ref_names=%s",
+            req.shot_id,
+            req.shot_number,
+            len(flat_refs),
+            ref_names,
+        )
         prompt_text = _append_video_api_ref_mapping(
             prompt_text,
             flat_refs,
