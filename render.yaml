@@ -32,6 +32,12 @@ services:
         generateValue: true
       - key: ACCESS_TOKEN_EXPIRE_MINUTES
         value: 43200
+      - key: FRONTEND_BASE_URL
+        value: "https://aistory-frontend.onrender.com"
+      - key: CORS_ORIGINS
+        value: "https://aistory-frontend.onrender.com,http://localhost:3000,http://localhost:5173"
+      - key: CORS_ALLOW_ORIGIN_REGEX
+        value: "^https://.*\\.onrender\\.com$"
       - key: SECURITY_HEADERS_ENABLED
         value: "1"
       - key: SECURITY_HSTS_SECONDS

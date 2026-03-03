@@ -60,6 +60,9 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 # CORS configuration
 origins = [item.strip() for item in (settings.CORS_ORIGINS or "").split(",") if item.strip()]
+frontend_origin = (settings.FRONTEND_BASE_URL or "").strip()
+if frontend_origin and frontend_origin not in origins:
+    origins.append(frontend_origin)
 if os.getenv("RENDER_EXTERNAL_URL"):
     render_origin = os.getenv("RENDER_EXTERNAL_URL").strip()
     if render_origin and render_origin not in origins:
