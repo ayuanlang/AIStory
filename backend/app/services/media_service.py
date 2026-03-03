@@ -1916,14 +1916,11 @@ class MediaGenerationService:
         def _post(): return requests.post(url, json=payload, headers=headers, timeout=60, verify=False)
         
         try:
-            print(f"[{log_tag}] POST Payload Length: {len(json.dumps(payload))}") 
             try:
                 resp = await asyncio.to_thread(_post)
             except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout):
                 resp = await asyncio.to_thread(_post)
-            print(f"[{log_tag}] Submission Response: {resp.text[:500]}...") # DEBUG USER REQUEST
             if resp.status_code not in [200, 201]: 
-                print(f"[{log_tag}] Error {resp.status_code}: {resp.text}")
                 return {"error": f"Submission Failed {resp.status_code}", "details": resp.text, "submit_failed": True}
             
             data = resp.json()
@@ -1969,15 +1966,6 @@ class MediaGenerationService:
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         trace_id = trace_id or f"grsai-{uuid.uuid4().hex[:10]}"
         payload_digest = hashlib.md5(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:12]
-        print(f"[Grsai] Debug - POST URL: {url}")
-        logger.info(
-            "[GrsaiTrace][%s] submit start | submit_url=%s result_url=%s is_video=%s payload_digest=%s",
-            trace_id,
-            url,
-            result_url,
-            is_video,
-            payload_digest,
-        )
 
         def _build_url_pairs(submit_url: str, poll_url: str):
             pairs = [(submit_url, poll_url)]
@@ -1998,15 +1986,6 @@ class MediaGenerationService:
         last_error = None
 
         for index, (submit_url, poll_url) in enumerate(upstream_candidates):
-            print(f"[Grsai] Upstream Try {index + 1}/{len(upstream_candidates)} -> {submit_url}")
-            logger.info(
-                "[GrsaiTrace][%s] upstream_try | idx=%s total=%s submit_url=%s poll_url=%s",
-                trace_id,
-                index + 1,
-                len(upstream_candidates),
-                submit_url,
-                poll_url,
-            )
 
             def _post():
                 return requests.post(submit_url, json=payload, headers=headers, timeout=(15, 120), verify=False)
@@ -2031,21 +2010,10 @@ class MediaGenerationService:
                 submit_ms = int((time.perf_counter() - submit_started) * 1000)
             except requests.exceptions.RequestException as e:
                 last_error = str(e)
-                print(f"[Grsai] Submission network error on {submit_url}: {last_error}")
                 logger.error("[GrsaiTrace][%s] submit network_error | submit_url=%s error=%s", trace_id, submit_url, last_error)
                 continue
 
-            print(f"[Grsai] API Returned: {resp.text[:1000]}")
-            logger.info(
-                "[GrsaiTrace][%s] submit response | submit_url=%s status=%s elapsed_ms=%s body_preview=%s",
-                trace_id,
-                submit_url,
-                resp.status_code,
-                submit_ms,
-                (resp.text or "")[:300],
-            )
             if resp.status_code != 200:
-                print(f"[Grsai] API Error {resp.status_code}: {resp.text}")
                 if resp.status_code == 429 or self._is_grsai_quota_or_throttle_error(resp.text):
                     logger.error("[GrsaiTrace][%s] submit throttled_or_quota | status=%s body=%s", trace_id, resp.status_code, (resp.text or "")[:500])
                     return {
@@ -2077,7 +2045,6 @@ class MediaGenerationService:
 
             data_obj = data.get("data")
             if data_obj is None:
-                print(f"[Grsai] API Logic Failure: {data}")
                 msg = data.get("msg") or data.get("message") or "Unknown Error"
                 return {"error": f"API Error {data.get('code')}", "details": msg, "submit_failed": True}
 
@@ -2100,7 +2067,6 @@ class MediaGenerationService:
                 task_id = data.get("id") or data.get("task_id") or data.get("taskId")
 
             if not task_id:
-                print(f"[Grsai] No Task ID in response: {data}")
                 logger.error("[GrsaiTrace][%s] submit missing_task_id | response=%s", trace_id, str(data)[:1000])
                 return {"error": "No Task ID", "details": data, "submit_failed": True}
 

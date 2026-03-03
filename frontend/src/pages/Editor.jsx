@@ -12060,8 +12060,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             const entries = Object.entries(pending);
             if (entries.length === 0) return;
 
-            onLog?.(`Resuming ${entries.length} pending video job(s) for this episode...`, 'info');
-
             for (const [shotId, payload] of entries) {
                 if (cancelled) break;
 

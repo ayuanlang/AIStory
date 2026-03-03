@@ -21,8 +21,8 @@ services:
         --timeout ${GUNICORN_TIMEOUT:-180} \
         --graceful-timeout ${GUNICORN_GRACEFUL_TIMEOUT:-420} \
         --keep-alive ${GUNICORN_KEEPALIVE:-15} \
-        --max-requests ${GUNICORN_MAX_REQUESTS:-0} \
-        --max-requests-jitter ${GUNICORN_MAX_REQUESTS_JITTER:-0}
+        --max-requests 0 \
+        --max-requests-jitter 0
     envVars:
       - key: PYTHON_VERSION
         value: 3.10.0
