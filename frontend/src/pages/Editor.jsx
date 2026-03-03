@@ -11446,6 +11446,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const [isBatchGenerating, setIsBatchGenerating] = useState(false);
     const [isStoppingShotBatch, setIsStoppingShotBatch] = useState(false);
     const [isManualRebindingMedia, setIsManualRebindingMedia] = useState(false);
+    const [stoppingVideoByShot, setStoppingVideoByShot] = useState({});
     const [translatingPromptField, setTranslatingPromptField] = useState('');
     const [batchProgress, setBatchProgress] = useState({
         current: 0,
@@ -11646,6 +11647,13 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         delete next[stableShotId];
         writeVideoJobStateStorage(next);
     }, [readVideoJobStateStorage, writeVideoJobStateStorage]);
+
+    const getPendingVideoJobId = useCallback((shotId) => {
+        const stableShotId = String(shotId || '').trim();
+        if (!stableShotId) return '';
+        const all = readVideoJobStateStorage();
+        return String(all?.[stableShotId]?.jobId || '').trim();
+    }, [readVideoJobStateStorage]);
 
     useEffect(() => {
         hasHydratedGenerationStateRef.current = false;
@@ -13721,6 +13729,41 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         }
     };
 
+    const handleForceStopShotVideo = useCallback(async (shotId) => {
+        const stableShotId = String(shotId || '').trim();
+        if (!stableShotId) return;
+        const jobId = getPendingVideoJobId(stableShotId);
+        if (!jobId) {
+            onLog?.(t('未找到可停止的视频任务。', 'No running video job found to stop.'), 'warning');
+            return;
+        }
+
+        const confirmed = await confirmUiMessage(t(
+            `确认强制停止该镜头视频任务？\njob_id: ${jobId}`,
+            `Force stop this shot video task?\njob_id: ${jobId}`
+        ));
+        if (!confirmed) return;
+
+        setStoppingVideoByShot((prev) => ({ ...prev, [stableShotId]: true }));
+        try {
+            const res = await stopGenerationJob('video', jobId);
+            clearPendingVideoJob(stableShotId);
+            setShotGeneratingState(stableShotId, 'video', false);
+            onLog?.(res?.message || t('已请求停止视频任务。', 'Video stop requested.'), 'warning');
+            showNotification(t('已请求停止视频任务', 'Video stop requested'), 'warning');
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'unknown error';
+            onLog?.(`${t('停止视频任务失败', 'Failed to stop video task')}: ${detail}`, 'error');
+            showNotification(`${t('停止失败', 'Stop failed')}: ${detail}`, 'error');
+        } finally {
+            setStoppingVideoByShot((prev) => {
+                const next = { ...prev };
+                delete next[stableShotId];
+                return next;
+            });
+        }
+    }, [clearPendingVideoJob, getPendingVideoJobId, onLog, setShotGeneratingState, t]);
+
     const pollShotBatchStatus = useCallback(async () => {
         if (!activeEpisode?.id) return null;
         try {
@@ -15121,6 +15164,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 }
 
                                                 if (modalType === 'video') {
+                                                    const pendingVideoJobId = getPendingVideoJobId(editingShot?.id);
+                                                    const isStoppingCurrentVideo = Boolean(stoppingVideoByShot[String(editingShot?.id || '')]);
                                                     return (
                                                         <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_1fr] gap-4">
                                                             <div className="space-y-3">
@@ -15145,6 +15190,14 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                         className={`text-xs px-2 py-1 rounded ${currentGeneratingState.video ? 'bg-sky-500/10 text-sky-300/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30'}`}
                                                                     >
                                                                         {currentGeneratingState.video ? t('生成中...', 'Generating...') : t('生成', 'Generate')}
+                                                                    </button>
+                                                                    <button
+                                                                        onClick={() => handleForceStopShotVideo(editingShot?.id)}
+                                                                        disabled={!pendingVideoJobId || isStoppingCurrentVideo}
+                                                                        className={`text-xs px-2 py-1 rounded ${(!pendingVideoJobId || isStoppingCurrentVideo) ? 'bg-red-500/10 text-red-300/50 cursor-not-allowed' : 'bg-red-500/20 text-red-200 hover:bg-red-500/30'}`}
+                                                                        title={t('强制停止当前镜头的视频生成任务', 'Force stop current shot video job')}
+                                                                    >
+                                                                        {isStoppingCurrentVideo ? t('停止中...', 'Stopping...') : t('强制停止', 'Force Stop')}
                                                                     </button>
                                                                 </div>
                                                                 <div className="flex items-center justify-between">
