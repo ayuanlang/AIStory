@@ -485,7 +485,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
     });
     const [promoInput, setPromoInput] = useState({
         promo_type: "企业宣传 / Corporate Promotion",
-        episodes_count: 6,
+        episodes_count: 1,
         campaign_objective: "",
         target_audience: "",
         key_message: "",
@@ -1489,7 +1489,11 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
             alert('Cannot generate episode scripts: missing project id.');
             return;
         }
-        const n = Number(globalStoryInput.episodes_count || 0);
+        const n = Number(
+            projectTab === 'promo_generator'
+                ? (promoInput.episodes_count || 0)
+                : (globalStoryInput.episodes_count || 0)
+        );
         if (!n || Number.isNaN(n) || n <= 0) {
             alert('Please set a valid Episodes Count first.');
             return;
@@ -2348,7 +2352,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                             label={t('集数', 'Episodes Count')}
                             value={String(promoInput.episodes_count || '')}
                             onChange={v => setPromoInput(prev => ({ ...prev, episodes_count: Number(v || 0) }))}
-                            list={['3', '5', '6', '8', '10', '12']}
+                            list={['1', '3', '5', '6', '8', '10', '12']}
                         />
 
                         <div className="sm:col-span-2">
@@ -2363,6 +2367,16 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                             <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('核心信息', 'Key Message')}</label>
                             <textarea className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none" value={promoInput.key_message} onChange={(e) => setPromoInput(prev => ({ ...prev, key_message: e.target.value }))} />
                         </div>
+                    </div>
+
+                    <div>
+                        <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('已生成宣传框架（Markdown）', 'Generated Promo Framework (Markdown)')}</label>
+                        <textarea
+                            className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-56 resize-none"
+                            value={info.story_dna_global_md || ''}
+                            onChange={(e) => updateField('story_dna_global_md', e.target.value)}
+                            placeholder={t('（生成后，宣传片全局框架会显示在这里。你可以编辑后保存修改。）', '(After generation, promo global framework will appear here. You can edit it and Save Changes.)')}
+                        />
                     </div>
                 </div>
                 )}
@@ -10374,6 +10388,8 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
 
     const getAssetImageType = useCallback((asset) => {
         const meta = getAssetMeta(asset);
+        const source = String(meta.source || '').trim().toLowerCase();
+        if (source === 'file_upload') return 'uploaded_asset';
         return String(
             meta.asset_type ||
             meta.frame_type ||
@@ -10383,6 +10399,14 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
             ''
         ).trim().toLowerCase();
     }, [getAssetMeta]);
+
+    const getAssetImageTypeLabel = useCallback((typeName) => {
+        const normalized = String(typeName || '').trim().toLowerCase();
+        if (normalized === 'uploaded_asset') {
+            return t('上传资产', 'Uploaded Asset');
+        }
+        return typeName;
+    }, [t]);
 
     const assetProjectOptions = useMemo(() => {
         const map = new Map();
@@ -10404,8 +10428,11 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
             const typeName = getAssetImageType(asset);
             if (typeName) set.add(typeName);
         }
-        return Array.from(set).sort((a, b) => a.localeCompare(b));
-    }, [assets, getAssetImageType]);
+        set.add('uploaded_asset');
+        return Array.from(set)
+            .map((value) => ({ value, label: getAssetImageTypeLabel(value) }))
+            .sort((a, b) => String(a.label || '').localeCompare(String(b.label || '')));
+    }, [assets, getAssetImageType, getAssetImageTypeLabel]);
 
     const filteredAssets = useMemo(() => {
         const keyword = String(assetKeyword || '').trim().toLowerCase();
@@ -11390,8 +11417,8 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                                 className="bg-black/40 border border-white/10 rounded-md px-2 py-2 text-xs text-white focus:border-primary/50 outline-none"
                                             >
                                                 <option value="all">{t('全部图片类型', 'All Image Types')}</option>
-                                                {assetImageTypeOptions.map((typeName) => (
-                                                    <option key={typeName} value={typeName}>{typeName}</option>
+                                                {assetImageTypeOptions.map((item) => (
+                                                    <option key={item.value} value={item.value}>{item.label}</option>
                                                 ))}
                                             </select>
                                             <button
@@ -11662,8 +11689,8 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                                                  className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
                                                              >
                                                                  <option value="all">{t('全部类型', 'All Types')}</option>
-                                                                 {assetImageTypeOptions.map((typeName) => (
-                                                                     <option key={typeName} value={typeName}>{typeName}</option>
+                                                                 {assetImageTypeOptions.map((item) => (
+                                                                     <option key={item.value} value={item.value}>{item.label}</option>
                                                                  ))}
                                                              </select>
                                                          </div>

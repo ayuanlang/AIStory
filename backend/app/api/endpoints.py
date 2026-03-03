@@ -39,6 +39,7 @@ import requests
 import asyncio
 import urllib.parse
 import socket
+import sys
 import time
 import html
 from pathlib import Path
@@ -1676,7 +1677,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 db.rollback()
                 raise
         
-        response_payload: Dict[str, Any] = {"result": result_content, "meta": debug_meta}
+        response_payload: Dict[str, Any] = {"success": True, "result": result_content, "meta": debug_meta}
 
         subject_consistency_meta = _detect_subject_consistency_warnings(result_content)
         debug_meta["subject_consistency"] = subject_consistency_meta

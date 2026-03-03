@@ -83,7 +83,69 @@ const normalizeVideoJobTimeoutMs = (value) => {
 };
 
 const buildApiErrorMessage = (error) => {
+    const extractMessageFromPayload = (payload) => {
+        if (payload == null) return '';
+
+        if (typeof payload === 'string') {
+            const trimmed = payload.trim();
+            if (!trimmed) return '';
+            try {
+                const parsed = JSON.parse(trimmed);
+                return extractMessageFromPayload(parsed) || trimmed;
+            } catch {
+                return trimmed;
+            }
+        }
+
+        if (Array.isArray(payload)) {
+            const joined = payload
+                .map((item) => extractMessageFromPayload(item))
+                .filter(Boolean)
+                .join('; ');
+            return joined;
+        }
+
+        if (typeof payload !== 'object') {
+            return String(payload || '').trim();
+        }
+
+        if (Array.isArray(payload.detail)) {
+            const joined = payload.detail
+                .map((item) => {
+                    if (!item) return '';
+                    if (typeof item === 'string') return item;
+                    const loc = Array.isArray(item.loc) ? item.loc.join('.') : '';
+                    const msg = item.msg || item.message || '';
+                    return loc ? `${loc}: ${msg}` : msg;
+                })
+                .filter(Boolean)
+                .join('; ');
+            if (joined) return joined;
+        }
+
+        const candidates = [
+            payload.detail,
+            payload.message,
+            payload.error,
+            payload.reason,
+            payload.msg,
+            payload.description,
+        ];
+
+        for (const candidate of candidates) {
+            const text = extractMessageFromPayload(candidate);
+            if (text) return text;
+        }
+
+        return '';
+    };
+
     const responseData = error?.response?.data;
+    const extractedFromResponse = extractMessageFromPayload(responseData);
+    if (extractedFromResponse) {
+        return extractedFromResponse;
+    }
+
     const detail = responseData?.detail;
 
     if (Array.isArray(detail)) {
@@ -125,6 +187,12 @@ const buildApiErrorMessage = (error) => {
 
     if (error?.code === 'ECONNABORTED') {
         return 'Request timeout. Please try again.';
+    }
+
+    const rawResponseText = error?.request?.responseText;
+    const extractedFromRawResponse = extractMessageFromPayload(rawResponseText);
+    if (extractedFromRawResponse) {
+        return extractedFromRawResponse;
     }
 
     if (!error?.response) {
@@ -1162,7 +1230,23 @@ export const analyzeScene = async (scriptText, systemPrompt = null, projectMetad
         payload.reuse_subject_assets = reuseSubjectAssets;
     }
     const response = await api.post('/analyze_scene', payload);
-    return response.data;
+    const data = response?.data ?? {};
+
+    const explicitSuccess = typeof data?.success === 'boolean' ? data.success : null;
+    const statusText = String(data?.status || '').trim().toLowerCase();
+    const statusIndicatesError = statusText === 'error' || statusText === 'failed' || statusText === 'fail';
+
+    if (explicitSuccess === false || statusIndicatesError) {
+        const detail =
+            data?.detail
+            || data?.message
+            || data?.error
+            || data?.reason
+            || 'Scene analysis failed';
+        throw new Error(String(detail));
+    }
+
+    return data;
 };
 
 export const fetchPrompt = async (filename) => {
