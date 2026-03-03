@@ -177,6 +177,11 @@ class LoggingMiddleware:
             await self.app(scope, receive, send)
             return
 
+        path = str(scope.get("path") or "")
+        if path.startswith("/uploads/"):
+            await self.app(scope, receive, send)
+            return
+
         start_time = time.time()
         request = Request(scope, receive=receive)
 
