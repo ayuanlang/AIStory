@@ -118,6 +118,7 @@ def _is_polling_log_suppressed(method: str, path: str) -> bool:
         r"^GET /api/v1/episodes/\d+/shots/batch-media/status$",
         r"^GET /api/v1/billing/recharge/status/[^/]+$",
         r"^GET /api/v1/generate/image/jobs/[^/]+$",
+        r"^GET /api/v1/generate/video/jobs/[^/]+$",
     ]
     return any(re.search(pattern, key) for pattern in suppressed_patterns)
 

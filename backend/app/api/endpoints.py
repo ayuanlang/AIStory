@@ -9485,6 +9485,26 @@ def get_runtime_stats(current_user: User = Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Not authorized")
 
     image_job_stats = _snapshot_image_job_stats()
+    with IMAGE_JOB_LOCK:
+        image_task_count = len(IMAGE_JOB_TASKS)
+    with VIDEO_JOB_LOCK:
+        video_store_items = len(VIDEO_JOB_STORE)
+        video_task_count = len(VIDEO_JOB_TASKS)
+
+    gunicorn_max_requests_raw = os.getenv("GUNICORN_MAX_REQUESTS", "")
+    gunicorn_max_requests_jitter_raw = os.getenv("GUNICORN_MAX_REQUESTS_JITTER", "")
+
+    def _safe_int_env(raw: Any, default: Optional[int] = None) -> Optional[int]:
+        try:
+            txt = str(raw or "").strip()
+            if txt == "":
+                return default
+            return int(txt)
+        except Exception:
+            return default
+
+    gunicorn_max_requests = _safe_int_env(gunicorn_max_requests_raw)
+    gunicorn_max_requests_jitter = _safe_int_env(gunicorn_max_requests_jitter_raw)
 
     return {
         "service": "aistory-backend",
@@ -9494,6 +9514,27 @@ def get_runtime_stats(current_user: User = Depends(get_current_user)):
             "service_id": os.getenv("RENDER_SERVICE_ID", ""),
             "instance_id": os.getenv("RENDER_INSTANCE_ID", ""),
             "git_commit": os.getenv("RENDER_GIT_COMMIT", ""),
+        },
+        "runtime": {
+            "python": {
+                "version": sys.version,
+                "active_threads": threading.active_count(),
+            },
+            "gunicorn": {
+                "workers": os.getenv("WEB_CONCURRENCY", ""),
+                "timeout": os.getenv("GUNICORN_TIMEOUT", ""),
+                "graceful_timeout": os.getenv("GUNICORN_GRACEFUL_TIMEOUT", ""),
+                "keepalive": os.getenv("GUNICORN_KEEPALIVE", ""),
+                "max_requests": gunicorn_max_requests_raw,
+                "max_requests_jitter": gunicorn_max_requests_jitter_raw,
+                "request_limit_disabled": (gunicorn_max_requests == 0 and (gunicorn_max_requests_jitter or 0) == 0),
+            },
+            "async_jobs": {
+                "image_store_items": image_job_stats.get("store_items", 0),
+                "image_live_tasks": image_task_count,
+                "video_store_items": video_store_items,
+                "video_live_tasks": video_task_count,
+            },
         },
         "image_jobs": image_job_stats,
     }
