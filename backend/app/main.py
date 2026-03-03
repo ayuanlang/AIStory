@@ -1,5 +1,6 @@
 
 from contextlib import asynccontextmanager
+from typing import Iterable, Tuple
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,6 +28,32 @@ init_initial_data()
 
 limiter = Limiter(key_func=get_remote_address)
 
+
+class SelectiveGZipMiddleware(GZipMiddleware):
+    def __init__(
+        self,
+        app,
+        *args,
+        excluded_path_prefixes: Iterable[str] = (),
+        **kwargs,
+    ):
+        super().__init__(app, *args, **kwargs)
+        self.excluded_path_prefixes: Tuple[str, ...] = tuple(excluded_path_prefixes or ())
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "http":
+            path = str(scope.get("path") or "")
+            if any(path.startswith(prefix) for prefix in self.excluded_path_prefixes):
+                await self.app(scope, receive, send)
+                return
+
+            headers = {k.lower(): v for k, v in (scope.get("headers") or [])}
+            if b"range" in headers:
+                await self.app(scope, receive, send)
+                return
+
+        await super().__call__(scope, receive, send)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     configure_uvicorn_logging_noise_reduction()
@@ -38,7 +65,11 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(LoggingMiddleware)
-app.add_middleware(GZipMiddleware, minimum_size=settings.GZIP_MINIMUM_SIZE)
+app.add_middleware(
+    SelectiveGZipMiddleware,
+    minimum_size=settings.GZIP_MINIMUM_SIZE,
+    excluded_path_prefixes=("/uploads",),
+)
 
 # Ensure upload dir exists
 import os
