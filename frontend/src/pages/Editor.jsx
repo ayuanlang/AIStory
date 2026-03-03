@@ -11458,6 +11458,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     }); // Progress tracking
     const shotBatchStatusTimerRef = useRef(null);
     const activeResumeVideoJobsRef = useRef(new Set());
+    const pausedResumeVideoJobsRef = useRef({});
     const [activeSources, setActiveSources] = useState({ Image: 'unset', Video: 'unset' });
     const [localKeyframes, setLocalKeyframes] = useState([]);
     const generationStateStorageKey = useMemo(() => {
@@ -11647,6 +11648,25 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         const next = { ...prev };
         delete next[stableShotId];
         writeVideoJobStateStorage(next);
+    }, [readVideoJobStateStorage, writeVideoJobStateStorage]);
+
+    const clearPendingVideoJobsByJobId = useCallback((jobId) => {
+        const stableJobId = String(jobId || '').trim();
+        if (!stableJobId) return;
+        const prev = readVideoJobStateStorage();
+        const next = {};
+        let changed = false;
+        Object.entries(prev).forEach(([shotId, payload]) => {
+            const existingJobId = String(payload?.jobId || '').trim();
+            if (existingJobId === stableJobId) {
+                changed = true;
+                return;
+            }
+            next[shotId] = payload;
+        });
+        if (changed) {
+            writeVideoJobStateStorage(next);
+        }
     }, [readVideoJobStateStorage, writeVideoJobStateStorage]);
 
     const getPendingVideoJobId = useCallback((shotId) => {
@@ -12066,7 +12086,30 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
         const resumePendingVideoJobs = async () => {
             const pending = readVideoJobStateStorage();
-            const entries = Object.entries(pending);
+            const pendingEntries = Object.entries(pending);
+            const normalizedPending = {};
+            const seenJobIds = new Set();
+            let normalizedChanged = false;
+            pendingEntries.forEach(([shotId, payload]) => {
+                const stableShotId = String(shotId || '').trim();
+                const jobId = String(payload?.jobId || '').trim();
+                const startedAt = Number(payload?.startedAt || 0) || Date.now();
+                if (!stableShotId || !jobId) {
+                    normalizedChanged = true;
+                    return;
+                }
+                if (seenJobIds.has(jobId)) {
+                    normalizedChanged = true;
+                    return;
+                }
+                seenJobIds.add(jobId);
+                normalizedPending[stableShotId] = { jobId, startedAt };
+            });
+            if (normalizedChanged) {
+                writeVideoJobStateStorage(normalizedPending);
+            }
+
+            const entries = Object.entries(normalizedPending);
             if (entries.length === 0) return;
 
             for (const [shotId, payload] of entries) {
@@ -12079,7 +12122,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     continue;
                 }
 
-                const resumeKey = `${stableShotId}:${jobId}`;
+                const pauseUntil = Number(pausedResumeVideoJobsRef.current[jobId] || 0);
+                if (pauseUntil > Date.now()) {
+                    continue;
+                }
+
+                const resumeKey = jobId;
                 if (activeResumeVideoJobsRef.current.has(resumeKey)) {
                     continue;
                 }
@@ -12110,7 +12158,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                     setEditingShot(prev => (prev && String(prev.id) === stableShotId ? { ...prev, ...newData } : prev));
                                     onLog?.(`Recovered video generation completed for shot ${stableShotId}.`, 'success');
                                 }
-                                clearPendingVideoJob(stableShotId);
+                                delete pausedResumeVideoJobsRef.current[jobId];
+                                clearPendingVideoJobsByJobId(jobId);
                                 setShotGeneratingState(stableShotId, 'video', false);
                                 await refreshShots();
                                 break;
@@ -12128,13 +12177,14 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                     }
                                     setEditingShot(prev => (prev && String(prev.id) === stableShotId ? { ...prev, ...newData } : prev));
                                     onLog?.(`Recovered video generation completed for shot ${stableShotId}.`, 'success');
-                                    clearPendingVideoJob(stableShotId);
+                                    delete pausedResumeVideoJobsRef.current[jobId];
+                                    clearPendingVideoJobsByJobId(jobId);
                                     setShotGeneratingState(stableShotId, 'video', false);
                                     await refreshShots();
                                     break;
                                 }
 
-                                clearPendingVideoJob(stableShotId);
+                                clearPendingVideoJobsByJobId(jobId);
                                 setShotGeneratingState(stableShotId, 'video', false);
                                 const errMsg = String(status?.error || 'unknown error');
                                 const tone = String(phase).startsWith('cancel') ? 'warning' : 'error';
@@ -12145,7 +12195,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                             const detail = e?.response?.data?.detail || e?.message || '';
                             const detailLower = String(detail).toLowerCase();
                             if (detailLower.includes('job not found')) {
-                                clearPendingVideoJob(stableShotId);
+                                clearPendingVideoJobsByJobId(jobId);
                                 setShotGeneratingState(stableShotId, 'video', false);
                                 onLog?.(`Recovered video job missing for shot ${stableShotId}; cleared pending state.`, 'warning');
                                 break;
@@ -12155,6 +12205,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                             waitMs = Math.min(15000, Math.round(waitMs * 1.6));
                             if (errorStreak >= 6) {
                                 setShotGeneratingState(stableShotId, 'video', false);
+                                pausedResumeVideoJobsRef.current[jobId] = Date.now() + 120000;
                                 onLog?.(`Video polling paused for shot ${stableShotId} due to repeated network/resource errors.`, 'warning');
                                 break;
                             }
@@ -12175,13 +12226,14 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         };
     }, [
         activeEpisode?.id,
-        clearPendingVideoJob,
+        clearPendingVideoJobsByJobId,
         onLog,
         onUpdateShot,
         readVideoJobStateStorage,
         refreshShots,
         setEditingShot,
         setShotGeneratingState,
+        writeVideoJobStateStorage,
     ]);
 
     const handleManualRebindMediaSlots = useCallback(async () => {
