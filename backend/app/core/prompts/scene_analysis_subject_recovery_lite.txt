@@ -34,7 +34,7 @@
 
 ## 与 scene_analysis 一致性硬规则
 本提示词下的资产生成规范必须与 `scene_analysis` 的资产规范一致，至少覆盖并严格执行：
-- `0) 生图提示词清晰性`：每个实体 `generation_prompt_en` 必须显式含 `Camera Position` + `Shooting Direction`。
+- `0) 生图提示词清晰性`：每个实体 `generation_prompt_en` 必须显式含 `Viewpoint Anchor` + `Viewing Direction`。
 - `0.5) Imagen 兼容质量规范`：自然英文、无引擎参数、无元说明、语义顺序清晰、负向词可执行。
 - `1) Environment Prompt Template`：空场景、Base+Delta 思路、可执行空间、机位/光照/焦距与材质信息完整。
 - `2) Character Prompt Template`：六视图一致性、风格驱动光学与颗粒、稳定锚点、真人感约束（真人剧）。
@@ -49,7 +49,7 @@
 ## Prompt Template（必须使用）
 
 ### 1) Environment Prompt Template
-`[Global Style]. {Base Environment Reference}: 【base_env_name / reference image id】. {Environment Delta}: 【only changed items; if REUSE write 'None'】. {Camera Position}: 【exact placement in/around environment】. {Shooting Direction}: 【Front/Reverse/Side + facing target/vector】. {Camera Setup}: 【Height/Angle/Framing】. {Composition Layers}: 【FG: elements + depth relation; MG: primary structure/subject anchor; BG: distant structure/light anchor; Primary Subject + Secondary Subject】. {Lighting Setup}: 【key/fill/back source position + quality + intensity + color temperature】. {Lens & Focus Baseline}: 【focal length family + DOF strategy】. {Grain/Noise Strategy}: 【clean digital / fine film grain / medium grain + shadow readability】. Atmosphere: 【mood keywords】. Details: 【materials, textures】. **No humans or characters present.**`
+`[Global Style]. {Base Environment Reference}: 【base_env_name / reference image id】. {Environment Delta}: 【only changed items; if REUSE write 'None'】. {Viewpoint Anchor}: 【exact observer placement in/around environment】. {Viewing Direction}: 【Front/Reverse/Side + facing target/vector】. {Camera Setup}: 【Height/Angle/Framing】. {Composition Layers}: 【FG: elements + depth relation; MG: primary structure/subject anchor; BG: distant structure/light anchor; Primary Subject + Secondary Subject】. {Lighting Setup}: 【key/fill/back source position + quality + intensity + color temperature】. {Lens & Focus Baseline}: 【focal length family + DOF strategy】. {Grain/Noise Strategy}: 【clean digital / fine film grain / medium grain + shadow readability】. Atmosphere: 【mood keywords】. Details: 【materials, textures】. **No humans or characters present.**`
 
 ### 1.1) Base + Delta 执行增强（观察方向切换）
 - 环境构图必须显式按前景（FG）/中景（MG）/后景（BG）描述，三层均需给出可见元素与空间关系。
@@ -73,14 +73,14 @@
 - 反向防呆：若结果仍把应后移的 Base 前景/中景保留为当前前景主锚点，视为无效 Delta，必须重写。
 - 推荐附加句：`Reference usage scope: structure/material/lighting style only; ignore base composition and original background dominance.`
 - 推荐写法：
-  `Environment Delta = {Camera Position/Direction: camera moved to opposite axis side behind ENV:[AudienceArea], now facing ENV:[MainStage] entrance; Axis Side: left -> right; Background Set Change: Visible Set = [stage portal, curtain rail, front seats], Excluded Set = [backstage corridor, rear exit door]; Lighting Direction Change: key light now front-right motivated by stage practicals; Framing Change: wide-to-mid with stage portal centered; Dynamic Parts State: None}`。
+  `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint moved to opposite axis side behind ENV:[AudienceArea], now facing ENV:[MainStage] entrance; Axis Side: left -> right; Background Set Change: Visible Set = [stage portal, curtain rail, front seats], Excluded Set = [backstage corridor, rear exit door]; Lighting Direction Change: key light now front-right motivated by stage practicals; Framing Change: wide-to-mid with stage portal centered; Dynamic Parts State: None}`。
 - Few-shot A（门内看外 -> 门外看内）：
-  `Environment Delta = {Camera Position/Direction: camera moved from inside doorway threshold to exterior corridor side, now facing inward to ENV:[RoomEntrance]; Axis Side: right -> left; Background Set Change: Visible Set = [door frame interior edge, corridor wall lamps, entry mat], Excluded Set = [window-side bookshelf, bed corner, inner desk area]; Lighting Direction Change: key light switches to corridor practicals from camera-left; Framing Change: medium-wide with doorway centered and room depth behind; Dynamic Parts State: PROP:[Door](Open -> Half-Open, reason: CHAR:[@Guard] pushes it and pauses to listen)}`。
+  `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint moved from inside doorway threshold to exterior corridor side, now facing inward to ENV:[RoomEntrance]; Axis Side: right -> left; Background Set Change: Visible Set = [door frame interior edge, corridor wall lamps, entry mat], Excluded Set = [window-side bookshelf, bed corner, inner desk area]; Lighting Direction Change: key light switches to corridor practicals from camera-left; Framing Change: medium-wide with doorway centered and room depth behind; Dynamic Parts State: PROP:[Door](Open -> Half-Open, reason: CHAR:[@Guard] pushes it and pauses to listen)}`。
 - Few-shot B（街道正向 -> 街道反向）：
-  `Environment Delta = {Camera Position/Direction: camera relocated to opposite sidewalk across traffic lane, now facing reverse toward ENV:[CrosswalkJunction]; Axis Side: left -> right; Background Set Change: Visible Set = [crosswalk signal pole, storefront neon, bus-stop shelter], Excluded Set = [alley dumpster row, rear parking gate, service entrance shutter]; Lighting Direction Change: key light becomes back-right from street signage and vehicle headlights; Framing Change: wide shot with crosswalk signal as new composition anchor; Dynamic Parts State: None}`。
+  `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint relocated to opposite sidewalk across traffic lane, now facing reverse toward ENV:[CrosswalkJunction]; Axis Side: left -> right; Background Set Change: Visible Set = [crosswalk signal pole, storefront neon, bus-stop shelter], Excluded Set = [alley dumpster row, rear parking gate, service entrance shutter]; Lighting Direction Change: key light becomes back-right from street signage and vehicle headlights; Framing Change: wide shot with crosswalk signal as new composition anchor; Dynamic Parts State: None}`。
 
 ### 2) Character Prompt Template
-`[Global Style] 6-view character sheet for 【Name】. {Camera Position}: 【studio camera placement for sheet capture】. {Shooting Direction}: 【for each panel explicitly mark Front/Back/Side/3-4 + facing】. {Lighting Setup}: 【key/fill/rim source position + quality + intensity + color temperature】. {Lens & Focus}: 【focal length (e.g. 35mm/50mm/85mm) + depth of field strategy】. {Grain/Noise Strategy}: 【clean digital / fine film grain / medium film grain + shadow noise control】. Structure: 6-view layout (Front, Back, Side, 3/4, Close-up, Detail). Appearance: 【Age, Body Type, ethnicity】. Attire: 【Clothing details, footwear】. Anchors: 【Signature features e.g. scar, accessory】. Consistency: T-pose/Neutral pose. Background: White.`
+`[Global Style] 6-view character sheet for 【Name】. {Viewpoint Anchor}: 【studio observer placement for sheet capture】. {Viewing Direction}: 【for each panel explicitly mark Front/Back/Side/3-4 + facing】. {Lighting Setup}: 【key/fill/rim source position + quality + intensity + color temperature】. {Lens & Focus}: 【focal length (e.g. 35mm/50mm/85mm) + depth of field strategy】. {Grain/Noise Strategy}: 【clean digital / fine film grain / medium film grain + shadow noise control】. Structure: 6-view layout (Front, Back, Side, 3/4, Close-up, Detail). Appearance: 【Age, Body Type, ethnicity】. Attire: 【Clothing details, footwear】. Anchors: 【Signature features e.g. scar, accessory】. Consistency: T-pose/Neutral pose. Background: White.`
 
 - 全身像硬规则（Mandatory）：角色 `generation_prompt_en` 必须明确为 full-body framing，人物从头到脚完整入镜，双脚与鞋子清晰可见（shoes fully visible）。
 - 鞋子可见硬规则（Mandatory）：不得使用会裁切鞋子的构图（如 waist-up / bust shot / knee crop）作为角色资产主图；若需近景，仅可作为附加 panel，且必须保留至少一个全身含鞋 panel。
@@ -88,7 +88,7 @@
 - 锚点只读硬规则（Mandatory）：`anchor_description` 与角色身份锚点是不可变更锚点（immutable anchors）；补全过程只能逐字符继承，不得重写、扩写、弱化、同义替换或风格化改写。
 
 ### 3) Prop Prompt Template
-`[Global Style] Prop Asset: 【Name】. {Camera Position}: 【exact studio/object-relative placement】. {Shooting Direction}: 【Front/Reverse/Side/Top or Isometric facing】. {Lighting Setup}: 【key/fill/rim source position + quality + intensity + color temperature】. {Lens & Focus}: 【focal length + DOF strategy】. {Grain/Noise Strategy}: 【clean digital / fine film grain / medium grain】. View: 【Angle e.g. Isometric/Front】. Material: 【Texture details】. Wear & Tear: 【Condition】. Background: White.`
+`[Global Style] Prop Asset: 【Name】. {Viewpoint Anchor}: 【exact studio/object-relative observer placement】. {Viewing Direction}: 【Front/Reverse/Side/Top or Isometric facing】. {Lighting Setup}: 【key/fill/rim source position + quality + intensity + color temperature】. {Lens & Focus}: 【focal length + DOF strategy】. {Grain/Noise Strategy}: 【clean digital / fine film grain / medium grain】. View: 【Angle e.g. Isometric/Front】. Material: 【Texture details】. Wear & Tear: 【Condition】. Background: White.`
 
 ## 引用与命名语法
 - 角色引用：`CHAR:[@Name]`
@@ -118,8 +118,9 @@
 
 并满足：
 - `generation_prompt_en` 必须英文，且显式包含：
-  - `Camera Position`
-  - `Shooting Direction`
+  - `Viewpoint Anchor`
+  - `Viewing Direction`
+- 默认禁止器材入画：除非剧情明确要求器材作为道具，否则不得把 `camera/camcorder/lens rig/tripod/operator` 写成画面实体。
 - Subject 生图提示词仅描述“要生成的画面结果”，禁止写生成原因、逻辑解释、过程说明、评注或元话术。
 - 禁止写法（示例）：`because...`, `in order to...`, `to ensure...`, `reason: ...`, `logic: ...`, `explain...`，以及中文“因为/为了/逻辑是/原因是/这样做是为了”。
 - `negative_prompt_en` 必须英文，且必须“实体级”独立撰写（不能全局复用一条）。
@@ -180,7 +181,7 @@ Part 2A:
       "appearance_cn": "Chinese Desc",
       "clothing": "Clothing Desc",
       "action_characteristics": "Action Traits",
-      "generation_prompt_en": "[Global Style] ... Camera Position: ... Shooting Direction: ...",
+      "generation_prompt_en": "[Global Style] ... Viewpoint Anchor: ... Viewing Direction: ...",
       "negative_prompt_en": "Entity-specific negatives ...",
       "anchor_description": "English visual tags only",
       "visual_dependencies": [],
@@ -201,7 +202,7 @@ Part 2B:
       "name_en": "English Name",
       "type": "held/static",
       "description_cn": "Chinese Desc",
-      "generation_prompt_en": "[Global Style] ... Camera Position: ... Shooting Direction: ...",
+      "generation_prompt_en": "[Global Style] ... Viewpoint Anchor: ... Viewing Direction: ...",
       "negative_prompt_en": "Entity-specific negatives ...",
       "anchor_description": "English visual tags only",
       "visual_dependencies": [],
@@ -223,7 +224,7 @@ Part 2C:
       "atmosphere": "Atmosphere",
       "visual_params": "Wide/Interior/Day",
       "description_cn": "Chinese Desc",
-      "generation_prompt_en": "[Global Style] ... Camera Position: ... Shooting Direction: ...",
+      "generation_prompt_en": "[Global Style] ... Viewpoint Anchor: ... Viewing Direction: ...",
       "negative_prompt_en": "Entity-specific negatives ...",
       "anchor_description": "English visual tags only",
       "visual_dependencies": [],
