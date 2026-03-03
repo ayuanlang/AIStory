@@ -11474,6 +11474,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const hasHydratedGenerationStateRef = useRef(false);
     const mediaRebindAttemptedRef = useRef('');
     const generationMediaBaselineRef = useRef({});
+    const startFrameAutoInheritRef = useRef('');
     const GENERATION_STATE_TTL_MS = 1000 * 60 * 60;
     const VIDEO_JOB_STATE_TTL_MS = 1000 * 60 * 60;
 
@@ -13418,6 +13419,35 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             return null;
         }
     };
+
+    useEffect(() => {
+        if (!editingShot?.id) {
+            startFrameAutoInheritRef.current = '';
+            return;
+        }
+
+        if (!isStartFrameInheritPrompt(editingShot.start_frame)) {
+            startFrameAutoInheritRef.current = '';
+            return;
+        }
+
+        const prevEndUrl = String(findPrevShotEndFrameUrl(editingShot.id) || '').trim();
+        if (!prevEndUrl) return;
+
+        const currentStartImage = String(editingShot.image_url || '').trim();
+        if (currentStartImage === prevEndUrl) return;
+
+        const syncKey = `${editingShot.id}:${prevEndUrl}`;
+        if (startFrameAutoInheritRef.current === syncKey) return;
+        startFrameAutoInheritRef.current = syncKey;
+
+        const updates = { image_url: prevEndUrl };
+        setEditingShot(prev => (prev && prev.id === editingShot.id ? { ...prev, ...updates } : prev));
+        onUpdateShot(editingShot.id, updates).catch((e) => {
+            console.warn('Auto inherit start frame failed:', e);
+            startFrameAutoInheritRef.current = '';
+        });
+    }, [editingShot?.id, editingShot?.start_frame, editingShot?.image_url, shots, onUpdateShot, setEditingShot]);
 
     // --- Generation Handlers ---
     const handleGenerateStartFrame = async (promptOverride = null) => {
