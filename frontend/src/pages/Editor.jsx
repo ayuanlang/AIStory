@@ -13702,6 +13702,121 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         }
     }, [clearPendingImageJob, editingShot?.id, getPendingImageJobId, onLog, setShotGeneratingState, t]);
 
+    const handleSetEndFrameFromVideoLastFrame = useCallback(async () => {
+        if (!editingShot?.id) return;
+        const targetShotId = editingShot.id;
+        const videoUrlRaw = String(editingShot.video_url || '').trim();
+        if (!videoUrlRaw) {
+            onLog?.(t('当前镜头没有视频，无法提取尾帧。', 'No shot video found to extract the last frame.'), 'warning');
+            return;
+        }
+
+        const captureLastFrameBlob = (videoUrl) => new Promise((resolve, reject) => {
+            const video = document.createElement('video');
+
+            const cleanup = () => {
+                video.onloadedmetadata = null;
+                video.onseeked = null;
+                video.onerror = null;
+                video.src = '';
+            };
+
+            const fail = (errorLike) => {
+                cleanup();
+                reject(errorLike instanceof Error ? errorLike : new Error(String(errorLike || 'capture failed')));
+            };
+
+            const capture = () => {
+                try {
+                    const width = Number(video.videoWidth || 0);
+                    const height = Number(video.videoHeight || 0);
+                    if (!width || !height) {
+                        fail(new Error('video resolution unavailable'));
+                        return;
+                    }
+
+                    const canvas = document.createElement('canvas');
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    if (!ctx) {
+                        fail(new Error('canvas context unavailable'));
+                        return;
+                    }
+
+                    ctx.drawImage(video, 0, 0, width, height);
+                    canvas.toBlob((blob) => {
+                        cleanup();
+                        if (!blob) {
+                            reject(new Error('failed to encode frame image'));
+                            return;
+                        }
+                        resolve(blob);
+                    }, 'image/jpeg', 0.94);
+                } catch (e) {
+                    fail(e);
+                }
+            };
+
+            video.crossOrigin = 'anonymous';
+            video.preload = 'auto';
+            video.muted = true;
+            video.playsInline = true;
+            video.onerror = () => fail(new Error('video load error'));
+            video.onloadedmetadata = () => {
+                const duration = Number(video.duration || 0);
+                if (!Number.isFinite(duration) || duration <= 0) {
+                    capture();
+                    return;
+                }
+                const target = Math.max(0, duration - 0.05);
+                if (Math.abs((video.currentTime || 0) - target) < 0.01) {
+                    capture();
+                    return;
+                }
+                video.currentTime = target;
+            };
+            video.onseeked = capture;
+            video.src = getFullUrl(videoUrl);
+        });
+
+        setShotGeneratingState(targetShotId, 'end', true);
+        try {
+            const frameBlob = await captureLastFrameBlob(videoUrlRaw);
+            const frameFile = new File(
+                [frameBlob],
+                `shot_${targetShotId}_video_last_frame_${Date.now()}.jpg`,
+                { type: 'image/jpeg' }
+            );
+
+            const uploaded = await uploadAsset(frameFile, {
+                project_id: projectId,
+                shot_id: targetShotId,
+                shot_number: editingShot.shot_id,
+                shot_name: editingShot.shot_name,
+                asset_type: 'end_frame',
+            });
+            const extractedUrl = String(uploaded?.url || '').trim();
+            if (!extractedUrl) {
+                throw new Error('uploaded frame has no url');
+            }
+
+            const tech = JSON.parse(editingShot.technical_notes || '{}');
+            tech.end_frame_url = extractedUrl;
+            tech.video_gen_mode = 'start_end';
+            await persistEditingShotUpdates({ technical_notes: JSON.stringify(tech) });
+
+            onLog?.(t('已从视频提取最后一帧并设置为结束帧。', 'Last video frame extracted and set as end frame.'), 'success');
+            showNotification(t('已设置结束帧', 'End frame set from video'), 'success');
+        } catch (e) {
+            const detail = e?.message || 'unknown error';
+            onLog?.(`${t('提取视频尾帧失败', 'Failed to extract video last frame')}: ${detail}`, 'error');
+            showNotification(t('提取视频尾帧失败', 'Failed to extract video last frame'), 'error');
+        } finally {
+            setShotGeneratingState(targetShotId, 'end', false);
+        }
+    }, [editingShot, onLog, persistEditingShotUpdates, projectId, setShotGeneratingState, t]);
+
     const handleGenerateVideo = async (promptOverride = null) => {
         if (!editingShot) return;
         const targetShotId = editingShot.id;
@@ -14614,6 +14729,14 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 >
                                                     <ImageIcon className="w-3 h-3"/> {t('设置', 'Set')}
                                                 </button>
+                                                <button
+                                                    onClick={handleSetEndFrameFromVideoLastFrame}
+                                                    disabled={!editingShot.video_url || currentGeneratingState.end}
+                                                    className={`text-[10px] px-2 py-0.5 rounded flex items-center gap-1 ${(!editingShot.video_url || currentGeneratingState.end) ? 'bg-white/10 text-white/40 cursor-not-allowed' : 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/30'}`}
+                                                    title={t('从当前视频提取最后一帧', 'Extract last frame from current video')}
+                                                >
+                                                    <Video className="w-3 h-3"/> {t('取视频尾帧', 'Last Frame')}
+                                                </button>
                                                 {currentGeneratingState.end && (
                                                     <button 
                                                         onClick={() => handleForceStopShotImage('end')}
@@ -15256,6 +15379,14 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                         className={`text-xs px-2 py-1 rounded ${currentGeneratingState.end ? 'bg-sky-500/10 text-sky-300/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30'}`}
                                                                     >
                                                                         {currentGeneratingState.end ? t('生成中...', 'Generating...') : t('生成', 'Generate')}
+                                                                    </button>
+                                                                    <button
+                                                                        onClick={handleSetEndFrameFromVideoLastFrame}
+                                                                        disabled={!editingShot.video_url || currentGeneratingState.end}
+                                                                        className={`text-xs px-2 py-1 rounded ${(!editingShot.video_url || currentGeneratingState.end) ? 'bg-white/10 text-white/40 cursor-not-allowed' : 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/30'}`}
+                                                                        title={t('从当前视频提取最后一帧', 'Extract last frame from current video')}
+                                                                    >
+                                                                        {t('取视频尾帧', 'Last Frame')}
                                                                     </button>
                                                                 </div>
                                                                 <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('英文提示词', 'Prompt (EN)')}</div>
