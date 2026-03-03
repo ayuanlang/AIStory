@@ -13513,17 +13513,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                         // Auto-populate mode
                         refs = autoMatches;
                         
-                        try {
-                            const currentIdx = shots.findIndex(s => s.id === editingShot.id);
-                            if (currentIdx > 0) {
-                                const prevShot = shots[currentIdx - 1];
-                                const prevTech = JSON.parse(prevShot.technical_notes || '{}');
-                                if (prevTech.end_frame_url && !refs.includes(prevTech.end_frame_url)) {
-                                    refs.unshift(prevTech.end_frame_url);
-                                }
-                            }
-                        } catch(err) { console.error("Prev shot lookup failed", err); }
-                        
                         // Deduplicate only in Auto Mode
                         refs = [...new Set(refs)];
                     }
@@ -14573,22 +14562,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                             onPickMedia={openMediaPicker}
                                             storageKey="ref_image_urls"
                                             strictPromptOnly={true}
-                                            additionalAutoRefs={(() => {
-                                                if (!isStartFrameInheritPrompt(editingShot.start_frame || '')) {
-                                                    return [];
-                                                }
-                                                // Find previous shot's End Frame (Automatic)
-                                                // Kept for backward compatibility or auto-suggestion
-                                                const idx = shots.findIndex(s => s.id === editingShot.id);
-                                                if (idx > 0) {
-                                                     try {
-                                                         const prev = shots[idx-1];
-                                                         const t = JSON.parse(prev.technical_notes || '{}');
-                                                         return t.end_frame_url ? [t.end_frame_url] : [];
-                                                     } catch(e) { return []; }
-                                                }
-                                                return [];
-                                            })()}
                                             onFindPrevFrame={() => {
                                                 // Logic to find PREVIOUS shot end frame
                                                 const idx = shots.findIndex(s => s.id === editingShot.id);
