@@ -13490,11 +13490,16 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 try {
                     const noteStr = editingShot.technical_notes || '{}';
                     const tech = JSON.parse(noteStr);
+                    const isManualMode = Array.isArray(tech.ref_image_urls);
+                    const isUserEdited = Boolean(tech.ref_image_urls_user_edited);
+                    const isLockedManual = isManualMode && isUserEdited;
                     
                     // Always calculate auto-suggested refs first (with new robust logic)
                     const autoMatches = getSuggestedRefImages(editingShot, rawPrompt, true);
 
-                    if (Array.isArray(tech.ref_image_urls)) {
+                    if (isLockedManual) {
+                        refs = [...tech.ref_image_urls];
+                    } else if (isManualMode) {
                         // Manual Mode: Merge saved list with NEW auto-matches (respecting deletions)
                         const savedRefs = tech.ref_image_urls;
                         const deletedRefs = tech.deleted_ref_urls || [];
@@ -13609,10 +13614,15 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
              try {
                 // Include Entity Refs + Manual Refs
                 const tech = JSON.parse(editingShot.technical_notes || '{}');
+                const isManualMode = Array.isArray(tech.end_ref_image_urls);
+                const isUserEdited = Boolean(tech.end_ref_image_urls_user_edited);
+                const isLockedManual = isManualMode && isUserEdited;
                 // Use End Refs specifically
                 const refs = [];
                 
-                if (Array.isArray(tech.end_ref_image_urls)) {
+                if (isLockedManual) {
+                    refs.push(...tech.end_ref_image_urls);
+                } else if (isManualMode) {
                     refs.push(...tech.end_ref_image_urls);
                 } else {
                     const suggested = getSuggestedRefImages(editingShot, rawPrompt, true);
@@ -13622,7 +13632,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 const deletedRefs = Array.isArray(tech.deleted_ref_urls) ? tech.deleted_ref_urls : [];
                 const isDeleted = deletedRefs.includes(editingShot.image_url);
                 
-                if (editingShot.image_url && !refs.includes(editingShot.image_url) && !isDeleted) {
+                if (!isLockedManual && editingShot.image_url && !refs.includes(editingShot.image_url) && !isDeleted) {
                     refs.unshift(editingShot.image_url);
                 }
                 
