@@ -11457,6 +11457,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         currentAssetLabel: '',
     }); // Progress tracking
     const shotBatchStatusTimerRef = useRef(null);
+    const activeResumeVideoJobsRef = useRef(new Set());
     const [activeSources, setActiveSources] = useState({ Image: 'unset', Video: 'unset' });
     const [localKeyframes, setLocalKeyframes] = useState([]);
     const generationStateStorageKey = useMemo(() => {
@@ -12078,67 +12079,91 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     continue;
                 }
 
+                const resumeKey = `${stableShotId}:${jobId}`;
+                if (activeResumeVideoJobsRef.current.has(resumeKey)) {
+                    continue;
+                }
+                activeResumeVideoJobsRef.current.add(resumeKey);
+
+                let errorStreak = 0;
+                let waitMs = 3000;
+
                 setShotGeneratingState(stableShotId, 'video', true);
 
-                while (!cancelled) {
-                    try {
-                        const status = await getVideoGenerationJobStatus(jobId);
-                        const phase = String(status?.status || '').toLowerCase();
+                try {
+                    while (!cancelled) {
+                        try {
+                            const status = await getVideoGenerationJobStatus(jobId);
+                            const phase = String(status?.status || '').toLowerCase();
+                            errorStreak = 0;
+                            waitMs = 3000;
 
-                        if (phase === 'succeeded') {
-                            const resultUrl = String(status?.result?.url || '').trim();
-                            if (resultUrl) {
-                                const newData = { video_url: resultUrl };
-                                try {
-                                    await onUpdateShot(stableShotId, newData);
-                                } catch (persistErr) {
-                                    console.warn('Resume video job save failed:', persistErr);
+                            if (phase === 'succeeded') {
+                                const resultUrl = String(status?.result?.url || '').trim();
+                                if (resultUrl) {
+                                    const newData = { video_url: resultUrl };
+                                    try {
+                                        await onUpdateShot(stableShotId, newData);
+                                    } catch (persistErr) {
+                                        console.warn('Resume video job save failed:', persistErr);
+                                    }
+                                    setEditingShot(prev => (prev && String(prev.id) === stableShotId ? { ...prev, ...newData } : prev));
+                                    onLog?.(`Recovered video generation completed for shot ${stableShotId}.`, 'success');
                                 }
-                                setEditingShot(prev => (prev && String(prev.id) === stableShotId ? { ...prev, ...newData } : prev));
-                                onLog?.(`Recovered video generation completed for shot ${stableShotId}.`, 'success');
-                            }
-                            clearPendingVideoJob(stableShotId);
-                            setShotGeneratingState(stableShotId, 'video', false);
-                            await refreshShots();
-                            break;
-                        }
-
-                        if (phase === 'failed' || phase === 'error' || phase === 'canceled' || phase === 'cancelled') {
-                            const resultUrl = String(status?.result?.url || '').trim();
-                            const serverBoundVideoUrl = resultUrl || await probeShotVideoUrl(stableShotId);
-                            if (serverBoundVideoUrl) {
-                                const newData = { video_url: serverBoundVideoUrl };
-                                try {
-                                    await onUpdateShot(stableShotId, newData);
-                                } catch (persistErr) {
-                                    console.warn('Resume video job save failed:', persistErr);
-                                }
-                                setEditingShot(prev => (prev && String(prev.id) === stableShotId ? { ...prev, ...newData } : prev));
-                                onLog?.(`Recovered video generation completed for shot ${stableShotId}.`, 'success');
                                 clearPendingVideoJob(stableShotId);
                                 setShotGeneratingState(stableShotId, 'video', false);
                                 await refreshShots();
                                 break;
                             }
 
-                            clearPendingVideoJob(stableShotId);
-                            setShotGeneratingState(stableShotId, 'video', false);
-                            const errMsg = String(status?.error || 'unknown error');
-                            const tone = String(phase).startsWith('cancel') ? 'warning' : 'error';
-                            onLog?.(`Recovered video generation failed for shot ${stableShotId}: ${errMsg}`, tone);
-                            break;
-                        }
-                    } catch (e) {
-                        const detail = e?.response?.data?.detail || e?.message || '';
-                        if (String(detail).toLowerCase().includes('job not found')) {
-                            clearPendingVideoJob(stableShotId);
-                            setShotGeneratingState(stableShotId, 'video', false);
-                            onLog?.(`Recovered video job missing for shot ${stableShotId}; cleared pending state.`, 'warning');
-                            break;
-                        }
-                    }
+                            if (phase === 'failed' || phase === 'error' || phase === 'canceled' || phase === 'cancelled') {
+                                const resultUrl = String(status?.result?.url || '').trim();
+                                const serverBoundVideoUrl = resultUrl || await probeShotVideoUrl(stableShotId);
+                                if (serverBoundVideoUrl) {
+                                    const newData = { video_url: serverBoundVideoUrl };
+                                    try {
+                                        await onUpdateShot(stableShotId, newData);
+                                    } catch (persistErr) {
+                                        console.warn('Resume video job save failed:', persistErr);
+                                    }
+                                    setEditingShot(prev => (prev && String(prev.id) === stableShotId ? { ...prev, ...newData } : prev));
+                                    onLog?.(`Recovered video generation completed for shot ${stableShotId}.`, 'success');
+                                    clearPendingVideoJob(stableShotId);
+                                    setShotGeneratingState(stableShotId, 'video', false);
+                                    await refreshShots();
+                                    break;
+                                }
 
-                    await new Promise(resolve => setTimeout(resolve, 2000));
+                                clearPendingVideoJob(stableShotId);
+                                setShotGeneratingState(stableShotId, 'video', false);
+                                const errMsg = String(status?.error || 'unknown error');
+                                const tone = String(phase).startsWith('cancel') ? 'warning' : 'error';
+                                onLog?.(`Recovered video generation failed for shot ${stableShotId}: ${errMsg}`, tone);
+                                break;
+                            }
+                        } catch (e) {
+                            const detail = e?.response?.data?.detail || e?.message || '';
+                            const detailLower = String(detail).toLowerCase();
+                            if (detailLower.includes('job not found')) {
+                                clearPendingVideoJob(stableShotId);
+                                setShotGeneratingState(stableShotId, 'video', false);
+                                onLog?.(`Recovered video job missing for shot ${stableShotId}; cleared pending state.`, 'warning');
+                                break;
+                            }
+
+                            errorStreak += 1;
+                            waitMs = Math.min(15000, Math.round(waitMs * 1.6));
+                            if (errorStreak >= 6) {
+                                setShotGeneratingState(stableShotId, 'video', false);
+                                onLog?.(`Video polling paused for shot ${stableShotId} due to repeated network/resource errors.`, 'warning');
+                                break;
+                            }
+                        }
+
+                        await new Promise(resolve => setTimeout(resolve, waitMs));
+                    }
+                } finally {
+                    activeResumeVideoJobsRef.current.delete(resumeKey);
                 }
             }
         };
