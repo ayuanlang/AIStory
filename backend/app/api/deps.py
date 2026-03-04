@@ -2,10 +2,12 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import OperationalError
+import logging
 from app.core.config import settings
-from app.db.session import get_db, SessionLocal
+from app.db.session import get_db
 from app.models.all_models import User
+
+logger = logging.getLogger(__name__)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/login/access-token")
 
@@ -25,21 +27,16 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     
     try:
         user = db.query(User).filter(User.username == username).first()
-    except OperationalError as e:
+    except Exception as exc:
         try:
             db.rollback()
         except Exception:
             pass
-        retry_db = SessionLocal()
-        try:
-            user = retry_db.query(User).filter(User.username == username).first()
-        except OperationalError:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Database temporarily unavailable, please retry",
-            )
-        finally:
-            retry_db.close()
+        logger.error("DB lookup failed in get_current_user: %s", type(exc).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable, please retry",
+        )
 
     if user is None:
         raise credentials_exception
