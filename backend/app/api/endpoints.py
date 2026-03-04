@@ -998,12 +998,20 @@ async def get_prompt_content(filename: str, current_user: User = Depends(get_cur
 @router.get("/prompts/skills")
 async def list_prompt_skills(current_user: User = Depends(get_current_user)):
     """List available prompt skills and metadata for frontend/tooling discovery."""
-    registry = load_skills_registry()
-    skills = registry.get("skills") if isinstance(registry.get("skills"), list) else []
-    return {
-        "version": registry.get("version", 1),
-        "skills": skills,
-    }
+    try:
+        registry = load_skills_registry()
+        skills = registry.get("skills") if isinstance(registry.get("skills"), list) else []
+        return {
+            "version": registry.get("version", 1),
+            "skills": skills,
+        }
+    except Exception as exc:
+        logger.exception("Failed to load prompt skills registry: %s", exc)
+        return {
+            "version": 1,
+            "skills": [],
+            "degraded": True,
+        }
 
 
 @router.get("/prompts/skills/{skill_id}")

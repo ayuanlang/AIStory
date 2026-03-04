@@ -901,116 +901,122 @@ def get_system_settings(
     if not _can_use_system_settings(current_user):
         return []
 
-    _ensure_builtin_system_settings(db)
+    try:
+        _ensure_builtin_system_settings(db)
 
-    _ensure_default_system_selection_for_user(db, current_user.id)
-    db.commit()
+        _ensure_default_system_selection_for_user(db, current_user.id)
+        db.commit()
 
-    system_settings = db.query(
-        SystemAPISetting.id,
-        SystemAPISetting.name,
-        SystemAPISetting.provider,
-        SystemAPISetting.category,
-        SystemAPISetting.model,
-        SystemAPISetting.base_url,
-        SystemAPISetting.api_key,
-        SystemAPISetting.deprecated.label("deprecated_flag"),
-        cast(SystemAPISetting.config, String).label("config_raw"),
-    ).filter(
-        SystemAPISetting.category != "System_Payment"
-    ).all()
+        system_settings = db.query(
+            SystemAPISetting.id,
+            SystemAPISetting.name,
+            SystemAPISetting.provider,
+            SystemAPISetting.category,
+            SystemAPISetting.model,
+            SystemAPISetting.base_url,
+            SystemAPISetting.api_key,
+            SystemAPISetting.deprecated.label("deprecated_flag"),
+            cast(SystemAPISetting.config, String).label("config_raw"),
+        ).filter(
+            SystemAPISetting.category != "System_Payment"
+        ).all()
 
-    # Build user's active map (one active per category should be maintained).
-    user_active_by_category: Dict[str, Dict] = {}
-    user_active_rows = db.query(
-        APISetting.id,
-        APISetting.category,
-        APISetting.provider,
-        APISetting.model,
-        cast(APISetting.config, String).label("config_raw"),
-    ).filter(
-        APISetting.user_id == current_user.id,
-        APISetting.is_active == True,
-    ).all()
-    for row in user_active_rows:
-        cat = row.category or "LLM"
-        row_data = {
-            "id": row.id,
-            "category": row.category,
-            "provider": row.provider,
-            "model": row.model,
-            "config": _safe_json_dict(getattr(row, "config_raw", None)),
-        }
-        # Keep latest id if historical duplicates exist.
-        if cat not in user_active_by_category or (row.id or 0) > (user_active_by_category[cat].get("id") or 0):
-            user_active_by_category[cat] = row_data
-
-    grouped: Dict[Tuple[str, str], Dict] = {}
-    for item in system_settings:
-        provider = item.provider or "unknown"
-        category = item.category or "LLM"
-        item_config = _safe_json_dict(getattr(item, "config_raw", None))
-        if getattr(item, "config_raw", None) and not item_config:
-            logger.warning(
-                "Invalid JSON in system setting config, fallback to empty dict | setting_id=%s provider=%s category=%s",
-                item.id,
-                provider,
-                category,
-            )
-        key = (provider, category)
-        if key not in grouped:
-            grouped[key] = {
-                "provider": provider,
-                "category": category,
-                "shared_key_configured": False,
-                "models_map": {},
+        user_active_by_category: Dict[str, Dict] = {}
+        user_active_rows = db.query(
+            APISetting.id,
+            APISetting.category,
+            APISetting.provider,
+            APISetting.model,
+            cast(APISetting.config, String).label("config_raw"),
+        ).filter(
+            APISetting.user_id == current_user.id,
+            APISetting.is_active == True,
+        ).all()
+        for row in user_active_rows:
+            cat = row.category or "LLM"
+            row_data = {
+                "id": row.id,
+                "category": row.category,
+                "provider": row.provider,
+                "model": row.model,
+                "config": _safe_json_dict(getattr(row, "config_raw", None)),
             }
+            if cat not in user_active_by_category or (row.id or 0) > (user_active_by_category[cat].get("id") or 0):
+                user_active_by_category[cat] = row_data
 
-        key_pool = _normalize_api_keys((item_config or {}).get("provider_api_keys"))
-        fallback_key = str(item.api_key or "").strip()
-        runtime_key = key_pool[0] if key_pool else fallback_key
-        has_key = bool(runtime_key)
-        grouped[key]["shared_key_configured"] = grouped[key]["shared_key_configured"] or has_key
+        grouped: Dict[Tuple[str, str], Dict] = {}
+        for item in system_settings:
+            provider = item.provider or "unknown"
+            category = item.category or "LLM"
+            item_config = _safe_json_dict(getattr(item, "config_raw", None))
+            if getattr(item, "config_raw", None) and not item_config:
+                logger.warning(
+                    "Invalid JSON in system setting config, fallback to empty dict | setting_id=%s provider=%s category=%s",
+                    item.id,
+                    provider,
+                    category,
+                )
+            key = (provider, category)
+            if key not in grouped:
+                grouped[key] = {
+                    "provider": provider,
+                    "category": category,
+                    "shared_key_configured": False,
+                    "models_map": {},
+                }
 
-        user_active = user_active_by_category.get(category)
-        user_is_active_for_row = False
-        if user_active:
-            user_is_active_for_row = (
-                (user_active.get("provider") == item.provider)
-                and ((user_active.get("model") or "") == (item.model or ""))
+            key_pool = _normalize_api_keys((item_config or {}).get("provider_api_keys"))
+            fallback_key = str(item.api_key or "").strip()
+            runtime_key = key_pool[0] if key_pool else fallback_key
+            has_key = bool(runtime_key)
+            grouped[key]["shared_key_configured"] = grouped[key]["shared_key_configured"] or has_key
+
+            user_active = user_active_by_category.get(category)
+            user_is_active_for_row = False
+            if user_active:
+                user_is_active_for_row = (
+                    (user_active.get("provider") == item.provider)
+                    and ((user_active.get("model") or "") == (item.model or ""))
+                )
+
+            option = SystemAPIModelOption(
+                id=item.id,
+                name=item.name,
+                provider=provider,
+                category=category,
+                model=item.model,
+                base_url=item.base_url,
+                webhook_url=(item_config or {}).get("webHook"),
+                deprecated=_is_setting_deprecated(item_config, getattr(item, "deprecated_flag", None)),
+                is_active=bool(user_is_active_for_row),
+                has_api_key=has_key,
+                api_key_masked=_mask_api_key(runtime_key) if has_key else "",
             )
 
-        option = SystemAPIModelOption(
-            id=item.id,
-            name=item.name,
-            provider=provider,
-            category=category,
-            model=item.model,
-            base_url=item.base_url,
-            webhook_url=(item_config or {}).get("webHook"),
-            deprecated=_is_setting_deprecated(item_config, getattr(item, "deprecated_flag", None)),
-            is_active=bool(user_is_active_for_row),
-            has_api_key=has_key,
-            api_key_masked=_mask_api_key(runtime_key) if has_key else "",
-        )
+            if option.deprecated:
+                continue
 
-        if option.deprecated:
-            continue
+            model_key = str(item.model or "").strip().lower()
+            existing_option = grouped[key]["models_map"].get(model_key)
+            if existing_option is None or (option.id or 0) >= (existing_option.id or 0):
+                grouped[key]["models_map"][model_key] = option
 
-        model_key = str(item.model or "").strip().lower()
-        existing_option = grouped[key]["models_map"].get(model_key)
-        if existing_option is None or (option.id or 0) >= (existing_option.id or 0):
-            grouped[key]["models_map"][model_key] = option
+        result = []
+        for _, row in grouped.items():
+            row["models"] = sorted(list(row.get("models_map", {}).values()), key=lambda m: (m.model or "", m.id))
+            row.pop("models_map", None)
+            if not row["models"]:
+                continue
+            result.append(SystemAPIProviderSettings(**row))
 
-    result = []
-    for _, row in grouped.items():
-        row["models"] = sorted(list(row.get("models_map", {}).values()), key=lambda m: (m.model or "", m.id))
-        row.pop("models_map", None)
-        if not row["models"]:
-            continue
-        result.append(SystemAPIProviderSettings(**row))
-
-    return sorted(result, key=lambda r: (r.category, r.provider))
+        return sorted(result, key=lambda r: (r.category, r.provider))
+    except Exception as exc:
+        logger.exception("Failed to load system settings for user_id=%s: %s", getattr(current_user, "id", None), exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return []
 
 
 @router.get("/settings/system/catalog", response_model=List[SystemAPIProviderModelCatalog])
