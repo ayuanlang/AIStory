@@ -12,7 +12,7 @@ const UserAdmin = () => {
     const [users, setUsers] = useState([]);
     const [billingOptions, setBillingOptions] = useState(null);
     const [featurePricingMap, setFeaturePricingMap] = useState({});
-    const [featurePricingDraft, setFeaturePricingDraft] = useState('{}');
+    const [featurePricingRows, setFeaturePricingRows] = useState([]);
     const [isFeaturePricingSaving, setIsFeaturePricingSaving] = useState(false);
     const [agentToolPolicy, setAgentToolPolicy] = useState({ default_allow: true, roles: {} });
     const [agentToolPolicyDraft, setAgentToolPolicyDraft] = useState('{\n  "default_allow": true,\n  "roles": {}\n}');
@@ -112,6 +112,34 @@ const UserAdmin = () => {
         });
         return normalized;
     };
+
+    const buildFeaturePricingRows = (obj = {}) => {
+        const normalized = normalizeFeaturePricing(obj);
+        return Object.entries(normalized)
+            .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+            .map(([feature, credits], idx) => ({
+                id: `feature-pricing-${idx}-${feature}`,
+                feature,
+                credits: String(credits),
+            }));
+    };
+
+    const buildFeaturePricingMapFromRows = (rows = []) => {
+        const next = {};
+        (rows || []).forEach((row) => {
+            const name = String(row?.feature || '').trim();
+            if (!name) return;
+            const parsed = Number(row?.credits);
+            next[name] = Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
+        });
+        return next;
+    };
+
+    const createEmptyFeaturePricingRow = () => ({
+        id: `feature-pricing-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        feature: '',
+        credits: '0',
+    });
 
     const normalizeAgentToolPolicy = (obj = {}) => {
         const fallback = {
@@ -1061,14 +1089,14 @@ const UserAdmin = () => {
                 if (!featurePricingRes || featurePricingRes.status !== 'fulfilled') {
                     const fromOptions = normalizeFeaturePricing(optionsRes.value?.featurePricing || {});
                     setFeaturePricingMap(fromOptions);
-                    setFeaturePricingDraft(JSON.stringify(fromOptions, null, 2));
+                    setFeaturePricingRows(buildFeaturePricingRows(fromOptions));
                 }
             }
 
             if (featurePricingRes.status === 'fulfilled') {
                 const normalized = normalizeFeaturePricing(featurePricingRes.value?.feature_pricing || {});
                 setFeaturePricingMap(normalized);
-                setFeaturePricingDraft(JSON.stringify(normalized, null, 2));
+                setFeaturePricingRows(buildFeaturePricingRows(normalized));
             }
 
             if (agentToolPolicyRes.status === 'fulfilled') {
@@ -1103,23 +1131,40 @@ const UserAdmin = () => {
 
     const handleSaveFeaturePricing = async () => {
         try {
-            const parsed = JSON.parse(featurePricingDraft || '{}');
-            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-                alert(t('功能定价必须是 JSON 对象', 'Feature pricing must be a JSON object'));
-                return;
-            }
             setIsFeaturePricingSaving(true);
-            const normalized = normalizeFeaturePricing(parsed);
+            const normalized = normalizeFeaturePricing(buildFeaturePricingMapFromRows(featurePricingRows));
             const res = await updateBillingFeaturePricing(normalized);
             const saved = normalizeFeaturePricing(res?.feature_pricing || {});
             setFeaturePricingMap(saved);
-            setFeaturePricingDraft(JSON.stringify(saved, null, 2));
+            setFeaturePricingRows(buildFeaturePricingRows(saved));
             alert(t('功能定价已保存', 'Feature pricing saved'));
         } catch (e) {
             alert(t('保存功能定价失败：', 'Failed to save feature pricing: ') + (e?.message || 'unknown error'));
         } finally {
             setIsFeaturePricingSaving(false);
         }
+    };
+
+    const handleFeaturePricingRowChange = (rowId, field, value) => {
+        setFeaturePricingRows((prev) => prev.map((row) => {
+            if (row.id !== rowId) return row;
+            if (field === 'credits') {
+                return { ...row, credits: String(value).replace(/[^0-9]/g, '') };
+            }
+            return { ...row, [field]: value };
+        }));
+    };
+
+    const handleAddFeaturePricingRow = () => {
+        setFeaturePricingRows((prev) => [...prev, createEmptyFeaturePricingRow()]);
+    };
+
+    const handleRemoveFeaturePricingRow = (rowId) => {
+        setFeaturePricingRows((prev) => prev.filter((row) => row.id !== rowId));
+    };
+
+    const handleResetFeaturePricingRows = () => {
+        setFeaturePricingRows(buildFeaturePricingRows(featurePricingMap || {}));
     };
 
     const handleSaveAgentToolPolicy = async () => {
@@ -1805,15 +1850,50 @@ const UserAdmin = () => {
                                 <div className="bg-black/30 border border-white/10 rounded-lg p-4">
                                     <h3 className="text-lg font-bold mb-2">{t('功能定价（积分）', 'Feature Pricing (Credits)')}</h3>
                                     <p className="text-xs text-gray-400 mb-3">
-                                        {t('按功能维度设置固定积分消耗，未配置功能默认 0。示例：{"llm_chat": 2, "image_gen": 5, "video_gen": 20, "scene.analyze": 1}', 'Set fixed credit cost by feature. Unconfigured features default to 0. Example: {"llm_chat": 2, "image_gen": 5, "video_gen": 20, "scene.analyze": 1}')}
+                                        {t('按功能维度设置固定积分消耗，未配置功能默认 0。每行填写一个功能键与积分。', 'Set fixed credit cost by feature. Unconfigured features default to 0. Fill one feature key and credits per row.')}
                                     </p>
-                                    <textarea
-                                        value={featurePricingDraft}
-                                        onChange={(e) => setFeaturePricingDraft(e.target.value)}
-                                        className="w-full min-h-[220px] bg-gray-900 border border-gray-700 rounded p-3 font-mono text-xs text-gray-200"
-                                        spellCheck={false}
-                                    />
+
+                                    <div className="space-y-2">
+                                        {featurePricingRows.length === 0 && (
+                                            <div className="text-xs text-gray-400 border border-dashed border-white/20 rounded p-3">
+                                                {t('暂无功能定价项，请点击“新增条目”。', 'No feature pricing entries yet. Click "Add Entry".')}
+                                            </div>
+                                        )}
+
+                                        {featurePricingRows.map((row) => (
+                                            <div key={row.id} className="grid grid-cols-12 gap-2 items-center">
+                                                <input
+                                                    value={row.feature}
+                                                    onChange={(e) => handleFeaturePricingRowChange(row.id, 'feature', e.target.value)}
+                                                    placeholder={t('功能键，例如 llm_chat', 'Feature key, e.g. llm_chat')}
+                                                    className="col-span-8 bg-gray-900 border border-gray-700 rounded p-2 text-xs text-gray-200"
+                                                />
+                                                <input
+                                                    value={row.credits}
+                                                    onChange={(e) => handleFeaturePricingRowChange(row.id, 'credits', e.target.value)}
+                                                    placeholder="0"
+                                                    inputMode="numeric"
+                                                    className="col-span-3 bg-gray-900 border border-gray-700 rounded p-2 text-xs text-gray-200"
+                                                />
+                                                <button
+                                                    onClick={() => handleRemoveFeaturePricingRow(row.id)}
+                                                    className="col-span-1 inline-flex items-center justify-center h-8 rounded bg-gray-700 hover:bg-gray-600 text-white"
+                                                    title={t('删除条目', 'Delete Entry')}
+                                                >
+                                                    <Trash2 className="w-3.5 h-3.5" />
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+
                                     <div className="mt-3 flex items-center gap-2">
+                                        <button
+                                            onClick={handleAddFeaturePricingRow}
+                                            className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded inline-flex items-center gap-1"
+                                        >
+                                            <Plus className="w-3.5 h-3.5" />
+                                            {t('新增条目', 'Add Entry')}
+                                        </button>
                                         <button
                                             onClick={handleSaveFeaturePricing}
                                             disabled={isFeaturePricingSaving}
@@ -1822,7 +1902,7 @@ const UserAdmin = () => {
                                             {isFeaturePricingSaving ? t('保存中...', 'Saving...') : t('保存功能定价', 'Save Feature Pricing')}
                                         </button>
                                         <button
-                                            onClick={() => setFeaturePricingDraft(JSON.stringify(featurePricingMap || {}, null, 2))}
+                                            onClick={handleResetFeaturePricingRows}
                                             className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded"
                                         >
                                             {t('重置草稿', 'Reset Draft')}

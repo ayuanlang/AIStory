@@ -797,7 +797,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                                        {/* Cover Image or Fallback */}
                                                        {p.cover_image && (
                                                            <img 
-                                                               src={p.cover_image.startsWith('http') ? p.cover_image : `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}${p.cover_image}`} 
+                                                               src={p.cover_image.startsWith('http') ? p.cover_image : `${(BASE_URL || 'http://localhost:8000')}${p.cover_image}`} 
                                                                alt={p.title} 
                                                                className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 z-10"
                                                                onError={(e) => { e.target.style.display = 'none'; }}

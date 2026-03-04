@@ -1,4 +1,8 @@
-// Use VITE_API_BASE_URL if set (production), otherwise fallback to relative path (dev/proxy)
-// Note: In Vite, env vars must start with VITE_ to be exposed
-export const BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
+// Prefer same-origin API path on Render static hosting to avoid CORS issues.
+// Set VITE_FORCE_CROSS_ORIGIN_API=1 only when you explicitly need direct backend-domain calls.
+const RAW_BASE_URL = String(import.meta?.env?.VITE_API_BASE_URL || '').trim();
+const FORCE_CROSS_ORIGIN_API = String(import.meta?.env?.VITE_FORCE_CROSS_ORIGIN_API || '0') === '1';
+const isRenderFrontend = typeof window !== 'undefined' && /\.onrender\.com$/i.test(window.location.hostname || '');
+
+export const BASE_URL = (!FORCE_CROSS_ORIGIN_API && isRenderFrontend) ? '' : RAW_BASE_URL;
 export const API_URL = `${BASE_URL}/api/v1`;

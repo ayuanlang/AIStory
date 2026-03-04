@@ -85,10 +85,10 @@ services:
     routes:
       - type: rewrite
         source: /api/*
-        destination: https://aistory-backend.onrender.com/api/*
+        destination: https://aistory-backend-xggg.onrender.com/api/*
       - type: rewrite
         source: /uploads/*
-        destination: https://aistory-backend.onrender.com/uploads/*
+        destination: https://aistory-backend-xggg.onrender.com/uploads/*
       - type: rewrite
         source: /*
         destination: /index.html
