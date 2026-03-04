@@ -5,8 +5,7 @@ import { useLog } from '../context/LogContext';
 import ReactMarkdown from 'react-markdown';
 import { useStore } from '../lib/store';
 import LogPanel from '../components/LogPanel';
-import AgentChat from '../components/AgentChat';
-import { MessageSquare, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare } from 'lucide-react';
+import { X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL } from '../config';
 import { setUiLang as setGlobalUiLang } from '../lib/uiLang';
@@ -16444,7 +16443,6 @@ const Editor = ({
     const [episodes, setEpisodes] = useState([]);
     const [activeEpisodeId, setActiveEpisodeId] = useState(initialEpisodeId);
     const [isEpisodeMenuOpen, setIsEpisodeMenuOpen] = useState(false);
-    const [isAgentOpen, setIsAgentOpen] = useState(false);
     const [activeTab, setActiveTab] = useState(initialActiveTab || 'overview');
     const [isImportOpen, setIsImportOpen] = useState(false);
     const [isJobPoolOpen, setIsJobPoolOpen] = useState(false);
@@ -17742,15 +17740,6 @@ const Editor = ({
                     >
                         <SettingsIcon className="w-4 h-4" />
                     </button>
-                    <button 
-                        onClick={() => trackMenuAction('editor.action.ai_agent', t('AI 助手', 'AI Agent'), () => setIsAgentOpen(!isAgentOpen))}
-                        className={`flex items-center gap-2 px-3 py-1 rounded-md text-xs font-bold transition-colors ${isAgentOpen ? 'bg-secondary text-white' : 'bg-primary text-black'}`}
-                    >
-                        <MessageSquare className="w-3.5 h-3.5" />
-                        {t('AI 助手', 'AI Agent')}
-                        {/* Status Dot */}
-                        <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse ml-1 opacity-50"></div>
-                    </button>
                 </div>
             </div>
 
@@ -17785,21 +17774,6 @@ const Editor = ({
                     </div>
                 </div>
             </div>
-
-            {/* Agent Sidebar (Slide-over) */}
-            <AnimatePresence>
-                {isAgentOpen && (
-                    <motion.div 
-                        initial={{ x: "100%", opacity: 0 }}
-                        animate={{ x: 0, opacity: 1 }}
-                        exit={{ x: "100%", opacity: 0 }}
-                        transition={{ type: "spring", stiffness: 300, damping: 30 }}
-                        className="absolute right-0 top-12 bottom-0 w-[450px] border-l border-white/10 bg-[#09090b]/95 backdrop-blur-xl z-50 flex flex-col shadow-[-20px_0_50px_rgba(0,0,0,0.5)]"
-                    >
-                        <AgentChat context={{ projectId: id }} onClose={() => setIsAgentOpen(false)} />
-                    </motion.div>
-                )}
-            </AnimatePresence>
 
             <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} onImport={handleImport} project={project} activeEpisodeId={activeEpisode?.id || null} uiLang={uiLang} />
 

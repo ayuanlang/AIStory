@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { api, getPricingRules, createPricingRule, updatePricingRule, deletePricingRule, getTransactions, updateUserCredits, syncPricingRules, getBillingOptions, getSystemSettingsManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, exportSystemSettingsManage, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, getSystemProviderKeysManage, setSystemProviderKeysManage, getAdminLlmLogFiles, getAdminLlmLogView, getAdminStorageUsage } from '../services/api';
+import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getAgentToolPolicy, updateAgentToolPolicy, getSystemSettingsManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, exportSystemSettingsManage, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, getAdminLlmLogFiles, getAdminLlmLogView, getAdminStorageUsage } from '../services/api';
 import Footer from '../components/Footer';
 import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive } from 'lucide-react';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
@@ -10,24 +10,17 @@ const UserAdmin = () => {
     const t = (zh, en) => tUI(uiLang, zh, en);
     const [activeTab, setActiveTab] = useState('users');
     const [users, setUsers] = useState([]);
-    const [pricingRules, setPricingRules] = useState([]);
     const [billingOptions, setBillingOptions] = useState(null);
+    const [featurePricingMap, setFeaturePricingMap] = useState({});
+    const [featurePricingDraft, setFeaturePricingDraft] = useState('{}');
+    const [isFeaturePricingSaving, setIsFeaturePricingSaving] = useState(false);
+    const [agentToolPolicy, setAgentToolPolicy] = useState({ default_allow: true, roles: {} });
+    const [agentToolPolicyDraft, setAgentToolPolicyDraft] = useState('{\n  "default_allow": true,\n  "roles": {}\n}');
+    const [isAgentToolPolicySaving, setIsAgentToolPolicySaving] = useState(false);
     const [transactions, setTransactions] = useState([]);
     const [transactionFilterUser, setTransactionFilterUser] = useState(''); // User ID filter
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
-
-    // New/Edit Rule State
-    const [isRuleModalOpen, setIsRuleModalOpen] = useState(false);
-    const [editingRule, setEditingRule] = useState(null);
-    const [ruleForm, setRuleForm] = useState({ task_type: 'llm_chat', provider: '', model: '', cost: 1, cost_input: 0, cost_output: 0, unit_type: 'per_call' });
-    
-    // Calculator State
-    const [calcPriceUSD, setCalcPriceUSD] = useState('');
-    const [calcPriceInput, setCalcPriceInput] = useState('');
-    const [calcPriceOutput, setCalcPriceOutput] = useState('');
-    const [exchangeRate, setExchangeRate] = useState(10); // Default: ￥1 = 10 Credits
-    const [markup, setMarkup] = useState('1.0'); // Default: 1.0x (No markup) - String for better input handling
 
     // Payment Config State
     const [paymentConfig, setPaymentConfig] = useState({
@@ -86,6 +79,10 @@ const UserAdmin = () => {
         base_url: '',
         model: '',
         webHook: '',
+        api_unit_type: 'per_call',
+        api_cost: '0',
+        api_cost_input: '0',
+        api_cost_output: '0',
         smart_priority: '100',
         smart_retry_limit: '1',
         smart_multi_ref_default: false,
@@ -105,11 +102,130 @@ const UserAdmin = () => {
 
     // ... existing code ...
 
-    const isTokenUnitType = (unitType) => ['per_token', 'per_1k_tokens', 'per_million_tokens'].includes(unitType);
-    const tokenUnitLabel = (unitType) => {
-        if (unitType === 'per_1k_tokens') return '1K';
-        if (unitType === 'per_token') return 'token';
-        return '1M';
+    const normalizeFeaturePricing = (obj = {}) => {
+        const normalized = {};
+        Object.entries(obj || {}).forEach(([key, value]) => {
+            const name = String(key || '').trim();
+            if (!name) return;
+            const parsed = Number(value);
+            normalized[name] = Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
+        });
+        return normalized;
+    };
+
+    const normalizeAgentToolPolicy = (obj = {}) => {
+        const fallback = {
+            default_allow: true,
+            roles: {
+                user: { allow: [], deny: ['internet_search'] },
+                authorized: { allow: ['internet_search'], deny: [] },
+                superuser: { allow: ['*'], deny: [] },
+            },
+        };
+
+        const src = (obj && typeof obj === 'object' && !Array.isArray(obj)) ? obj : {};
+        const roles = (src.roles && typeof src.roles === 'object' && !Array.isArray(src.roles)) ? src.roles : {};
+
+        const normalizeRole = (roleName) => {
+            const raw = (roles[roleName] && typeof roles[roleName] === 'object' && !Array.isArray(roles[roleName])) ? roles[roleName] : {};
+            const allow = Array.isArray(raw.allow) ? raw.allow.map((x) => String(x || '').trim()).filter(Boolean) : [];
+            const deny = Array.isArray(raw.deny) ? raw.deny.map((x) => String(x || '').trim()).filter(Boolean) : [];
+            return {
+                allow: Array.from(new Set(allow)),
+                deny: Array.from(new Set(deny)),
+            };
+        };
+
+        return {
+            default_allow: typeof src.default_allow === 'boolean' ? src.default_allow : fallback.default_allow,
+            roles: {
+                user: normalizeRole('user') || fallback.roles.user,
+                authorized: normalizeRole('authorized') || fallback.roles.authorized,
+                superuser: normalizeRole('superuser') || fallback.roles.superuser,
+            },
+        };
+    };
+
+    const buildRecommendedAgentToolPolicy = () => normalizeAgentToolPolicy({
+        default_allow: true,
+        roles: {
+            user: { allow: [], deny: ['internet_search'] },
+            authorized: { allow: ['internet_search'], deny: [] },
+            superuser: { allow: ['*'], deny: [] },
+        },
+    });
+
+    const AGENT_POLICY_ROLE_ORDER = ['user', 'authorized', 'superuser'];
+    const AGENT_POLICY_TOOL_OPTIONS = [
+        'search_project_data',
+        'internet_search',
+        'visualize_user_requirement',
+        'update_project_metadata',
+        'analyze_script',
+        'generate_project_asset',
+        'generate_image_text_to_image',
+        'generate_image_image_to_image',
+        'generate_video_text_to_video',
+        'generate_video_image_to_video',
+    ];
+
+    const parsePolicyFromDraftOrState = () => {
+        try {
+            const parsed = JSON.parse(agentToolPolicyDraft || '{}');
+            return normalizeAgentToolPolicy(parsed);
+        } catch {
+            return normalizeAgentToolPolicy(agentToolPolicy || {});
+        }
+    };
+
+    const applyAgentPolicyToState = (nextPolicy) => {
+        const normalized = normalizeAgentToolPolicy(nextPolicy || {});
+        setAgentToolPolicy(normalized);
+        setAgentToolPolicyDraft(JSON.stringify(normalized, null, 2));
+    };
+
+    const isAgentToolAllowedForRole = (policy, role, tool) => {
+        const normalized = normalizeAgentToolPolicy(policy || {});
+        const roleCfg = normalized.roles?.[role] || { allow: [], deny: [] };
+        const allowSet = new Set(Array.isArray(roleCfg.allow) ? roleCfg.allow : []);
+        const denySet = new Set(Array.isArray(roleCfg.deny) ? roleCfg.deny : []);
+
+        if (denySet.has(tool)) return false;
+        if (allowSet.has('*')) return true;
+        if (allowSet.has(tool)) return true;
+        return !!normalized.default_allow;
+    };
+
+    const handleToggleAgentPolicyTool = (role, tool, checked) => {
+        const base = parsePolicyFromDraftOrState();
+        const roleCfg = base.roles?.[role] || { allow: [], deny: [] };
+        const allowSet = new Set(Array.isArray(roleCfg.allow) ? roleCfg.allow : []);
+        const denySet = new Set(Array.isArray(roleCfg.deny) ? roleCfg.deny : []);
+
+        if (checked) {
+            denySet.delete(tool);
+            allowSet.add(tool);
+        } else {
+            allowSet.delete(tool);
+            denySet.add(tool);
+        }
+
+        base.roles[role] = {
+            allow: Array.from(allowSet),
+            deny: Array.from(denySet),
+        };
+        applyAgentPolicyToState(base);
+    };
+
+    const handleToggleAgentPolicyDefaultAllow = (checked) => {
+        const base = parsePolicyFromDraftOrState();
+        base.default_allow = !!checked;
+        applyAgentPolicyToState(base);
+    };
+
+    const handleRestoreRecommendedAgentPolicy = () => {
+        const recommended = buildRecommendedAgentToolPolicy();
+        applyAgentPolicyToState(recommended);
     };
 
     const fetchPaymentConfig = async () => {
@@ -178,6 +294,43 @@ const UserAdmin = () => {
         }
     }, [activeTab]);
 
+    const getSystemApiConfig = (row) => {
+        const raw = row?.config;
+        if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
+        if (typeof raw === 'string') {
+            try {
+                const parsed = JSON.parse(raw);
+                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+            } catch {
+                return {};
+            }
+        }
+        return {};
+    };
+
+    const normalizeApiPricingUnitType = (value) => {
+        const unit = String(value || 'per_call').trim() || 'per_call';
+        const allowed = new Set(['per_call', 'per_second', 'per_minute', 'per_token', 'per_1k_tokens', 'per_million_tokens']);
+        return allowed.has(unit) ? unit : 'per_call';
+    };
+
+    const toNonNegativeInt = (value) => {
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed) || parsed < 0) return 0;
+        return Math.floor(parsed);
+    };
+
+    const getApiPricing = (row) => {
+        const cfg = getSystemApiConfig(row);
+        const pricing = (cfg?.api_pricing && typeof cfg.api_pricing === 'object') ? cfg.api_pricing : {};
+        return {
+            unit_type: normalizeApiPricingUnitType(pricing?.unit_type ?? cfg?.billing_unit_type ?? 'per_call'),
+            cost: toNonNegativeInt(pricing?.cost ?? cfg?.billing_cost ?? 0),
+            cost_input: toNonNegativeInt(pricing?.cost_input ?? cfg?.billing_cost_input ?? 0),
+            cost_output: toNonNegativeInt(pricing?.cost_output ?? cfg?.billing_cost_output ?? 0),
+        };
+    };
+
     useEffect(() => {
         if (!selectedSystemApiId) {
             setSystemApiForm({
@@ -187,6 +340,10 @@ const UserAdmin = () => {
                 base_url: '',
                 model: '',
                 webHook: '',
+                api_unit_type: 'per_call',
+                api_cost: '0',
+                api_cost_input: '0',
+                api_cost_output: '0',
                 smart_priority: '100',
                 smart_retry_limit: '1',
                 smart_multi_ref_default: false,
@@ -196,16 +353,22 @@ const UserAdmin = () => {
         }
         const row = systemApiRows.find((item) => String(item.id) === String(selectedSystemApiId));
         if (!row) return;
+        const cfg = getSystemApiConfig(row);
+        const pricing = getApiPricing(row);
         setSystemApiForm({
             name: row.name || '',
             category: row.category || 'LLM',
             provider: row.provider || '',
             base_url: row.base_url || '',
             model: row.model || '',
-            webHook: row?.config?.webHook || '',
-            smart_priority: String(row?.config?.smart_priority ?? row?.config?.priority ?? '100'),
-            smart_retry_limit: String(row?.config?.smart_retry_limit ?? row?.config?.retry_limit ?? '1'),
-            smart_multi_ref_default: !!row?.config?.smart_multi_ref_default,
+            webHook: cfg?.webHook || '',
+            api_unit_type: pricing.unit_type,
+            api_cost: String(pricing.cost),
+            api_cost_input: String(pricing.cost_input),
+            api_cost_output: String(pricing.cost_output),
+            smart_priority: String(cfg?.smart_priority ?? cfg?.priority ?? '100'),
+            smart_retry_limit: String(cfg?.smart_retry_limit ?? cfg?.retry_limit ?? '1'),
+            smart_multi_ref_default: !!cfg?.smart_multi_ref_default,
             is_active: !!row.is_active,
         });
     }, [selectedSystemApiId, systemApiRows]);
@@ -309,19 +472,37 @@ const UserAdmin = () => {
     }, [filteredSystemApiRows, systemApiSortMode]);
 
     const getSmartPriority = (row) => {
-        const raw = row?.config?.smart_priority ?? row?.config?.priority ?? 100;
+        const cfg = getSystemApiConfig(row);
+        const raw = cfg?.smart_priority ?? cfg?.priority ?? 100;
         const parsed = Number(raw);
         return Number.isFinite(parsed) ? parsed : 100;
     };
 
     const getSmartRetryLimit = (row) => {
-        const raw = row?.config?.smart_retry_limit ?? row?.config?.retry_limit ?? 1;
+        const cfg = getSystemApiConfig(row);
+        const raw = cfg?.smart_retry_limit ?? cfg?.retry_limit ?? 1;
         const parsed = Number(raw);
         return Number.isFinite(parsed) && parsed >= 1 ? parsed : 1;
     };
 
-    const isSmartMultiRefDefault = (row) => !!row?.config?.smart_multi_ref_default;
-    const isSystemApiDeprecated = (row) => !!(row?.config?.deprecated || row?.config?.is_deprecated || row?.config?.disable_api);
+    const isSmartMultiRefDefault = (row) => {
+        const cfg = getSystemApiConfig(row);
+        return !!cfg?.smart_multi_ref_default;
+    };
+
+    const formatApiPricingSummary = (row) => {
+        const pricing = getApiPricing(row);
+        if (pricing.unit_type === 'per_token' || pricing.unit_type === 'per_1k_tokens' || pricing.unit_type === 'per_million_tokens') {
+            return `${pricing.unit_type} | in:${pricing.cost_input} out:${pricing.cost_output}`;
+        }
+        return `${pricing.unit_type} | ${pricing.cost}`;
+    };
+
+    const isSystemApiDeprecated = (row) => {
+        if (typeof row?.deprecated === 'boolean') return row.deprecated;
+        const cfg = getSystemApiConfig(row);
+        return !!(cfg?.deprecated || cfg?.is_deprecated || cfg?.disable_api);
+    };
 
     useEffect(() => {
         if (!visibleSystemApiRows.length) {
@@ -349,6 +530,12 @@ const UserAdmin = () => {
                 model: String(systemApiForm.model || '').trim() || undefined,
                 config: {
                     webHook: String(systemApiForm.webHook || '').trim() || '',
+                    api_pricing: {
+                        unit_type: normalizeApiPricingUnitType(systemApiForm.api_unit_type),
+                        cost: toNonNegativeInt(systemApiForm.api_cost),
+                        cost_input: toNonNegativeInt(systemApiForm.api_cost_input),
+                        cost_output: toNonNegativeInt(systemApiForm.api_cost_output),
+                    },
                     smart_priority: Number(systemApiForm.smart_priority || 100),
                     smart_retry_limit: Number(systemApiForm.smart_retry_limit || 1),
                     smart_multi_ref_default: !!systemApiForm.smart_multi_ref_default,
@@ -376,6 +563,12 @@ const UserAdmin = () => {
                 model: String(systemApiForm.model || '').trim() || undefined,
                 config: {
                     webHook: String(systemApiForm.webHook || '').trim() || '',
+                    api_pricing: {
+                        unit_type: normalizeApiPricingUnitType(systemApiForm.api_unit_type),
+                        cost: toNonNegativeInt(systemApiForm.api_cost),
+                        cost_input: toNonNegativeInt(systemApiForm.api_cost_input),
+                        cost_output: toNonNegativeInt(systemApiForm.api_cost_output),
+                    },
                     smart_priority: Number(systemApiForm.smart_priority || 100),
                     smart_retry_limit: Number(systemApiForm.smart_retry_limit || 1),
                     smart_multi_ref_default: !!systemApiForm.smart_multi_ref_default,
@@ -418,7 +611,22 @@ const UserAdmin = () => {
 
         try {
             const res = await batchToggleSystemProviderDeprecatedManage(provider, !!deprecated, category);
-            await fetchSystemApiManageRows();
+            setSystemApiRows((prev) => prev.map((item) => {
+                const sameProvider = String(item?.provider || '').trim() === provider;
+                const sameCategory = !category || String(item?.category || '').trim() === category;
+                if (!sameProvider || !sameCategory) return item;
+                const cfg = getSystemApiConfig(item);
+                return {
+                    ...item,
+                    deprecated: !!deprecated,
+                    config: {
+                        ...cfg,
+                        deprecated: !!deprecated,
+                        is_deprecated: !!deprecated,
+                        disable_api: !!deprecated,
+                    },
+                };
+            }));
             alert(`批量${actionLabel}完成。匹配 ${res?.matched || 0} 条，变更 ${res?.changed || 0} 条。`);
         } catch (e) {
             alert(e?.response?.data?.detail || e.message || `批量${actionLabel}失败`);
@@ -433,8 +641,29 @@ const UserAdmin = () => {
         if (!await confirmUiMessage(`确认${actionLabel}该模型配置？`)) return;
 
         try {
-            await toggleSystemSettingDeprecatedManage(Number(row.id), next);
-            await fetchSystemApiManageRows();
+            const updated = await toggleSystemSettingDeprecatedByKeyManage({
+                provider: row.provider,
+                category: row.category,
+                model: row.model || '',
+                setting_id: Number(row.id),
+                deprecated: next,
+            });
+            const effectiveDeprecated = typeof updated?.deprecated === 'boolean' ? !!updated.deprecated : !!next;
+            setSystemApiRows((prev) => prev.map((item) => {
+                if (Number(item?.id) !== Number(row.id)) return item;
+                const cfg = getSystemApiConfig(item);
+                return {
+                    ...item,
+                    ...((updated && typeof updated === 'object') ? updated : {}),
+                    deprecated: effectiveDeprecated,
+                    config: {
+                        ...cfg,
+                        deprecated: effectiveDeprecated,
+                        is_deprecated: effectiveDeprecated,
+                        disable_api: effectiveDeprecated,
+                    },
+                };
+            }));
             alert(`已${actionLabel}：${row.provider} / ${row.model || '-'}`);
         } catch (e) {
             alert(e?.response?.data?.detail || e.message || `${actionLabel}失败`);
@@ -801,72 +1030,19 @@ const UserAdmin = () => {
         }
     };
 
-    // ... existing fetchAllData ...
-
-    // Effect to auto-calculate
-    useEffect(() => {
-        const rate = parseFloat(exchangeRate) || 10;
-        const mark = parseFloat(markup) || 1.0;
-        
-        // Single Cost Calculation (Generic)
-        const price = parseFloat(calcPriceUSD);
-        let validUpdate = false;
-        let updates = {};
-
-        // Always save reference values
-        updates.ref_markup = mark;
-        updates.ref_exchange_rate = rate;
-        
-        if (!isNaN(price)) {
-            updates.cost = Math.ceil(price * rate * mark);
-            updates.ref_cost_cny = price;
-            validUpdate = true;
-        }
-
-        // Dual Cost Calculation (Token-based)
-        if (isTokenUnitType(ruleForm.unit_type)) {
-            const pInput = parseFloat(calcPriceInput);
-            const pOutput = parseFloat(calcPriceOutput);
-            
-            if (!isNaN(pInput) || !isNaN(pOutput)) {
-                 const costIn = !isNaN(pInput) ? pInput * rate * mark : 0;
-                 const costOut = !isNaN(pOutput) ? pOutput * rate * mark : 0;
-
-                 updates.cost_input = Math.ceil(costIn);
-                 updates.cost_output = Math.ceil(costOut);
-                 updates.ref_cost_input_cny = !isNaN(pInput) ? pInput : 0;
-                 updates.ref_cost_output_cny = !isNaN(pOutput) ? pOutput : 0;
-                 validUpdate = true;
-            }
-        }
-        
-        if (validUpdate) {
-            setRuleForm(prev => ({ ...prev, ...updates }));
-        }
-    }, [calcPriceUSD, calcPriceInput, calcPriceOutput, exchangeRate, markup, ruleForm.unit_type]);
-
     // Credit Edit State
     const [creditEditUser, setCreditEditUser] = useState(null);
     const [creditAmount, setCreditAmount] = useState(0);
 
-    const providerOptionsForTask = (taskType) => {
-        const providers = billingOptions?.providersByTaskType?.[taskType] || [];
-        return providers.map(p => ({ value: p, label: p }));
-    };
-
-    const modelOptionsForProvider = (provider) => {
-        if (!provider) return [];
-        return billingOptions?.modelsByProvider?.[provider] || [];
-    };
-
     const fetchAllData = async () => {
         setLoading(true);
         try {
-            const [usersRes, rulesRes, transRes, optionsRes] = await Promise.allSettled([
+            const [usersRes, transRes, optionsRes, featurePricingRes, agentToolPolicyRes] = await Promise.allSettled([
                 api.get('/users'),
-                getPricingRules(),
                 getTransactions(50, transactionFilterUser || null),
-                getBillingOptions()
+                getBillingOptions(),
+                getBillingFeaturePricing(),
+                getAgentToolPolicy(),
             ]);
 
             if (usersRes.status === 'fulfilled') {
@@ -876,22 +1052,29 @@ const UserAdmin = () => {
                 // Extract System User Settings to populate Model Options
                 const systemUsers = fetchedUsers.filter(u => u.is_system);
                 if (systemUsers.length > 0) {
-                     // We actually need to fetch api_settings from somewhere for these users, 
-                     // OR rely on the sync endpoint logic.
-                     // But the UI hardcoded MODEL_OPTIONS.
-                     // Let's TRY to fetch system settings if an endpoint exists, or infer.
-                     // The endpoint `GET /billing/rules/sync` does sync, maybe we call it or rely on existing rules?
-                     // Better: Extract unique provider/models from existing Pricing Rules to seed the dropdowns + defaults
+                     // Keep room for future dynamic provider/model extraction from system settings.
                 }
             } 
             
-            if (rulesRes.status === 'fulfilled') {
-                const rules = rulesRes.value;
-                setPricingRules(rules);
-            }
-
             if (optionsRes.status === 'fulfilled') {
                 setBillingOptions(optionsRes.value);
+                if (!featurePricingRes || featurePricingRes.status !== 'fulfilled') {
+                    const fromOptions = normalizeFeaturePricing(optionsRes.value?.featurePricing || {});
+                    setFeaturePricingMap(fromOptions);
+                    setFeaturePricingDraft(JSON.stringify(fromOptions, null, 2));
+                }
+            }
+
+            if (featurePricingRes.status === 'fulfilled') {
+                const normalized = normalizeFeaturePricing(featurePricingRes.value?.feature_pricing || {});
+                setFeaturePricingMap(normalized);
+                setFeaturePricingDraft(JSON.stringify(normalized, null, 2));
+            }
+
+            if (agentToolPolicyRes.status === 'fulfilled') {
+                const normalizedPolicy = normalizeAgentToolPolicy(agentToolPolicyRes.value || {});
+                setAgentToolPolicy(normalizedPolicy);
+                setAgentToolPolicyDraft(JSON.stringify(normalizedPolicy, null, 2));
             }
 
             if (transRes.status === 'fulfilled') setTransactions(transRes.value.sort((a,b)=>b.id-a.id));
@@ -918,48 +1101,47 @@ const UserAdmin = () => {
         }
     }, [transactionFilterUser, activeTab]);
 
-    const handleSaveRule = async () => {
+    const handleSaveFeaturePricing = async () => {
         try {
-            if (isTokenUnitType(ruleForm.unit_type)) {
-                const ci = parseInt(ruleForm.cost_input || 0);
-                const co = parseInt(ruleForm.cost_output || 0);
-                if (ci <= 0 || co <= 0) {
-                    alert('Token unit types require both Input and Output token costs (> 0).');
-                    return;
-                }
+            const parsed = JSON.parse(featurePricingDraft || '{}');
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                alert(t('功能定价必须是 JSON 对象', 'Feature pricing must be a JSON object'));
+                return;
             }
-
-            if (editingRule) {
-                await updatePricingRule(editingRule.id, ruleForm);
-            } else {
-                await createPricingRule(ruleForm);
-            }
-            setIsRuleModalOpen(false);
-            setEditingRule(null);
-            fetchAllData(); // Refresh
+            setIsFeaturePricingSaving(true);
+            const normalized = normalizeFeaturePricing(parsed);
+            const res = await updateBillingFeaturePricing(normalized);
+            const saved = normalizeFeaturePricing(res?.feature_pricing || {});
+            setFeaturePricingMap(saved);
+            setFeaturePricingDraft(JSON.stringify(saved, null, 2));
+            alert(t('功能定价已保存', 'Feature pricing saved'));
         } catch (e) {
-            alert("Failed to save rule: " + e.message);
+            alert(t('保存功能定价失败：', 'Failed to save feature pricing: ') + (e?.message || 'unknown error'));
+        } finally {
+            setIsFeaturePricingSaving(false);
         }
     };
 
-    const handleSyncRules = async () => {
-        setLoading(true);
+    const handleSaveAgentToolPolicy = async () => {
         try {
-            const added = await syncPricingRules();
-            alert(`Sync complete. Added ${added.length} new rules.`);
-            fetchAllData();
-        } catch(e) {
-            alert("Sync failed: " + e.message);
-            setLoading(false);
-        }
-    };
+            const parsed = JSON.parse(agentToolPolicyDraft || '{}');
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                alert(t('Agent 工具策略必须是 JSON 对象', 'Agent tool policy must be a JSON object'));
+                return;
+            }
 
-    const handleDeleteRule = async (id) => {
-        if (!await confirmUiMessage("Delete this pricing rule?")) return;
-        try {
-            await deletePricingRule(id);
-            fetchAllData();
-        } catch (e) { alert(e.message); }
+            setIsAgentToolPolicySaving(true);
+            const normalized = normalizeAgentToolPolicy(parsed);
+            const saved = await updateAgentToolPolicy(normalized);
+            const normalizedSaved = normalizeAgentToolPolicy(saved || {});
+            setAgentToolPolicy(normalizedSaved);
+            setAgentToolPolicyDraft(JSON.stringify(normalizedSaved, null, 2));
+            alert(t('Agent 工具策略已保存', 'Agent tool policy saved'));
+        } catch (e) {
+            alert(t('保存 Agent 工具策略失败：', 'Failed to save agent tool policy: ') + (e?.message || 'unknown error'));
+        } finally {
+            setIsAgentToolPolicySaving(false);
+        }
     };
 
     const handleUpdateCredits = async () => {
@@ -975,7 +1157,6 @@ const UserAdmin = () => {
     useEffect(() => {
         fetchAllData();
     }, []);
-
 
     // Helper Components
     const TabButton = ({ id, label, icon: Icon }) => (
@@ -1620,94 +1801,125 @@ const UserAdmin = () => {
                     {/* PRICING TAB */}
                     {activeTab === 'pricing' && (
                         <div>
-                            <div className="flex justify-between mb-4">
-                                <h3 className="text-lg font-bold">{t('定价规则', 'Pricing Rules')}</h3>
-                                <div className="flex gap-2">
-                                    <button
-                                        onClick={handleSyncRules}
-                                        className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded flex items-center gap-2"
-                                        title={t('导入系统 API 设置', 'Import system API settings')}
-                                    >
-                                        <RefreshCw size={16} /> {t('同步设置', 'Sync Settings')}
-                                    </button>
-                                    <button 
-                                        onClick={() => { 
-                                            setEditingRule(null); 
-                                            setRuleForm({ task_type: 'llm_chat', provider: '', model: '', cost: 1, cost_input: 0, cost_output: 0, unit_type: 'per_call' }); 
-                                            setCalcPriceUSD('');
-                                            setCalcPriceInput('');
-                                            setCalcPriceOutput('');
-                                            setExchangeRate(10);
-                                            setMarkup('1.0');
-                                            setIsRuleModalOpen(true); 
-                                        }}
-                                        className="bg-primary hover:bg-primary/90 text-white px-3 py-1 rounded flex items-center gap-2"
-                                    >
-                                    <Plus size={16} /> {t('新增规则', 'Add Rule')}
-                                </button>
+                            <div className="space-y-4">
+                                <div className="bg-black/30 border border-white/10 rounded-lg p-4">
+                                    <h3 className="text-lg font-bold mb-2">{t('功能定价（积分）', 'Feature Pricing (Credits)')}</h3>
+                                    <p className="text-xs text-gray-400 mb-3">
+                                        {t('按功能维度设置固定积分消耗，未配置功能默认 0。示例：{"llm_chat": 2, "image_gen": 5, "video_gen": 20, "scene.analyze": 1}', 'Set fixed credit cost by feature. Unconfigured features default to 0. Example: {"llm_chat": 2, "image_gen": 5, "video_gen": 20, "scene.analyze": 1}')}
+                                    </p>
+                                    <textarea
+                                        value={featurePricingDraft}
+                                        onChange={(e) => setFeaturePricingDraft(e.target.value)}
+                                        className="w-full min-h-[220px] bg-gray-900 border border-gray-700 rounded p-3 font-mono text-xs text-gray-200"
+                                        spellCheck={false}
+                                    />
+                                    <div className="mt-3 flex items-center gap-2">
+                                        <button
+                                            onClick={handleSaveFeaturePricing}
+                                            disabled={isFeaturePricingSaving}
+                                            className="bg-primary hover:bg-primary/90 text-white px-3 py-1 rounded disabled:opacity-50"
+                                        >
+                                            {isFeaturePricingSaving ? t('保存中...', 'Saving...') : t('保存功能定价', 'Save Feature Pricing')}
+                                        </button>
+                                        <button
+                                            onClick={() => setFeaturePricingDraft(JSON.stringify(featurePricingMap || {}, null, 2))}
+                                            className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded"
+                                        >
+                                            {t('重置草稿', 'Reset Draft')}
+                                        </button>
+                                    </div>
                                 </div>
-                            </div>
-                            <div className="overflow-x-auto">
-                                <table className="w-full text-left border-collapse">
-                                    <thead>
-                                        <tr className="border-b border-gray-800 text-gray-400 text-sm">
-                                            <th className="p-3">{t('提供方', 'Provider')}</th>
-                                            <th className="p-3">{t('模型', 'Model')}</th>
-                                            <th className="p-3">{t('任务', 'Task')}</th>
-                                            <th className="p-3">{t('成本（积分）', 'Cost (Credits)')}</th>
-                                            <th className="p-3">{t('状态', 'Status')}</th>
-                                            <th className="p-3 text-right">{t('操作', 'Actions')}</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {pricingRules.map(rule => (
-                                            <tr key={rule.id} className="border-b border-gray-800/50 hover:bg-gray-800/50">
-                                                <td className="p-3">{rule.provider || t('*（全部）', '* (All)')}</td>
-                                                <td className="p-3">{rule.model || t('*（全部）', '* (All)')}</td>
-                                                <td className="p-3"><span className="bg-gray-700 px-2 py-0.5 rounded text-xs">{rule.task_type}</span></td>
-                                                <td className="p-3">
-                                                    {isTokenUnitType(rule.unit_type) ? (
-                                                        <div className="flex flex-col text-xs font-mono">
-                                                            <span className="text-blue-300" title={t('输入 Tokens', 'Input Tokens')}>In: {rule.cost_input} <span className="text-gray-600">/ {tokenUnitLabel(rule.unit_type)}</span></span>
-                                                            <span className="text-green-300" title={t('输出 Tokens', 'Output Tokens')}>Out: {rule.cost_output} <span className="text-gray-600">/ {tokenUnitLabel(rule.unit_type)}</span></span>
-                                                        </div>
-                                                    ) : (
-                                                        <span className="font-bold text-yellow-400">
-                                                            {rule.cost} <span className="text-[10px] text-gray-500 font-normal">/ {rule.unit_type.replace('per_', '').replace('_', ' ')}</span>
-                                                        </span>
-                                                    )}
-                                                </td>
-                                                <td className="p-3">
-                                                    <span className={`w-2 h-2 rounded-full inline-block mr-2 ${rule.is_active ? 'bg-green-500' : 'bg-red-500'}`}></span>
-                                                    {rule.is_active ? t('启用', 'Active') : t('停用', 'Inactive')}
-                                                </td>
-                                                <td className="p-3 text-right flex justify-end gap-2">
-                                                    <button onClick={() => { 
-                                                        setEditingRule(rule); 
-                                                        setRuleForm(rule); 
-                                                        
-                                                        const m = rule.ref_markup || 1.0;
-                                                        const r = rule.ref_exchange_rate || 10;
-                                                        setMarkup(m.toString());
-                                                        setExchangeRate(r);
 
-                                                        setCalcPriceUSD(rule.ref_cost_cny !== undefined && rule.ref_cost_cny !== null ? rule.ref_cost_cny : ((rule.cost || 0)/(r*m)));
-                                                        
-                                                        // For dual pricing, recreate approximates if ref missing
-                                                        const inputApprox = (rule.cost_input || 0) / (r * m);
-                                                        const outputApprox = (rule.cost_output || 0) / (r * m);
+                                <div className="bg-black/30 border border-white/10 rounded-lg p-4">
+                                    <h3 className="text-lg font-bold mb-2">{t('API 调用定价', 'API Call Pricing')}</h3>
+                                    <p className="text-xs text-gray-400 mb-3">
+                                        {t('API 调用定价已迁移到「系统 API」配置中（config.api_pricing）。请前往“系统 API”标签，为每个 provider/model 设置 unit_type、cost、cost_input、cost_output。', 'API call pricing is now configured in System API settings (config.api_pricing). Go to the System API tab and set unit_type, cost, cost_input, cost_output per provider/model.')}
+                                    </p>
+                                    <button
+                                        onClick={() => setActiveTab('system_api')}
+                                        className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded"
+                                    >
+                                        {t('前往系统 API 配置', 'Go to System API Settings')}
+                                    </button>
+                                </div>
 
-                                                        setCalcPriceInput(rule.ref_cost_input_cny !== undefined && rule.ref_cost_input_cny !== null ? rule.ref_cost_input_cny : inputApprox);
-                                                        setCalcPriceOutput(rule.ref_cost_output_cny !== undefined && rule.ref_cost_output_cny !== null ? rule.ref_cost_output_cny : outputApprox);
-                                                        
-                                                        setIsRuleModalOpen(true); 
-                                                    }} className="text-blue-400 hover:text-blue-300"><Edit2 size={16} /></button>
-                                                    <button onClick={() => handleDeleteRule(rule.id)} className="text-red-400 hover:text-red-300"><Trash2 size={16} /></button>
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
+                                <div className="bg-black/30 border border-white/10 rounded-lg p-4">
+                                    <h3 className="text-lg font-bold mb-2">{t('Agent 工具权限策略（按角色）', 'Agent Tool Permission Policy (By Role)')}</h3>
+                                    <p className="text-xs text-gray-400 mb-3">
+                                        {t('控制 user / authorized / superuser 可调用的 Agent 工具。格式：{ default_allow, roles.{role}.{allow|deny} }。支持 * 通配。', 'Control which Agent tools user / authorized / superuser can call. Format: { default_allow, roles.{role}.{allow|deny} }. Supports * wildcard.')}
+                                    </p>
+
+                                    <div className="mb-3 border border-white/10 rounded p-3 bg-black/20">
+                                        <label className="flex items-center gap-2 text-xs text-gray-300 mb-3">
+                                            <input
+                                                type="checkbox"
+                                                checked={!!normalizeAgentToolPolicy(agentToolPolicy).default_allow}
+                                                onChange={(e) => handleToggleAgentPolicyDefaultAllow(e.target.checked)}
+                                            />
+                                            {t('default_allow（未显式 allow/deny 的工具默认允许）', 'default_allow (tools without explicit allow/deny are allowed by default)')}
+                                        </label>
+
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-xs border-collapse">
+                                                <thead>
+                                                    <tr className="border-b border-white/10 text-gray-400">
+                                                        <th className="text-left p-2">{t('工具', 'Tool')}</th>
+                                                        {AGENT_POLICY_ROLE_ORDER.map((role) => (
+                                                            <th key={role} className="text-center p-2 uppercase">{role}</th>
+                                                        ))}
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {AGENT_POLICY_TOOL_OPTIONS.map((tool) => (
+                                                        <tr key={tool} className="border-b border-white/5">
+                                                            <td className="p-2 font-mono text-gray-200">{tool}</td>
+                                                            {AGENT_POLICY_ROLE_ORDER.map((role) => {
+                                                                const checked = isAgentToolAllowedForRole(agentToolPolicy, role, tool);
+                                                                return (
+                                                                    <td key={`${role}-${tool}`} className="p-2 text-center">
+                                                                        <input
+                                                                            type="checkbox"
+                                                                            checked={checked}
+                                                                            onChange={(e) => handleToggleAgentPolicyTool(role, tool, e.target.checked)}
+                                                                        />
+                                                                    </td>
+                                                                );
+                                                            })}
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+
+                                    <textarea
+                                        value={agentToolPolicyDraft}
+                                        onChange={(e) => setAgentToolPolicyDraft(e.target.value)}
+                                        className="w-full min-h-[240px] bg-gray-900 border border-gray-700 rounded p-3 font-mono text-xs text-gray-200"
+                                        spellCheck={false}
+                                    />
+                                    <div className="mt-3 flex items-center gap-2">
+                                        <button
+                                            onClick={handleSaveAgentToolPolicy}
+                                            disabled={isAgentToolPolicySaving}
+                                            className="bg-primary hover:bg-primary/90 text-white px-3 py-1 rounded disabled:opacity-50"
+                                        >
+                                            {isAgentToolPolicySaving ? t('保存中...', 'Saving...') : t('保存 Agent 策略', 'Save Agent Policy')}
+                                        </button>
+                                        <button
+                                            onClick={handleRestoreRecommendedAgentPolicy}
+                                            className="bg-blue-700 hover:bg-blue-600 text-white px-3 py-1 rounded"
+                                        >
+                                            {t('恢复推荐策略', 'Restore Recommended Policy')}
+                                        </button>
+                                        <button
+                                            onClick={() => setAgentToolPolicyDraft(JSON.stringify(agentToolPolicy || {}, null, 2))}
+                                            className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded"
+                                        >
+                                            {t('重置草稿', 'Reset Draft')}
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     )}
@@ -2045,6 +2257,9 @@ const UserAdmin = () => {
                                                                     <span className="px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-200 border border-purple-500/30">
                                                                         {t('重试', 'Retry')}: {getSmartRetryLimit(row)}
                                                                     </span>
+                                                                    <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-200 border border-amber-500/30">
+                                                                        {t('API 定价', 'API Pricing')}: {formatApiPricingSummary(row)}
+                                                                    </span>
                                                                     {isSmartMultiRefDefault(row) && (
                                                                         <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-200 border border-emerald-500/30">
                                                                             {t('多图默认', 'Multi-ref Default')}
@@ -2131,6 +2346,51 @@ const UserAdmin = () => {
                                                 <input
                                                     value={systemApiForm.webHook}
                                                     onChange={(e) => setSystemApiForm((prev) => ({ ...prev, webHook: e.target.value }))}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('API 计费单位', 'API Billing Unit')}</label>
+                                                <select
+                                                    value={systemApiForm.api_unit_type}
+                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, api_unit_type: e.target.value }))}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                >
+                                                    <option value="per_call">per_call</option>
+                                                    <option value="per_second">per_second</option>
+                                                    <option value="per_minute">per_minute</option>
+                                                    <option value="per_token">per_token</option>
+                                                    <option value="per_1k_tokens">per_1k_tokens</option>
+                                                    <option value="per_million_tokens">per_million_tokens</option>
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('API 成本（基础）', 'API Cost (Base)')}</label>
+                                                <input
+                                                    type="number"
+                                                    min="0"
+                                                    value={systemApiForm.api_cost}
+                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, api_cost: e.target.value }))}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('API 成本（输入）', 'API Cost (Input)')}</label>
+                                                <input
+                                                    type="number"
+                                                    min="0"
+                                                    value={systemApiForm.api_cost_input}
+                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, api_cost_input: e.target.value }))}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('API 成本（输出）', 'API Cost (Output)')}</label>
+                                                <input
+                                                    type="number"
+                                                    min="0"
+                                                    value={systemApiForm.api_cost_output}
+                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, api_cost_output: e.target.value }))}
                                                     className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
                                                 />
                                             </div>
@@ -2323,227 +2583,6 @@ const UserAdmin = () => {
 
                 </div>
             </main>
-
-            {/* Config Modal */}
-            {isRuleModalOpen && (
-                <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
-                    <div className="bg-gray-900 border border-gray-700 p-6 rounded-xl w-full max-w-md">
-                        <h3 className="text-xl font-bold mb-4">{editingRule ? t('编辑规则', 'Edit Rule') : t('新建定价规则', 'New Pricing Rule')}</h3>
-                        <div className="space-y-4">
-                            <div>
-                                <label className="block text-sm text-gray-400 mb-1">{t('任务类型', 'Task Type')}</label>
-                                <select 
-                                    className="w-full bg-gray-800 border border-gray-700 rounded p-2"
-                                    value={ruleForm.task_type}
-                                    onChange={e => setRuleForm({
-                                        ...ruleForm, 
-                                        task_type: e.target.value,
-                                        provider: '',  // Reset dependent fields
-                                        model: ''
-                                    })}
-                                >
-                                    <option value="llm_chat">{t('聊天（LLM）', 'Chat (LLM)')}</option>
-                                    <option value="image_gen">{t('图片生成', 'Image Generation')}</option>
-                                    <option value="video_gen">{t('视频生成', 'Video Generation')}</option>
-                                    <option value="analysis">{t('文本分析', 'Analysis (Text)')}</option>
-                                    <option value="analysis_character">{t('角色分析', 'Character Analysis')}</option>
-                                </select>
-                            </div>
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-sm text-gray-400 mb-1">{t('提供方（可选）', 'Provider (Optional)')}</label>
-                                    <select 
-                                        className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-sm"
-                                        value={ruleForm.provider || ''}
-                                        onChange={e => setRuleForm({...ruleForm, provider: e.target.value || null, model: ''})}
-                                    >
-                                        <option value="">{t('任意（*）', 'Any (*)')}</option>
-                                        {providerOptionsForTask(ruleForm.task_type).map(opt => (
-                                            <option key={opt.value} value={opt.value}>{opt.label}</option>
-                                        ))}
-                                    </select>
-                                </div>
-                                <div>
-                                    <label className="block text-sm text-gray-400 mb-1">{t('模型（可选）', 'Model (Optional)')}</label>
-                                    <select 
-                                        className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-sm"
-                                        value={ruleForm.model || ''}
-                                        onChange={e => setRuleForm({...ruleForm, model: e.target.value || null})}
-                                    >
-                                       <option value="">{t('任意（*）', 'Any (*)')}</option>
-                                       {modelOptionsForProvider(ruleForm.provider).map(m => (
-                                           <option key={m} value={m}>{m}</option>
-                                       ))}
-                                    </select>
-                                </div>
-                            </div>
-                            <div>
-                                <label className="block text-sm text-gray-400 mb-1">{t('计费单位', 'Unit Type')}</label>
-                                <select 
-                                    className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-sm"
-                                    value={ruleForm.unit_type || 'per_call'}
-                                    onChange={e => setRuleForm({...ruleForm, unit_type: e.target.value})}
-                                >
-                                    <option value="per_call">{t('按 API 调用（请求）', 'Per API Call (Request)')}</option>
-                                    <option value="per_1k_tokens">{t('每 1k Tokens', 'Per 1k Tokens')}</option>
-                                    <option value="per_million_tokens">{t('每 1M Tokens', 'Per 1M Tokens')}</option>
-                                    <option value="per_image">{t('每张图片', 'Per Image')}</option>
-                                    <option value="per_second">{t('每秒（视频）', 'Per Second (Video)')}</option>
-                                    <option value="per_minute">{t('每分钟', 'Per Minute')}</option>
-                                </select>
-                            </div>
-
-                            <div className="bg-black/40 p-3 rounded border border-white/5 space-y-3">
-                                <label className="block text-xs font-medium text-blue-400 uppercase">{t('自动计算成本（人民币）', 'Auto-Calculate Cost (CNY)')}</label>
-                                
-                                {isTokenUnitType(ruleForm.unit_type) ? (
-                                    /* LLM Dual Pricing Calculator */
-                                    <div className="grid grid-cols-2 gap-3 mb-2">
-                                        <div>
-                                            <label className="block text-[10px] text-gray-400 mb-1">{t(`输入价格（每 ${tokenUnitLabel(ruleForm.unit_type)} Tokens）`, `Input Price (Per ${tokenUnitLabel(ruleForm.unit_type)} Tokens)`)}</label>
-                                            <input 
-                                                type="number" 
-                                                step="0.0001"
-                                                placeholder={ruleForm.unit_type === 'per_1k_tokens' ? t('例如：0.002', 'e.g. 0.002') : t('例如：1.00', 'e.g. 1.00')}
-                                                className="w-full bg-gray-900 border border-gray-700 rounded p-1.5 text-sm"
-                                                value={calcPriceInput}
-                                                onChange={(e) => setCalcPriceInput(e.target.value)}
-                                            />
-                                        </div>
-                                        <div>
-                                            <label className="block text-[10px] text-gray-400 mb-1">{t(`输出价格（每 ${tokenUnitLabel(ruleForm.unit_type)} Tokens）`, `Output Price (Per ${tokenUnitLabel(ruleForm.unit_type)} Tokens)`)}</label>
-                                            <input 
-                                                type="number" 
-                                                step="0.0001"
-                                                placeholder={ruleForm.unit_type === 'per_1k_tokens' ? t('例如：0.006', 'e.g. 0.006') : t('例如：6.00', 'e.g. 6.00')}
-                                                className="w-full bg-gray-900 border border-gray-700 rounded p-1.5 text-sm"
-                                                value={calcPriceOutput}
-                                                onChange={(e) => setCalcPriceOutput(e.target.value)}
-                                            />
-                                        </div>
-                                    </div>
-                                ) : (
-                                    /* Standard Single Pricing Calculator */
-                                    <div className="mb-2">
-                                        <label className="block text-[10px] text-gray-400 mb-1">
-                                            {ruleForm.unit_type === 'per_million_tokens' ? t('每 1M Tokens 价格（元）', 'Price per 1M Tokens (Yuan)') :
-                                            ruleForm.unit_type === 'per_1k_tokens' ? t('每 1K Tokens 价格（元）', 'Price per 1K Tokens (Yuan)') :
-                                            ruleForm.unit_type === 'per_image' ? t('每张图片价格（元）', 'Price per Image (Yuan)') :
-                                            ruleForm.unit_type === 'per_second' ? t('每秒价格（元）', 'Price per Second (Yuan)') :
-                                            ruleForm.unit_type === 'per_minute' ? t('每分钟价格（元）', 'Price per Minute (Yuan)') :
-                                            t('每次请求价格（元）', 'Price per Request (Yuan)')}
-                                        </label>
-                                        <input 
-                                            type="number" 
-                                            step="0.0001"
-                                            placeholder={
-                                                ruleForm.unit_type === 'per_million_tokens' ? '36.00' :
-                                                ruleForm.unit_type === 'per_image' ? '0.30' :
-                                                '0.015'
-                                            }
-                                            className="w-full bg-gray-900 border border-gray-700 rounded p-1.5 text-sm"
-                                            value={calcPriceUSD}
-                                            onChange={(e) => setCalcPriceUSD(e.target.value)}
-                                        />
-                                        <p className="text-[9px] text-gray-600 mt-1">
-                                            {ruleForm.unit_type === 'per_million_tokens' ? t('例如：GPT-4o 输入：约￥36.00', 'e.g. GPT-4o Input: ~￥36.00') :
-                                            ruleForm.unit_type === 'per_image' ? t('例如：DALL-E 3：约￥0.30', 'e.g. DALL-E 3: ~￥0.30') :
-                                            ruleForm.unit_type === 'per_second' ? t('例如：Runway：约￥0.35/秒', 'e.g. Runway: ~￥0.35/sec') :
-                                            t('供应商基础成本（元）', 'Base provider cost in Yuan')}
-                                        </p>
-                                    </div>
-                                )}
-
-                                <div className="grid grid-cols-2 gap-3 border-t border-white/10 pt-2">
-                                    <div>
-                                        <label className="block text-[10px] text-gray-400 mb-1">{t('倍率（加价）', 'Multiplier (Markup)')}</label>
-                                        <input 
-                                            type="number"
-                                            step="0.1" 
-                                            value={markup}
-                                            className="w-full bg-gray-900 border border-gray-700 rounded p-1.5 text-sm"
-                                            onChange={(e) => setMarkup(e.target.value)}
-                                        />
-                                        <p className="text-[9px] text-gray-600 mt-1">{t('例如：2.0 = 2倍成本', 'e.g. 2.0 = 2x Cost')}</p>
-                                    </div>
-                                    <div>
-                                        <label className="block text-[10px] text-gray-400 mb-1">{t('汇率（￥1=积分）', 'Exchange (￥1=Credits)')}</label>
-                                        <input 
-                                            type="number" 
-                                            value={exchangeRate}
-                                            className="w-full bg-gray-900 border border-gray-700 rounded p-1.5 text-sm"
-                                            onChange={(e) => setExchangeRate(parseFloat(e.target.value) || 10)}
-                                        />
-                                    </div>
-                                </div>
-                                <div className="text-[10px] text-gray-500 bg-white/5 p-2 rounded">
-                                    <div className="flex justify-between items-center mb-1">
-                                        <span>{t('计算公式：', 'Calculation:')}</span>
-                                        <span className="font-mono text-xs text-white">
-                                           Price × {exchangeRate} × {markup}x
-                                        </span>
-                                    </div>
-                                    <div className="flex justify-between items-center border-t border-white/10 pt-1">
-                                        <span className="text-yellow-500 font-bold">{t('最终成本：', 'Final Cost:')}</span>
-                                        <span className="font-mono text-yellow-400 font-bold text-sm">
-                                            {isTokenUnitType(ruleForm.unit_type) ? (
-                                                <span>
-                                                    In: {Math.ceil((parseFloat(calcPriceInput)||0) * exchangeRate * markup)} / 
-                                                    Out: {Math.ceil((parseFloat(calcPriceOutput)||0) * exchangeRate * markup)}
-                                                </span>
-                                            ) : (
-                                                <span>{Math.ceil((parseFloat(calcPriceUSD) || 0) * exchangeRate * markup)} {t('积分', 'Credits')}</span>
-                                            )}
-                                        </span>
-                                    </div>
-                                    <div className="text-[9px] text-gray-600 mt-1 text-right">
-                                        Per {ruleForm.unit_type.replace('per_', '').replace('_', ' ')}
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div>
-                                <label className="block text-sm text-gray-400 mb-1">
-                                    {isTokenUnitType(ruleForm.unit_type) ? t('成本（积分：输入 / 输出）', 'Cost (Credits: Input / Output)') : t('成本（积分）', 'Cost (Credits)')}
-                                </label>
-                                {isTokenUnitType(ruleForm.unit_type) ? (
-                                     <div className="grid grid-cols-2 gap-2">
-                                        <div>
-                                            <span className="text-[10px] text-gray-500">{t(`输入（每 ${tokenUnitLabel(ruleForm.unit_type)}）`, `Input (per ${tokenUnitLabel(ruleForm.unit_type)})`)}</span>
-                                            <input 
-                                                type="number" 
-                                                className="w-full bg-gray-800 border border-gray-700 rounded p-2 font-mono text-yellow-400 font-bold"
-                                                value={ruleForm.cost_input || 0}
-                                                onChange={e => setRuleForm({...ruleForm, cost_input: parseInt(e.target.value) || 0})}
-                                            />
-                                        </div>
-                                        <div>
-                                            <span className="text-[10px] text-gray-500">{t(`输出（每 ${tokenUnitLabel(ruleForm.unit_type)}）`, `Output (per ${tokenUnitLabel(ruleForm.unit_type)})`)}</span>
-                                            <input 
-                                                type="number" 
-                                                className="w-full bg-gray-800 border border-gray-700 rounded p-2 font-mono text-yellow-400 font-bold"
-                                                value={ruleForm.cost_output || 0}
-                                                onChange={e => setRuleForm({...ruleForm, cost_output: parseInt(e.target.value) || 0})}
-                                            />
-                                        </div>
-                                     </div>
-                                ) : (
-                                    <input 
-                                        type="number" 
-                                        className="w-full bg-gray-800 border border-gray-700 rounded p-2 font-mono text-yellow-400 font-bold"
-                                        value={ruleForm.cost}
-                                        onChange={e => setRuleForm({...ruleForm, cost: parseInt(e.target.value)})}
-                                    />
-                                )}
-                            </div>
-                            <div className="flex justify-end gap-2 mt-6">
-                                <button onClick={() => setIsRuleModalOpen(false)} className="px-4 py-2 hover:bg-gray-800 rounded">{t('取消', 'Cancel')}</button>
-                                <button onClick={handleSaveRule} className="px-4 py-2 bg-primary hover:bg-primary/90 text-black font-bold rounded">{t('保存', 'Save')}</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
 
             {/* Credit Modal */}
             {creditEditUser && (

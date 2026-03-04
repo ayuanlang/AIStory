@@ -94,6 +94,14 @@ class SystemAPISettingToggleDeprecatedRequest(BaseModel):
     deprecated: Optional[bool] = None
 
 
+class SystemAPISettingToggleDeprecatedByKeyRequest(BaseModel):
+    provider: str
+    category: str
+    model: Optional[str] = None
+    setting_id: Optional[int] = None
+    deprecated: Optional[bool] = None
+
+
 class SystemAPIProviderBatchDeprecatedRequest(BaseModel):
     deprecated: bool
     category: Optional[str] = None
@@ -114,6 +122,7 @@ class SystemAPISettingOut(BaseModel):
     base_url: Optional[str] = None
     model: Optional[str] = None
     config: Optional[Dict[str, Any]] = {}
+    deprecated: bool = False
     is_active: bool = False
 
     class Config:
@@ -128,6 +137,7 @@ class SystemAPISettingImportItem(BaseModel):
     base_url: Optional[str] = None
     model: Optional[str] = None
     config: Optional[Dict[str, Any]] = {}
+    deprecated: Optional[bool] = None
     is_active: bool = False
 
 
@@ -142,6 +152,7 @@ class SystemAPIProviderModelImportItem(BaseModel):
     base_url: Optional[str] = None
     model: Optional[str] = None
     config: Optional[Dict[str, Any]] = {}
+    deprecated: Optional[bool] = None
     is_active: bool = False
 
 
@@ -162,3 +173,59 @@ class SystemAPIProviderModelCatalog(BaseModel):
     category: str
     provider: str
     models: List[str] = []
+
+
+class AgentToolPolicyUpdate(BaseModel):
+    default_allow: Optional[bool] = True
+    roles: Dict[str, Dict[str, List[str]]] = Field(default_factory=dict)
+
+
+class AgentToolPolicyOut(BaseModel):
+    default_allow: bool = True
+    roles: Dict[str, Dict[str, List[str]]] = Field(default_factory=dict)
+
+
+class SystemAIAssistantModelInput(BaseModel):
+    name: Optional[str] = None
+    category: str = "LLM"
+    model: str
+    base_url: Optional[str] = None
+    endpoint: Optional[str] = None
+    unit_type: str = "per_call"
+    supplier_price: Optional[float] = None
+    supplier_price_input: Optional[float] = None
+    supplier_price_output: Optional[float] = None
+    is_active: bool = False
+    config: Optional[Dict[str, Any]] = Field(default_factory=dict)
+
+
+class SystemAIAssistantRequest(BaseModel):
+    provider: str
+    multiplier: float = 1.0
+    models: List[SystemAIAssistantModelInput] = Field(default_factory=list)
+
+
+class SystemAIAssistantSuggestion(BaseModel):
+    action: str
+    setting_id: Optional[int] = None
+    provider: str
+    category: str
+    model: str
+    name: Optional[str] = None
+    base_url: Optional[str] = None
+    unit_type: str
+    supplier_price: Optional[float] = None
+    supplier_price_input: Optional[float] = None
+    supplier_price_output: Optional[float] = None
+    multiplier: float
+    cost: int = 0
+    cost_input: int = 0
+    cost_output: int = 0
+    reason: Optional[str] = None
+
+
+class SystemAIAssistantResponse(BaseModel):
+    provider: str
+    multiplier: float
+    suggestions: List[SystemAIAssistantSuggestion] = Field(default_factory=list)
+    applied_count: int = 0

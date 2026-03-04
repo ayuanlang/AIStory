@@ -308,6 +308,15 @@ export const sendAgentCommand = async (query, context = {}, history = []) => {
     return response.data;
 };
 
+export const sendSystemManagementAgentCommand = async (query, context = {}, history = []) => {
+    const response = await api.post('/agent/system-management/command', {
+        query,
+        context,
+        history,
+    });
+    return response.data;
+};
+
 export const fetchProjects = async () => {
     const response = await api.get('/projects/');
     return response.data;
@@ -1052,7 +1061,13 @@ export const getSettingDefaults = async () => {
 }
 
 export const getSystemSettings = async () => {
-    const response = await api.get('/settings/system');
+    const response = await api.get('/settings/system', {
+        params: { _ts: Date.now() },
+        headers: {
+            'Cache-Control': 'no-cache',
+            Pragma: 'no-cache',
+        },
+    });
     return response.data;
 }
 
@@ -1067,7 +1082,13 @@ export const selectSystemSetting = async (setting_id) => {
 }
 
 export const getSystemSettingsManage = async () => {
-    const response = await api.get('/settings/system/manage');
+    const response = await api.get('/settings/system/manage', {
+        params: { _ts: Date.now() },
+        headers: {
+            'Cache-Control': 'no-cache',
+            Pragma: 'no-cache',
+        },
+    });
     return response.data;
 }
 
@@ -1085,6 +1106,29 @@ export const toggleSystemSettingDeprecatedManage = async (settingId, deprecated 
     const payload = deprecated === null || deprecated === undefined ? {} : { deprecated: !!deprecated };
     const response = await api.post(`/settings/system/manage/${settingId}/deprecated`, payload);
     return response.data;
+}
+
+export const toggleSystemSettingDeprecatedByKeyManage = async ({ provider, category, model = null, setting_id = null, deprecated = null }) => {
+    const payload = {
+        provider,
+        category,
+        ...(model !== null && model !== undefined ? { model } : {}),
+        ...(setting_id !== null && setting_id !== undefined ? { setting_id } : {}),
+        ...(deprecated === null || deprecated === undefined ? {} : { deprecated: !!deprecated }),
+    };
+    if (setting_id !== null && setting_id !== undefined) {
+        const fallbackPayload = deprecated === null || deprecated === undefined ? {} : { deprecated: !!deprecated };
+        const fallback = await api.post(`/settings/system/manage/${Number(setting_id)}/deprecated`, fallbackPayload);
+        return fallback.data;
+    }
+    try {
+        const response = await api.post('/settings/system/manage/deprecated/by-key', payload);
+        return response.data;
+    } catch (error) {
+        const status = Number(error?.response?.status || 0);
+        if (status === 404) return null;
+        throw error;
+    }
 }
 
 export const batchToggleSystemProviderDeprecatedManage = async (provider, deprecated, category = null) => {
@@ -1294,6 +1338,16 @@ export const fetchPrompt = async (filename) => {
     return response.data;
 };
 
+export const fetchPromptSkills = async () => {
+    const response = await api.get('/prompts/skills');
+    return response.data;
+};
+
+export const fetchPromptSkillDetail = async (skillId) => {
+    const response = await api.get(`/prompts/skills/${encodeURIComponent(skillId)}`);
+    return response.data;
+};
+
 export const fetchMe = async () => {
     const response = await api.get('/users/me');
     return response.data;
@@ -1359,12 +1413,13 @@ export const injectEntityFeatures = (prompt, entities = []) => {
 };
 
 // Billing API
-export const getPricingRules = async () => (await api.get('/billing/rules')).data;
-export const createPricingRule = async (data) => (await api.post('/billing/rules', data)).data;
-export const syncPricingRules = async () => (await api.post('/billing/rules/sync')).data;
 export const getBillingOptions = async () => (await api.get('/billing/options')).data;
-export const updatePricingRule = async (id, data) => (await api.put(`/billing/rules/${id}`, data)).data;
-export const deletePricingRule = async (id) => (await api.delete(`/billing/rules/${id}`)).data;
+export const getBillingFeaturePricing = async () => (await api.get('/billing/feature-pricing')).data;
+export const updateBillingFeaturePricing = async (featurePricing) => (await api.put('/billing/feature-pricing', { feature_pricing: featurePricing || {} })).data;
+export const getAgentToolPolicy = async () => (await api.get('/settings/system/agent/tools-policy')).data;
+export const updateAgentToolPolicy = async (payload = {}) => (await api.put('/settings/system/agent/tools-policy', payload || {})).data;
+export const getSystemAIAssistantAnalyze = async (payload = {}) => (await api.post('/settings/system/ai-assistant/analyze', payload || {})).data;
+export const getSystemAIAssistantApply = async (payload = {}) => (await api.post('/settings/system/ai-assistant/apply', payload || {})).data;
 export const getTransactions = async (limit=100, userId=null) => {
     let url = `/billing/transactions?limit=${limit}`;
     if (userId) url += `&user_id=${userId}`;

@@ -1,35 +1,220 @@
 from sqlalchemy.orm import Session
-from app.models.all_models import User, PricingRule, TransactionHistory
+from app.models.all_models import User, TransactionHistory, SystemAPISetting
 from fastapi import HTTPException
 import logging
 import math
 import re
+import json
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
 class BillingService:
     TOKEN_UNIT_TYPES = {'per_token', 'per_1k_tokens', 'per_million_tokens'}
+    FEATURE_PRICING_PROVIDER = "feature_pricing"
+    FEATURE_PRICING_MODEL = "global"
 
     @staticmethod
-    def _task_type_candidates(task_type: str) -> List[str]:
-        """Return ordered task_type candidates for pricing lookup fallback."""
-        primary = str(task_type or "").strip()
-        if not primary:
-            return []
+    def _to_int(value: Any, default: int = 0) -> int:
+        try:
+            if value is None:
+                return int(default)
+            return int(float(value))
+        except Exception:
+            return int(default)
 
-        alias_map = {
-            # Vision/entity analysis historically billed as analysis_character,
-            # but many deployments only have analysis or llm_chat rules.
-            "analysis_character": ["analysis", "llm_chat"],
-            "analysis": ["llm_chat"],
+    @staticmethod
+    def _safe_json_dict(value: Any) -> Dict[str, Any]:
+        if value is None:
+            return {}
+        if isinstance(value, dict):
+            return dict(value)
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return {}
+            try:
+                parsed = json.loads(raw)
+                return parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                return {}
+        return {}
+
+    @staticmethod
+    def _task_type_to_category(task_type: str) -> str:
+        normalized = str(task_type or "").strip().lower()
+        if normalized == "image_gen":
+            return "Image"
+        if normalized == "video_gen":
+            return "Video"
+        if normalized == "analysis_character":
+            return "Vision"
+        if normalized == "analysis":
+            return "Vision"
+        if normalized == "llm_chat":
+            return "LLM"
+        return "Tools"
+
+    @staticmethod
+    def get_feature_pricing_map(db: Session) -> Dict[str, int]:
+        row = db.query(SystemAPISetting).filter(
+            SystemAPISetting.category == "System_Payment",
+            SystemAPISetting.provider == BillingService.FEATURE_PRICING_PROVIDER,
+            SystemAPISetting.model == BillingService.FEATURE_PRICING_MODEL,
+        ).order_by(SystemAPISetting.id.desc()).first()
+
+        if not row:
+            return {}
+
+        cfg = BillingService._safe_json_dict(row.config)
+        raw_map = cfg.get("feature_pricing") if isinstance(cfg.get("feature_pricing"), dict) else {}
+        out: Dict[str, int] = {}
+        for key, value in raw_map.items():
+            text_key = str(key or "").strip()
+            if not text_key:
+                continue
+            out[text_key] = max(0, BillingService._to_int(value, 0))
+        return out
+
+    @staticmethod
+    def set_feature_pricing_map(db: Session, pricing: Dict[str, Any]) -> Dict[str, int]:
+        normalized: Dict[str, int] = {}
+        for key, value in (pricing or {}).items():
+            text_key = str(key or "").strip()
+            if not text_key:
+                continue
+            normalized[text_key] = max(0, BillingService._to_int(value, 0))
+
+        row = db.query(SystemAPISetting).filter(
+            SystemAPISetting.category == "System_Payment",
+            SystemAPISetting.provider == BillingService.FEATURE_PRICING_PROVIDER,
+            SystemAPISetting.model == BillingService.FEATURE_PRICING_MODEL,
+        ).order_by(SystemAPISetting.id.desc()).first()
+
+        if not row:
+            row = SystemAPISetting(
+                name="Feature Pricing",
+                category="System_Payment",
+                provider=BillingService.FEATURE_PRICING_PROVIDER,
+                api_key="",
+                base_url="",
+                model=BillingService.FEATURE_PRICING_MODEL,
+                deprecated=False,
+                config={"feature_pricing": normalized},
+                is_active=True,
+            )
+            db.add(row)
+            db.commit()
+            return normalized
+
+        cfg = BillingService._safe_json_dict(row.config)
+        cfg["feature_pricing"] = normalized
+        row.config = cfg
+        db.commit()
+        return normalized
+
+    @staticmethod
+    def _resolve_feature_cost(db: Session, task_type: str, details: dict = None) -> int:
+        pricing_map = BillingService.get_feature_pricing_map(db)
+        if not pricing_map:
+            return 0
+
+        payload = dict(details or {})
+        candidates: List[str] = []
+        for key in ["billing_feature", "feature", "item"]:
+            value = payload.get(key)
+            if value is not None:
+                text = str(value).strip()
+                if text:
+                    candidates.append(text)
+        task_text = str(task_type or "").strip()
+        if task_text:
+            candidates.append(task_text)
+
+        for candidate in candidates:
+            if candidate in pricing_map:
+                return max(0, BillingService._to_int(pricing_map[candidate], 0))
+        return 0
+
+    @staticmethod
+    def _resolve_api_pricing_config(db: Session, task_type: str, provider: str = None, model: str = None) -> Dict[str, Any]:
+        provider_text = str(provider or "").strip()
+        model_text = str(model or "").strip()
+        category = BillingService._task_type_to_category(task_type)
+
+        query = db.query(SystemAPISetting).filter(
+            SystemAPISetting.category == category,
+            SystemAPISetting.provider == provider_text,
+        )
+        if model_text:
+            query = query.filter(SystemAPISetting.model == model_text)
+        row = query.order_by(SystemAPISetting.id.desc()).first()
+
+        if not row and provider_text and model_text:
+            row = db.query(SystemAPISetting).filter(
+                SystemAPISetting.category == category,
+                SystemAPISetting.provider == provider_text,
+                SystemAPISetting.model == None,
+            ).order_by(SystemAPISetting.id.desc()).first()
+
+        if not row and provider_text:
+            query_any_category = db.query(SystemAPISetting).filter(
+                SystemAPISetting.provider == provider_text,
+            )
+            if model_text:
+                query_any_category = query_any_category.filter(SystemAPISetting.model == model_text)
+            else:
+                query_any_category = query_any_category.filter(SystemAPISetting.model == None)
+            row = query_any_category.order_by(SystemAPISetting.id.desc()).first()
+
+        if not row:
+            return {}
+
+        cfg = BillingService._safe_json_dict(row.config)
+        api_pricing = cfg.get("api_pricing") if isinstance(cfg.get("api_pricing"), dict) else {}
+        if api_pricing:
+            return api_pricing
+
+        return {
+            "unit_type": cfg.get("billing_unit_type", "per_call"),
+            "cost": cfg.get("billing_cost", 0),
+            "cost_input": cfg.get("billing_cost_input", 0),
+            "cost_output": cfg.get("billing_cost_output", 0),
         }
 
-        out = [primary]
-        for candidate in alias_map.get(primary, []):
-            if candidate not in out:
-                out.append(candidate)
-        return out
+    @staticmethod
+    def _estimate_api_cost_from_config(config: Dict[str, Any], details: dict = None) -> int:
+        if not config:
+            return 0
+
+        unit_type = str(config.get("unit_type", "per_call") or "per_call").strip()
+        base_cost = max(0, BillingService._to_int(config.get("cost", 0), 0))
+        cost_input = max(0, BillingService._to_int(config.get("cost_input", 0), 0))
+        cost_output = max(0, BillingService._to_int(config.get("cost_output", 0), 0))
+
+        payload = dict(details or {})
+        if unit_type in BillingService.TOKEN_UNIT_TYPES:
+            input_tokens = BillingService._to_int(payload.get("input_tokens", payload.get("prompt_tokens", 0)), 0)
+            output_tokens = BillingService._to_int(payload.get("output_tokens", payload.get("completion_tokens", 0)), 0)
+            total_tokens = BillingService._to_int(payload.get("total_tokens", 0), 0)
+            if input_tokens == 0 and output_tokens == 0 and total_tokens > 0:
+                input_tokens = total_tokens
+
+            divisor = 1_000_000.0 if unit_type == 'per_million_tokens' else 1_000.0 if unit_type == 'per_1k_tokens' else 1.0
+            token_cost = ((float(input_tokens) * float(cost_input)) + (float(output_tokens) * float(cost_output))) / divisor
+            if cost_input == 0 and cost_output == 0 and base_cost > 0:
+                token_cost = (float(max(total_tokens, input_tokens + output_tokens)) * float(base_cost)) / divisor
+            return max(0, int(round(token_cost)))
+
+        quantity = 1.0
+        if unit_type == 'per_second':
+            quantity = float(payload.get('duration_seconds', payload.get('duration', 0)) or 0)
+        elif unit_type == 'per_minute':
+            quantity = float(payload.get('duration_seconds', payload.get('duration', 0)) or 0) / 60.0
+
+        if quantity <= 0 and unit_type in {'per_second', 'per_minute'}:
+            return 0
+        return max(0, int(round(float(base_cost) * float(quantity))))
 
     @staticmethod
     def _estimate_tokens_from_text(text: str) -> int:
@@ -90,8 +275,12 @@ class BillingService:
 
     @staticmethod
     def is_token_pricing(db: Session, task_type: str, provider: str = None, model: str = None) -> bool:
-        rule = BillingService.get_pricing_rule(db, task_type, provider, model)
-        return bool(rule and rule.unit_type in BillingService.TOKEN_UNIT_TYPES)
+        api_cfg = BillingService._resolve_api_pricing_config(db, task_type, provider, model)
+        if api_cfg:
+            unit_type = str(api_cfg.get("unit_type", "per_call") or "per_call").strip()
+            if unit_type in BillingService.TOKEN_UNIT_TYPES:
+                return True
+        return False
 
     @staticmethod
     def reserve_credits(
@@ -315,145 +504,13 @@ class BillingService:
             "outstanding_delta": outstanding,
         }
     @staticmethod
-    def get_pricing_rule(db: Session, task_type: str, provider: str = None, model: str = None) -> PricingRule:
-        """
-        Finds the pricing rule for the given parameters.
-        Matching priority:
-        1) Exact match on (task_type, provider, model)
-        2) Fallback on (task_type, provider, model=None) if model-specific not found
-        3) Fallback on generic (task_type, provider=None, model=None) if provider-specific not found
-        """
-        for candidate_task in BillingService._task_type_candidates(task_type):
-            base = db.query(PricingRule).filter(
-                PricingRule.task_type == candidate_task,
-                PricingRule.is_active == True
-            )
-
-            # 1) Exact
-            if provider is not None:
-                q = base.filter(PricingRule.provider == provider)
-            else:
-                q = base.filter(PricingRule.provider == None)
-
-            if model is not None:
-                q = q.filter(PricingRule.model == model)
-            else:
-                q = q.filter(PricingRule.model == None)
-
-            rule = q.first()
-            if rule:
-                if candidate_task != task_type:
-                    logger.warning(
-                        "Pricing rule fallback hit: requested_task=%s fallback_task=%s provider=%s model=%s rule_id=%s",
-                        task_type,
-                        candidate_task,
-                        provider,
-                        model,
-                        rule.id,
-                    )
-                return rule
-
-            # 2) Provider-level fallback (model=None)
-            if provider is not None and model is not None:
-                rule = base.filter(
-                    PricingRule.provider == provider,
-                    PricingRule.model == None
-                ).first()
-                if rule:
-                    if candidate_task != task_type:
-                        logger.warning(
-                            "Pricing rule fallback hit (provider-level): requested_task=%s fallback_task=%s provider=%s model=%s rule_id=%s",
-                            task_type,
-                            candidate_task,
-                            provider,
-                            model,
-                            rule.id,
-                        )
-                    return rule
-
-            # 3) Generic fallback
-            if provider is not None or model is not None:
-                rule = base.filter(
-                    PricingRule.provider == None,
-                    PricingRule.model == None
-                ).first()
-                if rule:
-                    if candidate_task != task_type:
-                        logger.warning(
-                            "Pricing rule fallback hit (generic): requested_task=%s fallback_task=%s provider=%s model=%s rule_id=%s",
-                            task_type,
-                            candidate_task,
-                            provider,
-                            model,
-                            rule.id,
-                        )
-                    return rule
-
-        return None
-
-    @staticmethod
     def estimate_cost(db: Session, task_type: str, provider: str = None, model: str = None, details: dict = None) -> int:
-        rule = BillingService.get_pricing_rule(db, task_type, provider, model)
-        if not rule:
-            error_msg = f"No pricing rule found for task: {task_type}, provider: {provider}, model: {model}"
-            logger.error(error_msg)
-            raise HTTPException(
-                status_code=500,
-                detail=f"Pricing configuration error: missing pricing rule for task={task_type}, provider={provider}, model={model}."
-            )
-
-        # Advanced Calculation Logic
-        try:
-            # Token-unit dual pricing (Input/Output) is driven by unit_type, not task_type.
-            if details and rule.unit_type in BillingService.TOKEN_UNIT_TYPES and (
-                'input_tokens' in details or 'output_tokens' in details or 'total_tokens' in details
-            ):
-                input_tokens = details.get('input_tokens', None)
-                output_tokens = details.get('output_tokens', None)
-
-                # Back-compat: if caller only provides total_tokens, treat as input.
-                if input_tokens is None and output_tokens is None:
-                    input_tokens = details.get('total_tokens', 0)
-                    output_tokens = 0
-                else:
-                    input_tokens = input_tokens or 0
-                    output_tokens = output_tokens or 0
-
-                if rule.cost_input is None or rule.cost_output is None or rule.cost_input <= 0 or rule.cost_output <= 0:
-                    raise HTTPException(
-                        status_code=500,
-                        detail="Pricing configuration error: token unit type requires positive cost_input and cost_output."
-                    )
-
-                divisor = 1_000_000.0 if rule.unit_type == 'per_million_tokens' else \
-                          1_000.0 if rule.unit_type == 'per_1k_tokens' else 1.0
-
-                cost_in = (float(input_tokens) / divisor) * float(rule.cost_input)
-                cost_out = (float(output_tokens) / divisor) * float(rule.cost_output)
-
-                total_calculated = cost_in + cost_out
-                return int(max(1, round(total_calculated)))
-
-            # Standard Unit Multipliers
-            quantity = 1.0
-            if details:
-                if rule.unit_type == 'per_second':
-                    quantity = float(details.get('duration_seconds', 0))
-                elif rule.unit_type == 'per_minute':
-                    quantity = float(details.get('duration_seconds', 0)) / 60.0
-                elif rule.unit_type == 'per_token':
-                    quantity = float(details.get('total_tokens', 0))
-                elif rule.unit_type == 'per_1k_tokens':
-                    quantity = float(details.get('total_tokens', 0)) / 1000.0
-                elif rule.unit_type == 'per_million_tokens':
-                    quantity = float(details.get('total_tokens', 0)) / 1_000_000.0
-            
-            total = float(rule.cost) * quantity
-            return int(max(1, round(total))) if total > 0 else 0
-
-        except Exception as e:
-            logger.error(f"Error calculating cost: {e}")
-            return rule.cost
+        feature_cost = BillingService._resolve_feature_cost(db, task_type, details)
+        api_pricing_cfg = BillingService._resolve_api_pricing_config(db, task_type, provider, model)
+        if api_pricing_cfg:
+            api_cost = BillingService._estimate_api_cost_from_config(api_pricing_cfg, details)
+            return max(0, int(feature_cost) + int(api_cost))
+        return max(0, int(feature_cost))
 
 
     @staticmethod

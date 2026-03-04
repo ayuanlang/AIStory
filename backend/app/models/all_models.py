@@ -283,6 +283,7 @@ class SystemAPISetting(Base):
     api_key = Column(String)
     base_url = Column(String, nullable=True)
     model = Column(String, nullable=True)
+    deprecated = Column(Boolean, default=False)
     config = Column(JSON, default={})
 
     is_active = Column(Boolean, default=False)

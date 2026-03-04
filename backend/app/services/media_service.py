@@ -173,7 +173,12 @@ class MediaGenerationService:
             return raw
         return None
 
-    def _is_deprecated_system_config(self, config_value: Any) -> bool:
+    def _is_deprecated_system_config(self, config_value: Any, deprecated_flag: Any = None) -> bool:
+        if isinstance(deprecated_flag, bool):
+            if deprecated_flag:
+                return True
+        elif deprecated_flag is not None and str(deprecated_flag).strip().lower() in {"1", "true", "yes", "y", "on"}:
+            return True
         cfg = self._safe_json_dict(config_value)
         return bool(
             cfg.get("deprecated")
@@ -380,7 +385,7 @@ class MediaGenerationService:
             provider = self._normalize_provider_name(row.provider, category)
             if not provider:
                 continue
-            if self._is_deprecated_system_config(row.config):
+            if self._is_deprecated_system_config(row.config, getattr(row, "deprecated", None)):
                 continue
             cfg = self._safe_json_dict(row.config)
             priority_raw = cfg.get("smart_priority", cfg.get("priority", 100))
@@ -758,7 +763,7 @@ class MediaGenerationService:
                 resolved_source = f"system_by_user_provider_model:{target_provider}/{target_model}"
 
                 if system_setting:
-                    if self._is_deprecated_system_config(system_setting.config):
+                    if self._is_deprecated_system_config(system_setting.config, getattr(system_setting, "deprecated", None)):
                         logger.warning(
                             "Blocked deprecated system api setting in media service | user_id=%s category=%s provider=%s model=%s setting_id=%s",
                             user_id,

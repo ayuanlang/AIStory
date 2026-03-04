@@ -1,0 +1,211 @@
+[
+  {
+    "key": "agent.command",
+    "tool_group": "agent_llm_ops",
+    "display_name": "Agent 指令编排",
+    "endpoints": ["/agent/command"],
+    "default_task_type": "llm_chat",
+    "source_categories": ["LLM"],
+    "billable": true,
+    "notes": "主链路为 LLM 推理，子工具可触发 image_gen/video_gen"
+  },
+  {
+    "key": "tool.translate",
+    "tool_group": "agent_llm_ops",
+    "display_name": "文本翻译",
+    "endpoints": ["/tools/translate"],
+    "default_task_type": "llm_chat",
+    "source_categories": ["LLM"],
+    "billable": true,
+    "notes": "支持 token 预估与结算"
+  },
+  {
+    "key": "tool.refine_prompt",
+    "tool_group": "agent_llm_ops",
+    "display_name": "提示词润色",
+    "endpoints": ["/tools/refine_prompt"],
+    "default_task_type": "llm_chat",
+    "source_categories": ["LLM"],
+    "billable": false,
+    "notes": "当前实现未见稳定成功扣费路径，可按运营策略切换"
+  },
+  {
+    "key": "tool.search_project_data",
+    "tool_group": "agent_mcp_ops",
+    "display_name": "项目内搜索（MCP）",
+    "endpoints": ["/agent/command"],
+    "default_task_type": "analysis",
+    "source_categories": ["LLM", "Tools"],
+    "billable": false,
+    "notes": "用于实体/场景/分镜检索，默认不计费"
+  },
+  {
+    "key": "tool.internet_search",
+    "tool_group": "agent_mcp_ops",
+    "display_name": "互联网搜索（MCP）",
+    "endpoints": ["/agent/command"],
+    "default_task_type": "analysis",
+    "source_categories": ["Tools", "LLM"],
+    "billable": false,
+    "notes": "基础互联网搜索能力，默认不计费"
+  },
+  {
+    "key": "tool.visualize_user_requirement",
+    "tool_group": "agent_mcp_ops",
+    "display_name": "需求可视化",
+    "endpoints": ["/agent/command"],
+    "default_task_type": "analysis",
+    "source_categories": ["LLM", "Tools"],
+    "billable": false,
+    "notes": "将用户需求结构化为可展示数据"
+  },
+  {
+    "key": "project.metadata.update",
+    "tool_group": "project_management",
+    "display_name": "项目元数据更新",
+    "endpoints": ["/agent/command"],
+    "default_task_type": "analysis",
+    "source_categories": ["LLM", "Tools"],
+    "billable": false,
+    "notes": "更新项目标题与描述"
+  },
+  {
+    "key": "scene.analyze",
+    "tool_group": "vision_analysis",
+    "display_name": "场景分析",
+    "endpoints": ["/analyze_scene"],
+    "default_task_type": "analysis",
+    "source_categories": ["Vision", "LLM"],
+    "billable": true,
+    "notes": "Vision 不可用时可回退 LLM"
+  },
+  {
+    "key": "asset.analyze",
+    "tool_group": "vision_analysis",
+    "display_name": "资产分析",
+    "endpoints": ["/assets/analyze"],
+    "default_task_type": "analysis",
+    "source_categories": ["Vision", "LLM"],
+    "billable": true,
+    "notes": "含图像输入 token 成本补偿"
+  },
+  {
+    "key": "entity.analyze",
+    "tool_group": "entity_vision_analysis",
+    "display_name": "实体视觉分析",
+    "endpoints": ["/entities/{entity_id}/analyze"],
+    "default_task_type": "analysis_character",
+    "source_categories": ["Vision", "LLM"],
+    "billable": true,
+    "notes": "task_type 支持 fallback: analysis_character -> analysis -> llm_chat"
+  },
+  {
+    "key": "image.generate.sync",
+    "tool_group": "image_generation",
+    "display_name": "图片生成（同步）",
+    "endpoints": ["/generate/image"],
+    "default_task_type": "image_gen",
+    "source_categories": ["Image"],
+    "billable": true,
+    "notes": "单次调用扣费"
+  },
+  {
+    "key": "image.generate.async",
+    "tool_group": "image_generation",
+    "display_name": "图片生成（异步）",
+    "endpoints": ["/generate/image/submit", "/generate/image/jobs/{job_id}"],
+    "default_task_type": "image_gen",
+    "source_categories": ["Image"],
+    "billable": true,
+    "notes": "提交任务计费，查询任务不计费"
+  },
+  {
+    "key": "video.generate.sync",
+    "tool_group": "video_generation",
+    "display_name": "视频生成（同步）",
+    "endpoints": ["/generate/video"],
+    "default_task_type": "video_gen",
+    "source_categories": ["Video"],
+    "billable": true,
+    "notes": "可按 duration/分辨率扩展分层计费"
+  },
+  {
+    "key": "video.generate.async",
+    "tool_group": "video_generation",
+    "display_name": "视频生成（异步）",
+    "endpoints": ["/generate/video/submit", "/generate/video/jobs/{job_id}"],
+    "default_task_type": "video_gen",
+    "source_categories": ["Video"],
+    "billable": true,
+    "notes": "提交任务计费，查询任务不计费"
+  },
+  {
+    "key": "entity.sora_character",
+    "tool_group": "video_generation",
+    "display_name": "实体 Sora 角色生成",
+    "endpoints": ["/entities/{entity_id}/generate_sora_character"],
+    "default_task_type": "video_gen",
+    "source_categories": ["Video"],
+    "billable": true,
+    "notes": "归入视频生成类成本池"
+  },
+  {
+    "key": "story.script.llm_ops",
+    "tool_group": "agent_llm_ops",
+    "display_name": "故事与脚本生成",
+    "endpoints": [
+      "/projects/{project_id}/story_generator/global",
+      "/projects/{project_id}/story_generator/analyze_novel",
+      "/episodes/{episode_id}/story_generator",
+      "/episodes/{episode_id}/script_generator/scenes",
+      "/scenes/{scene_id}/regenerate",
+      "/scenes/{scene_id}/ai_generate_shots"
+    ],
+    "default_task_type": "llm_chat",
+    "source_categories": ["LLM"],
+    "billable": true,
+    "notes": "按文本推理计费，必要时可细分 story_gen/script_gen"
+  },
+  {
+    "key": "billing.recharge",
+    "tool_group": "billing_recharge",
+    "display_name": "充值入账",
+    "endpoints": [
+      "/billing/recharge/create",
+      "/billing/recharge/status/{order_no}",
+      "/billing/recharge/notify",
+      "/billing/recharge/mock_pay/{order_no}"
+    ],
+    "default_task_type": "recharge",
+    "source_categories": ["System_Payment"],
+    "billable": false,
+    "notes": "非消费类交易，增加 credits"
+  },
+  {
+    "key": "billing.admin_adjust",
+    "tool_group": "billing_admin_ops",
+    "display_name": "管理员调账",
+    "endpoints": ["/billing/users/{user_id}/credits"],
+    "default_task_type": "admin_adjustment",
+    "source_categories": ["admin"],
+    "billable": false,
+    "notes": "后台人工增减积分"
+  },
+  {
+    "key": "settings.system_api",
+    "tool_group": "config_management",
+    "display_name": "系统 API 设置治理",
+    "endpoints": [
+      "/settings",
+      "/settings/system",
+      "/settings/system/catalog",
+      "/settings/system/select",
+      "/settings/system/manage",
+      "/settings/system/manage/provider/{provider}/keys"
+    ],
+    "default_task_type": null,
+    "source_categories": ["LLM", "Vision", "Image", "Video", "Tools", "Voice", "System_Payment"],
+    "billable": false,
+    "notes": "配置管理类功能，默认不计费"
+  }
+]

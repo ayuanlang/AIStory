@@ -6,7 +6,7 @@ class AgentRequest(BaseModel):
     query: str
     project_id: Optional[int] = None
     context: Dict[str, Any] = {}
-    history: List[Dict[str, str]] = []
+    history: List[Dict[str, Any]] = []
     llm_config: Optional[Dict[str, Any]] = None
 
 class AgentAction(BaseModel):

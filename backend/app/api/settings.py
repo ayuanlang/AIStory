@@ -1,10 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import cast, String
+from sqlalchemy import cast, String, func
 import logging
 import json
+import ast
 import random
 from datetime import datetime
+import math
 from app.db.session import get_db
 from app.models.all_models import APISetting, User, PricingRule, SystemAPISetting
 from app.schemas.settings import (
@@ -18,16 +20,181 @@ from app.schemas.settings import (
     SystemAPISettingManageCreate,
     SystemAPISettingManageUpdate,
     SystemAPISettingToggleDeprecatedRequest,
+    SystemAPISettingToggleDeprecatedByKeyRequest,
     SystemAPIProviderBatchDeprecatedRequest,
     SystemAPIProviderKeysUpdateRequest,
     SystemAPISettingImportRequest,
     SystemAPIProviderImportRequest,
+    AgentToolPolicyUpdate,
+    AgentToolPolicyOut,
+    SystemAIAssistantRequest,
+    SystemAIAssistantResponse,
+    SystemAIAssistantSuggestion,
 )
 from app.api.deps import get_current_user
 from typing import List, Dict, Tuple, Any
 
 router = APIRouter()
 logger = logging.getLogger("settings_api")
+logger.setLevel(logging.INFO)
+
+_AGENT_POLICY_CATEGORY = "System_Payment"
+_AGENT_POLICY_PROVIDER = "agent_policy"
+_AGENT_POLICY_MODEL = "tool_acl"
+
+
+def _default_agent_tool_policy() -> Dict[str, Any]:
+    return {
+        "default_allow": True,
+        "roles": {
+            "user": {
+                "allow": [],
+                "deny": ["internet_search"],
+            },
+            "authorized": {
+                "allow": ["internet_search"],
+                "deny": [],
+            },
+            "superuser": {
+                "allow": ["*"],
+                "deny": [],
+            },
+        },
+    }
+
+
+def _normalize_agent_tool_policy(value: Any) -> Dict[str, Any]:
+    base = _default_agent_tool_policy()
+    payload = _safe_json_dict(value)
+    if "agent_tool_policy" in payload and isinstance(payload.get("agent_tool_policy"), dict):
+        payload = _safe_json_dict(payload.get("agent_tool_policy"))
+
+    default_allow = payload.get("default_allow")
+    if isinstance(default_allow, bool):
+        base["default_allow"] = default_allow
+    elif default_allow is not None:
+        base["default_allow"] = _to_bool(default_allow)
+
+    roles_raw = payload.get("roles") if isinstance(payload.get("roles"), dict) else {}
+    normalized_roles: Dict[str, Dict[str, List[str]]] = {}
+    for role_name in ["user", "authorized", "superuser"]:
+        role_payload = roles_raw.get(role_name) if isinstance(roles_raw.get(role_name), dict) else {}
+        allow_list = []
+        deny_list = []
+        for item in role_payload.get("allow") or []:
+            text = str(item or "").strip()
+            if text and text not in allow_list:
+                allow_list.append(text)
+        for item in role_payload.get("deny") or []:
+            text = str(item or "").strip()
+            if text and text not in deny_list:
+                deny_list.append(text)
+        normalized_roles[role_name] = {
+            "allow": allow_list,
+            "deny": deny_list,
+        }
+
+    base["roles"] = normalized_roles
+    return base
+
+
+def _get_or_create_agent_policy_row(db: Session) -> SystemAPISetting:
+    row = db.query(SystemAPISetting).filter(
+        SystemAPISetting.category == _AGENT_POLICY_CATEGORY,
+        SystemAPISetting.provider == _AGENT_POLICY_PROVIDER,
+        SystemAPISetting.model == _AGENT_POLICY_MODEL,
+    ).order_by(SystemAPISetting.id.desc()).first()
+
+    if row:
+        normalized = _normalize_agent_tool_policy(_safe_json_dict(row.config).get("agent_tool_policy", {}))
+        cfg = _safe_json_dict(row.config)
+        cfg["agent_tool_policy"] = normalized
+        row.config = cfg
+        return row
+
+    row = SystemAPISetting(
+        name="Agent Tool Policy",
+        category=_AGENT_POLICY_CATEGORY,
+        provider=_AGENT_POLICY_PROVIDER,
+        api_key="",
+        base_url="",
+        model=_AGENT_POLICY_MODEL,
+        deprecated=False,
+        config={"agent_tool_policy": _default_agent_tool_policy()},
+        is_active=True,
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+def _normalize_unit_type_for_system_ai(raw: Any) -> str:
+    text = str(raw or "per_call").strip() or "per_call"
+    allowed = {"per_call", "per_second", "per_minute", "per_token", "per_1k_tokens", "per_million_tokens"}
+    return text if text in allowed else "per_call"
+
+
+def _safe_non_negative_float(value: Any) -> float:
+    try:
+        parsed = float(value)
+        if math.isnan(parsed) or math.isinf(parsed):
+            return 0.0
+        return max(0.0, parsed)
+    except Exception:
+        return 0.0
+
+
+def _multiplied_cost_to_credit(value: Any, multiplier: float) -> int:
+    base = _safe_non_negative_float(value)
+    mul = _safe_non_negative_float(multiplier)
+    return max(0, int(math.ceil(base * (mul if mul > 0 else 1.0))))
+
+
+def _build_system_ai_suggestions(payload: SystemAIAssistantRequest, db: Session) -> List[SystemAIAssistantSuggestion]:
+    provider = str(payload.provider or "").strip()
+    if not provider:
+        raise HTTPException(status_code=400, detail="provider is required")
+
+    multiplier = _safe_non_negative_float(payload.multiplier)
+    if multiplier <= 0:
+        multiplier = 1.0
+
+    suggestions: List[SystemAIAssistantSuggestion] = []
+    for item in payload.models or []:
+        model_name = str(item.model or "").strip()
+        if not model_name:
+            continue
+
+        category = str(item.category or "LLM").strip() or "LLM"
+        unit_type = _normalize_unit_type_for_system_ai(item.unit_type)
+        cost = _multiplied_cost_to_credit(item.supplier_price, multiplier)
+        cost_input = _multiplied_cost_to_credit(item.supplier_price_input, multiplier)
+        cost_output = _multiplied_cost_to_credit(item.supplier_price_output, multiplier)
+
+        existing = _find_system_setting_by_normalized_triplet(db, provider, category, model_name)
+        action = "create" if not existing else "update"
+        reason = "new model from provider metadata" if not existing else "existing model pricing/API definition will be adjusted"
+
+        suggestions.append(SystemAIAssistantSuggestion(
+            action=action,
+            setting_id=(existing.id if existing else None),
+            provider=provider,
+            category=category,
+            model=model_name,
+            name=(str(item.name or "").strip() or (existing.name if existing else f"{provider} {model_name}")),
+            base_url=(str(item.base_url or "").strip() or (existing.base_url if existing else None)),
+            unit_type=unit_type,
+            supplier_price=(_safe_non_negative_float(item.supplier_price) if item.supplier_price is not None else None),
+            supplier_price_input=(_safe_non_negative_float(item.supplier_price_input) if item.supplier_price_input is not None else None),
+            supplier_price_output=(_safe_non_negative_float(item.supplier_price_output) if item.supplier_price_output is not None else None),
+            multiplier=multiplier,
+            cost=cost,
+            cost_input=cost_input,
+            cost_output=cost_output,
+            reason=reason,
+        ))
+
+    return suggestions
 
 
 def _mask_api_key(api_key: str) -> str:
@@ -42,17 +209,53 @@ def _safe_json_dict(value) -> Dict:
     if value is None:
         return {}
     if isinstance(value, dict):
-        return value
-    if isinstance(value, str):
-        raw = value.strip()
-        if not raw:
-            return {}
+        return dict(value)
+    if isinstance(value, (bytes, bytearray)):
         try:
-            parsed = json.loads(raw)
-            return parsed if isinstance(parsed, dict) else {}
+            value = value.decode("utf-8", errors="ignore")
         except Exception:
             return {}
+    if isinstance(value, str):
+        raw_obj: Any = value
+        for _ in range(3):
+            if isinstance(raw_obj, dict):
+                return raw_obj
+            if not isinstance(raw_obj, str):
+                return {}
+
+            raw = raw_obj.strip()
+            if not raw:
+                return {}
+
+            parsed = None
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                try:
+                    parsed = ast.literal_eval(raw)
+                except Exception:
+                    parsed = None
+
+            if parsed is None:
+                return {}
+            raw_obj = parsed
+
+        return raw_obj if isinstance(raw_obj, dict) else {}
     return {}
+
+
+def _to_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        raw = value.strip().lower()
+        if raw in {"1", "true", "yes", "y", "on"}:
+            return True
+        if raw in {"0", "false", "no", "n", "off", "", "none", "null"}:
+            return False
+    return bool(value)
 
 
 def _normalize_api_keys(values) -> List[str]:
@@ -257,13 +460,175 @@ def _task_type_to_category(task_type: str) -> str:
     return "Tools"
 
 
-def _is_setting_deprecated(config_value) -> bool:
+def _find_system_setting_by_normalized_triplet(db: Session, provider: str, category: str, model: str):
+    provider_norm = str(provider or "").strip().lower()
+    category_norm = str(category or "").strip().lower()
+    model_norm = str(model or "").strip().lower()
+    return db.query(SystemAPISetting).filter(
+        func.lower(func.trim(func.coalesce(SystemAPISetting.provider, ""))) == provider_norm,
+        func.lower(func.trim(func.coalesce(SystemAPISetting.category, ""))) == category_norm,
+        func.lower(func.trim(func.coalesce(SystemAPISetting.model, ""))) == model_norm,
+    ).order_by(SystemAPISetting.id.desc()).first()
+
+
+def _is_setting_deprecated(config_value, deprecated_flag: Any = None) -> bool:
+    if _to_bool(deprecated_flag):
+        return True
     cfg = _safe_json_dict(config_value)
     return bool(
-        cfg.get("deprecated")
-        or cfg.get("is_deprecated")
-        or cfg.get("disable_api")
+        _to_bool(cfg.get("deprecated"))
+        or _to_bool(cfg.get("is_deprecated"))
+        or _to_bool(cfg.get("disable_api"))
     )
+
+
+def _normalize_system_api_billing_config(config_value: Any) -> Dict[str, Any]:
+    cfg = _safe_json_dict(config_value)
+    api_pricing_raw = cfg.get("api_pricing") if isinstance(cfg.get("api_pricing"), dict) else {}
+
+    unit_type = str(api_pricing_raw.get("unit_type", cfg.get("billing_unit_type", "per_call")) or "per_call").strip() or "per_call"
+    token_unit_types = {"per_token", "per_1k_tokens", "per_million_tokens"}
+    if unit_type not in {"per_call", "per_second", "per_minute", *token_unit_types}:
+        unit_type = "per_call"
+
+    def _non_negative_int(value: Any, default: int = 0) -> int:
+        try:
+            parsed = int(float(value))
+            return parsed if parsed >= 0 else 0
+        except Exception:
+            return default
+
+    cost = _non_negative_int(api_pricing_raw.get("cost", cfg.get("billing_cost", 0)), 0)
+    cost_input = _non_negative_int(api_pricing_raw.get("cost_input", cfg.get("billing_cost_input", 0)), 0)
+    cost_output = _non_negative_int(api_pricing_raw.get("cost_output", cfg.get("billing_cost_output", 0)), 0)
+
+    normalized_api_pricing = {
+        "unit_type": unit_type,
+        "cost": cost,
+        "cost_input": cost_input,
+        "cost_output": cost_output,
+    }
+
+    cfg["api_pricing"] = normalized_api_pricing
+    cfg["billing_unit_type"] = unit_type
+    cfg["billing_cost"] = cost
+    cfg["billing_cost_input"] = cost_input
+    cfg["billing_cost_output"] = cost_output
+    return cfg
+
+
+def _migrate_legacy_pricing_rules_to_system_api_pricing(db: Session) -> int:
+    rows = db.query(SystemAPISetting).filter(
+        SystemAPISetting.category != "System_Payment",
+    ).all()
+    if not rows:
+        return 0
+
+    rules = db.query(PricingRule).filter(PricingRule.is_active == True).order_by(PricingRule.id.asc()).all()
+    if not rules:
+        return 0
+
+    def _norm(value: Any) -> str:
+        return str(value or "").strip().lower()
+
+    def _nn_int(value: Any) -> int:
+        try:
+            parsed = int(float(value))
+            return parsed if parsed >= 0 else 0
+        except Exception:
+            return 0
+
+    def _rule_api_pricing(rule: PricingRule) -> Dict[str, Any]:
+        unit_type = str(rule.unit_type or "per_call").strip() or "per_call"
+        allowed_unit_types = {"per_call", "per_second", "per_minute", "per_token", "per_1k_tokens", "per_million_tokens"}
+        if unit_type not in allowed_unit_types:
+            unit_type = "per_call"
+        return {
+            "unit_type": unit_type,
+            "cost": _nn_int(getattr(rule, "cost", 0)),
+            "cost_input": _nn_int(getattr(rule, "cost_input", 0)),
+            "cost_output": _nn_int(getattr(rule, "cost_output", 0)),
+        }
+
+    def _config_has_non_zero_pricing(cfg: Dict[str, Any]) -> bool:
+        pricing = cfg.get("api_pricing") if isinstance(cfg.get("api_pricing"), dict) else {}
+        return any(
+            _nn_int(pricing.get(k, 0)) > 0
+            for k in ("cost", "cost_input", "cost_output")
+        )
+
+    by_exact: Dict[Tuple[str, str, str], List[SystemAPISetting]] = {}
+    by_provider_category: Dict[Tuple[str, str], List[SystemAPISetting]] = {}
+    by_category_model: Dict[Tuple[str, str], List[SystemAPISetting]] = {}
+    by_category: Dict[str, List[SystemAPISetting]] = {}
+    active_by_category: Dict[str, List[SystemAPISetting]] = {}
+
+    for row in rows:
+        provider_key = _norm(row.provider)
+        category_key = _norm(row.category)
+        model_key = _norm(row.model)
+
+        by_exact.setdefault((provider_key, category_key, model_key), []).append(row)
+        by_provider_category.setdefault((provider_key, category_key), []).append(row)
+        by_category_model.setdefault((category_key, model_key), []).append(row)
+        by_category.setdefault(category_key, []).append(row)
+        if bool(row.is_active):
+            active_by_category.setdefault(category_key, []).append(row)
+
+    updated = 0
+
+    for rule in rules:
+        category_key = _norm(_task_type_to_category(str(rule.task_type or "")))
+        provider_key = _norm(rule.provider)
+        model_key = _norm(rule.model)
+
+        candidate_rows: List[SystemAPISetting] = []
+        if provider_key and model_key:
+            candidate_rows.extend(by_exact.get((provider_key, category_key, model_key), []))
+        elif provider_key:
+            candidate_rows.extend(by_provider_category.get((provider_key, category_key), []))
+        elif model_key:
+            candidate_rows.extend(by_category_model.get((category_key, model_key), []))
+        else:
+            candidate_rows.extend(active_by_category.get(category_key, []))
+            if not candidate_rows:
+                candidate_rows.extend(by_category.get(category_key, []))
+
+        if not candidate_rows:
+            fallback_rows = active_by_category.get(category_key, [])
+            if fallback_rows:
+                candidate_rows.extend(fallback_rows)
+
+        if not candidate_rows:
+            continue
+
+        target_pricing = _rule_api_pricing(rule)
+
+        seen_ids = set()
+        for row in candidate_rows:
+            if row.id in seen_ids:
+                continue
+            seen_ids.add(row.id)
+
+            cfg = _normalize_system_api_billing_config(row.config)
+            if _config_has_non_zero_pricing(cfg):
+                continue
+
+            cfg["api_pricing"] = {
+                "unit_type": target_pricing["unit_type"],
+                "cost": target_pricing["cost"],
+                "cost_input": target_pricing["cost_input"],
+                "cost_output": target_pricing["cost_output"],
+            }
+            cfg["billing_unit_type"] = target_pricing["unit_type"]
+            cfg["billing_cost"] = target_pricing["cost"]
+            cfg["billing_cost_input"] = target_pricing["cost_input"]
+            cfg["billing_cost_output"] = target_pricing["cost_output"]
+
+            row.config = cfg
+            updated += 1
+
+    return updated
 
 
 def _ensure_builtin_system_settings(db: Session) -> None:
@@ -350,6 +715,7 @@ def _ensure_builtin_system_settings(db: Session) -> None:
             api_key=shared_key,
             base_url=item["base_url"],
             model=item["model"],
+            deprecated=False,
             config=item["config"],
             is_active=False,
         ))
@@ -548,6 +914,7 @@ def get_system_settings(
         SystemAPISetting.model,
         SystemAPISetting.base_url,
         SystemAPISetting.api_key,
+        SystemAPISetting.deprecated.label("deprecated_flag"),
         cast(SystemAPISetting.config, String).label("config_raw"),
     ).filter(
         SystemAPISetting.category != "System_Payment"
@@ -596,7 +963,7 @@ def get_system_settings(
                 "provider": provider,
                 "category": category,
                 "shared_key_configured": False,
-                "models": [],
+                "models_map": {},
             }
 
         key_pool = _normalize_api_keys((item_config or {}).get("provider_api_keys"))
@@ -613,25 +980,34 @@ def get_system_settings(
                 and ((user_active.get("model") or "") == (item.model or ""))
             )
 
-        grouped[key]["models"].append(
-            SystemAPIModelOption(
-                id=item.id,
-                name=item.name,
-                provider=provider,
-                category=category,
-                model=item.model,
-                base_url=item.base_url,
-                webhook_url=(item_config or {}).get("webHook"),
-                deprecated=_is_setting_deprecated(item_config),
-                is_active=bool(user_is_active_for_row),
-                has_api_key=has_key,
-                api_key_masked=_mask_api_key(runtime_key) if has_key else "",
-            )
+        option = SystemAPIModelOption(
+            id=item.id,
+            name=item.name,
+            provider=provider,
+            category=category,
+            model=item.model,
+            base_url=item.base_url,
+            webhook_url=(item_config or {}).get("webHook"),
+            deprecated=_is_setting_deprecated(item_config, getattr(item, "deprecated_flag", None)),
+            is_active=bool(user_is_active_for_row),
+            has_api_key=has_key,
+            api_key_masked=_mask_api_key(runtime_key) if has_key else "",
         )
+
+        if option.deprecated:
+            continue
+
+        model_key = str(item.model or "").strip().lower()
+        existing_option = grouped[key]["models_map"].get(model_key)
+        if existing_option is None or (option.id or 0) >= (existing_option.id or 0):
+            grouped[key]["models_map"][model_key] = option
 
     result = []
     for _, row in grouped.items():
-        row["models"] = sorted(row["models"], key=lambda m: (m.model or "", m.id))
+        row["models"] = sorted(list(row.get("models_map", {}).values()), key=lambda m: (m.model or "", m.id))
+        row.pop("models_map", None)
+        if not row["models"]:
+            continue
         result.append(SystemAPIProviderSettings(**row))
 
     return sorted(result, key=lambda r: (r.category, r.provider))
@@ -699,7 +1075,7 @@ def select_system_setting(
     if not system_setting:
         raise HTTPException(status_code=404, detail="System API setting not found")
 
-    if _is_setting_deprecated(system_setting.config):
+    if _is_setting_deprecated(system_setting.config, system_setting.deprecated):
         raise HTTPException(status_code=400, detail="This system API setting is deprecated and cannot be activated")
 
     # Enforce one-active-per-category for current user.
@@ -756,12 +1132,154 @@ def list_system_settings_for_manage(
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
     _ensure_builtin_system_settings(db)
+    migrated_count = _migrate_legacy_pricing_rules_to_system_api_pricing(db)
+    if migrated_count:
+        logger.info("[system_api.pricing.migrate] migrated_rows=%s", migrated_count)
     db.commit()
 
     rows = db.query(SystemAPISetting).filter(
         SystemAPISetting.category != "System_Payment",
     ).order_by(SystemAPISetting.category.asc(), SystemAPISetting.provider.asc(), SystemAPISetting.model.asc(), SystemAPISetting.id.asc()).all()
-    return rows
+    return [
+        SystemAPISettingOut(
+            id=row.id,
+            name=row.name,
+            category=row.category,
+            provider=row.provider,
+            api_key=row.api_key,
+            base_url=row.base_url,
+            model=row.model,
+            config=_normalize_system_api_billing_config(row.config),
+            deprecated=_is_setting_deprecated(row.config, row.deprecated),
+            is_active=bool(row.is_active),
+        )
+        for row in rows
+    ]
+
+
+@router.get("/settings/system/agent/tools-policy", response_model=AgentToolPolicyOut)
+def get_agent_tool_policy(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage agent tool policy")
+
+    row = _get_or_create_agent_policy_row(db)
+    db.commit()
+    db.refresh(row)
+    cfg = _safe_json_dict(row.config)
+    normalized = _normalize_agent_tool_policy(cfg.get("agent_tool_policy", {}))
+    return AgentToolPolicyOut(**normalized)
+
+
+@router.put("/settings/system/agent/tools-policy", response_model=AgentToolPolicyOut)
+def update_agent_tool_policy(
+    payload: AgentToolPolicyUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage agent tool policy")
+
+    row = _get_or_create_agent_policy_row(db)
+    cfg = _safe_json_dict(row.config)
+    cfg["agent_tool_policy"] = _normalize_agent_tool_policy(payload.dict())
+    row.config = cfg
+    db.commit()
+    db.refresh(row)
+
+    normalized = _normalize_agent_tool_policy(_safe_json_dict(row.config).get("agent_tool_policy", {}))
+    return AgentToolPolicyOut(**normalized)
+
+
+@router.post("/settings/system/ai-assistant/analyze", response_model=SystemAIAssistantResponse)
+def analyze_system_ai_assistant(
+    payload: SystemAIAssistantRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only superuser can use system AI assistant")
+
+    suggestions = _build_system_ai_suggestions(payload, db)
+    return SystemAIAssistantResponse(
+        provider=str(payload.provider or "").strip(),
+        multiplier=(_safe_non_negative_float(payload.multiplier) or 1.0),
+        suggestions=suggestions,
+        applied_count=0,
+    )
+
+
+@router.post("/settings/system/ai-assistant/apply", response_model=SystemAIAssistantResponse)
+def apply_system_ai_assistant(
+    payload: SystemAIAssistantRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only superuser can use system AI assistant")
+
+    suggestions = _build_system_ai_suggestions(payload, db)
+    applied_count = 0
+    now_iso = datetime.utcnow().isoformat()
+
+    for suggestion in suggestions:
+        existing = _find_system_setting_by_normalized_triplet(db, suggestion.provider, suggestion.category, suggestion.model)
+
+        supplier_pricing = {
+            "unit_type": suggestion.unit_type,
+            "supplier_price": suggestion.supplier_price,
+            "supplier_price_input": suggestion.supplier_price_input,
+            "supplier_price_output": suggestion.supplier_price_output,
+            "source": "provider_input",
+            "updated_at": now_iso,
+        }
+        pricing_scheme = {
+            "strategy": "supplier_price_x_multiplier",
+            "multiplier": suggestion.multiplier,
+            "computed_at": now_iso,
+        }
+        normalized_cfg = _normalize_system_api_billing_config({
+            "api_pricing": {
+                "unit_type": suggestion.unit_type,
+                "cost": suggestion.cost,
+                "cost_input": suggestion.cost_input,
+                "cost_output": suggestion.cost_output,
+            }
+        })
+        normalized_cfg["supplier_pricing"] = supplier_pricing
+        normalized_cfg["pricing_scheme"] = pricing_scheme
+
+        if existing:
+            existing.name = suggestion.name or existing.name
+            if suggestion.base_url:
+                existing.base_url = suggestion.base_url
+            existing.config = {**_safe_json_dict(existing.config), **normalized_cfg}
+            existing.is_active = bool(existing.is_active)
+        else:
+            existing = SystemAPISetting(
+                name=suggestion.name or f"{suggestion.provider} {suggestion.model}",
+                category=suggestion.category,
+                provider=suggestion.provider,
+                api_key="",
+                base_url=suggestion.base_url,
+                model=suggestion.model,
+                deprecated=False,
+                config=normalized_cfg,
+                is_active=False,
+            )
+            db.add(existing)
+
+        applied_count += 1
+
+    db.commit()
+    return SystemAIAssistantResponse(
+        provider=str(payload.provider or "").strip(),
+        multiplier=(_safe_non_negative_float(payload.multiplier) or 1.0),
+        suggestions=suggestions,
+        applied_count=applied_count,
+    )
 
 
 @router.post("/settings/system/manage", response_model=SystemAPISettingOut)
@@ -778,7 +1296,50 @@ def create_system_setting_for_manage(
         raise HTTPException(status_code=400, detail="provider is required")
 
     category = (payload.category or "LLM").strip() or "LLM"
+    model = (payload.model or "").strip()
+    existing = _find_system_setting_by_normalized_triplet(db, provider, category, model)
+    if existing:
+        target_cfg = payload.config if isinstance(payload.config, dict) else _safe_json_dict(existing.config)
+        target_cfg = _normalize_system_api_billing_config(target_cfg)
+        existing.name = (payload.name or existing.name or "System Setting").strip() or "System Setting"
+        existing.base_url = payload.base_url
+        existing.model = payload.model
+        existing.config = target_cfg
+        existing.is_active = bool(payload.is_active)
+
+        effective_key = _sync_system_provider_shared_key(
+            db,
+            existing.provider,
+            existing.id,
+            payload.api_key,
+        )
+        existing.api_key = effective_key
+
+        if existing.is_active:
+            db.query(SystemAPISetting).filter(
+                SystemAPISetting.category == existing.category,
+                SystemAPISetting.id != existing.id,
+                SystemAPISetting.is_active == True,
+            ).update({"is_active": False})
+
+        db.commit()
+        db.refresh(existing)
+        out_cfg = _safe_json_dict(existing.config)
+        return SystemAPISettingOut(
+            id=existing.id,
+            name=existing.name,
+            category=existing.category,
+            provider=existing.provider,
+            api_key=existing.api_key,
+            base_url=existing.base_url,
+            model=existing.model,
+            config=out_cfg,
+            deprecated=_is_setting_deprecated(out_cfg, existing.deprecated),
+            is_active=bool(existing.is_active),
+        )
+
     create_config = payload.config if isinstance(payload.config, dict) else {}
+    create_config = _normalize_system_api_billing_config(create_config)
     new_setting = SystemAPISetting(
         name=(payload.name or "System Setting").strip() or "System Setting",
         category=category,
@@ -786,6 +1347,7 @@ def create_system_setting_for_manage(
         api_key="",
         base_url=payload.base_url,
         model=payload.model,
+        deprecated=False,
         config=create_config,
         is_active=bool(payload.is_active),
     )
@@ -810,7 +1372,19 @@ def create_system_setting_for_manage(
 
     db.commit()
     db.refresh(new_setting)
-    return new_setting
+    out_cfg = _safe_json_dict(new_setting.config)
+    return SystemAPISettingOut(
+        id=new_setting.id,
+        name=new_setting.name,
+        category=new_setting.category,
+        provider=new_setting.provider,
+        api_key=new_setting.api_key,
+        base_url=new_setting.base_url,
+        model=new_setting.model,
+        config=out_cfg,
+        deprecated=_is_setting_deprecated(out_cfg, new_setting.deprecated),
+        is_active=bool(new_setting.is_active),
+    )
 
 
 @router.post("/settings/system/manage/{setting_id}", response_model=SystemAPISettingOut)
@@ -833,6 +1407,8 @@ def update_system_setting_for_manage(
     for key, value in update_data.items():
         setattr(target, key, value)
 
+    target.config = _normalize_system_api_billing_config(target.config)
+
     if payload.is_active:
         db.query(SystemAPISetting).filter(
             SystemAPISetting.category == target.category,
@@ -851,7 +1427,19 @@ def update_system_setting_for_manage(
 
     db.commit()
     db.refresh(target)
-    return target
+    out_cfg = _safe_json_dict(target.config)
+    return SystemAPISettingOut(
+        id=target.id,
+        name=target.name,
+        category=target.category,
+        provider=target.provider,
+        api_key=target.api_key,
+        base_url=target.base_url,
+        model=target.model,
+        config=out_cfg,
+        deprecated=_is_setting_deprecated(out_cfg, target.deprecated),
+        is_active=bool(target.is_active),
+    )
 
 
 @router.post("/settings/system/manage/{setting_id}/deprecated", response_model=SystemAPISettingOut)
@@ -870,19 +1458,197 @@ def toggle_system_setting_deprecated_for_manage(
     if not target:
         raise HTTPException(status_code=404, detail="System API setting not found")
 
-    cfg = _safe_json_dict(target.config)
-    current = _is_setting_deprecated(cfg)
+    logger.warning(
+        "[system_api.deprecated.toggle_by_id] request user_id=%s setting_id=%s provider=%s category=%s model=%s payload_deprecated=%s before_deprecated_col=%s before_config=%s",
+        getattr(current_user, "id", None),
+        target.id,
+        target.provider,
+        target.category,
+        target.model,
+        payload.deprecated,
+        target.deprecated,
+        target.config,
+    )
+    print(f"[DBG toggle_by_id request] setting_id={target.id} provider={target.provider} category={target.category} model={target.model} payload_deprecated={payload.deprecated} before_col={target.deprecated} before_cfg={target.config}")
+
+    cfg = dict(_safe_json_dict(target.config))
+    current = _is_setting_deprecated(cfg, target.deprecated)
     next_value = (not current) if payload.deprecated is None else bool(payload.deprecated)
 
     cfg["deprecated"] = bool(next_value)
     # Keep legacy aliases aligned for compatibility.
     cfg["is_deprecated"] = bool(next_value)
     cfg["disable_api"] = bool(next_value)
-    target.config = cfg
+
+    # Always force-update the requested row id first.
+    db.query(SystemAPISetting).filter(SystemAPISetting.id == target.id).update(
+        {"config": cfg, "deprecated": bool(next_value)},
+        synchronize_session=False,
+    )
+
+    provider_norm = str(target.provider or "").strip().lower()
+    category_norm = str(target.category or "").strip().lower()
+    model_norm = str(target.model or "").strip().lower()
+
+    duplicate_query = db.query(SystemAPISetting).filter(
+        func.lower(func.trim(func.coalesce(SystemAPISetting.provider, ""))) == provider_norm,
+        func.lower(func.trim(func.coalesce(SystemAPISetting.category, ""))) == category_norm,
+        func.lower(func.trim(func.coalesce(SystemAPISetting.model, ""))) == model_norm,
+    )
+
+    duplicate_rows = duplicate_query.all()
+    if not duplicate_rows:
+        duplicate_rows = [target]
+
+    logger.warning(
+        "[system_api.deprecated.toggle_by_id] matched_rows setting_id=%s matched_ids=%s normalized_key=(%s,%s,%s) next_value=%s",
+        target.id,
+        [row.id for row in duplicate_rows],
+        provider_norm,
+        category_norm,
+        model_norm,
+        next_value,
+    )
+    print(f"[DBG toggle_by_id matched] setting_id={target.id} matched_ids={[row.id for row in duplicate_rows]} normalized_key=({provider_norm},{category_norm},{model_norm}) next_value={next_value}")
+
+    for row in duplicate_rows:
+        if row.id == target.id:
+            continue
+        row_cfg = dict(_safe_json_dict(row.config))
+        row_cfg["deprecated"] = bool(next_value)
+        row_cfg["is_deprecated"] = bool(next_value)
+        row_cfg["disable_api"] = bool(next_value)
+        db.query(SystemAPISetting).filter(SystemAPISetting.id == row.id).update(
+            {"config": row_cfg, "deprecated": bool(next_value)},
+            synchronize_session=False,
+        )
 
     db.commit()
     db.refresh(target)
-    return target
+    logger.warning(
+        "[system_api.deprecated.toggle_by_id] committed setting_id=%s target_deprecated_col=%s target_config=%s",
+        target.id,
+        target.deprecated,
+        target.config,
+    )
+    print(f"[DBG toggle_by_id committed] setting_id={target.id} after_col={target.deprecated} after_cfg={target.config}")
+    if bool(target.deprecated) != bool(next_value):
+        logger.error(
+            "[system_api.deprecated.toggle_by_id] persistence_mismatch setting_id=%s expected=%s actual_col=%s actual_config=%s",
+            target.id,
+            next_value,
+            target.deprecated,
+            target.config,
+        )
+        raise HTTPException(status_code=500, detail=f"Deprecated persistence mismatch for setting_id={target.id}")
+    out_cfg = _safe_json_dict(target.config)
+    return SystemAPISettingOut(
+        id=target.id,
+        name=target.name,
+        category=target.category,
+        provider=target.provider,
+        api_key=target.api_key,
+        base_url=target.base_url,
+        model=target.model,
+        config=out_cfg,
+        deprecated=_is_setting_deprecated(out_cfg, target.deprecated),
+        is_active=bool(target.is_active),
+    )
+
+
+@router.post("/settings/system/manage/deprecated/by-key", response_model=SystemAPISettingOut)
+def toggle_system_setting_deprecated_by_key_for_manage(
+    payload: SystemAPISettingToggleDeprecatedByKeyRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+
+    provider_norm = str(payload.provider or "").strip().lower()
+    category_norm = str(payload.category or "").strip().lower()
+    model_norm = str(payload.model or "").strip().lower()
+    if not provider_norm or not category_norm:
+        raise HTTPException(status_code=400, detail="provider and category are required")
+
+    logger.warning(
+        "[system_api.deprecated.toggle_by_key] request user_id=%s provider=%s category=%s model=%s setting_id=%s payload_deprecated=%s",
+        getattr(current_user, "id", None),
+        payload.provider,
+        payload.category,
+        payload.model,
+        payload.setting_id,
+        payload.deprecated,
+    )
+    print(f"[DBG toggle_by_key request] provider={payload.provider} category={payload.category} model={payload.model} setting_id={payload.setting_id} payload_deprecated={payload.deprecated}")
+
+    query = db.query(SystemAPISetting).filter(
+        func.lower(func.trim(func.coalesce(SystemAPISetting.provider, ""))) == provider_norm,
+        func.lower(func.trim(func.coalesce(SystemAPISetting.category, ""))) == category_norm,
+        func.lower(func.trim(func.coalesce(SystemAPISetting.model, ""))) == model_norm,
+    )
+    rows = query.order_by(SystemAPISetting.id.asc()).all()
+    if not rows and payload.setting_id:
+        fallback = db.query(SystemAPISetting).filter(SystemAPISetting.id == int(payload.setting_id)).first()
+        if fallback:
+            rows = [fallback]
+            logger.warning(
+                "[system_api.deprecated.toggle_by_key] fallback_to_id matched setting_id=%s provider=%s category=%s model=%s",
+                fallback.id,
+                fallback.provider,
+                fallback.category,
+                fallback.model,
+            )
+            print(f"[DBG toggle_by_key fallback] fallback_id={fallback.id} provider={fallback.provider} category={fallback.category} model={fallback.model}")
+    if not rows:
+        raise HTTPException(status_code=404, detail="System API setting not found for provider/category/model")
+
+    latest = sorted(rows, key=lambda r: r.id, reverse=True)[0]
+    current = _is_setting_deprecated(latest.config, latest.deprecated)
+    next_value = (not current) if payload.deprecated is None else bool(payload.deprecated)
+
+    logger.warning(
+        "[system_api.deprecated.toggle_by_key] matched_rows ids=%s latest_id=%s current=%s next=%s",
+        [row.id for row in rows],
+        latest.id,
+        current,
+        next_value,
+    )
+    print(f"[DBG toggle_by_key matched] ids={[row.id for row in rows]} latest_id={latest.id} current={current} next={next_value}")
+
+    for row in rows:
+        row_cfg = dict(_safe_json_dict(row.config))
+        row_cfg["deprecated"] = bool(next_value)
+        row_cfg["is_deprecated"] = bool(next_value)
+        row_cfg["disable_api"] = bool(next_value)
+        db.query(SystemAPISetting).filter(SystemAPISetting.id == row.id).update(
+            {"config": row_cfg, "deprecated": bool(next_value)},
+            synchronize_session=False,
+        )
+
+    db.commit()
+    db.refresh(latest)
+    logger.warning(
+        "[system_api.deprecated.toggle_by_key] committed latest_id=%s latest_deprecated_col=%s latest_config=%s",
+        latest.id,
+        latest.deprecated,
+        latest.config,
+    )
+    print(f"[DBG toggle_by_key committed] latest_id={latest.id} after_col={latest.deprecated} after_cfg={latest.config}")
+
+    out_cfg = _safe_json_dict(latest.config)
+    return SystemAPISettingOut(
+        id=latest.id,
+        name=latest.name,
+        category=latest.category,
+        provider=latest.provider,
+        api_key=latest.api_key,
+        base_url=latest.base_url,
+        model=latest.model,
+        config=out_cfg,
+        deprecated=_is_setting_deprecated(out_cfg, latest.deprecated),
+        is_active=bool(latest.is_active),
+    )
 
 
 @router.post("/settings/system/manage/provider/{provider}/deprecated")
@@ -911,14 +1677,17 @@ def batch_toggle_system_provider_deprecated_for_manage(
     changed = 0
     next_value = bool(payload.deprecated)
     for row in rows:
-        cfg = _safe_json_dict(row.config)
-        current = _is_setting_deprecated(cfg)
+        cfg = dict(_safe_json_dict(row.config))
+        current = _is_setting_deprecated(cfg, row.deprecated)
         if current != next_value:
             changed += 1
         cfg["deprecated"] = next_value
         cfg["is_deprecated"] = next_value
         cfg["disable_api"] = next_value
-        row.config = cfg
+        db.query(SystemAPISetting).filter(SystemAPISetting.id == row.id).update(
+            {"config": cfg, "deprecated": next_value},
+            synchronize_session=False,
+        )
 
     db.commit()
 
@@ -1031,6 +1800,7 @@ def export_system_settings_for_manage(
                 "base_url": row.base_url,
                 "model": row.model,
                 "config": row.config or {},
+                "deprecated": bool(row.deprecated),
                 "is_active": bool(row.is_active),
             }
             for row in rows
@@ -1073,6 +1843,7 @@ def export_system_provider_bundle_for_manage(
                 "base_url": row.base_url,
                 "model": row.model,
                 "config": row.config or {},
+                "deprecated": bool(row.deprecated),
                 "is_active": bool(row.is_active),
             }
             for row in provider_rows
@@ -1135,17 +1906,14 @@ def import_system_provider_bundle_for_manage(
             category = str(model_item.category or "LLM").strip() or "LLM"
             model = (model_item.model or "").strip()
 
-            target = db.query(SystemAPISetting).filter(
-                SystemAPISetting.category == category,
-                SystemAPISetting.provider == provider_name,
-                SystemAPISetting.model == model,
-            ).order_by(SystemAPISetting.id.desc()).first()
+            target = _find_system_setting_by_normalized_triplet(db, provider_name, category, model)
 
             if target:
                 target.name = (model_item.name or target.name or "System Setting").strip() or "System Setting"
                 target.base_url = model_item.base_url
                 target.model = model_item.model
-                target.config = model_item.config if isinstance(model_item.config, dict) else {}
+                target.config = _normalize_system_api_billing_config(model_item.config if isinstance(model_item.config, dict) else {})
+                target.deprecated = _is_setting_deprecated(target.config, model_item.deprecated)
                 target.is_active = bool(model_item.is_active)
                 updated += 1
             else:
@@ -1156,7 +1924,8 @@ def import_system_provider_bundle_for_manage(
                     api_key="",
                     base_url=model_item.base_url,
                     model=model_item.model,
-                    config=model_item.config if isinstance(model_item.config, dict) else {},
+                    deprecated=_is_setting_deprecated(model_item.config if isinstance(model_item.config, dict) else {}, model_item.deprecated),
+                    config=_normalize_system_api_billing_config(model_item.config if isinstance(model_item.config, dict) else {}),
                     is_active=bool(model_item.is_active),
                 )
                 db.add(target)
@@ -1222,17 +1991,14 @@ def import_system_settings_for_manage(
         if not provider:
             continue
 
-        target = db.query(SystemAPISetting).filter(
-            SystemAPISetting.category == category,
-            SystemAPISetting.provider == provider,
-            SystemAPISetting.model == model,
-        ).order_by(SystemAPISetting.id.desc()).first()
+        target = _find_system_setting_by_normalized_triplet(db, provider, category, model)
 
         if target:
             target.name = (item.name or target.name or "System Setting").strip() or "System Setting"
             target.base_url = item.base_url
             target.model = item.model
-            target.config = item.config if isinstance(item.config, dict) else {}
+            target.config = _normalize_system_api_billing_config(item.config if isinstance(item.config, dict) else {})
+            target.deprecated = _is_setting_deprecated(target.config, item.deprecated)
             target.is_active = bool(item.is_active)
             updated += 1
         else:
@@ -1243,7 +2009,8 @@ def import_system_settings_for_manage(
                 api_key="",
                 base_url=item.base_url,
                 model=item.model,
-                config=item.config if isinstance(item.config, dict) else {},
+                deprecated=_is_setting_deprecated(item.config if isinstance(item.config, dict) else {}, item.deprecated),
+                config=_normalize_system_api_billing_config(item.config if isinstance(item.config, dict) else {}),
                 is_active=bool(item.is_active),
             )
             db.add(target)

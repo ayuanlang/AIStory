@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "skills": [
+    {
+      "id": "agent_orchestrator",
+      "title": "Agent Orchestrator",
+      "type": "agent",
+      "prompts": [
+        "skills/agent_orchestrator/system_prompt.txt"
+      ],
+      "legacy_refs": []
+    },
+    {
+      "id": "scene_analysis",
+      "title": "Scene Analysis",
+      "type": "analysis",
+      "prompts": [
+        "scene_analysis.txt",
+        "scene_analysis_subject_recovery_lite.txt"
+      ],
+      "legacy_refs": [
+        "scene_analysis.txt",
+        "scene_analysis_subject_recovery_lite.txt"
+      ]
+    },
+    {
+      "id": "story_generation",
+      "title": "Story Generation",
+      "type": "story",
+      "prompts": [
+        "story_generator_global.txt",
+        "story_generator_episode.txt",
+        "story_generator_analyze_novel.txt"
+      ],
+      "legacy_refs": [
+        "story_generator_global.txt",
+        "story_generator_episode.txt",
+        "story_generator_analyze_novel.txt"
+      ]
+    },
+    {
+      "id": "script_generation",
+      "title": "Script Generation",
+      "type": "script",
+      "prompts": [
+        "script_generator_scenes.txt",
+        "script_generator_episode_script.txt",
+        "scene_regenerate.txt",
+        "shot_generator.txt"
+      ],
+      "legacy_refs": [
+        "script_generator_scenes.txt",
+        "script_generator_episode_script.txt",
+        "scene_regenerate.txt",
+        "shot_generator.txt"
+      ]
+    },
+    {
+      "id": "promo_generation",
+      "title": "Promo Generation",
+      "type": "promo",
+      "prompts": [
+        "promo_generator_global.txt",
+        "promo_generator_episode_script.txt"
+      ],
+      "legacy_refs": [
+        "promo_generator_global.txt",
+        "promo_generator_episode_script.txt"
+      ]
+    },
+    {
+      "id": "image_style_extraction",
+      "title": "Image Style Extraction",
+      "type": "vision",
+      "prompts": [
+        "image_style_extractor.txt"
+      ],
+      "legacy_refs": [
+        "image_style_extractor.txt"
+      ]
+    }
+  ]
+}

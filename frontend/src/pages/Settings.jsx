@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useStore } from '@/lib/store';
 import { Save, Info, Upload, Download, Coins, History, Palette, CheckCircle, ArrowLeft, User, KeyRound } from 'lucide-react';
 import { API_URL } from '@/config';
-import { updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, selectSystemSetting, toggleSystemSettingDeprecatedManage, updateMyProfile, updateMyPassword, uploadMyAvatar, recordSystemLogAction, getAutoDownloadLocalPreference, setAutoDownloadLocalPreference } from '../services/api';
+import { updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, selectSystemSetting, updateMyProfile, updateMyPassword, uploadMyAvatar, recordSystemLogAction, getAutoDownloadLocalPreference, setAutoDownloadLocalPreference, fetchPrompt, fetchPromptSkills } from '../services/api';
 import RechargeModal from '../components/RechargeModal'; // Import RechargeModal
 import { getUiLang, setUiLang as setGlobalUiLang, tUI, UI_LANG_EVENT } from '../lib/uiLang';
 
@@ -173,10 +173,13 @@ const Settings = () => {
     const [showRecharge, setShowRecharge] = useState(false); // Recharge Modal State
     const [systemSettings, setSystemSettings] = useState([]);
     const [isSystemSettingsLoading, setIsSystemSettingsLoading] = useState(false);
+    const [promptSkills, setPromptSkills] = useState([]);
+    const [isPromptSkillsLoading, setIsPromptSkillsLoading] = useState(false);
+    const [selectedPromptSkillId, setSelectedPromptSkillId] = useState('');
+    const [selectedPromptSkillText, setSelectedPromptSkillText] = useState('');
+    const [isPromptSkillTextLoading, setIsPromptSkillTextLoading] = useState(false);
     const [selectingSystemId, setSelectingSystemId] = useState(null);
-    const [togglingDeprecatedId, setTogglingDeprecatedId] = useState(null);
     const [selectedSystemCategory, setSelectedSystemCategory] = useState('All');
-    const [isSuperuser, setIsSuperuser] = useState(false);
     const [activeSettingSources, setActiveSettingSources] = useState({
         LLM: 'none',
         Image: 'none',
@@ -445,13 +448,65 @@ const Settings = () => {
             if (userRes && userRes.credits !== undefined) {
                 setUserCredits(userRes.credits);
             }
-            setIsSuperuser(!!userRes?.is_superuser);
             setSystemSettings(Array.isArray(systemRes) ? systemRes : []);
         } catch (err) {
             console.error("Failed to load system API settings", err);
             setSystemSettings([]);
         } finally {
             setIsSystemSettingsLoading(false);
+        }
+    };
+
+    const loadPromptSkills = async () => {
+        setIsPromptSkillsLoading(true);
+        try {
+            const res = await fetchPromptSkills();
+            const items = Array.isArray(res?.skills) ? res.skills : [];
+            setPromptSkills(items);
+
+            if (items.length > 0) {
+                const firstSkillId = String(items[0]?.id || '').trim();
+                setSelectedPromptSkillId(firstSkillId);
+                if (firstSkillId) {
+                    setIsPromptSkillTextLoading(true);
+                    try {
+                        const promptRes = await fetchPrompt(`skill:${firstSkillId}/system_prompt.txt`);
+                        setSelectedPromptSkillText(String(promptRes?.content || ''));
+                    } catch {
+                        setSelectedPromptSkillText('');
+                    } finally {
+                        setIsPromptSkillTextLoading(false);
+                    }
+                } else {
+                    setSelectedPromptSkillText('');
+                }
+            } else {
+                setSelectedPromptSkillId('');
+                setSelectedPromptSkillText('');
+            }
+        } catch (err) {
+            console.error('Failed to load prompt skills', err);
+            setPromptSkills([]);
+            setSelectedPromptSkillId('');
+            setSelectedPromptSkillText('');
+        } finally {
+            setIsPromptSkillsLoading(false);
+        }
+    };
+
+    const handleSelectPromptSkill = async (skillId) => {
+        const id = String(skillId || '').trim();
+        if (!id) return;
+        setSelectedPromptSkillId(id);
+        setIsPromptSkillTextLoading(true);
+        try {
+            const promptRes = await fetchPrompt(`skill:${id}/system_prompt.txt`);
+            setSelectedPromptSkillText(String(promptRes?.content || ''));
+        } catch (err) {
+            console.error('Failed to load skill prompt text', err);
+            setSelectedPromptSkillText('');
+        } finally {
+            setIsPromptSkillTextLoading(false);
         }
     };
 
@@ -534,6 +589,7 @@ const Settings = () => {
         }
         if (activeTab === 'api_settings') {
             loadSystemSettingsCatalog();
+            loadPromptSkills();
         }
     }, [activeTab]);
 
@@ -1172,23 +1228,6 @@ const Settings = () => {
             showNotification(msg, 'error');
         } finally {
             setSelectingSystemId(null);
-        }
-    };
-
-    const handleToggleDeprecated = async (setting) => {
-        if (!setting?.id) return;
-        setTogglingDeprecatedId(setting.id);
-        try {
-            const next = !setting?.deprecated;
-            await toggleSystemSettingDeprecatedManage(setting.id, next);
-            showNotification(next ? t('已标记为弃用', 'Marked as deprecated') : t('已取消弃用', 'Deprecated flag removed'), 'success');
-            await loadSystemSettingsCatalog();
-            await refreshActiveSettingSources();
-        } catch (err) {
-            console.error('Failed to toggle deprecated flag', err);
-            showNotification(err?.message || t('切换弃用状态失败', 'Failed to toggle deprecated status'), 'error');
-        } finally {
-            setTogglingDeprecatedId(null);
         }
     };
 
@@ -2189,18 +2228,6 @@ const Settings = () => {
                                                                     </div>
                                                                     <div className="md:col-span-2 flex md:justify-end">
                                                                         <div className="w-full md:w-auto flex gap-2 justify-end">
-                                                                            {isSuperuser && (
-                                                                                <button
-                                                                                    onClick={(e) => {
-                                                                                        e.stopPropagation();
-                                                                                        handleToggleDeprecated(row);
-                                                                                    }}
-                                                                                    disabled={togglingDeprecatedId === row.id}
-                                                                                    className={`text-xs px-2.5 py-1.5 rounded border disabled:opacity-50 disabled:cursor-not-allowed ${row.deprecated ? 'border-green-500/40 text-green-300 bg-green-500/10 hover:bg-green-500/20' : 'border-red-500/40 text-red-300 bg-red-500/10 hover:bg-red-500/20'}`}
-                                                                                >
-                                                                                    {togglingDeprecatedId === row.id ? t('处理中...', 'Processing...') : (row.deprecated ? t('启用', 'Enable') : t('弃用', 'Deprecate'))}
-                                                                                </button>
-                                                                            )}
                                                                             <button
                                                                                 onClick={(e) => {
                                                                                     e.stopPropagation();
@@ -2221,6 +2248,53 @@ const Settings = () => {
                                             </div>
                                         </div>
                                     ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    <div className="space-y-4">
+                        <h2 className="text-xl font-semibold">{t('Prompt Skills 浏览器', 'Prompt Skills Browser')}</h2>
+                        <div className="bg-black/20 p-6 rounded-xl border border-white/10 space-y-4 shadow-sm">
+                            <p className="text-xs text-muted-foreground">
+                                {t('用于查看按 skills 组织的提示词（Claude skills 风格），方便排查与运营配置。', 'Browse skills-organized prompts (Claude skills style) for operations and debugging.')}
+                            </p>
+
+                            {isPromptSkillsLoading ? (
+                                <div className="text-sm text-muted-foreground">{t('加载 Prompt Skills 中...', 'Loading prompt skills...')}</div>
+                            ) : promptSkills.length === 0 ? (
+                                <div className="text-sm text-muted-foreground">{t('暂无 Prompt Skills。', 'No prompt skills found.')}</div>
+                            ) : (
+                                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                                    <div className="lg:col-span-1 space-y-2">
+                                        {promptSkills.map((item) => {
+                                            const id = String(item?.id || '').trim();
+                                            if (!id) return null;
+                                            return (
+                                                <button
+                                                    key={id}
+                                                    onClick={() => handleSelectPromptSkill(id)}
+                                                    className={`w-full text-left px-3 py-2 rounded border transition-colors ${selectedPromptSkillId === id ? 'bg-primary/20 text-primary border-primary/40' : 'bg-white/5 text-muted-foreground border-white/10 hover:bg-white/10 hover:text-white'}`}
+                                                >
+                                                    <div className="text-sm font-medium">{item?.title || id}</div>
+                                                    <div className="text-[11px] opacity-75 font-mono">{id}</div>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+
+                                    <div className="lg:col-span-2 border border-white/10 rounded-lg bg-black/20 p-3">
+                                        <div className="text-xs text-muted-foreground mb-2">
+                                            {t('system_prompt.txt 预览', 'system_prompt.txt preview')}
+                                        </div>
+                                        {isPromptSkillTextLoading ? (
+                                            <div className="text-sm text-muted-foreground">{t('加载提示词中...', 'Loading prompt...')}</div>
+                                        ) : selectedPromptSkillText ? (
+                                            <pre className="whitespace-pre-wrap break-words text-xs text-gray-200 max-h-[420px] overflow-auto">{selectedPromptSkillText}</pre>
+                                        ) : (
+                                            <div className="text-sm text-muted-foreground">{t('该 skill 暂无 system_prompt.txt。', 'No system_prompt.txt for this skill.')}</div>
+                                        )}
+                                    </div>
                                 </div>
                             )}
                         </div>

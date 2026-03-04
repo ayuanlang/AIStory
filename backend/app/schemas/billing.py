@@ -59,3 +59,11 @@ class CreditCheck(BaseModel):
     cost: int
     current_balance: int
     message: Optional[str] = None
+
+
+class FeaturePricingUpdate(BaseModel):
+    feature_pricing: dict[str, int] = {}
+
+
+class FeaturePricingOut(BaseModel):
+    feature_pricing: dict[str, int] = {}

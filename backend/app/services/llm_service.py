@@ -12,6 +12,7 @@ from pathlib import Path
 from logging.handlers import RotatingFileHandler
 
 from app.core.config import settings
+from app.core.prompts.skills_loader import get_skill_prompt_text
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +41,13 @@ if not _llm_call_logger.handlers:
 # Default timeout set to 300s, with env override support.
 DEFAULT_LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "300"))
 
-SYSTEM_PROMPT = """
+_DEFAULT_AGENT_SYSTEM_PROMPT = """
 You are an AI assistant for a Storyboard Editor application.
 Your goal is to help the user edit, create, and manage storyboard projects.
+
+Always do reasoning/scheduling with the system default LLM config provided by backend.
+You must only call tools listed below and should prefer read-first, then write.
+Respect permissions: if project context is missing or user appears unauthorized for a tool, ask for confirmation/context instead of writing.
 
 You have access to the following tools:
 1. `generate_project_asset`
@@ -62,6 +67,23 @@ You have access to the following tools:
    - Parameters:
      - `title`: (string, optional)
      - `description`: (string, optional)
+
+4. `search_project_data`
+     - Use this to search entities/scenes/shots in the current project.
+     - Parameters:
+         - `query`: (string) keyword to search.
+         - `limit`: (integer, optional, default 10, max 20)
+
+5. `internet_search`
+     - Use this for basic web search when project data is insufficient.
+     - Parameters:
+         - `query`: (string)
+
+6. `visualize_user_requirement`
+     - Use this to structure user requirements into a visualizable task list.
+     - Parameters:
+         - `objective`: (string)
+         - `tasks`: (array of strings, optional)
 
 RESPONSE FORMAT:
 You must respond with a JSON object. Do not include markdown formatting (like ```json).
@@ -87,6 +109,15 @@ If the user's request is not clear or does not require a tool, return an empty p
 """
 
 class LLMService:
+    def _get_agent_system_prompt(self) -> str:
+        try:
+            resolved = get_skill_prompt_text("agent_orchestrator", "system_prompt.txt")
+            if isinstance(resolved, str) and resolved.strip():
+                return resolved
+        except Exception as e:
+            logger.warning("Failed to load agent skill prompt, fallback to default: %s", e)
+        return _DEFAULT_AGENT_SYSTEM_PROMPT
+
     def _vendor_label(self, provider: Any) -> str:
         raw = str(provider or "").strip()
         return raw or "unknown"
@@ -681,7 +712,7 @@ class LLMService:
              return {"reply": "Please configure your LLM API Key in Settings.", "plan": []}
 
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": self._get_agent_system_prompt()},
         ]
         
         # Add context summary to system message or valid context message
@@ -702,6 +733,49 @@ class LLMService:
             return await self._call_openai_compatible(base_url, api_key, model, messages, extra_config)
         except Exception as e:
             logger.error(f"LLM Call failed: {e}")
+            provider = (extra_config or {}).get("__provider") or config.get("provider") or self._infer_provider(base_url, model)
+            err_msg = self._vendor_failed_message(provider, e)
+            return {
+                "reply": f"Sorry, I encountered an error communicating with the AI provider: {err_msg}",
+                "plan": []
+            }
+
+    async def analyze_intent_with_system_prompt(
+        self,
+        query: str,
+        context: Dict[str, Any],
+        history: List[Dict[str, str]],
+        config: Dict[str, Any],
+        system_prompt: str,
+    ) -> Dict[str, Any]:
+        if not config:
+            logger.warning("No LLM config provided for custom prompt intent analysis, using mock fallback.")
+            return self._mock_fallback(query)
+
+        api_key = config.get("api_key")
+        base_url = config.get("base_url")
+        model = config.get("model")
+
+        if not api_key:
+            return {"reply": "Please configure your LLM API Key in Settings.", "plan": []}
+
+        resolved_prompt = str(system_prompt or "").strip() or self._get_agent_system_prompt()
+        messages = [
+            {"role": "system", "content": resolved_prompt},
+            {"role": "system", "content": f"Current Runtime Context: {json.dumps(context or {}, default=str)}"},
+        ]
+
+        for msg in (history or [])[-5:]:
+            messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
+        messages.append({"role": "user", "content": query})
+
+        extra_config = dict(config.get("config", {}) or {})
+        extra_config.setdefault("__provider", config.get("provider") or self._infer_provider(base_url, model))
+
+        try:
+            return await self._call_openai_compatible(base_url, api_key, model, messages, extra_config)
+        except Exception as e:
+            logger.error(f"LLM custom-prompt intent call failed: {e}")
             provider = (extra_config or {}).get("__provider") or config.get("provider") or self._infer_provider(base_url, model)
             err_msg = self._vendor_failed_message(provider, e)
             return {

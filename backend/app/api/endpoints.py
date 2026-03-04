@@ -11,6 +11,8 @@ from app.models.all_models import Project, ProjectShare, User, Episode, Scene, S
 from app.schemas.agent import AgentRequest, AgentResponse, AnalyzeSceneRequest
 from app.services.agent_service import agent_service
 from app.services.billing_service import billing_service
+from app.services.tool_billing_taxonomy_service import tool_billing_taxonomy_service
+from app.core.prompts.skills_loader import get_skill_prompt_text, load_skills_registry, get_skill_meta
 from app.services.llm_service import llm_service
 from app.services.payment_service import payment_service
 from app.db.init_db import check_and_migrate_tables  # EMERGENCY FIX IMPORT
@@ -697,6 +699,48 @@ def get_system_api_setting(
     return query.order_by(SystemAPISetting.id.desc()).first()
 
 
+def _safe_json_dict(value: Any) -> Dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _to_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        raw = value.strip().lower()
+        if raw in {"1", "true", "yes", "y", "on"}:
+            return True
+        if raw in {"0", "false", "no", "n", "off", "", "none", "null"}:
+            return False
+    return bool(value)
+
+
+def _is_system_setting_deprecated(config_value: Any, deprecated_flag: Any = None) -> bool:
+    if _to_bool(deprecated_flag):
+        return True
+    cfg = _safe_json_dict(config_value)
+    return bool(
+        _to_bool(cfg.get("deprecated"))
+        or _to_bool(cfg.get("is_deprecated"))
+        or _to_bool(cfg.get("disable_api"))
+    )
+
+
 def _resolve_effective_api_setting_meta(
     db: Session,
     user: User,
@@ -736,6 +780,15 @@ def _resolve_effective_api_setting_meta(
         model=target_model,
     )
     if system_setting:
+        if _is_system_setting_deprecated(system_setting.config, system_setting.deprecated):
+            return None, "system_setting_deprecated", {
+                "active_count": active_count,
+                "marker_id": setting.id,
+                "category": resolved_category,
+                "provider": target_provider,
+                "model": target_model,
+                "setting_id": system_setting.id,
+            }
         return system_setting, "system_by_user_provider_model", {
             "active_count": active_count,
             "marker_id": setting.id,
@@ -788,6 +841,8 @@ def _seed_default_system_settings_for_user(db: Session, user_id: int) -> None:
 
     chosen_by_category: Dict[str, SystemAPISetting] = {}
     for row in active_system_rows:
+        if _is_system_setting_deprecated(row.config, row.deprecated):
+            continue
         category = str(row.category or "").strip()
         if not category or category in chosen_by_category:
             continue
@@ -880,20 +935,84 @@ def get_effective_setting_snapshot(
         "meta": meta,
     }
 
+_PROMPT_SKILL_ALIAS = {
+    "scene_analysis.txt": "skill:scene_analysis/scene_analysis.txt",
+    "scene_analysis_subject_recovery_lite.txt": "skill:scene_analysis/scene_analysis_subject_recovery_lite.txt",
+    "story_generator_global.txt": "skill:story_generation/story_generator_global.txt",
+    "story_generator_episode.txt": "skill:story_generation/story_generator_episode.txt",
+    "story_generator_analyze_novel.txt": "skill:story_generation/story_generator_analyze_novel.txt",
+    "script_generator_scenes.txt": "skill:script_generation/script_generator_scenes.txt",
+    "script_generator_episode_script.txt": "skill:script_generation/script_generator_episode_script.txt",
+    "scene_regenerate.txt": "skill:script_generation/scene_regenerate.txt",
+    "shot_generator.txt": "skill:script_generation/shot_generator.txt",
+    "promo_generator_global.txt": "skill:promo_generation/promo_generator_global.txt",
+    "promo_generator_episode_script.txt": "skill:promo_generation/promo_generator_episode_script.txt",
+    "image_style_extractor.txt": "skill:image_style_extraction/image_style_extractor.txt",
+}
+
+
+def _resolve_prompt_text(prompt_ref: str) -> str:
+    ref = str(prompt_ref or "").strip()
+    if not ref:
+        raise FileNotFoundError("prompt ref is empty")
+
+    candidates = [ref]
+    alias = _PROMPT_SKILL_ALIAS.get(ref)
+    if alias:
+        candidates.append(alias)
+
+    for item in candidates:
+        item_text = str(item or "").strip()
+        if not item_text:
+            continue
+
+        if item_text.startswith("skill:"):
+            raw = item_text[len("skill:"):]
+            parts = [piece for piece in raw.split("/") if piece]
+            skill_id = parts[0] if parts else ""
+            prompt_name = parts[1] if len(parts) > 1 else "system_prompt.txt"
+            content = get_skill_prompt_text(skill_id, prompt_name)
+            if content:
+                return content
+            continue
+
+        prompt_dir = os.path.join(str(settings.BASE_DIR), "app", "core", "prompts")
+        prompt_path = os.path.join(prompt_dir, item_text)
+        if os.path.exists(prompt_path):
+            with open(prompt_path, "r", encoding="utf-8") as handle:
+                return handle.read()
+
+    raise FileNotFoundError(f"Prompt '{prompt_ref}' not found")
+
+
 @router.get("/prompts/{filename}")
 async def get_prompt_content(filename: str, current_user: User = Depends(get_current_user)):
     """Retrieve content of a prompt file."""
-    # Robust path resolution using settings.BASE_DIR (backend root)
-    prompt_dir = os.path.join(str(settings.BASE_DIR), "app", "core", "prompts")
-    prompt_path = os.path.join(prompt_dir, filename)
-    
-    if not os.path.exists(prompt_path):
-        # logging for debug on Render
-        logger.error(f"Prompt file not found at: {prompt_path}")
+    try:
+        return {"content": _resolve_prompt_text(filename)}
+    except FileNotFoundError:
+        logger.error("Prompt file not found: %s", filename)
         raise HTTPException(status_code=404, detail=f"Prompt file '{filename}' not found.")
-        
-    with open(prompt_path, "r", encoding="utf-8") as f:
-        return {"content": f.read()}
+
+
+@router.get("/prompts/skills")
+async def list_prompt_skills(current_user: User = Depends(get_current_user)):
+    """List available prompt skills and metadata for frontend/tooling discovery."""
+    registry = load_skills_registry()
+    skills = registry.get("skills") if isinstance(registry.get("skills"), list) else []
+    return {
+        "version": registry.get("version", 1),
+        "skills": skills,
+    }
+
+
+@router.get("/prompts/skills/{skill_id}")
+async def get_prompt_skill_detail(skill_id: str, current_user: User = Depends(get_current_user)):
+    """Get one prompt skill metadata by skill id."""
+    meta = get_skill_meta(skill_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_id}' not found.")
+    return meta
 
 @router.post("/analyze_scene", response_model=Dict[str, Any])
 async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)): # user auth optional depending on reqs, kept for safety
@@ -1169,16 +1288,11 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             system_instruction = request.system_prompt
         else:
             prompt_filename = request.prompt_file or "scene_analysis.txt"
-            # Robust path resolution
-            prompt_dir = os.path.join(str(settings.BASE_DIR), "app", "core", "prompts")
-            prompt_path = os.path.join(prompt_dir, prompt_filename)
-            
-            if not os.path.exists(prompt_path):
-                 logger.error(f"Scene analysis prompt not found at: {prompt_path}")
-                 raise HTTPException(status_code=404, detail=f"Prompt file '{prompt_filename}' not found.")
-                
-            with open(prompt_path, "r", encoding="utf-8") as f:
-                system_instruction = f.read()
+            try:
+                system_instruction = _resolve_prompt_text(prompt_filename)
+            except FileNotFoundError:
+                logger.error("Scene analysis prompt not found: %s", prompt_filename)
+                raise HTTPException(status_code=404, detail=f"Prompt file '{prompt_filename}' not found.")
 
             # Inject Templates if using the standard scene_analysis.txt
             if "scene_analysis.txt" in prompt_filename:
@@ -2110,15 +2224,36 @@ async def process_agent_command(
     if project_id:
         _require_project_access(db, int(project_id), current_user)
 
-    # Resolve Provider/Model for Billing
-    provider = request.llm_config.get("provider") if request.llm_config else None
-    model = request.llm_config.get("model") if request.llm_config else None
-    
-    if not provider:
-        api_config = get_effective_api_setting(db, current_user, category="LLM")
-        if api_config:
-            provider = api_config.provider
-            model = api_config.model
+    resolved_llm_config = agent_service.get_system_default_llm_config(current_user.id, category="LLM")
+    if not resolved_llm_config or not resolved_llm_config.get("api_key"):
+        raise HTTPException(status_code=400, detail="No active system default LLM API config found in Settings (System API / category=LLM).")
+
+    provider = resolved_llm_config.get("provider")
+    model = resolved_llm_config.get("model")
+    resolved_cfg_meta = resolved_llm_config.get("config") if isinstance(resolved_llm_config.get("config"), dict) else {}
+    logger.info(
+        "[agent.command] resolved_system_llm | user_id=%s provider=%s model=%s setting_id=%s source=%s category=%s",
+        current_user.id,
+        provider,
+        model,
+        resolved_cfg_meta.get("__resolved_setting_id"),
+        resolved_cfg_meta.get("__selection_source"),
+        resolved_cfg_meta.get("__resolved_category"),
+    )
+
+    merged_context = dict(request.context or {})
+    merged_context["agent_mode"] = "project"
+    merged_context["auth"] = {
+        "user_id": current_user.id,
+        "is_superuser": bool(getattr(current_user, "is_superuser", False)),
+        "is_authorized": bool(getattr(current_user, "is_authorized", False)),
+        "username": getattr(current_user, "username", None),
+    }
+
+    request_for_agent = request.copy(update={
+        "llm_config": resolved_llm_config,
+        "context": merged_context,
+    })
     
     reservation_tx = None
     # Billing Check / Reserve
@@ -2153,25 +2288,26 @@ async def process_agent_command(
         billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
 
     try:
-        result = await agent_service.process_command(request, db, current_user.id)
+        result = await agent_service.process_command(request_for_agent, db, current_user)
+        usage_payload = result.usage if isinstance(result.usage, dict) else {}
         
         # Billing Finalize
         if reservation_tx:
-            if result.usage:
+            if usage_payload:
                 actual_details = {"item": "agent_intent"}
-                actual_details.update(result.usage)
-                actual_details["input_tokens"] = result.usage.get("prompt_tokens", 0)
-                actual_details["output_tokens"] = result.usage.get("completion_tokens", 0)
-                actual_details["total_tokens"] = result.usage.get("total_tokens", 0)
+                actual_details.update(usage_payload)
+                actual_details["input_tokens"] = usage_payload.get("prompt_tokens", 0)
+                actual_details["output_tokens"] = usage_payload.get("completion_tokens", 0)
+                actual_details["total_tokens"] = usage_payload.get("total_tokens", 0)
                 billing_service.settle_reservation(db, reservation_tx.id, actual_details)
             else:
                 billing_service.cancel_reservation(db, reservation_tx.id, "No usage returned")
         else:
             details = {"query": request.query[:50]}
-            if result.usage:
-                details["input_tokens"] = result.usage.get("prompt_tokens", 0)
-                details["output_tokens"] = result.usage.get("completion_tokens", 0)
-                details["total_tokens"] = result.usage.get("total_tokens", 0)
+            if usage_payload:
+                details["input_tokens"] = usage_payload.get("prompt_tokens", 0)
+                details["output_tokens"] = usage_payload.get("completion_tokens", 0)
+                details["total_tokens"] = usage_payload.get("total_tokens", 0)
             billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, details)
         
         return result
@@ -2182,6 +2318,97 @@ async def process_agent_command(
                 billing_service.cancel_reservation(db, reservation_tx.id, str(e))
         except:
             pass
+        billing_service.log_failed_transaction(db, current_user.id, "llm_chat", provider, model, str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/agent/system-management/command", response_model=AgentResponse)
+async def process_system_management_agent_command(
+    request: AgentRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not bool(getattr(current_user, "is_superuser", False)):
+        raise HTTPException(status_code=403, detail="Only superuser can use system management AI agent")
+
+    resolved_llm_config = agent_service.get_system_default_llm_config(current_user.id, category="LLM")
+    if not resolved_llm_config or not resolved_llm_config.get("api_key"):
+        raise HTTPException(status_code=400, detail="No active system default LLM API config found in Settings (System API / category=LLM).")
+
+    provider = resolved_llm_config.get("provider")
+    model = resolved_llm_config.get("model")
+    resolved_cfg_meta = resolved_llm_config.get("config") if isinstance(resolved_llm_config.get("config"), dict) else {}
+    logger.info(
+        "[agent.system_management.command] resolved_system_llm | user_id=%s provider=%s model=%s setting_id=%s source=%s category=%s",
+        current_user.id,
+        provider,
+        model,
+        resolved_cfg_meta.get("__resolved_setting_id"),
+        resolved_cfg_meta.get("__selection_source"),
+        resolved_cfg_meta.get("__resolved_category"),
+    )
+
+    reservation_tx = None
+    if billing_service.is_token_pricing(db, "llm_chat", provider, model):
+        import json as _json
+        messages_est = [
+            {"role": "system", "content": "System management agent mode"},
+            {"role": "system", "content": f"Runtime Context: {_json.dumps(request.context or {}, default=str)}"},
+        ]
+        for msg in (request.history or [])[-5:]:
+            messages_est.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
+        messages_est.append({"role": "user", "content": request.query})
+
+        est = billing_service.estimate_input_output_tokens_from_messages(messages_est, output_ratio=1.5)
+        reserve_details = {
+            "item": "system_management_agent_intent",
+            "estimation_method": "prompt_tokens_ratio",
+            "estimated_output_ratio": 1.5,
+            "query_len": len(request.query or ""),
+            "input_tokens": est.get("input_tokens", 0),
+            "output_tokens": est.get("output_tokens", 0),
+            "total_tokens": est.get("total_tokens", 0),
+        }
+        reservation_tx = billing_service.reserve_credits(db, current_user.id, "llm_chat", provider, model, reserve_details)
+    else:
+        billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+
+    try:
+        result = await agent_service.process_system_management_command(request, db, current_user)
+        usage_payload = result.usage if isinstance(result.usage, dict) else {}
+        if reservation_tx:
+            if usage_payload:
+                actual_details = {
+                    "item": "system_management_agent_intent",
+                    "input_tokens": usage_payload.get("prompt_tokens", 0),
+                    "output_tokens": usage_payload.get("completion_tokens", 0),
+                    "total_tokens": usage_payload.get("total_tokens", 0),
+                }
+                billing_service.settle_reservation(db, reservation_tx.id, actual_details)
+            else:
+                billing_service.cancel_reservation(db, reservation_tx.id, "No usage returned")
+        else:
+            details = {"item": "system_management_agent_intent", "query": (request.query or "")[:80]}
+            if usage_payload:
+                details["input_tokens"] = usage_payload.get("prompt_tokens", 0)
+                details["output_tokens"] = usage_payload.get("completion_tokens", 0)
+                details["total_tokens"] = usage_payload.get("total_tokens", 0)
+            billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, details)
+        return result
+    except PermissionError as e:
+        if reservation_tx:
+            try:
+                billing_service.cancel_reservation(db, reservation_tx.id, str(e))
+            except Exception:
+                pass
+        raise HTTPException(status_code=403, detail=str(e))
+    except Exception as e:
+        logger.error(f"System Management Agent Command Failed: {e}")
+        if reservation_tx:
+            try:
+                billing_service.cancel_reservation(db, reservation_tx.id, str(e))
+            except Exception:
+                pass
         billing_service.log_failed_transaction(db, current_user.id, "llm_chat", provider, model, str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -2750,8 +2977,6 @@ async def generate_project_story_dna_global(
     if not episodes_count or int(episodes_count) <= 0:
         raise HTTPException(status_code=400, detail="episodes_count is required")
 
-    prompt_dir = os.path.join(str(settings.BASE_DIR), "app", "core", "prompts")
-
     # Prefer request payload (latest UI state), fall back to saved global_info.
     script_title = (req.script_title or gi_existing.get("script_title") or "").strip()
     project_type = (getattr(req, "type", None) or gi_existing.get("type") or "").strip()
@@ -2771,12 +2996,11 @@ async def generate_project_story_dna_global(
             req_extra_notes=req.extra_notes,
         ) else "story_generator_global.txt"
 
-    prompt_path = os.path.join(prompt_dir, prompt_filename)
-    if not os.path.exists(prompt_path):
-        logger.error(f"Story generator prompt not found at: {prompt_path}")
+    try:
+        sys_prompt = _resolve_prompt_text(prompt_filename)
+    except FileNotFoundError:
+        logger.error("Story generator prompt not found: %s", prompt_filename)
         raise HTTPException(status_code=404, detail=f"Prompt file '{prompt_filename}' not found.")
-    with open(prompt_path, "r", encoding="utf-8") as f:
-        sys_prompt = f.read()
 
     user_prompt = (
         f"Mode: global\n"
@@ -3192,14 +3416,11 @@ async def analyze_project_novel_to_story_generator_fields(
     if not novel_text:
         raise HTTPException(status_code=400, detail="novel_text is required")
 
-    prompt_dir = os.path.join(str(settings.BASE_DIR), "app", "core", "prompts")
-    prompt_path = os.path.join(prompt_dir, "story_generator_analyze_novel.txt")
-    if not os.path.exists(prompt_path):
-        logger.error(f"Analyze novel prompt not found at: {prompt_path}")
+    try:
+        sys_prompt_template = _resolve_prompt_text("story_generator_analyze_novel.txt")
+    except FileNotFoundError:
+        logger.error("Analyze novel prompt not found: story_generator_analyze_novel.txt")
         raise HTTPException(status_code=404, detail="Prompt file 'story_generator_analyze_novel.txt' not found.")
-
-    with open(prompt_path, "r", encoding="utf-8") as f:
-        sys_prompt_template = f.read()
 
     user_prompt = f"Project Title: {project.title}\n\nNovel/Script Text:\n{novel_text}"
 
@@ -4273,14 +4494,11 @@ async def generate_episode_story_dna(
             raise HTTPException(status_code=400, detail="episode_number is required for episode mode")
         prompt_filename = "story_generator_episode.txt"
 
-    prompt_dir = os.path.join(str(settings.BASE_DIR), "app", "core", "prompts")
-    prompt_path = os.path.join(prompt_dir, prompt_filename)
-    if not os.path.exists(prompt_path):
-        logger.error(f"Story generator prompt not found at: {prompt_path}")
+    try:
+        sys_prompt = _resolve_prompt_text(prompt_filename)
+    except FileNotFoundError:
+        logger.error("Story generator prompt not found: %s", prompt_filename)
         raise HTTPException(status_code=404, detail=f"Prompt file '{prompt_filename}' not found.")
-
-    with open(prompt_path, "r", encoding="utf-8") as f:
-        sys_prompt = f.read()
 
     user_prompt = (
         f"Mode: {mode}\n"
@@ -4400,13 +4618,11 @@ async def generate_episode_scenes_from_story(
         raise HTTPException(status_code=404, detail="Episode not found")
     project = _require_project_access(db, episode.project_id, current_user)
 
-    prompt_dir = os.path.join(str(settings.BASE_DIR), "app", "core", "prompts")
-    prompt_path = os.path.join(prompt_dir, "script_generator_scenes.txt")
-    if not os.path.exists(prompt_path):
-        logger.error(f"Script generator prompt not found at: {prompt_path}")
+    try:
+        sys_prompt = _resolve_prompt_text("script_generator_scenes.txt")
+    except FileNotFoundError:
+        logger.error("Script generator prompt not found: script_generator_scenes.txt")
         raise HTTPException(status_code=404, detail="Prompt file 'script_generator_scenes.txt' not found.")
-    with open(prompt_path, "r", encoding="utf-8") as f:
-        sys_prompt = f.read()
 
     global_md = ""
     try:
@@ -4846,7 +5062,6 @@ async def generate_project_episode_scripts_from_global_framework(
         f"character_canon_len={len(character_canon_md)} character_source={character_canon_source}"
     )
 
-    prompt_dir = os.path.join(str(settings.BASE_DIR), "app", "core", "prompts")
     generator_kind = _normalize_generator_kind(req.generator_kind)
     if generator_kind == "promo":
         prompt_filename = "promo_generator_episode_script.txt"
@@ -4854,15 +5069,14 @@ async def generate_project_episode_scripts_from_global_framework(
         prompt_filename = "script_generator_episode_script.txt"
     else:
         prompt_filename = "promo_generator_episode_script.txt" if _should_use_promo_prompts(gi) else "script_generator_episode_script.txt"
-    prompt_path = os.path.join(prompt_dir, prompt_filename)
-    if not os.path.exists(prompt_path):
-        logger.error(f"Episode script generator prompt not found at: {prompt_path}")
+    try:
+        sys_prompt = _resolve_prompt_text(prompt_filename)
+    except FileNotFoundError:
+        logger.error("Episode script generator prompt not found: %s", prompt_filename)
         logger.info(
             f"[generate_episode_scripts] RESPONSE success=False status_code=404 project_id={project_id} detail=Prompt file {prompt_filename} not found"
         )
         raise HTTPException(status_code=404, detail=f"Prompt file '{prompt_filename}' not found.")
-    with open(prompt_path, "r", encoding="utf-8") as f:
-        sys_prompt = f.read()
 
     # Ensure episodes exist (match by title "Episode X"; create missing)
     existing_eps = db.query(Episode).filter(Episode.project_id == project_id).all()
@@ -5663,12 +5877,10 @@ async def regenerate_scene(
         system_instruction = str(req.system_prompt)
     else:
         prompt_filename = str(req.prompt_file or "scene_regenerate.txt").strip() or "scene_regenerate.txt"
-        prompt_dir = os.path.join(str(settings.BASE_DIR), "app", "core", "prompts")
-        prompt_path = os.path.join(prompt_dir, prompt_filename)
-        if not os.path.exists(prompt_path):
+        try:
+            system_instruction = _resolve_prompt_text(prompt_filename)
+        except FileNotFoundError:
             raise HTTPException(status_code=404, detail=f"Prompt file '{prompt_filename}' not found.")
-        with open(prompt_path, "r", encoding="utf-8") as f:
-            system_instruction = f.read()
 
     scene_snapshot = (
         f"| Episode ID | Scene ID | Scene No. | Scene Name | Equivalent Duration | Core Scene Info | Original Script Text | Environment Name | Linked Characters | Key Props |\n"
@@ -6141,15 +6353,11 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
         entity_section = "# Entity Reference\n" + "\n".join(entity_descriptions) + "\n"
 
     # 3. Prepare System Prompt
-    prompt_dir = os.path.join(str(settings.BASE_DIR), "app", "core", "prompts")
-    prompt_path = os.path.join(prompt_dir, "shot_generator.txt")
-    
     system_prompt = ""
     try:
-        with open(prompt_path, "r", encoding="utf-8") as f:
-            system_prompt = f.read()
+        system_prompt = _resolve_prompt_text("shot_generator.txt")
     except Exception as e:
-        logger.error(f"Failed to load shot_generator.txt from {prompt_path}: {e}")
+        logger.error(f"Failed to load shot_generator.txt: {e}")
         # Very drastic fallback, but better than crash
         system_prompt = "You are a Storyboard Master. Generate a shot list as a markdown table."
 
@@ -9314,7 +9522,7 @@ def rebind_shot_media_from_assets(
 
 
 
-from app.schemas.billing import PricingRuleCreate, PricingRuleUpdate, PricingRuleOut, TransactionOut
+from app.schemas.billing import PricingRuleCreate, PricingRuleUpdate, PricingRuleOut, TransactionOut, FeaturePricingUpdate, FeaturePricingOut
 from app.models.all_models import RechargePlan, PaymentOrder
 import uuid
 import io
@@ -10082,9 +10290,7 @@ def get_pricing_rules(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    if not current_user.is_superuser:
-        raise HTTPException(status_code=403, detail="Not authorized")
-    return db.query(PricingRule).all()
+    raise HTTPException(status_code=410, detail="Legacy pricing rules are disabled. Use feature pricing + system API pricing.")
 
 @router.post("/billing/rules", response_model=PricingRuleOut)
 def create_pricing_rule(
@@ -10092,21 +10298,7 @@ def create_pricing_rule(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    if not current_user.is_superuser:
-        raise HTTPException(status_code=403, detail="Not authorized")
-    
-    try:
-        rule = PricingRule(**rule_in.dict())
-        _validate_pricing_rule_token_costs(rule)
-        db.add(rule)
-        db.commit()
-        db.refresh(rule)
-        return rule
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error creating pricing rule: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    raise HTTPException(status_code=410, detail="Legacy pricing rules are disabled. Use feature pricing + system API pricing.")
 
 @router.post("/billing/rules/sync", response_model=List[PricingRuleOut])
 def sync_pricing_rules(
@@ -10117,73 +10309,7 @@ def sync_pricing_rules(
     Sync system API Settings into Pricing Rules.
     If a provider/model exists in system settings but not in pricing rules, add it.
     """
-    if not current_user.is_superuser:
-        raise HTTPException(status_code=403, detail="Not authorized")
-
-    # 1. Fetch active dedicated system settings
-    settings = db.query(SystemAPISetting).filter(
-        SystemAPISetting.is_active == True
-    ).all()
-
-    if not settings:
-        return []
-    
-    added_rules = []
-    
-    def _task_types_for_setting_category(category: str) -> List[str]:
-        # Pricing rules are keyed by (task_type, provider, model).
-        # Core rule: both chat + scene analysis use Core LLM settings.
-        if category == "LLM":
-            return ["llm_chat", "analysis"]
-        if category == "Vision":
-            # Vision analysis currently bills under analysis / analysis_character
-            return ["analysis", "analysis_character"]
-        if category == "Image":
-            return ["image_gen"]
-        if category == "Video":
-            return ["video_gen"]
-        if category == "Analysis":
-            return ["analysis"]
-        return ["llm_chat"]
-
-    try:
-        for setting in settings:
-            for task_type in _task_types_for_setting_category(setting.category):
-                # Check existence (Exact match on provider+model+task)
-                query = db.query(PricingRule).filter(
-                    PricingRule.provider == setting.provider,
-                    PricingRule.task_type == task_type
-                )
-
-                if setting.model:
-                    query = query.filter(PricingRule.model == setting.model)
-                else:
-                    query = query.filter(PricingRule.model == None)
-
-                existing = query.first()
-
-                if not existing:
-                    new_rule = PricingRule(
-                        provider=setting.provider,
-                        model=setting.model,
-                        task_type=task_type,
-                        cost=1,
-                        unit_type="per_call",
-                        is_active=True,
-                        description=f"Auto-synced from {setting.category}/{setting.name}"
-                    )
-                    db.add(new_rule)
-                    added_rules.append(new_rule)
-        
-        if added_rules:
-            db.commit()
-            for r in added_rules:
-                db.refresh(r)
-        
-        return added_rules
-    except Exception as e:
-        logger.error(f"Sync pricing rules failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    raise HTTPException(status_code=410, detail="Legacy pricing rules are disabled. Use feature pricing + system API pricing.")
 
 
 @router.get("/billing/options")
@@ -10199,9 +10325,26 @@ def get_billing_options(
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Not authorized")
 
+    source_categories_by_task_type = tool_billing_taxonomy_service.get_billable_source_categories_by_task_type()
+    feature_pricing = billing_service.get_feature_pricing_map(db)
+    if not source_categories_by_task_type:
+        source_categories_by_task_type = {
+            "llm_chat": ["LLM"],
+            "analysis": ["LLM", "Vision"],
+            "analysis_character": ["LLM", "Vision"],
+            "image_gen": ["Image"],
+            "video_gen": ["Video"],
+        }
+
     all_settings = db.query(SystemAPISetting).all()
     if not all_settings:
-        return {"providersByTaskType": {}, "modelsByProvider": {}}
+        return {
+            "taskTypes": sorted(list(source_categories_by_task_type.keys())),
+            "sourceCategoriesByTaskType": source_categories_by_task_type,
+            "providersByTaskType": {k: [] for k in source_categories_by_task_type.keys()},
+            "modelsByProvider": {},
+            "featurePricing": feature_pricing,
+        }
 
     # Build category -> providers/models
     providers_by_category = {}
@@ -10221,15 +10364,6 @@ def get_billing_options(
             out |= providers_by_category.get(c, set())
         return out
 
-    # Task types currently used for billing.
-    source_categories_by_task_type = {
-        "llm_chat": ["LLM"],
-        "analysis": ["LLM", "Vision"],
-        "analysis_character": ["LLM", "Vision"],
-        "image_gen": ["Image"],
-        "video_gen": ["Video"],
-    }
-
     providers_by_task_type = {
         task_type: _union_categories(*cats)
         for task_type, cats in source_categories_by_task_type.items()
@@ -10240,6 +10374,61 @@ def get_billing_options(
         "sourceCategoriesByTaskType": source_categories_by_task_type,
         "providersByTaskType": {k: sorted(list(v)) for k, v in providers_by_task_type.items()},
         "modelsByProvider": {k: sorted(list(v)) for k, v in models_by_provider.items()},
+        "featurePricing": feature_pricing,
+    }
+
+
+@router.get("/billing/feature-pricing", response_model=FeaturePricingOut)
+def get_billing_feature_pricing(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    return FeaturePricingOut(feature_pricing=billing_service.get_feature_pricing_map(db))
+
+
+@router.put("/billing/feature-pricing", response_model=FeaturePricingOut)
+def update_billing_feature_pricing(
+    payload: FeaturePricingUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    saved = billing_service.set_feature_pricing_map(db, payload.feature_pricing or {})
+    return FeaturePricingOut(feature_pricing=saved)
+
+
+@router.get("/billing/taxonomy/preview")
+def get_billing_taxonomy_preview(
+    current_user: User = Depends(get_current_user),
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    entries = tool_billing_taxonomy_service.get_entries()
+    source_categories_by_task_type = tool_billing_taxonomy_service.get_billable_source_categories_by_task_type()
+
+    task_types_by_source_category: Dict[str, List[str]] = {}
+    category_set = set()
+    for categories in source_categories_by_task_type.values():
+        for category in categories:
+            category_text = str(category or "").strip()
+            if category_text:
+                category_set.add(category_text)
+
+    for category in sorted(list(category_set)):
+        task_types_by_source_category[category] = tool_billing_taxonomy_service.get_billable_task_types_for_source_category(category)
+
+    return {
+        "entryCount": len(entries),
+        "entries": entries,
+        "taskTypes": sorted(list(source_categories_by_task_type.keys())),
+        "sourceCategoriesByTaskType": source_categories_by_task_type,
+        "taskTypesBySourceCategory": task_types_by_source_category,
     }
 
 @router.put("/billing/rules/{rule_id}", response_model=PricingRuleOut)
@@ -10249,22 +10438,7 @@ def update_pricing_rule(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    if not current_user.is_superuser:
-        raise HTTPException(status_code=403, detail="Not authorized")
-        
-    rule = db.query(PricingRule).filter(PricingRule.id == rule_id).first()
-    if not rule:
-        raise HTTPException(status_code=404, detail="Rule not found")
-        
-    update_data = rule_in.model_dump(exclude_unset=True)
-    for field, value in update_data.items():
-        setattr(rule, field, value)
-
-    _validate_pricing_rule_token_costs(rule)
-    
-    db.commit()
-    db.refresh(rule)
-    return rule
+    raise HTTPException(status_code=410, detail="Legacy pricing rules are disabled. Use feature pricing + system API pricing.")
 
 @router.delete("/billing/rules/{rule_id}")
 def delete_pricing_rule(
@@ -10272,16 +10446,7 @@ def delete_pricing_rule(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    if not current_user.is_superuser:
-        raise HTTPException(status_code=403, detail="Not authorized")
-        
-    rule = db.query(PricingRule).filter(PricingRule.id == rule_id).first()
-    if not rule:
-        raise HTTPException(status_code=404, detail="Rule not found")
-        
-    db.delete(rule)
-    db.commit()
-    return {"status": "success"}
+    raise HTTPException(status_code=410, detail="Legacy pricing rules are disabled. Use feature pricing + system API pricing.")
 
 @router.get("/billing/transactions", response_model=List[TransactionOut])
 def get_transactions(
@@ -13500,11 +13665,9 @@ async def analyze_asset_image(
     }
 
     # 3. Load System Prompt
-    prompt_path = os.path.join(settings.BASE_DIR, "app/core/prompts", "image_style_extractor.txt")
-    if os.path.exists(prompt_path):
-        with open(prompt_path, "r", encoding="utf-8") as f:
-            system_prompt = f.read()
-    else:
+    try:
+        system_prompt = _resolve_prompt_text("image_style_extractor.txt")
+    except FileNotFoundError:
         system_prompt = "Describe the art style and visual elements of this image."
 
     # 4. Construct Image URL
