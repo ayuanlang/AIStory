@@ -10,6 +10,7 @@ import hmac
 import asyncio
 import uuid
 import os
+import random
 import logging
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -35,6 +36,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logger = logging.getLogger(__name__)
 
 class AgentService:
+    _provider_key_cursors: Dict[str, int] = {}
     def _safe_json_dict_or_none(self, value: Any) -> Optional[Dict[str, Any]]:
         if value is None:
             return {}
@@ -111,6 +113,59 @@ class AgentService:
             )
             session.commit()
 
+    def _is_deprecated_system_config(self, config_value: Any) -> bool:
+        cfg = self._safe_json_dict_or_none(config_value) or {}
+        return bool(
+            cfg.get("deprecated")
+            or cfg.get("is_deprecated")
+            or cfg.get("disable_api")
+        )
+
+    def _normalize_api_keys(self, value: Any) -> List[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            raw_items = value.replace("\r", "\n").replace(",", "\n").split("\n")
+        elif isinstance(value, list):
+            raw_items = value
+        else:
+            raw_items = [value]
+
+        result: List[str] = []
+        seen = set()
+        for item in raw_items:
+            key = str(item or "").strip()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            result.append(key)
+        return result
+
+    def _pick_runtime_api_key(self, config_value: Any, fallback_key: Any = None) -> str:
+        cfg = self._safe_json_dict_or_none(config_value) or {}
+        pooled = self._normalize_api_keys(cfg.get("provider_api_keys"))
+        if pooled:
+            strategy = str(cfg.get("provider_api_key_strategy") or "random").strip().lower()
+            if strategy == "round_robin":
+                cursor_key = str(cfg.get("provider") or cfg.get("__provider") or "default")
+                cursor = int(self._provider_key_cursors.get(cursor_key, 0))
+                selected = pooled[cursor % len(pooled)]
+                self._provider_key_cursors[cursor_key] = cursor + 1
+                return selected
+            if strategy == "weighted":
+                raw_weights = cfg.get("provider_api_key_weights")
+                if isinstance(raw_weights, list) and raw_weights:
+                    weights = []
+                    for i in range(len(pooled)):
+                        try:
+                            w = float(raw_weights[i]) if i < len(raw_weights) else 1.0
+                        except Exception:
+                            w = 1.0
+                        weights.append(w if w > 0 else 1.0)
+                    return random.choices(pooled, weights=weights, k=1)[0]
+            return random.choice(pooled)
+        return str(fallback_key or "").strip()
+
     def get_api_config(self, provider: str, user_id: int = 1, category: Optional[str] = None) -> Dict[str, Any]:
         """
         Resolves API configuration by:
@@ -173,9 +228,19 @@ class AgentService:
                 ).order_by(SystemAPISetting.id.desc()).first()
 
                 if setting:
+                    if self._is_deprecated_system_config(setting.config):
+                        logger.warning(
+                            "Blocked deprecated system api setting | user_id=%s category=%s provider=%s model=%s setting_id=%s",
+                            user_id,
+                            resolved_category,
+                            target_provider,
+                            target_model,
+                            setting.id,
+                        )
+                        return {}
                     return {
                         "provider": setting.provider,
-                        "api_key": setting.api_key,
+                        "api_key": self._pick_runtime_api_key({**(setting.config or {}), "provider": setting.provider}, setting.api_key),
                         "base_url": setting.base_url or defaults.get(target_provider, {}).get("base_url"),
                         "model": setting.model or defaults.get(target_provider, {}).get("model"),
                         "config": setting.config or {}
@@ -255,6 +320,16 @@ class AgentService:
                     )
 
                 if selected:
+                    if self._is_deprecated_system_config(selected.config):
+                        logger.warning(
+                            "Blocked deprecated active system api config | user_id=%s category=%s provider=%s model=%s setting_id=%s",
+                            user_id,
+                            resolved_category,
+                            selected.provider,
+                            selected.model,
+                            selected.id,
+                        )
+                        return {}
                     if not _is_endpoint_compatible(selected.config or {}):
                         logger.warning(
                             "Skipping incompatible %s setting | user_id=%s setting_id=%s provider=%s model=%s endpoint=%s",
@@ -291,7 +366,7 @@ class AgentService:
 
                     return {
                         "provider": selected.provider,
-                        "api_key": selected.api_key,
+                        "api_key": self._pick_runtime_api_key({**(selected.config or {}), "provider": selected.provider}, selected.api_key),
                         "base_url": selected.base_url or default.get("base_url"),
                         "model": selected.model or default.get("model"),
                         "config": merged_config

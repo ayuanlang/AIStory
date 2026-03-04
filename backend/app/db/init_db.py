@@ -707,6 +707,88 @@ def init_system_api_settings(db):
     else:
         logger.info("System grsai models already initialized")
 
+    # Seed baseline KIE models for system-level configuration.
+    kie_provider = "kie"
+    kie_base_url = "https://api.kie.ai"
+
+    def _kie_item(name: str, category: str, model: str) -> dict:
+        return {
+            "name": name,
+            "category": category,
+            "model": model,
+        }
+
+    kie_models = [
+        _kie_item("Kie Z-image v4.0", "Image", "z-image-v4.0"),
+        _kie_item("Kie Z-image v4.5", "Image", "z-image-v4.5"),
+        _kie_item("Kie Grok Imagine", "Image", "grok-imagine"),
+        _kie_item("Kie Flux-2", "Image", "flux-2"),
+        _kie_item("Kie Google Imagen4 Fast", "Image", "imagen4-fast"),
+        _kie_item("Kie Google Imagen4 Ultra", "Image", "imagen4-ultra"),
+        _kie_item("Kie Ideogram", "Image", "ideogram"),
+        _kie_item("Kie Qwen Image", "Image", "qwen-image"),
+        _kie_item("Kie Recraft", "Image", "recraft"),
+        _kie_item("Kie Topaz", "Image", "topaz"),
+
+        _kie_item("Kie Kling v2.1", "Video", "kling-v2.1"),
+        _kie_item("Kie Kling v2.5", "Video", "kling-v2.5"),
+        _kie_item("Kie Sora2", "Video", "sora2"),
+        _kie_item("Kie Bytedance v1 Pro", "Video", "bytedance-v1-pro"),
+        _kie_item("Kie Bytedance v1 Lite", "Video", "bytedance-v1-lite"),
+        _kie_item("Kie Hailuo", "Video", "hailuo"),
+        _kie_item("Kie Wan Turbo", "Video", "wan-turbo"),
+        _kie_item("Kie Grok Imagine Video", "Video", "grok-imagine-video"),
+
+        _kie_item("Kie ElevenLabs", "Tools", "elevenlabs"),
+
+        _kie_item("Kie Gemini 2.5 Flash", "LLM", "gemini-2.5-flash"),
+        _kie_item("Kie Gemini 2.5 Pro", "LLM", "gemini-2.5-pro"),
+    ]
+
+    existing_kie_rows = db.query(SystemAPISetting).filter(
+        SystemAPISetting.provider == kie_provider
+    ).all()
+
+    kie_shared_api_key = ""
+    for row in existing_kie_rows:
+        if (row.api_key or "").strip():
+            kie_shared_api_key = row.api_key.strip()
+            break
+
+    existing_kie_keys = {
+        ((row.category or "").strip().lower(), (row.model or "").strip().lower())
+        for row in existing_kie_rows
+    }
+
+    kie_added = 0
+    for item in kie_models:
+        key = (item["category"].strip().lower(), item["model"].strip().lower())
+        if key in existing_kie_keys:
+            continue
+
+        db.add(SystemAPISetting(
+            name=item["name"],
+            category=item["category"],
+            provider=kie_provider,
+            api_key=kie_shared_api_key,
+            base_url=kie_base_url,
+            model=item["model"],
+            config={
+                "endpoint": f"{kie_base_url}/api/v1/jobs/createTask",
+                "query_endpoint": f"{kie_base_url}/api/v1/jobs/recordInfo",
+                "credits_endpoint": f"{kie_base_url}/api/v1/user/credits",
+            },
+            is_active=False,
+        ))
+        existing_kie_keys.add(key)
+        kie_added += 1
+
+    if kie_added > 0:
+        db.commit()
+        logger.info("Seeded %s kie models into system_api_settings", kie_added)
+    else:
+        logger.info("System kie models already initialized")
+
 def init_initial_data():
     db = SessionLocal()
     try:

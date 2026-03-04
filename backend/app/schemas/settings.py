@@ -51,6 +51,7 @@ class SystemAPIModelOption(BaseModel):
     model: Optional[str] = None
     base_url: Optional[str] = None
     webhook_url: Optional[str] = None
+    deprecated: bool = False
     is_active: bool = False
     has_api_key: bool = False
     api_key_masked: Optional[str] = None
@@ -87,6 +88,21 @@ class SystemAPISettingManageCreate(BaseModel):
     model: Optional[str] = None
     config: Optional[Dict[str, Any]] = {}
     is_active: bool = False
+
+
+class SystemAPISettingToggleDeprecatedRequest(BaseModel):
+    deprecated: Optional[bool] = None
+
+
+class SystemAPIProviderBatchDeprecatedRequest(BaseModel):
+    deprecated: bool
+    category: Optional[str] = None
+
+
+class SystemAPIProviderKeysUpdateRequest(BaseModel):
+    keys: List[str] = Field(default_factory=list)
+    strategy: Optional[str] = None
+    weights: Optional[List[float]] = None
 
 
 class SystemAPISettingOut(BaseModel):

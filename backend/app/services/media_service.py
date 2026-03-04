@@ -37,6 +37,7 @@ class MediaGenerationService:
 # ...
     DOUBAO_MIN_IMAGE_PIXELS = 3_686_400
     SMART_ROUTER_PROVIDER = "smart_router"
+    _provider_key_cursors: Dict[str, int] = {}
 
     def _vendor_label(self, provider: Any) -> str:
         raw = str(provider or "").strip()
@@ -172,6 +173,59 @@ class MediaGenerationService:
             return raw
         return None
 
+    def _is_deprecated_system_config(self, config_value: Any) -> bool:
+        cfg = self._safe_json_dict(config_value)
+        return bool(
+            cfg.get("deprecated")
+            or cfg.get("is_deprecated")
+            or cfg.get("disable_api")
+        )
+
+    def _normalize_api_keys(self, value: Any) -> List[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            raw_items = value.replace("\r", "\n").replace(",", "\n").split("\n")
+        elif isinstance(value, list):
+            raw_items = value
+        else:
+            raw_items = [value]
+
+        result: List[str] = []
+        seen = set()
+        for item in raw_items:
+            key = str(item or "").strip()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            result.append(key)
+        return result
+
+    def _pick_runtime_api_key(self, config_value: Any, fallback_key: Any = None) -> str:
+        cfg = self._safe_json_dict(config_value)
+        pooled = self._normalize_api_keys(cfg.get("provider_api_keys"))
+        if pooled:
+            strategy = str(cfg.get("provider_api_key_strategy") or "random").strip().lower()
+            if strategy == "round_robin":
+                cursor_key = str(cfg.get("provider") or cfg.get("__provider") or "default")
+                cursor = int(self._provider_key_cursors.get(cursor_key, 0))
+                selected = pooled[cursor % len(pooled)]
+                self._provider_key_cursors[cursor_key] = cursor + 1
+                return selected
+            if strategy == "weighted":
+                raw_weights = cfg.get("provider_api_key_weights")
+                if isinstance(raw_weights, list) and raw_weights:
+                    weights = []
+                    for i in range(len(pooled)):
+                        try:
+                            w = float(raw_weights[i]) if i < len(raw_weights) else 1.0
+                        except Exception:
+                            w = 1.0
+                        weights.append(w if w > 0 else 1.0)
+                    return random.choices(pooled, weights=weights, k=1)[0]
+            return random.choice(pooled)
+        return str(fallback_key or "").strip()
+
     def _infer_image_size_from_dimensions(self, width: Any, height: Any) -> str:
         try:
             w = int(width)
@@ -260,6 +314,9 @@ class MediaGenerationService:
             "grsai-image": "grsai",
             "grsai-video": "grsai",
             "grsai": "grsai",
+            "kie-image": "kie",
+            "kie-video": "kie",
+            "kie": "kie",
             "doubao": "doubao",
             "doubao video": "doubao",
             "stable diffusion": "stability",
@@ -308,6 +365,7 @@ class MediaGenerationService:
             "elevenlabs": {"base_url": "https://api.elevenlabs.io/v1", "model": "premade/Adam"},
             "doubao": {"base_url": "https://ark.cn-beijing.volces.com/api/v3", "model": "doubao-seedream-4-5-251128"},
             "grsai": {"base_url": "https://grsaiapi.com", "model": "sora-image"},
+            "kie": {"base_url": "https://api.kie.ai", "model": "veo3-fast"},
             "tencent": {"base_url": "https://aiart.tencentcloudapi.com", "model": "hunyuan-vision"},
             "wanxiang": {"base_url": "https://dashscope.aliyuncs.com/api/v1/services/aigc/image2video/video-synthesis", "model": "wanx2.1-i2v-plus"},
             "vidu": {"base_url": "https://api.vidu.studio/open/v1/creation/video", "model": "vidu2.0"},
@@ -321,6 +379,8 @@ class MediaGenerationService:
         for row in rows:
             provider = self._normalize_provider_name(row.provider, category)
             if not provider:
+                continue
+            if self._is_deprecated_system_config(row.config):
                 continue
             cfg = self._safe_json_dict(row.config)
             priority_raw = cfg.get("smart_priority", cfg.get("priority", 100))
@@ -377,6 +437,16 @@ class MediaGenerationService:
                 return await self._handle_doubao_generation("image", prompt, api_config, reference_image_url, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt)
             if provider == "grsai":
                 return await self._handle_grsai_generation("image", prompt, api_config, reference_image_url, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt, image_size=normalized_image_size)
+            if provider == "kie":
+                return await self._handle_kie_generation(
+                    "image",
+                    prompt,
+                    api_config,
+                    reference_image_url,
+                    aspect_ratio=aspect_ratio,
+                    negative_prompt=negative_prompt,
+                    image_size=normalized_image_size,
+                )
             if provider == "tencent":
                 return await self._handle_tencent_generation("image", prompt, api_config, reference_image_url, negative_prompt=negative_prompt)
             if provider in ["stability", "stable diffusion"]:
@@ -393,6 +463,17 @@ class MediaGenerationService:
                 return await self._handle_doubao_generation("video", prompt, api_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt)
             if provider == "grsai":
                 return await self._handle_grsai_generation("video", prompt, api_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt)
+            if provider == "kie":
+                return await self._handle_kie_generation(
+                    "video",
+                    prompt,
+                    api_config,
+                    reference_image_url,
+                    last_frame_url=last_frame_url,
+                    duration=duration,
+                    aspect_ratio=aspect_ratio,
+                    negative_prompt=negative_prompt,
+                )
             if provider == "tencent":
                 return await self._handle_tencent_generation("video", prompt, api_config, reference_image_url, duration=duration, negative_prompt=negative_prompt)
             if provider in ["wanxiang", "wanx"]:
@@ -677,6 +758,21 @@ class MediaGenerationService:
                 resolved_source = f"system_by_user_provider_model:{target_provider}/{target_model}"
 
                 if system_setting:
+                    if self._is_deprecated_system_config(system_setting.config):
+                        logger.warning(
+                            "Blocked deprecated system api setting in media service | user_id=%s category=%s provider=%s model=%s setting_id=%s",
+                            user_id,
+                            resolved_category,
+                            target_provider,
+                            target_model,
+                            system_setting.id,
+                        )
+                        return {
+                            "provider": system_setting.provider,
+                            "model": system_setting.model,
+                            "__blocked": True,
+                            "__blocked_reason": "该 System API 配置已弃用，禁止发起 API 调用。",
+                        }
                     logger.info(
                         "Resolved media API config | user_id=%s category=%s provider=%s source=%s selection_source=system_only setting_id=%s model=%s endpoint=%s",
                         user_id,
@@ -689,7 +785,7 @@ class MediaGenerationService:
                     )
                     return {
                         "provider": system_setting.provider,
-                        "api_key": system_setting.api_key,
+                        "api_key": self._pick_runtime_api_key({**(system_setting.config or {}), "provider": system_setting.provider}, system_setting.api_key),
                         "base_url": system_setting.base_url or defaults.get(target_provider, {}).get("base_url"),
                         "model": system_setting.model or defaults.get(target_provider, {}).get("model"),
                         "config": {
@@ -736,6 +832,12 @@ class MediaGenerationService:
             requested_model=(llm_config or {}).get("model"),
             user_credits=user_credits,
         )
+
+        if api_config and api_config.get("__blocked"):
+            return {
+                "error": self._vendor_failed_message(provider, api_config.get("__blocked_reason") or "该系统配置已弃用"),
+                "submit_failed": True,
+            }
 
         print(f"[MediaService] Generating Image. Provider: {provider}, Refs Type: {type(reference_image_url)}, Refs: {reference_image_url}, W: {width}, H: {height}, image_size: {image_size}, AR: {aspect_ratio}")
 
@@ -794,6 +896,12 @@ class MediaGenerationService:
             requested_model=(llm_config or {}).get("model"),
             user_credits=user_credits,
         )
+
+        if api_config and api_config.get("__blocked"):
+            return {
+                "error": self._vendor_failed_message(provider, api_config.get("__blocked_reason") or "该系统配置已弃用"),
+                "submit_failed": True,
+            }
 
         print(f"[MediaService] Generating Video. Provider: {provider}, Refs: {reference_image_url}, LastFrame: {last_frame_url}, Ratio: {aspect_ratio}, Keyframes: {len(keyframes) if keyframes else 0}")
 
@@ -2140,6 +2248,208 @@ class MediaGenerationService:
         if last_error:
             return {"error": "Grsai request failed", "details": last_error, "submit_failed": True}
         return {"error": "Grsai request failed", "details": "All upstream endpoints failed", "submit_failed": True}
+
+    def _extract_urls_from_payload(self, value: Any) -> List[str]:
+        urls: List[str] = []
+
+        def _walk(node: Any):
+            if node is None:
+                return
+            if isinstance(node, str):
+                text = node.strip()
+                if text.startswith("http://") or text.startswith("https://"):
+                    urls.append(text)
+                    return
+                if text and (text.startswith("{") or text.startswith("[")):
+                    try:
+                        parsed = json.loads(text)
+                    except Exception:
+                        return
+                    _walk(parsed)
+                return
+            if isinstance(node, dict):
+                for item in node.values():
+                    _walk(item)
+                return
+            if isinstance(node, list):
+                for item in node:
+                    _walk(item)
+
+        _walk(value)
+
+        deduped: List[str] = []
+        seen = set()
+        for url in urls:
+            if url in seen:
+                continue
+            seen.add(url)
+            deduped.append(url)
+        return deduped
+
+    async def _handle_kie_generation(
+        self,
+        gen_type,
+        prompt,
+        config,
+        ref_image=None,
+        last_frame_url=None,
+        duration=5,
+        aspect_ratio=None,
+        negative_prompt: Optional[str] = None,
+        image_size: Optional[str] = None,
+    ):
+        prompt = self._merge_negative_prompt(prompt, negative_prompt)
+        api_key = (config.get("api_key") or "").strip()
+        if not api_key:
+            return {"error": "Missing KIE API key", "submit_failed": True}
+
+        model = (config.get("model") or "").strip() or ("flux-kontext-pro" if gen_type == "image" else "veo3-fast")
+        tool_conf = config.get("config", {}) or {}
+
+        base_url = (config.get("base_url") or tool_conf.get("base_url") or "https://api.kie.ai").strip().rstrip("/")
+        if "/api/v1/jobs" in base_url:
+            base_url = base_url.split("/api/v1/jobs")[0]
+
+        submit_url = (tool_conf.get("endpoint") or f"{base_url}/api/v1/jobs/createTask").strip()
+        query_url = (tool_conf.get("query_endpoint") or f"{base_url}/api/v1/jobs/recordInfo").strip()
+
+        payload_input: Dict[str, Any] = {
+            "prompt": prompt,
+        }
+
+        normalized_ar = self._normalize_aspect_ratio_value(aspect_ratio)
+        if normalized_ar:
+            payload_input["aspectRatio"] = normalized_ar
+
+        if gen_type == "image":
+            normalized_image_size = self._normalize_image_size_value(
+                image_size or tool_conf.get("image_size") or tool_conf.get("imageSize")
+            )
+            if normalized_image_size:
+                payload_input["imageSize"] = normalized_image_size
+        else:
+            payload_input["duration"] = int(duration) if duration else 5
+
+        resolved_refs: List[str] = []
+        if ref_image:
+            ref_list = ref_image if isinstance(ref_image, list) else [ref_image]
+            for ref in ref_list:
+                resolved = self._resolve_ref_for_api(ref, force_data_uri_for_local=True)
+                if resolved:
+                    resolved_refs.append(resolved)
+
+        if resolved_refs:
+            payload_input["imageUrl"] = resolved_refs[0]
+            payload_input["imageUrls"] = resolved_refs
+
+        if last_frame_url:
+            last_ref = self._resolve_ref_for_api(last_frame_url, force_data_uri_for_local=True)
+            if last_ref:
+                payload_input["lastFrameUrl"] = last_ref
+
+        callback_url = (tool_conf.get("webHook") or "").strip()
+        payload: Dict[str, Any] = {
+            "model": model,
+            "input": payload_input,
+        }
+        if callback_url and callback_url != "-1":
+            payload["callBackUrl"] = callback_url
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        base_metadata = {"provider": "kie", "model": model, "prompt": prompt}
+
+        def _post_submit():
+            return requests.post(submit_url, json=payload, headers=headers, timeout=90, verify=False)
+
+        try:
+            resp = await asyncio.to_thread(_post_submit)
+        except requests.exceptions.RequestException as e:
+            return {"error": "KIE request failed", "details": str(e), "submit_failed": True}
+        except Exception as e:
+            return {"error": "KIE request failed", "details": str(e), "submit_failed": True}
+
+        if resp.status_code != 200:
+            return {"error": f"KIE submission failed {resp.status_code}", "details": resp.text, "submit_failed": True}
+
+        try:
+            data = resp.json()
+        except Exception:
+            return {"error": "Invalid KIE response", "details": resp.text[:1000], "submit_failed": True}
+
+        code = data.get("code")
+        if code not in (None, 200, "200"):
+            return {
+                "error": f"KIE submission failed code={code}",
+                "details": data.get("msg") or data.get("message") or data,
+                "submit_failed": True,
+            }
+
+        data_block = data.get("data") or {}
+        task_id = (
+            data_block.get("taskId")
+            or data_block.get("task_id")
+            or data_block.get("id")
+            or data.get("taskId")
+            or data.get("task_id")
+            or data.get("id")
+        )
+        if not task_id:
+            return {"error": "No taskId from KIE", "details": data, "submit_failed": True}
+
+        def _poll_status():
+            return requests.get(query_url, params={"taskId": task_id}, headers=headers, timeout=45, verify=False)
+
+        for _ in range(120):
+            await asyncio.sleep(3)
+            try:
+                poll_resp = await asyncio.to_thread(_poll_status)
+            except requests.exceptions.Timeout:
+                continue
+            except requests.exceptions.RequestException as e:
+                last_error = str(e)
+                continue
+
+            if poll_resp.status_code != 200:
+                continue
+
+            try:
+                poll_data = poll_resp.json()
+            except Exception:
+                continue
+
+            poll_code = poll_data.get("code")
+            if poll_code not in (None, 200, "200"):
+                continue
+
+            record = poll_data.get("data") or {}
+            state = str(record.get("state") or record.get("status") or "").strip().lower()
+
+            if state in {"waiting", "queued", "queuing", "processing", "running", "generating", "pending"}:
+                continue
+
+            if state in {"success", "succeeded", "completed", "done"}:
+                result_payload = record.get("resultJson")
+                urls = self._extract_urls_from_payload(result_payload)
+                if not urls:
+                    urls = self._extract_urls_from_payload(record)
+                if not urls:
+                    return {"error": "KIE task succeeded but no media URL found", "details": poll_data}
+
+                meta = {"raw": poll_data}
+                meta.update(base_metadata)
+                return {"url": urls[0], "metadata": meta}
+
+            if state in {"fail", "failed", "error", "canceled", "cancelled"}:
+                return {
+                    "error": "KIE generation failed",
+                    "details": record.get("failMsg") or record.get("message") or poll_data,
+                }
+
+        return {"error": "Timeout polling KIE task"}
 
     # -- Helpers --
     def _download_and_save(self, url: str, filename_base: str = None, user_id: int = 1) -> str:

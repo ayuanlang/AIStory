@@ -1081,6 +1081,36 @@ export const updateSystemSettingManage = async (settingId, data) => {
     return response.data;
 }
 
+export const toggleSystemSettingDeprecatedManage = async (settingId, deprecated = null) => {
+    const payload = deprecated === null || deprecated === undefined ? {} : { deprecated: !!deprecated };
+    const response = await api.post(`/settings/system/manage/${settingId}/deprecated`, payload);
+    return response.data;
+}
+
+export const batchToggleSystemProviderDeprecatedManage = async (provider, deprecated, category = null) => {
+    const payload = {
+        deprecated: !!deprecated,
+        ...(category ? { category } : {}),
+    };
+    const response = await api.post(`/settings/system/manage/provider/${encodeURIComponent(provider)}/deprecated`, payload);
+    return response.data;
+}
+
+export const getSystemProviderKeysManage = async (provider) => {
+    const response = await api.get(`/settings/system/manage/provider/${encodeURIComponent(provider)}/keys`);
+    return response.data;
+}
+
+export const setSystemProviderKeysManage = async (provider, keys = [], strategy = null, weights = null) => {
+    const payload = {
+        keys,
+        ...(strategy ? { strategy } : {}),
+        ...(Array.isArray(weights) ? { weights } : {}),
+    };
+    const response = await api.post(`/settings/system/manage/provider/${encodeURIComponent(provider)}/keys`, payload);
+    return response.data;
+}
+
 export const deleteSystemSettingManage = async (settingId) => {
     const response = await api.delete(`/settings/system/manage/${settingId}`);
     return response.data;

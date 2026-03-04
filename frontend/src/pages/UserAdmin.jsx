@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { api, getPricingRules, createPricingRule, updatePricingRule, deletePricingRule, getTransactions, updateUserCredits, syncPricingRules, getBillingOptions, getSystemSettingsManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, exportSystemSettingsManage, importSystemSettingsManage, getAdminLlmLogFiles, getAdminLlmLogView, getAdminStorageUsage } from '../services/api';
+import { api, getPricingRules, createPricingRule, updatePricingRule, deletePricingRule, getTransactions, updateUserCredits, syncPricingRules, getBillingOptions, getSystemSettingsManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, exportSystemSettingsManage, importSystemSettingsManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, getSystemProviderKeysManage, setSystemProviderKeysManage, getAdminLlmLogFiles, getAdminLlmLogView, getAdminStorageUsage } from '../services/api';
 import Footer from '../components/Footer';
 import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive } from 'lucide-react';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
@@ -71,11 +71,16 @@ const UserAdmin = () => {
     const [systemApiFilterCategory, setSystemApiFilterCategory] = useState('all');
     const [systemApiFilterProvider, setSystemApiFilterProvider] = useState('all');
     const [systemApiSortMode, setSystemApiSortMode] = useState('default');
+    const [systemApiKeyProvider, setSystemApiKeyProvider] = useState('');
+    const [providerKeysText, setProviderKeysText] = useState('');
+    const [providerKeysMeta, setProviderKeysMeta] = useState({ key_count: 0, keys_masked: [] });
+    const [providerKeyStrategy, setProviderKeyStrategy] = useState('random');
+    const [providerKeyWeightsText, setProviderKeyWeightsText] = useState('');
+    const [isProviderKeysSaving, setIsProviderKeysSaving] = useState(false);
     const [systemApiForm, setSystemApiForm] = useState({
         name: '',
         category: 'LLM',
         provider: '',
-        api_key: '',
         base_url: '',
         model: '',
         webHook: '',
@@ -176,7 +181,6 @@ const UserAdmin = () => {
                 name: '',
                 category: 'LLM',
                 provider: '',
-                api_key: '',
                 base_url: '',
                 model: '',
                 webHook: '',
@@ -193,7 +197,6 @@ const UserAdmin = () => {
             name: row.name || '',
             category: row.category || 'LLM',
             provider: row.provider || '',
-            api_key: '',
             base_url: row.base_url || '',
             model: row.model || '',
             webHook: row?.config?.webHook || '',
@@ -203,6 +206,63 @@ const UserAdmin = () => {
             is_active: !!row.is_active,
         });
     }, [selectedSystemApiId, systemApiRows]);
+
+    const allSystemApiProviders = React.useMemo(() => {
+        const set = new Set();
+        systemApiRows.forEach((row) => {
+            const provider = String(row?.provider || '').trim();
+            if (provider) set.add(provider);
+        });
+        return Array.from(set);
+    }, [systemApiRows]);
+
+    useEffect(() => {
+        if (systemApiFilterProvider && systemApiFilterProvider !== 'all') {
+            setSystemApiKeyProvider(systemApiFilterProvider);
+            return;
+        }
+        if (!systemApiKeyProvider && allSystemApiProviders.length > 0) {
+            setSystemApiKeyProvider(allSystemApiProviders[0]);
+        }
+    }, [systemApiFilterProvider, allSystemApiProviders, systemApiKeyProvider]);
+
+    useEffect(() => {
+        const provider = String(systemApiKeyProvider || '').trim();
+        if (!provider) {
+            setProviderKeysText('');
+            setProviderKeysMeta({ key_count: 0, keys_masked: [] });
+            setProviderKeyStrategy('random');
+            setProviderKeyWeightsText('');
+            return;
+        }
+
+        let cancelled = false;
+        (async () => {
+            try {
+                const res = await getSystemProviderKeysManage(provider);
+                if (cancelled) return;
+                const keys = Array.isArray(res?.keys) ? res.keys : [];
+                setProviderKeysText(keys.join('\n'));
+                setProviderKeysMeta({
+                    key_count: Number(res?.key_count || keys.length || 0),
+                    keys_masked: Array.isArray(res?.keys_masked) ? res.keys_masked : [],
+                });
+                setProviderKeyStrategy(String(res?.strategy || 'random'));
+                const weights = Array.isArray(res?.weights) ? res.weights : [];
+                setProviderKeyWeightsText(weights.length ? weights.join('\n') : '');
+            } catch (e) {
+                if (cancelled) return;
+                setProviderKeysText('');
+                setProviderKeysMeta({ key_count: 0, keys_masked: [] });
+                setProviderKeyStrategy('random');
+                setProviderKeyWeightsText('');
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [systemApiKeyProvider]);
 
     const systemApiCategoryOptions = React.useMemo(() => {
         const set = new Set();
@@ -258,6 +318,7 @@ const UserAdmin = () => {
     };
 
     const isSmartMultiRefDefault = (row) => !!row?.config?.smart_multi_ref_default;
+    const isSystemApiDeprecated = (row) => !!(row?.config?.deprecated || row?.config?.is_deprecated || row?.config?.disable_api);
 
     useEffect(() => {
         if (!visibleSystemApiRows.length) {
@@ -281,7 +342,6 @@ const UserAdmin = () => {
                 name: String(systemApiForm.name || '').trim() || undefined,
                 category: systemApiForm.category || 'LLM',
                 provider,
-                api_key: String(systemApiForm.api_key || '').trim() || undefined,
                 base_url: String(systemApiForm.base_url || '').trim() || undefined,
                 model: String(systemApiForm.model || '').trim() || undefined,
                 config: {
@@ -309,7 +369,6 @@ const UserAdmin = () => {
                 name: String(systemApiForm.name || '').trim() || undefined,
                 category: systemApiForm.category || 'LLM',
                 provider: String(systemApiForm.provider || '').trim() || undefined,
-                api_key: String(systemApiForm.api_key || '').trim() || undefined,
                 base_url: String(systemApiForm.base_url || '').trim() || undefined,
                 model: String(systemApiForm.model || '').trim() || undefined,
                 config: {
@@ -339,6 +398,70 @@ const UserAdmin = () => {
             alert('System API setting deleted.');
         } catch (e) {
             alert(e?.response?.data?.detail || e.message || 'Failed to delete system API setting');
+        }
+    };
+
+    const handleBatchToggleProviderDeprecated = async (deprecated) => {
+        const provider = String(systemApiFilterProvider || '').trim();
+        if (!provider || provider === 'all') {
+            alert('请先在“供应商筛选”中选择具体供应商。');
+            return;
+        }
+
+        const category = systemApiFilterCategory !== 'all' ? String(systemApiFilterCategory || '').trim() : null;
+        const actionLabel = deprecated ? '弃用' : '启用';
+        const scopeLabel = category ? `${provider} / ${category}` : provider;
+        if (!await confirmUiMessage(`确认批量${actionLabel}供应商 ${scopeLabel} 的 System API 配置？`)) return;
+
+        try {
+            const res = await batchToggleSystemProviderDeprecatedManage(provider, !!deprecated, category);
+            await fetchSystemApiManageRows();
+            alert(`批量${actionLabel}完成。匹配 ${res?.matched || 0} 条，变更 ${res?.changed || 0} 条。`);
+        } catch (e) {
+            alert(e?.response?.data?.detail || e.message || `批量${actionLabel}失败`);
+        }
+    };
+
+    const handleToggleSingleSystemApiDeprecated = async (row) => {
+        if (!row?.id) return;
+        const current = isSystemApiDeprecated(row);
+        const next = !current;
+        const actionLabel = next ? '弃用' : '启用';
+        if (!await confirmUiMessage(`确认${actionLabel}该模型配置？`)) return;
+
+        try {
+            await toggleSystemSettingDeprecatedManage(Number(row.id), next);
+            await fetchSystemApiManageRows();
+            alert(`已${actionLabel}：${row.provider} / ${row.model || '-'}`);
+        } catch (e) {
+            alert(e?.response?.data?.detail || e.message || `${actionLabel}失败`);
+        }
+    };
+
+    const handleSaveProviderKeys = async () => {
+        const provider = String(systemApiKeyProvider || '').trim();
+        if (!provider) {
+            alert('请先选择供应商。');
+            return;
+        }
+
+        const pool = String(providerKeysText || '').split(/\r?\n|,/).map((s) => s.trim()).filter(Boolean);
+        const weights = String(providerKeyWeightsText || '').split(/\r?\n|,/).map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0);
+        setIsProviderKeysSaving(true);
+        try {
+            const res = await setSystemProviderKeysManage(provider, pool, providerKeyStrategy, (providerKeyStrategy === 'weighted' ? weights : null));
+            setProviderKeysMeta({
+                key_count: Number(res?.key_count || pool.length || 0),
+                keys_masked: Array.isArray(res?.keys_masked) ? res.keys_masked : [],
+            });
+            setProviderKeyStrategy(String(res?.strategy || providerKeyStrategy || 'random'));
+            setProviderKeyWeightsText(Array.isArray(res?.weights) && res.weights.length ? res.weights.join('\n') : '');
+            await fetchSystemApiManageRows();
+            alert(`供应商密钥池已保存（${res?.key_count || 0} 个）。`);
+        } catch (e) {
+            alert(e?.response?.data?.detail || e.message || '保存供应商密钥池失败');
+        } finally {
+            setIsProviderKeysSaving(false);
         }
     };
 
@@ -1631,7 +1754,83 @@ const UserAdmin = () => {
                             {isSystemApiLoading ? (
                                 <div className="text-sm text-gray-400">{t('加载中...', 'Loading...')}</div>
                             ) : (
-                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                <div className="space-y-4">
+                                    <div className="border border-emerald-500/30 rounded-lg p-4 bg-emerald-500/5 space-y-3">
+                                        <div className="flex items-center justify-between gap-2">
+                                            <h4 className="text-sm font-bold text-emerald-200">{t('供应商统一密钥池（独立配置区）', 'Provider Unified Key Pool (Standalone)')}</h4>
+                                            <span className="text-[11px] text-emerald-300">{t('模型配置不再编辑密钥', 'Model editor no longer edits keys')}</span>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                            <div>
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('供应商', 'Provider')}</label>
+                                                <select
+                                                    value={systemApiKeyProvider}
+                                                    onChange={(e) => setSystemApiKeyProvider(e.target.value)}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                >
+                                                    <option value="">{t('请选择供应商', 'Select Provider')}</option>
+                                                    {allSystemApiProviders.map((provider) => (
+                                                        <option key={provider} value={provider}>{provider}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('密钥调度策略', 'Key Dispatch Strategy')}</label>
+                                                <select
+                                                    value={providerKeyStrategy}
+                                                    onChange={(e) => setProviderKeyStrategy(e.target.value)}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                >
+                                                    <option value="random">{t('随机', 'Random')}</option>
+                                                    <option value="round_robin">{t('轮询', 'Round Robin')}</option>
+                                                    <option value="weighted">{t('权重随机', 'Weighted Random')}</option>
+                                                </select>
+                                            </div>
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-xs uppercase text-gray-400 mb-1">{t('密钥池（多 key，按行或逗号分隔）', 'Key Pool (multi-key, newline/comma separated)')}</label>
+                                            <textarea
+                                                value={providerKeysText}
+                                                onChange={(e) => setProviderKeysText(e.target.value)}
+                                                rows={4}
+                                                className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm font-mono"
+                                                placeholder="sk-key-1\nsk-key-2\nsk-key-3"
+                                            />
+                                        </div>
+
+                                        {providerKeyStrategy === 'weighted' && (
+                                            <div>
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('权重（与 key 顺序对应）', 'Weights (same order as keys)')}</label>
+                                                <textarea
+                                                    value={providerKeyWeightsText}
+                                                    onChange={(e) => setProviderKeyWeightsText(e.target.value)}
+                                                    rows={3}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm font-mono"
+                                                    placeholder="1\n3\n1"
+                                                />
+                                            </div>
+                                        )}
+
+                                        <div className="text-[11px] text-gray-400">
+                                            {t('对同一 provider 的所有模型统一生效；模型配置仅引用所属供应商密钥。', 'Applies to all models under the same provider; model settings only read provider keys.')}
+                                        </div>
+                                        <div className="text-[11px] text-gray-500">
+                                            {t('当前服务端记录', 'Server snapshot')}: {providerKeysMeta.key_count || 0} {t('个密钥', 'keys')} {providerKeysMeta.keys_masked?.length ? `(${providerKeysMeta.keys_masked.slice(0, 3).join(', ')}${providerKeysMeta.keys_masked.length > 3 ? ', ...' : ''})` : ''}
+                                        </div>
+                                        <div>
+                                            <button
+                                                onClick={handleSaveProviderKeys}
+                                                disabled={isProviderKeysSaving || !systemApiKeyProvider}
+                                                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold rounded text-xs"
+                                            >
+                                                {isProviderKeysSaving ? t('保存中...', 'Saving...') : t('保存供应商密钥池', 'Save Provider Key Pool')}
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                                     <div className="border border-white/10 rounded-lg p-4 bg-black/20 space-y-3">
                                         <div className="text-[11px] text-gray-300 bg-white/5 border border-white/10 rounded p-2 leading-relaxed">
                                             {t('智能路由规则：多参考图（>4）会优先尝试“多图默认 API”；主通道达到重试上限后，按同类别优先级（数字越小越优先）依次回退。', 'Smart routing rule: multi-reference image jobs (>4) first try the “multi-ref default API”; after retry limit on the main path, fallback follows same-category priority (lower number first).')}
@@ -1682,13 +1881,29 @@ const UserAdmin = () => {
 
                                         <div className="flex items-center justify-between gap-2 text-xs">
                                             <span className="text-gray-400">{t('列表排序', 'List Order')}</span>
-                                            <button
-                                                onClick={() => setSystemApiSortMode((prev) => (prev === 'priority' ? 'default' : 'priority'))}
-                                                className={`px-2.5 py-1 rounded border transition-colors ${systemApiSortMode === 'priority' ? 'bg-primary/20 text-primary border-primary/40' : 'bg-white/5 text-gray-300 border-white/10 hover:bg-white/10'}`}
-                                                title={t('仅改变当前列表展示顺序，不修改数据库数据。', 'Only changes current list view order, does not modify database data.')}
-                                            >
-                                                {systemApiSortMode === 'priority' ? t('当前：按优先级', 'Current: By Priority') : t('当前：默认顺序', 'Current: Default Order')}
-                                            </button>
+                                            <div className="flex items-center gap-2">
+                                                <button
+                                                    onClick={() => handleBatchToggleProviderDeprecated(true)}
+                                                    className="px-2.5 py-1 rounded border border-red-500/40 text-red-300 bg-red-500/10 hover:bg-red-500/20"
+                                                    title={t('按当前供应商筛选批量弃用（可叠加类别筛选）', 'Batch deprecate current provider filter (category filter optional)')}
+                                                >
+                                                    {t('批量弃用', 'Batch Deprecate')}
+                                                </button>
+                                                <button
+                                                    onClick={() => handleBatchToggleProviderDeprecated(false)}
+                                                    className="px-2.5 py-1 rounded border border-emerald-500/40 text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20"
+                                                    title={t('按当前供应商筛选批量启用（可叠加类别筛选）', 'Batch enable current provider filter (category filter optional)')}
+                                                >
+                                                    {t('批量启用', 'Batch Enable')}
+                                                </button>
+                                                <button
+                                                    onClick={() => setSystemApiSortMode((prev) => (prev === 'priority' ? 'default' : 'priority'))}
+                                                    className={`px-2.5 py-1 rounded border transition-colors ${systemApiSortMode === 'priority' ? 'bg-primary/20 text-primary border-primary/40' : 'bg-white/5 text-gray-300 border-white/10 hover:bg-white/10'}`}
+                                                    title={t('仅改变当前列表展示顺序，不修改数据库数据。', 'Only changes current list view order, does not modify database data.')}
+                                                >
+                                                    {systemApiSortMode === 'priority' ? t('当前：按优先级', 'Current: By Priority') : t('当前：默认顺序', 'Current: Default Order')}
+                                                </button>
+                                            </div>
                                         </div>
 
                                         <label className="text-xs uppercase text-gray-400">{t('选择已有设置', 'Select Existing Setting')}</label>
@@ -1713,8 +1928,10 @@ const UserAdmin = () => {
                                                         <th className="text-left p-2">{t('类别', 'Category')}</th>
                                                         <th className="text-left p-2">{t('提供方', 'Provider')}</th>
                                                         <th className="text-left p-2">{t('模型', 'Model')}</th>
+                                                        <th className="text-left p-2">{t('弃用', 'Deprecated')}</th>
                                                         <th className="text-left p-2">{t('智能策略', 'Smart Strategy')}</th>
                                                         <th className="text-left p-2">{t('启用', 'Active')}</th>
+                                                        <th className="text-left p-2">{t('操作', 'Actions')}</th>
                                                     </tr>
                                                 </thead>
                                                 <tbody>
@@ -1728,6 +1945,13 @@ const UserAdmin = () => {
                                                             <td className="p-2">{row.category}</td>
                                                             <td className="p-2">{row.provider}</td>
                                                             <td className="p-2">{row.model || '-'}</td>
+                                                            <td className="p-2">
+                                                                {isSystemApiDeprecated(row) ? (
+                                                                    <span className="px-1.5 py-0.5 rounded bg-red-500/20 text-red-300 border border-red-500/30">{t('已弃用', 'Deprecated')}</span>
+                                                                ) : (
+                                                                    <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">{t('正常', 'Active')}</span>
+                                                                )}
+                                                            </td>
                                                             <td className="p-2">
                                                                 <div className="flex flex-wrap gap-1">
                                                                     <span className="px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-200 border border-blue-500/30">
@@ -1744,11 +1968,22 @@ const UserAdmin = () => {
                                                                 </div>
                                                             </td>
                                                             <td className="p-2">{row.is_active ? t('是', 'Yes') : t('否', 'No')}</td>
+                                                            <td className="p-2">
+                                                                <button
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        handleToggleSingleSystemApiDeprecated(row);
+                                                                    }}
+                                                                    className={`px-2 py-0.5 rounded border text-[11px] ${isSystemApiDeprecated(row) ? 'border-emerald-500/40 text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20' : 'border-red-500/40 text-red-300 bg-red-500/10 hover:bg-red-500/20'}`}
+                                                                >
+                                                                    {isSystemApiDeprecated(row) ? t('启用', 'Enable') : t('弃用', 'Deprecate')}
+                                                                </button>
+                                                            </td>
                                                         </tr>
                                                     ))}
                                                     {visibleSystemApiRows.length === 0 && (
                                                         <tr className="border-t border-white/10">
-                                                            <td className="p-3 text-gray-400" colSpan={6}>
+                                                            <td className="p-3 text-gray-400" colSpan={8}>
                                                                 {t('无匹配结果，请调整筛选条件。', 'No matching settings. Adjust your filters.')}
                                                             </td>
                                                         </tr>
@@ -1841,15 +2076,6 @@ const UserAdmin = () => {
                                                 />
                                                 {t('设为“多参考图（>4）”临时默认 API', 'Use as temporary default API for multi-ref image (>4)')}
                                             </label>
-                                            <div className="md:col-span-2">
-                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('API Key（留空则保留当前共享密钥）', 'API Key (leave blank to keep current shared key)')}</label>
-                                                <input
-                                                    type="password"
-                                                    value={systemApiForm.api_key}
-                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, api_key: e.target.value }))}
-                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
-                                                />
-                                            </div>
                                         </div>
 
                                         <label className="flex items-center gap-2 text-xs text-gray-400">
@@ -1883,6 +2109,7 @@ const UserAdmin = () => {
                                                 {t('删除', 'Delete')}
                                             </button>
                                         </div>
+                                    </div>
                                     </div>
                                 </div>
                             )}

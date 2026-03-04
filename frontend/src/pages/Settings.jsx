@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useStore } from '@/lib/store';
 import { Save, Info, Upload, Download, Coins, History, Palette, CheckCircle, ArrowLeft, User, KeyRound } from 'lucide-react';
 import { API_URL } from '@/config';
-import { updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, selectSystemSetting, updateMyProfile, updateMyPassword, uploadMyAvatar, recordSystemLogAction, getAutoDownloadLocalPreference, setAutoDownloadLocalPreference } from '../services/api';
+import { updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, selectSystemSetting, toggleSystemSettingDeprecatedManage, updateMyProfile, updateMyPassword, uploadMyAvatar, recordSystemLogAction, getAutoDownloadLocalPreference, setAutoDownloadLocalPreference } from '../services/api';
 import RechargeModal from '../components/RechargeModal'; // Import RechargeModal
 import { getUiLang, setUiLang as setGlobalUiLang, tUI, UI_LANG_EVENT } from '../lib/uiLang';
 
@@ -174,7 +174,9 @@ const Settings = () => {
     const [systemSettings, setSystemSettings] = useState([]);
     const [isSystemSettingsLoading, setIsSystemSettingsLoading] = useState(false);
     const [selectingSystemId, setSelectingSystemId] = useState(null);
+    const [togglingDeprecatedId, setTogglingDeprecatedId] = useState(null);
     const [selectedSystemCategory, setSelectedSystemCategory] = useState('All');
+    const [isSuperuser, setIsSuperuser] = useState(false);
     const [activeSettingSources, setActiveSettingSources] = useState({
         LLM: 'none',
         Image: 'none',
@@ -443,6 +445,7 @@ const Settings = () => {
             if (userRes && userRes.credits !== undefined) {
                 setUserCredits(userRes.credits);
             }
+            setIsSuperuser(!!userRes?.is_superuser);
             setSystemSettings(Array.isArray(systemRes) ? systemRes : []);
         } catch (err) {
             console.error("Failed to load system API settings", err);
@@ -827,6 +830,13 @@ const Settings = () => {
                      setImgToolWidth("1024");
                      setImgToolHeight("1024");
                      setImgToolWebHook("-1");
+                 } else if (toolName === "Kie-Image") {
+                     setImgToolKey("");
+                     setImgToolEndpoint("https://api.kie.ai/api/v1/jobs/createTask");
+                     setImgToolModel("flux-kontext-pro");
+                     setImgToolWidth("1024");
+                     setImgToolHeight("1024");
+                     setImgToolWebHook("");
                  } else if (toolName === "Tencent Hunyuan") {
                      setImgToolKey("");
                      setImgToolEndpoint("https://aiart.tencentcloudapi.com");
@@ -883,6 +893,11 @@ const Settings = () => {
                     setVidToolEndpoint("https://grsai.dakka.com.cn");
                     setVidToolModel("sora-2");
                     setVidToolWebHook("-1");
+                      } else if (toolName === "Kie-Video") {
+                          setVidToolKey("");
+                          setVidToolEndpoint("https://api.kie.ai/api/v1/jobs/createTask");
+                          setVidToolModel("veo3-fast");
+                          setVidToolWebHook("");
                  } else if (toolName === "Vidu (Video)") {
                     setVidToolKey("");
                     setVidToolEndpoint("https://api.vidu.studio/open/v1/creation");
@@ -1000,6 +1015,7 @@ const Settings = () => {
             else if (frontendProviderName === "Wanxiang") backendProvider = "wanxiang";
             else if (frontendProviderName === "Vidu (Video)") backendProvider = "vidu";
             else if (frontendProviderName === "Tencent Hunyuan") backendProvider = "tencent";
+            else if (frontendProviderName === "Kie-Image" || frontendProviderName === "Kie-Video") backendProvider = "kie";
             else if (frontendProviderName === "Midjourney") backendProvider = "midjourney";
             else if (frontendProviderName === "DALL-E 3") backendProvider = "openai";
 
@@ -1156,6 +1172,23 @@ const Settings = () => {
             showNotification(msg, 'error');
         } finally {
             setSelectingSystemId(null);
+        }
+    };
+
+    const handleToggleDeprecated = async (setting) => {
+        if (!setting?.id) return;
+        setTogglingDeprecatedId(setting.id);
+        try {
+            const next = !setting?.deprecated;
+            await toggleSystemSettingDeprecatedManage(setting.id, next);
+            showNotification(next ? t('已标记为弃用', 'Marked as deprecated') : t('已取消弃用', 'Deprecated flag removed'), 'success');
+            await loadSystemSettingsCatalog();
+            await refreshActiveSettingSources();
+        } catch (err) {
+            console.error('Failed to toggle deprecated flag', err);
+            showNotification(err?.message || t('切换弃用状态失败', 'Failed to toggle deprecated status'), 'error');
+        } finally {
+            setTogglingDeprecatedId(null);
         }
     };
 
@@ -1769,6 +1802,7 @@ const Settings = () => {
                                         <option className="bg-zinc-900" value="Midjourney">Midjourney</option>
                                         <option className="bg-zinc-900" value="Doubao">{t('Doubao（豆包 - 火山引擎）', 'Doubao (豆包 - Volcengine)')}</option>
                                         <option className="bg-zinc-900" value="Grsai-Image">{t('Grsai（聚合）', 'Grsai (Aggregation)')}</option>
+                                        <option className="bg-zinc-900" value="Kie-Image">Kie AI</option>
                                         <option className="bg-zinc-900" value="DALL-E 3">DALL-E 3</option>
                                         <option className="bg-zinc-900" value="Stable Diffusion">{t('Stable Diffusion（SDXL/Pony）', 'Stable Diffusion (SDXL/Pony)')}</option>
                                         <option className="bg-zinc-900" value="Flux">Flux.1</option>
@@ -1887,6 +1921,7 @@ const Settings = () => {
                                         <option className="bg-zinc-900" value="Kling">{t('Kling AI（可灵）', 'Kling AI (可灵)')}</option>
                                         <option className="bg-zinc-900" value="Sora">Sora (OpenAI)</option>
                                         <option className="bg-zinc-900" value="Grsai-Video">{t('Grsai（标准）', 'Grsai (Standard)')}</option>
+                                        <option className="bg-zinc-900" value="Kie-Video">Kie AI</option>
                                         <option className="bg-zinc-900" value="Grsai-Video (Upload)">{t('Grsai（文件上传）', 'Grsai (File Upload)')}</option>
                                         <option className="bg-zinc-900" value="Stable Video">{t('Stable Video 组件', 'Stable Video Component')}</option>
                                         <option className="bg-zinc-900" value="Doubao Video">{t('Doubao（豆包 - 火山引擎）', 'Doubao (豆包 - Volcengine)')}</option>
@@ -2145,19 +2180,38 @@ const Settings = () => {
                                                                 >
                                                                     <div className="md:col-span-9 text-xs">
                                                                         <div className="text-muted-foreground">{t('模型', 'Model')}</div>
-                                                                        <div className="font-mono break-all">{row.model || '-'}</div>
+                                                                        <div className="font-mono break-all flex flex-wrap items-center gap-2">
+                                                                            <span>{row.model || '-'}</span>
+                                                                            <span className={`text-[10px] px-1.5 py-0.5 rounded border ${row.deprecated ? 'border-red-500/30 text-red-300 bg-red-500/10' : 'border-green-500/30 text-green-300 bg-green-500/10'}`}>
+                                                                                {row.deprecated ? t('状态：已弃用', 'Status: Deprecated') : t('状态：正常', 'Status: Active')}
+                                                                            </span>
+                                                                        </div>
                                                                     </div>
                                                                     <div className="md:col-span-2 flex md:justify-end">
-                                                                        <button
-                                                                            onClick={(e) => {
-                                                                                e.stopPropagation();
-                                                                                handleSelectSystemSetting(row);
-                                                                            }}
-                                                                            disabled={!group.shared_key_configured || selectingSystemId === row.id}
-                                                                            className="w-full md:w-auto text-xs px-3 py-1.5 rounded border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                                                                        >
-                                                                            {selectingSystemId === row.id ? t('激活中...', 'Activating...') : (row.is_active ? t('已激活', 'Active') : t('使用此配置', 'Use This'))}
-                                                                        </button>
+                                                                        <div className="w-full md:w-auto flex gap-2 justify-end">
+                                                                            {isSuperuser && (
+                                                                                <button
+                                                                                    onClick={(e) => {
+                                                                                        e.stopPropagation();
+                                                                                        handleToggleDeprecated(row);
+                                                                                    }}
+                                                                                    disabled={togglingDeprecatedId === row.id}
+                                                                                    className={`text-xs px-2.5 py-1.5 rounded border disabled:opacity-50 disabled:cursor-not-allowed ${row.deprecated ? 'border-green-500/40 text-green-300 bg-green-500/10 hover:bg-green-500/20' : 'border-red-500/40 text-red-300 bg-red-500/10 hover:bg-red-500/20'}`}
+                                                                                >
+                                                                                    {togglingDeprecatedId === row.id ? t('处理中...', 'Processing...') : (row.deprecated ? t('启用', 'Enable') : t('弃用', 'Deprecate'))}
+                                                                                </button>
+                                                                            )}
+                                                                            <button
+                                                                                onClick={(e) => {
+                                                                                    e.stopPropagation();
+                                                                                    handleSelectSystemSetting(row);
+                                                                                }}
+                                                                                disabled={!group.shared_key_configured || selectingSystemId === row.id || !!row.deprecated}
+                                                                                className="text-xs px-3 py-1.5 rounded border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                                            >
+                                                                                {selectingSystemId === row.id ? t('激活中...', 'Activating...') : (row.is_active ? t('已激活', 'Active') : t('使用此配置', 'Use This'))}
+                                                                            </button>
+                                                                        </div>
                                                                     </div>
                                                                 </div>
                                                             ))}

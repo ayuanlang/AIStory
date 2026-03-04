@@ -496,6 +496,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
         channel_context: "",
         constraints: "",
     });
+    const [promoFrameworkViewMode, setPromoFrameworkViewMode] = useState('preview');
     const [isGeneratingGlobalStory, setIsGeneratingGlobalStory] = useState(false);
     const [isGeneratingEpisodeScripts, setIsGeneratingEpisodeScripts] = useState(false);
     const [isStoppingEpisodeScripts, setIsStoppingEpisodeScripts] = useState(false);
@@ -1214,18 +1215,28 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
 
             const updated = await generateProjectStoryGlobal(id, payload);
             setProject(updated);
-            if (updated?.global_info) {
+            const responseGlobalInfo = (updated?.global_info && typeof updated.global_info === 'object')
+                ? updated.global_info
+                : {};
+            const returnedMarkdown = String(
+                responseGlobalInfo.story_dna_global_md
+                || updated?.story_dna_global_md
+                || ''
+            );
+
+            setInfo(prev => {
                 const merged = {
-                    ...info,
-                    ...updated.global_info,
+                    ...prev,
+                    ...responseGlobalInfo,
+                    story_dna_global_md: returnedMarkdown || prev.story_dna_global_md || '',
                     promo_generator_input: {
                         ...promoInput,
                         episodes_count: episodesCount,
                     },
                     tech_params: {
                         visual_standard: {
-                            ...info.tech_params.visual_standard,
-                            ...(updated.global_info.tech_params?.visual_standard || {})
+                            ...(prev?.tech_params?.visual_standard || {}),
+                            ...(responseGlobalInfo.tech_params?.visual_standard || {})
                         }
                     }
                 };
@@ -1238,13 +1249,15 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                 if (merged.tech_params?.visual_standard) {
                     merged.tech_params.visual_standard.quality = normalizeProjectEpisodeQuality(merged.tech_params.visual_standard.quality);
                 }
-                setInfo(merged);
-            }
+                return merged;
+            });
 
             setGlobalStoryInput(prev => ({
                 ...prev,
                 episodes_count: episodesCount,
             }));
+
+            setPromoFrameworkViewMode('preview');
 
             await updateProject(id, {
                 global_info: {
@@ -2370,13 +2383,41 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                     </div>
 
                     <div>
-                        <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('已生成宣传框架（Markdown）', 'Generated Promo Framework (Markdown)')}</label>
-                        <textarea
-                            className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-56 resize-none"
-                            value={info.story_dna_global_md || ''}
-                            onChange={(e) => updateField('story_dna_global_md', e.target.value)}
-                            placeholder={t('（生成后，宣传片全局框架会显示在这里。你可以编辑后保存修改。）', '(After generation, promo global framework will appear here. You can edit it and Save Changes.)')}
-                        />
+                        <div className="flex items-center justify-between gap-3 mb-1">
+                            <label className="text-xs text-muted-foreground uppercase font-bold block">{t('已生成宣传框架（Markdown）', 'Generated Promo Framework (Markdown)')}</label>
+                            <div className="flex items-center gap-1 bg-black/20 border border-white/10 rounded-md p-1">
+                                <button
+                                    type="button"
+                                    onClick={() => setPromoFrameworkViewMode('preview')}
+                                    className={`px-2 py-1 rounded text-xs font-bold ${promoFrameworkViewMode === 'preview' ? 'bg-white text-black' : 'text-white/80 hover:bg-white/10'}`}
+                                >
+                                    {t('预览', 'Preview')}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setPromoFrameworkViewMode('edit')}
+                                    className={`px-2 py-1 rounded text-xs font-bold ${promoFrameworkViewMode === 'edit' ? 'bg-white text-black' : 'text-white/80 hover:bg-white/10'}`}
+                                >
+                                    {t('编辑', 'Edit')}
+                                </button>
+                            </div>
+                        </div>
+
+                        {promoFrameworkViewMode === 'edit' ? (
+                            <textarea
+                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-56 resize-none"
+                                value={info.story_dna_global_md || ''}
+                                onChange={(e) => updateField('story_dna_global_md', e.target.value)}
+                                placeholder={t('（生成后，宣传片全局框架会显示在这里。你可以编辑后保存修改。）', '(After generation, promo global framework will appear here. You can edit it and Save Changes.)')}
+                            />
+                        ) : (
+                            <div className="bg-black/30 border border-white/10 rounded-md px-3 py-3 h-56 overflow-y-auto custom-scrollbar prose prose-invert max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1">
+                                {(info.story_dna_global_md || '').trim()
+                                    ? <ReactMarkdown>{info.story_dna_global_md}</ReactMarkdown>
+                                    : <div className="text-sm text-muted-foreground">{t('（生成后，宣传片全局框架会显示在这里。）', '(After generation, promo global framework will appear here.)')}</div>
+                                }
+                            </div>
+                        )}
                     </div>
                 </div>
                 )}

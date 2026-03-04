@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import cast, String
 import logging
 import json
+import random
 from datetime import datetime
 from app.db.session import get_db
 from app.models.all_models import APISetting, User, PricingRule, SystemAPISetting
@@ -16,10 +17,13 @@ from app.schemas.settings import (
     SystemAPISelectionRequest,
     SystemAPISettingManageCreate,
     SystemAPISettingManageUpdate,
+    SystemAPISettingToggleDeprecatedRequest,
+    SystemAPIProviderBatchDeprecatedRequest,
+    SystemAPIProviderKeysUpdateRequest,
     SystemAPISettingImportRequest,
 )
 from app.api.deps import get_current_user
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Any
 
 router = APIRouter()
 logger = logging.getLogger("settings_api")
@@ -48,6 +52,101 @@ def _safe_json_dict(value) -> Dict:
         except Exception:
             return {}
     return {}
+
+
+def _normalize_api_keys(values) -> List[str]:
+    if values is None:
+        return []
+    if isinstance(values, str):
+        raw_items = values.replace("\r", "\n").replace(",", "\n").split("\n")
+    elif isinstance(values, list):
+        raw_items = values
+    else:
+        raw_items = [values]
+
+    result: List[str] = []
+    seen = set()
+    for item in raw_items:
+        key = str(item or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        result.append(key)
+    return result
+
+
+def _normalize_key_strategy(value: str) -> str:
+    raw = str(value or "").strip().lower()
+    if raw in {"round_robin", "weighted", "random"}:
+        return raw
+    return "random"
+
+
+def _normalize_key_weights(values, keys: List[str]) -> List[float]:
+    if not keys:
+        return []
+    if values is None:
+        return [1.0] * len(keys)
+    raw_values = values if isinstance(values, list) else [values]
+    parsed: List[float] = []
+    for item in raw_values:
+        try:
+            val = float(item)
+        except Exception:
+            val = 1.0
+        if val <= 0:
+            val = 1.0
+        parsed.append(val)
+
+    if not parsed:
+        parsed = [1.0]
+    if len(parsed) < len(keys):
+        parsed.extend([1.0] * (len(keys) - len(parsed)))
+    return parsed[:len(keys)]
+
+
+def _extract_provider_key_pool_from_row(row: SystemAPISetting) -> List[str]:
+    cfg = _safe_json_dict(row.config)
+    pooled = _normalize_api_keys(cfg.get("provider_api_keys"))
+    if pooled:
+        return pooled
+    single = str(row.api_key or "").strip()
+    return [single] if single else []
+
+
+def _get_system_provider_key_pool(db: Session, provider: str) -> List[str]:
+    rows = db.query(SystemAPISetting).filter(SystemAPISetting.provider == provider).order_by(SystemAPISetting.id.asc()).all()
+    merged: List[str] = []
+    seen = set()
+    for row in rows:
+        for key in _extract_provider_key_pool_from_row(row):
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(key)
+    return merged
+
+
+def _apply_system_provider_key_pool(db: Session, provider: str, keys: List[str]) -> None:
+    normalized = _normalize_api_keys(keys)
+    rows = db.query(SystemAPISetting).filter(SystemAPISetting.provider == provider).all()
+    primary_key = normalized[0] if normalized else ""
+    for row in rows:
+        cfg = _safe_json_dict(row.config)
+        cfg["provider_api_keys"] = normalized
+        strategy = _normalize_key_strategy(cfg.get("provider_api_key_strategy"))
+        cfg["provider_api_key_strategy"] = strategy
+        cfg["provider_api_key_weights"] = _normalize_key_weights(cfg.get("provider_api_key_weights"), normalized)
+        row.config = cfg
+        row.api_key = primary_key
+
+
+def _pick_provider_runtime_key(config_value, fallback_key: str = "") -> str:
+    cfg = _safe_json_dict(config_value)
+    pooled = _normalize_api_keys(cfg.get("provider_api_keys"))
+    if pooled:
+        return random.choice(pooled)
+    return str(fallback_key or "").strip()
 
 
 def _can_use_system_settings(user: User) -> bool:
@@ -125,20 +224,12 @@ def _sync_system_provider_shared_key(db: Session, provider: str, current_setting
         return incoming_api_key or ""
 
     key = (incoming_api_key or "").strip()
-    provider_settings = db.query(SystemAPISetting).filter(
-        SystemAPISetting.provider == provider,
-    ).all()
+    pool = _get_system_provider_key_pool(db, provider)
+    if key and key not in pool:
+        pool = [key, *pool]
 
-    if key:
-        for item in provider_settings:
-            if item.id != current_setting_id:
-                item.api_key = key
-        return key
-
-    for item in provider_settings:
-        if item.id != current_setting_id and (item.api_key or "").strip():
-            return item.api_key
-    return ""
+    _apply_system_provider_key_pool(db, provider, pool)
+    return pool[0] if pool else ""
 
 
 def _task_type_to_category(task_type: str) -> str:
@@ -152,6 +243,106 @@ def _task_type_to_category(task_type: str) -> str:
     if task == "llm_chat":
         return "LLM"
     return "Tools"
+
+
+def _is_setting_deprecated(config_value) -> bool:
+    cfg = _safe_json_dict(config_value)
+    return bool(
+        cfg.get("deprecated")
+        or cfg.get("is_deprecated")
+        or cfg.get("disable_api")
+    )
+
+
+def _ensure_builtin_system_settings(db: Session) -> None:
+    kie_base_url = "https://api.kie.ai"
+
+    def _kie_item(name: str, category: str, model: str) -> Dict[str, Any]:
+        return {
+            "name": name,
+            "category": category,
+            "provider": "kie",
+            "base_url": kie_base_url,
+            "model": model,
+            "config": {
+                "endpoint": f"{kie_base_url}/api/v1/jobs/createTask",
+                "query_endpoint": f"{kie_base_url}/api/v1/jobs/recordInfo",
+                "credits_endpoint": f"{kie_base_url}/api/v1/user/credits",
+                "deprecated": False,
+            },
+        }
+
+    builtins = [
+        _kie_item("Kie Z-image v4.0", "Image", "z-image-v4.0"),
+        _kie_item("Kie Z-image v4.5", "Image", "z-image-v4.5"),
+        _kie_item("Kie Grok Imagine", "Image", "grok-imagine"),
+        _kie_item("Kie Flux-2", "Image", "flux-2"),
+        _kie_item("Kie Google Imagen4 Fast", "Image", "imagen4-fast"),
+        _kie_item("Kie Google Imagen4 Ultra", "Image", "imagen4-ultra"),
+        _kie_item("Kie Ideogram", "Image", "ideogram"),
+        _kie_item("Kie Qwen Image", "Image", "qwen-image"),
+        _kie_item("Kie Recraft", "Image", "recraft"),
+        _kie_item("Kie Topaz", "Image", "topaz"),
+
+        _kie_item("Kie Kling v2.1", "Video", "kling-v2.1"),
+        _kie_item("Kie Kling v2.5", "Video", "kling-v2.5"),
+        _kie_item("Kie Sora2", "Video", "sora2"),
+        _kie_item("Kie Bytedance v1 Pro", "Video", "bytedance-v1-pro"),
+        _kie_item("Kie Bytedance v1 Lite", "Video", "bytedance-v1-lite"),
+        _kie_item("Kie Hailuo", "Video", "hailuo"),
+        _kie_item("Kie Wan Turbo", "Video", "wan-turbo"),
+        _kie_item("Kie Grok Imagine Video", "Video", "grok-imagine-video"),
+
+        _kie_item("Kie ElevenLabs", "Tools", "elevenlabs"),
+
+        _kie_item("Kie Gemini 2.5 Flash", "LLM", "gemini-2.5-flash"),
+        _kie_item("Kie Gemini 2.5 Pro", "LLM", "gemini-2.5-pro"),
+    ]
+
+    existing = db.query(SystemAPISetting.category, SystemAPISetting.provider, SystemAPISetting.model).filter(
+        SystemAPISetting.provider == "kie"
+    ).all()
+    existing_keys = {
+        ((c or "").strip().lower(), (p or "").strip().lower(), (m or "").strip().lower())
+        for c, p, m in existing
+    }
+
+    to_create = []
+    for item in builtins:
+        key = (
+            item["category"].strip().lower(),
+            item["provider"].strip().lower(),
+            item["model"].strip().lower(),
+        )
+        if key in existing_keys:
+            continue
+        to_create.append(item)
+
+    if not to_create:
+        return
+
+    shared_key = ""
+    key_row = db.query(SystemAPISetting.api_key).filter(
+        SystemAPISetting.provider == "kie",
+        SystemAPISetting.api_key.isnot(None),
+        SystemAPISetting.api_key != "",
+    ).order_by(SystemAPISetting.id.desc()).first()
+    if key_row and (key_row[0] or "").strip():
+        shared_key = key_row[0].strip()
+
+    for item in to_create:
+        db.add(SystemAPISetting(
+            name=item["name"],
+            category=item["category"],
+            provider=item["provider"],
+            api_key=shared_key,
+            base_url=item["base_url"],
+            model=item["model"],
+            config=item["config"],
+            is_active=False,
+        ))
+
+    db.flush()
 
 DEFAULTS = {
     "openai": {
@@ -223,6 +414,16 @@ DEFAULTS = {
         "base_url": "https://dashscope.aliyuncs.com/api/v1/services/aigc/image2video/video-synthesis",
         "model": "wanx2.1-kf2v-plus",
         "config": {}
+    },
+    "kie": {
+        "category": "Video",
+        "name": "KIE AI",
+        "base_url": "https://api.kie.ai",
+        "model": "veo3-fast",
+        "config": {
+            "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
+            "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo"
+        }
     }
 }
 
@@ -322,6 +523,8 @@ def get_system_settings(
     if not _can_use_system_settings(current_user):
         return []
 
+    _ensure_builtin_system_settings(db)
+
     _ensure_default_system_selection_for_user(db, current_user.id)
     db.commit()
 
@@ -384,7 +587,10 @@ def get_system_settings(
                 "models": [],
             }
 
-        has_key = bool((item.api_key or "").strip())
+        key_pool = _normalize_api_keys((item_config or {}).get("provider_api_keys"))
+        fallback_key = str(item.api_key or "").strip()
+        runtime_key = key_pool[0] if key_pool else fallback_key
+        has_key = bool(runtime_key)
         grouped[key]["shared_key_configured"] = grouped[key]["shared_key_configured"] or has_key
 
         user_active = user_active_by_category.get(category)
@@ -404,9 +610,10 @@ def get_system_settings(
                 model=item.model,
                 base_url=item.base_url,
                 webhook_url=(item_config or {}).get("webHook"),
+                deprecated=_is_setting_deprecated(item_config),
                 is_active=bool(user_is_active_for_row),
                 has_api_key=has_key,
-                api_key_masked=_mask_api_key(item.api_key or "") if has_key else "",
+                api_key_masked=_mask_api_key(runtime_key) if has_key else "",
             )
         )
 
@@ -425,6 +632,9 @@ def get_system_settings_catalog(
 ):
     if not _can_use_system_settings(current_user) and not _can_manage_system_settings(current_user):
         return []
+
+    _ensure_builtin_system_settings(db)
+    db.commit()
 
     grouped: Dict[Tuple[str, str], set] = {}
 
@@ -476,6 +686,9 @@ def select_system_setting(
     ).first()
     if not system_setting:
         raise HTTPException(status_code=404, detail="System API setting not found")
+
+    if _is_setting_deprecated(system_setting.config):
+        raise HTTPException(status_code=400, detail="This system API setting is deprecated and cannot be activated")
 
     # Enforce one-active-per-category for current user.
     db.query(APISetting).filter(
@@ -529,6 +742,9 @@ def list_system_settings_for_manage(
 ):
     if not _can_manage_system_settings(current_user):
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+
+    _ensure_builtin_system_settings(db)
+    db.commit()
 
     rows = db.query(SystemAPISetting).filter(
         SystemAPISetting.category != "System_Payment",
@@ -626,6 +842,155 @@ def update_system_setting_for_manage(
     return target
 
 
+@router.post("/settings/system/manage/{setting_id}/deprecated", response_model=SystemAPISettingOut)
+def toggle_system_setting_deprecated_for_manage(
+    setting_id: int,
+    payload: SystemAPISettingToggleDeprecatedRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+
+    target = db.query(SystemAPISetting).filter(
+        SystemAPISetting.id == setting_id,
+    ).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="System API setting not found")
+
+    cfg = _safe_json_dict(target.config)
+    current = _is_setting_deprecated(cfg)
+    next_value = (not current) if payload.deprecated is None else bool(payload.deprecated)
+
+    cfg["deprecated"] = bool(next_value)
+    # Keep legacy aliases aligned for compatibility.
+    cfg["is_deprecated"] = bool(next_value)
+    cfg["disable_api"] = bool(next_value)
+    target.config = cfg
+
+    db.commit()
+    db.refresh(target)
+    return target
+
+
+@router.post("/settings/system/manage/provider/{provider}/deprecated")
+def batch_toggle_system_provider_deprecated_for_manage(
+    provider: str,
+    payload: SystemAPIProviderBatchDeprecatedRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+
+    provider_name = str(provider or "").strip()
+    if not provider_name:
+        raise HTTPException(status_code=400, detail="provider is required")
+
+    query = db.query(SystemAPISetting).filter(SystemAPISetting.provider == provider_name)
+    category = str(payload.category or "").strip()
+    if category:
+        query = query.filter(SystemAPISetting.category == category)
+
+    rows = query.order_by(SystemAPISetting.id.asc()).all()
+    if not rows:
+        raise HTTPException(status_code=404, detail="No system API settings found for provider")
+
+    changed = 0
+    next_value = bool(payload.deprecated)
+    for row in rows:
+        cfg = _safe_json_dict(row.config)
+        current = _is_setting_deprecated(cfg)
+        if current != next_value:
+            changed += 1
+        cfg["deprecated"] = next_value
+        cfg["is_deprecated"] = next_value
+        cfg["disable_api"] = next_value
+        row.config = cfg
+
+    db.commit()
+
+    return {
+        "ok": True,
+        "provider": provider_name,
+        "category": category or None,
+        "deprecated": next_value,
+        "matched": len(rows),
+        "changed": changed,
+    }
+
+
+@router.get("/settings/system/manage/provider/{provider}/keys")
+def get_system_provider_keys_for_manage(
+    provider: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+
+    provider_name = str(provider or "").strip()
+    if not provider_name:
+        raise HTTPException(status_code=400, detail="provider is required")
+
+    pool = _get_system_provider_key_pool(db, provider_name)
+    first_row = db.query(SystemAPISetting).filter(SystemAPISetting.provider == provider_name).order_by(SystemAPISetting.id.asc()).first()
+    cfg = _safe_json_dict(first_row.config if first_row else {})
+    strategy = _normalize_key_strategy(cfg.get("provider_api_key_strategy"))
+    weights = _normalize_key_weights(cfg.get("provider_api_key_weights"), pool)
+    return {
+        "provider": provider_name,
+        "key_count": len(pool),
+        "keys": pool,
+        "keys_masked": [_mask_api_key(k) for k in pool],
+        "strategy": strategy,
+        "weights": weights,
+    }
+
+
+@router.post("/settings/system/manage/provider/{provider}/keys")
+def set_system_provider_keys_for_manage(
+    provider: str,
+    payload: SystemAPIProviderKeysUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+
+    provider_name = str(provider or "").strip()
+    if not provider_name:
+        raise HTTPException(status_code=400, detail="provider is required")
+
+    rows = db.query(SystemAPISetting).filter(SystemAPISetting.provider == provider_name).all()
+    if not rows:
+        raise HTTPException(status_code=404, detail="No system API settings found for provider")
+
+    pool = _normalize_api_keys(payload.keys)
+    strategy = _normalize_key_strategy(payload.strategy)
+    weights = _normalize_key_weights(payload.weights, pool)
+
+    rows = db.query(SystemAPISetting).filter(SystemAPISetting.provider == provider_name).all()
+    primary_key = pool[0] if pool else ""
+    for row in rows:
+        cfg = _safe_json_dict(row.config)
+        cfg["provider_api_keys"] = pool
+        cfg["provider_api_key_strategy"] = strategy
+        cfg["provider_api_key_weights"] = weights
+        row.config = cfg
+        row.api_key = primary_key
+    db.commit()
+
+    return {
+        "ok": True,
+        "provider": provider_name,
+        "key_count": len(pool),
+        "keys_masked": [_mask_api_key(k) for k in pool],
+        "strategy": strategy,
+        "weights": weights,
+    }
+
+
 @router.get("/settings/system/manage/export")
 def export_system_settings_for_manage(
     db: Session = Depends(get_db),
@@ -633,6 +998,9 @@ def export_system_settings_for_manage(
 ):
     if not _can_manage_system_settings(current_user):
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+
+    _ensure_builtin_system_settings(db)
+    db.commit()
 
     rows = db.query(SystemAPISetting).filter(
         SystemAPISetting.category != "System_Payment",

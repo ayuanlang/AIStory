@@ -3,6 +3,7 @@
 import requests
 import json
 import asyncio
+import time
 from typing import Dict, Any, List, Optional
 import logging
 import os
@@ -126,6 +127,8 @@ class LLMService:
     def _infer_provider(self, base_url: str, model: str = "") -> str:
         url = (base_url or "").lower()
         model_lower = (model or "").lower()
+        if "kie.ai" in url or model_lower.startswith("gemini-2.5"):
+            return "kie"
         if "ark.cn-" in url or "doubao" in model_lower:
             return "doubao"
         if "openai" in url:
@@ -198,6 +201,127 @@ class LLMService:
             return "\n".join(nested_chunks).strip()
 
         return ""
+
+    def _extract_text_from_kie_result(self, value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return ""
+            if raw.startswith("{") or raw.startswith("["):
+                try:
+                    parsed = json.loads(raw)
+                    return self._extract_text_from_kie_result(parsed)
+                except Exception:
+                    return raw
+            return raw
+        if isinstance(value, list):
+            chunks = [self._extract_text_from_kie_result(item) for item in value]
+            return "\n".join([chunk for chunk in chunks if chunk]).strip()
+        if isinstance(value, dict):
+            direct_keys = [
+                "text", "content", "output", "response", "answer", "message", "result", "resultText", "result_text"
+            ]
+            for key in direct_keys:
+                if key in value:
+                    text = self._extract_text_from_kie_result(value.get(key))
+                    if text:
+                        return text
+            chunks = []
+            for nested in value.values():
+                text = self._extract_text_from_kie_result(nested)
+                if text:
+                    chunks.append(text)
+            return "\n".join(chunks).strip()
+        return str(value)
+
+    async def _raw_kie_llm_request_full(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> Dict[str, Any]:
+        cfg = dict(extra_config or {})
+        endpoint = str(cfg.get("endpoint") or "").strip()
+        query_endpoint = str(cfg.get("query_endpoint") or "").strip()
+
+        root = (base_url or "https://api.kie.ai").strip().rstrip("/")
+        if "/api/v1/jobs" in root:
+            root = root.split("/api/v1/jobs")[0]
+
+        submit_url = endpoint if endpoint else f"{root}/api/v1/jobs/createTask"
+        poll_url = query_endpoint if query_endpoint else f"{root}/api/v1/jobs/recordInfo"
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        prompt_text = self._extract_text_from_content(messages)
+        payload = {
+            "model": model,
+            "input": {
+                "messages": messages,
+                "prompt": prompt_text,
+            },
+        }
+
+        def _post_submit():
+            return requests.post(submit_url, json=payload, headers=headers, timeout=90)
+
+        response = await asyncio.to_thread(_post_submit)
+        if response.status_code != 200:
+            raise Exception(f"KIE createTask failed {response.status_code}: {response.text}")
+
+        data = response.json()
+        code = data.get("code")
+        if code not in (None, 200, "200"):
+            raise Exception(f"KIE createTask failed code={code}: {data.get('msg') or data.get('message') or data}")
+
+        data_block = data.get("data") or {}
+        task_id = data_block.get("taskId") or data_block.get("task_id") or data_block.get("id") or data.get("taskId")
+        if not task_id:
+            raise Exception("KIE createTask missing taskId")
+
+        def _poll_status():
+            return requests.get(poll_url, params={"taskId": task_id}, headers=headers, timeout=45)
+
+        deadline = time.time() + max(60, DEFAULT_LLM_TIMEOUT_SECONDS)
+        last_payload = None
+        while time.time() < deadline:
+            await asyncio.sleep(2)
+            p_resp = await asyncio.to_thread(_poll_status)
+            if p_resp.status_code != 200:
+                continue
+            try:
+                p_data = p_resp.json()
+            except Exception:
+                continue
+            last_payload = p_data
+
+            p_code = p_data.get("code")
+            if p_code not in (None, 200, "200"):
+                continue
+
+            record = p_data.get("data") or {}
+            state = str(record.get("state") or record.get("status") or "").strip().lower()
+            if state in {"waiting", "queued", "queuing", "processing", "running", "generating", "pending"}:
+                continue
+            if state in {"fail", "failed", "error", "canceled", "cancelled"}:
+                raise Exception(record.get("failMsg") or record.get("message") or "KIE task failed")
+
+            if state in {"success", "succeeded", "completed", "done"}:
+                text = self._extract_text_from_kie_result(record.get("resultJson"))
+                if not text:
+                    text = self._extract_text_from_kie_result(record)
+                return {
+                    "choices": [
+                        {
+                            "message": {"content": text or ""},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {},
+                    "_token_limit_hints": [],
+                }
+
+        raise Exception(f"KIE task polling timeout: {last_payload}")
 
     def _extract_finish_reason_from_response(self, full_response: Dict[str, Any]) -> Any:
         choices = full_response.get("choices") or []
@@ -758,6 +882,8 @@ class LLMService:
 
         resolved_category = str((extra_config or {}).get("__resolved_category") or "LLM").strip().upper()
         provider = (extra_config or {}).get("__provider") or self._infer_provider(base_url, model)
+        if provider == "kie" and resolved_category == "LLM":
+            return await self._raw_kie_llm_request_full(base_url, api_key, model, messages, extra_config)
         if provider == "grsai" and resolved_category == "LLM":
             base_url = self._normalize_grsai_llm_base_url(base_url)
 
