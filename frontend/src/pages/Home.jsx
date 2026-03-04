@@ -42,7 +42,7 @@ const Home = () => {
                         </h1>
                         
                         <p className="text-lg md:text-2xl text-muted-foreground max-w-2xl mx-auto leading-relaxed">
-                            {t('告别手工绘制。woola AI story 会自动将你的剧本转化为专业电影级分镜。', 'Stop drawing by hand. woola AI story transforms your screenplay into professional, cinematic shots automatically.')}
+                            {t('告别手工绘制。Woola AI story 会自动将你的剧本转化为专业电影级分镜。', 'Stop drawing by hand. Woola AI story transforms your screenplay into professional, cinematic shots automatically.')}
                         </p>
                         
                         <div className="flex flex-col sm:flex-row gap-4 justify-center items-center pt-8">
@@ -60,7 +60,7 @@ const Home = () => {
             </main>
             
             <footer className="relative z-10 py-6 text-center text-sm text-muted-foreground">
-                <p>&copy; 2024 woola AI story. {t('版权所有。', 'All rights reserved.')}</p>
+                <p>&copy; 2024 Woola AI story. {t('版权所有。', 'All rights reserved.')}</p>
             </footer>
         </div>
     );
