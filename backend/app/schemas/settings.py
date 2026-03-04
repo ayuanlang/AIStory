@@ -136,6 +136,28 @@ class SystemAPISettingImportRequest(BaseModel):
     replace_all: bool = False
 
 
+class SystemAPIProviderModelImportItem(BaseModel):
+    name: Optional[str] = "System Setting"
+    category: str = "LLM"
+    base_url: Optional[str] = None
+    model: Optional[str] = None
+    config: Optional[Dict[str, Any]] = {}
+    is_active: bool = False
+
+
+class SystemAPIProviderImportItem(BaseModel):
+    provider: str
+    api_keys: List[str] = Field(default_factory=list)
+    strategy: Optional[str] = None
+    weights: Optional[List[float]] = None
+    models: List[SystemAPIProviderModelImportItem] = Field(default_factory=list)
+
+
+class SystemAPIProviderImportRequest(BaseModel):
+    providers: List[SystemAPIProviderImportItem] = Field(default_factory=list)
+    replace_all: bool = False
+
+
 class SystemAPIProviderModelCatalog(BaseModel):
     category: str
     provider: str

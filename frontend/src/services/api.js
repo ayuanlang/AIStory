@@ -1126,6 +1126,16 @@ export const importSystemSettingsManage = async (payload) => {
     return response.data;
 }
 
+export const exportSystemProviderBundleManage = async () => {
+    const response = await api.get('/settings/system/manage/provider-bundle/export');
+    return response.data;
+}
+
+export const importSystemProviderBundleManage = async (payload) => {
+    const response = await api.post('/settings/system/manage/provider-bundle/import', payload);
+    return response.data;
+}
+
 export const getAdminLlmLogFiles = async () => {
     const response = await api.get('/admin/llm-logs/files');
     return response.data;

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { api, getPricingRules, createPricingRule, updatePricingRule, deletePricingRule, getTransactions, updateUserCredits, syncPricingRules, getBillingOptions, getSystemSettingsManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, exportSystemSettingsManage, importSystemSettingsManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, getSystemProviderKeysManage, setSystemProviderKeysManage, getAdminLlmLogFiles, getAdminLlmLogView, getAdminStorageUsage } from '../services/api';
+import { api, getPricingRules, createPricingRule, updatePricingRule, deletePricingRule, getTransactions, updateUserCredits, syncPricingRules, getBillingOptions, getSystemSettingsManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, exportSystemSettingsManage, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, getSystemProviderKeysManage, setSystemProviderKeysManage, getAdminLlmLogFiles, getAdminLlmLogView, getAdminStorageUsage } from '../services/api';
 import Footer from '../components/Footer';
 import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive } from 'lucide-react';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
@@ -67,6 +67,8 @@ const UserAdmin = () => {
     const [isSystemApiLoading, setIsSystemApiLoading] = useState(false);
     const [isSystemApiImporting, setIsSystemApiImporting] = useState(false);
     const [isSystemApiExporting, setIsSystemApiExporting] = useState(false);
+    const [isSystemProviderBundleImporting, setIsSystemProviderBundleImporting] = useState(false);
+    const [isSystemProviderBundleExporting, setIsSystemProviderBundleExporting] = useState(false);
     const [selectedSystemApiId, setSelectedSystemApiId] = useState('');
     const [systemApiFilterCategory, setSystemApiFilterCategory] = useState('all');
     const [systemApiFilterProvider, setSystemApiFilterProvider] = useState('all');
@@ -90,6 +92,7 @@ const UserAdmin = () => {
         is_active: false,
     });
     const systemApiImportInputRef = React.useRef(null);
+    const systemProviderBundleImportInputRef = React.useRef(null);
     const [llmLogFiles, setLlmLogFiles] = useState([]);
     const [selectedLlmLogFile, setSelectedLlmLogFile] = useState('llm_calls.log');
     const [llmLogTailLines, setLlmLogTailLines] = useState(300);
@@ -521,6 +524,65 @@ const UserAdmin = () => {
             alert(e?.response?.data?.detail || e.message || 'Failed to import system API settings');
         } finally {
             setIsSystemApiImporting(false);
+        }
+    };
+
+    const handleExportSystemProviderBundle = async () => {
+        setIsSystemProviderBundleExporting(true);
+        try {
+            const payload = await exportSystemProviderBundleManage();
+            const dataStr = JSON.stringify(payload, null, 2);
+            const blob = new Blob([dataStr], { type: 'application/json;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            const ts = new Date().toISOString().replace(/[:.]/g, '-');
+            a.href = url;
+            a.download = `system_api_provider_bundle_${ts}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            alert('System API provider bundle exported.');
+        } catch (e) {
+            alert(e?.response?.data?.detail || e.message || 'Failed to export system API provider bundle');
+        } finally {
+            setIsSystemProviderBundleExporting(false);
+        }
+    };
+
+    const handleOpenImportSystemProviderBundle = () => {
+        if (systemProviderBundleImportInputRef.current) {
+            systemProviderBundleImportInputRef.current.value = '';
+            systemProviderBundleImportInputRef.current.click();
+        }
+    };
+
+    const handleImportSystemProviderBundleFile = async (event) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+
+        try {
+            const text = await file.text();
+            const parsed = JSON.parse(text);
+            const providers = Array.isArray(parsed?.providers) ? parsed.providers : [];
+            if (!providers.length) {
+                alert('No providers found in import file. Expected { providers: [...] }.');
+                return;
+            }
+
+            const replaceAll = await confirmUiMessage('Replace all existing system API settings before provider import? Click Cancel for merge/update mode.', {
+                title: 'Import Mode',
+                confirmText: 'Replace All',
+                cancelText: 'Merge/Update',
+            });
+            setIsSystemProviderBundleImporting(true);
+            const result = await importSystemProviderBundleManage({ providers, replace_all: replaceAll });
+            await fetchSystemApiManageRows();
+            alert(`Provider import finished. Providers: ${result?.providers || 0}, Created: ${result?.created || 0}, Updated: ${result?.updated || 0}`);
+        } catch (e) {
+            alert(e?.response?.data?.detail || e.message || 'Failed to import system API provider bundle');
+        } finally {
+            setIsSystemProviderBundleImporting(false);
         }
     };
 
@@ -1728,6 +1790,13 @@ const UserAdmin = () => {
                                         className="hidden"
                                         onChange={handleImportSystemApiSettingsFile}
                                     />
+                                    <input
+                                        ref={systemProviderBundleImportInputRef}
+                                        type="file"
+                                        accept="application/json,.json"
+                                        className="hidden"
+                                        onChange={handleImportSystemProviderBundleFile}
+                                    />
                                     <button
                                         onClick={handleOpenImportSystemApiSettings}
                                         disabled={isSystemApiImporting || isSystemApiLoading}
@@ -1741,6 +1810,22 @@ const UserAdmin = () => {
                                         className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded flex items-center gap-2 disabled:opacity-50"
                                     >
                                         <Download size={16} /> {isSystemApiExporting ? t('导出中...', 'Exporting...') : t('导出', 'Export')}
+                                    </button>
+                                    <button
+                                        onClick={handleOpenImportSystemProviderBundle}
+                                        disabled={isSystemProviderBundleImporting || isSystemApiLoading}
+                                        className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded flex items-center gap-2 disabled:opacity-50"
+                                        title={t('按供应商+密钥池+模型导入', 'Import by provider + key pool + models')}
+                                    >
+                                        <Upload size={16} /> {isSystemProviderBundleImporting ? t('供应商导入中...', 'Provider Importing...') : t('导入供应商', 'Import Providers')}
+                                    </button>
+                                    <button
+                                        onClick={handleExportSystemProviderBundle}
+                                        disabled={isSystemProviderBundleExporting || isSystemApiLoading}
+                                        className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded flex items-center gap-2 disabled:opacity-50"
+                                        title={t('按供应商+密钥池+模型导出', 'Export by provider + key pool + models')}
+                                    >
+                                        <Download size={16} /> {isSystemProviderBundleExporting ? t('供应商导出中...', 'Provider Exporting...') : t('导出供应商', 'Export Providers')}
                                     </button>
                                     <button
                                         onClick={fetchSystemApiManageRows}

@@ -21,6 +21,7 @@ from app.schemas.settings import (
     SystemAPIProviderBatchDeprecatedRequest,
     SystemAPIProviderKeysUpdateRequest,
     SystemAPISettingImportRequest,
+    SystemAPIProviderImportRequest,
 )
 from app.api.deps import get_current_user
 from typing import List, Dict, Tuple, Any
@@ -137,6 +138,17 @@ def _apply_system_provider_key_pool(db: Session, provider: str, keys: List[str])
         strategy = _normalize_key_strategy(cfg.get("provider_api_key_strategy"))
         cfg["provider_api_key_strategy"] = strategy
         cfg["provider_api_key_weights"] = _normalize_key_weights(cfg.get("provider_api_key_weights"), normalized)
+        row.config = cfg
+        row.api_key = primary_key
+
+
+def _apply_provider_key_bundle_to_rows(rows: List[SystemAPISetting], keys: List[str], strategy: str, weights: List[float]) -> None:
+    primary_key = keys[0] if keys else ""
+    for row in rows:
+        cfg = _safe_json_dict(row.config)
+        cfg["provider_api_keys"] = keys
+        cfg["provider_api_key_strategy"] = strategy
+        cfg["provider_api_key_weights"] = weights
         row.config = cfg
         row.api_key = primary_key
 
@@ -1023,6 +1035,160 @@ def export_system_settings_for_manage(
             }
             for row in rows
         ],
+    }
+
+
+@router.get("/settings/system/manage/provider-bundle/export")
+def export_system_provider_bundle_for_manage(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+
+    _ensure_builtin_system_settings(db)
+    db.commit()
+
+    rows = db.query(SystemAPISetting).filter(
+        SystemAPISetting.category != "System_Payment",
+    ).order_by(SystemAPISetting.provider.asc(), SystemAPISetting.category.asc(), SystemAPISetting.model.asc(), SystemAPISetting.id.asc()).all()
+
+    grouped: Dict[str, List[SystemAPISetting]] = {}
+    for row in rows:
+        provider_name = str(row.provider or "").strip()
+        if not provider_name:
+            continue
+        grouped.setdefault(provider_name, []).append(row)
+
+    providers = []
+    for provider_name, provider_rows in grouped.items():
+        first_cfg = _safe_json_dict(provider_rows[0].config if provider_rows else {})
+        keys = _get_system_provider_key_pool(db, provider_name)
+        strategy = _normalize_key_strategy(first_cfg.get("provider_api_key_strategy"))
+        weights = _normalize_key_weights(first_cfg.get("provider_api_key_weights"), keys)
+        models = [
+            {
+                "name": row.name,
+                "category": row.category,
+                "base_url": row.base_url,
+                "model": row.model,
+                "config": row.config or {},
+                "is_active": bool(row.is_active),
+            }
+            for row in provider_rows
+        ]
+        providers.append({
+            "provider": provider_name,
+            "api_keys": keys,
+            "strategy": strategy,
+            "weights": weights,
+            "model_count": len(models),
+            "models": models,
+        })
+
+    return {
+        "version": 1,
+        "format": "provider_bundle",
+        "exported_at": datetime.utcnow().isoformat(),
+        "provider_count": len(providers),
+        "providers": providers,
+    }
+
+
+@router.post("/settings/system/manage/provider-bundle/import")
+def import_system_provider_bundle_for_manage(
+    payload: SystemAPIProviderImportRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+
+    providers = payload.providers or []
+    if not providers:
+        return {"ok": True, "providers": 0, "created": 0, "updated": 0, "key_updated_providers": 0, "total": 0}
+
+    if payload.replace_all:
+        db.query(SystemAPISetting).filter(
+            SystemAPISetting.category != "System_Payment",
+        ).delete(synchronize_session=False)
+        db.flush()
+
+    created = 0
+    updated = 0
+    key_updated_providers = 0
+    providers_processed = 0
+    last_active_id_by_category: Dict[str, int] = {}
+
+    for provider_item in providers:
+        provider_name = str(provider_item.provider or "").strip()
+        if not provider_name:
+            continue
+
+        providers_processed += 1
+        keys = _normalize_api_keys(provider_item.api_keys)
+        strategy = _normalize_key_strategy(provider_item.strategy)
+        weights = _normalize_key_weights(provider_item.weights, keys)
+        models = provider_item.models or []
+
+        for model_item in models:
+            category = str(model_item.category or "LLM").strip() or "LLM"
+            model = (model_item.model or "").strip()
+
+            target = db.query(SystemAPISetting).filter(
+                SystemAPISetting.category == category,
+                SystemAPISetting.provider == provider_name,
+                SystemAPISetting.model == model,
+            ).order_by(SystemAPISetting.id.desc()).first()
+
+            if target:
+                target.name = (model_item.name or target.name or "System Setting").strip() or "System Setting"
+                target.base_url = model_item.base_url
+                target.model = model_item.model
+                target.config = model_item.config if isinstance(model_item.config, dict) else {}
+                target.is_active = bool(model_item.is_active)
+                updated += 1
+            else:
+                target = SystemAPISetting(
+                    name=(model_item.name or "System Setting").strip() or "System Setting",
+                    category=category,
+                    provider=provider_name,
+                    api_key="",
+                    base_url=model_item.base_url,
+                    model=model_item.model,
+                    config=model_item.config if isinstance(model_item.config, dict) else {},
+                    is_active=bool(model_item.is_active),
+                )
+                db.add(target)
+                db.flush()
+                created += 1
+
+            if bool(model_item.is_active):
+                last_active_id_by_category[category] = target.id
+
+        provider_rows = db.query(SystemAPISetting).filter(
+            SystemAPISetting.provider == provider_name,
+            SystemAPISetting.category != "System_Payment",
+        ).all()
+        if provider_rows:
+            _apply_provider_key_bundle_to_rows(provider_rows, keys, strategy, weights)
+            key_updated_providers += 1
+
+    for category, keep_id in last_active_id_by_category.items():
+        db.query(SystemAPISetting).filter(
+            SystemAPISetting.category == category,
+            SystemAPISetting.id != keep_id,
+            SystemAPISetting.is_active == True,
+        ).update({"is_active": False}, synchronize_session=False)
+
+    db.commit()
+    return {
+        "ok": True,
+        "providers": providers_processed,
+        "created": created,
+        "updated": updated,
+        "key_updated_providers": key_updated_providers,
+        "total": created + updated,
     }
 
 
