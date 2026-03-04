@@ -1582,44 +1582,51 @@ const Settings = () => {
                             <KeyRound className="w-5 h-5 text-primary" />
                             {t('修改密码', 'Change Password')}
                         </h2>
-
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium">{t('当前密码', 'Current Password')}</label>
-                                <input
-                                    type="password"
-                                    value={currentPassword}
-                                    onChange={(e) => setCurrentPassword(e.target.value)}
-                                    className="w-full p-2 rounded-md bg-white/10 border border-white/10"
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium">{t('新密码', 'New Password')}</label>
-                                <input
-                                    type="password"
-                                    value={newPassword}
-                                    onChange={(e) => setNewPassword(e.target.value)}
-                                    className="w-full p-2 rounded-md bg-white/10 border border-white/10"
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium">{t('确认新密码', 'Confirm New Password')}</label>
-                                <input
-                                    type="password"
-                                    value={confirmPassword}
-                                    onChange={(e) => setConfirmPassword(e.target.value)}
-                                    className="w-full p-2 rounded-md bg-white/10 border border-white/10"
-                                />
-                            </div>
-                        </div>
-
-                        <button
-                            onClick={handleChangePassword}
-                            disabled={isUpdatingPassword}
-                            className="px-4 py-2 bg-white/10 border border-white/10 rounded-lg text-sm font-bold hover:bg-white/20 disabled:opacity-50"
+                        <form
+                            onSubmit={(e) => {
+                                e.preventDefault();
+                                handleChangePassword();
+                            }}
+                            className="space-y-4"
                         >
-                            {isUpdatingPassword ? t('更新中...', 'Updating...') : t('更新密码', 'Update Password')}
-                        </button>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium">{t('当前密码', 'Current Password')}</label>
+                                    <input
+                                        type="password"
+                                        value={currentPassword}
+                                        onChange={(e) => setCurrentPassword(e.target.value)}
+                                        className="w-full p-2 rounded-md bg-white/10 border border-white/10"
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium">{t('新密码', 'New Password')}</label>
+                                    <input
+                                        type="password"
+                                        value={newPassword}
+                                        onChange={(e) => setNewPassword(e.target.value)}
+                                        className="w-full p-2 rounded-md bg-white/10 border border-white/10"
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium">{t('确认新密码', 'Confirm New Password')}</label>
+                                    <input
+                                        type="password"
+                                        value={confirmPassword}
+                                        onChange={(e) => setConfirmPassword(e.target.value)}
+                                        className="w-full p-2 rounded-md bg-white/10 border border-white/10"
+                                    />
+                                </div>
+                            </div>
+
+                            <button
+                                type="submit"
+                                disabled={isUpdatingPassword}
+                                className="px-4 py-2 bg-white/10 border border-white/10 rounded-lg text-sm font-bold hover:bg-white/20 disabled:opacity-50"
+                            >
+                                {isUpdatingPassword ? t('更新中...', 'Updating...') : t('更新密码', 'Update Password')}
+                            </button>
+                        </form>
                     </section>
                 </div>
             )}

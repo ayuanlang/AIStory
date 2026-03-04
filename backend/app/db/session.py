@@ -20,7 +20,12 @@ if not is_sqlite:
     })
 
 engine = create_engine(settings.DATABASE_URL, **engine_kwargs)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+SessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    bind=engine,
+    expire_on_commit=False,
+)
 
 Base = declarative_base()
 

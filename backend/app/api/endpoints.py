@@ -978,16 +978,26 @@ def _resolve_prompt_text(prompt_ref: str) -> str:
 
         prompt_dir = os.path.join(str(settings.BASE_DIR), "app", "core", "prompts")
         prompt_path = os.path.join(prompt_dir, item_text)
-        if os.path.exists(prompt_path):
+        if os.path.isfile(prompt_path):
             with open(prompt_path, "r", encoding="utf-8") as handle:
                 return handle.read()
 
     raise FileNotFoundError(f"Prompt '{prompt_ref}' not found")
 
 
-@router.get("/prompts/{filename}")
+@router.get("/prompts/{filename:path}")
 async def get_prompt_content(filename: str, current_user: User = Depends(get_current_user)):
     """Retrieve content of a prompt file."""
+    normalized = str(filename or "").strip().strip("/")
+
+    if normalized == "skills":
+        return await list_prompt_skills(current_user)
+
+    if normalized.startswith("skills/"):
+        skill_id = normalized.split("/", 1)[1].strip()
+        if skill_id:
+            return await get_prompt_skill_detail(skill_id, current_user)
+
     try:
         return {"content": _resolve_prompt_text(filename)}
     except FileNotFoundError:
