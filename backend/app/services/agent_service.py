@@ -1,6 +1,7 @@
 
 import requests
 import re
+from urllib.parse import urljoin
 import urllib3
 import time
 import base64
@@ -101,6 +102,11 @@ You may only use these tools:
      - supplier_price_output (optional)
      - multiplier (optional, default 1.0)
      - is_active (optional, default false)
+3) read_webpage
+     - Parameters:
+         - url (required)
+         - max_chars (optional, default 4000, max 12000)
+         - max_pages (optional, default 1, max 5; reads pages sequentially by following next-page links)
 
 Rules:
 - Prefer search first, then update.
@@ -116,6 +122,7 @@ Output must be JSON object with keys: reply, plan.
     _SYSTEM_MANAGEMENT_ALLOWED_TOOLS = {
         "search_system_api_settings",
         "upsert_system_api_pricing",
+        "read_webpage",
     }
 
     _SYSTEM_WRITE_CONFIRM_KEYWORDS = {
@@ -291,6 +298,180 @@ Output must be JSON object with keys: reply, plan.
                 return hint
         return ""
 
+    def _extract_model_hint_from_text(self, text: str) -> str:
+        raw = str(text or "").strip()
+        if not raw:
+            return ""
+
+        patterns = [
+            r"(?:model|模型)\s*[:：]\s*([A-Za-z0-9._:/-]{2,80})",
+            r"(?:model|模型)\s+([A-Za-z0-9._:/-]{2,80})",
+        ]
+        for pattern in patterns:
+            m = re.search(pattern, raw, flags=re.IGNORECASE)
+            if m:
+                return str(m.group(1) or "").strip()
+        return ""
+
+    def _extract_requested_page_count(self, text: str) -> int:
+        raw = str(text or "").strip()
+        if not raw:
+            return 1
+
+        cn_match = re.search(r"(?:读|读取|翻到)?\s*([1-5])\s*页", raw, flags=re.IGNORECASE)
+        if cn_match:
+            try:
+                return max(1, min(5, int(cn_match.group(1))))
+            except Exception:
+                return 1
+
+        en_match = re.search(r"([1-5])\s*pages?", raw, flags=re.IGNORECASE)
+        if en_match:
+            try:
+                return max(1, min(5, int(en_match.group(1))))
+            except Exception:
+                return 1
+
+        return 1
+
+    def _extract_next_page_url_from_history(self, history: List[Dict[str, Any]]) -> str:
+        if not isinstance(history, list):
+            return ""
+
+        for item in reversed(history):
+            if not isinstance(item, dict):
+                continue
+            content = str(item.get("content") or "")
+            if not content:
+                continue
+
+            labeled = re.search(r"下一页\s*[:：]\s*(https?://[^\s)]+)", content, flags=re.IGNORECASE)
+            if labeled:
+                return str(labeled.group(1) or "").strip()
+
+            urls = re.findall(r"https?://[^\s)]+", content, flags=re.IGNORECASE)
+            if urls:
+                return str(urls[-1] or "").strip()
+
+        return ""
+
+    def _extract_pricing_candidates_from_webpage(
+        self,
+        webpage_result: Dict[str, Any],
+        query: str,
+        history: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        if not isinstance(webpage_result, dict):
+            return []
+
+        url = str(webpage_result.get("url") or "").strip()
+        title = str(webpage_result.get("title") or "").strip()
+        excerpt = str(webpage_result.get("excerpt") or "").strip()
+        combined = " ".join(part for part in [url, title, excerpt] if part).strip()
+        if not combined:
+            return []
+
+        provider_hint = (
+            self._extract_provider_hint_from_text(query)
+            or self._infer_provider_hint_from_history(query, history or [])
+            or self._extract_provider_hint_from_text(f"{url} {title}")
+        )
+        model_hint = self._extract_model_hint_from_text(query) or self._extract_model_hint_from_text(combined)
+
+        candidates: List[Dict[str, Any]] = []
+
+        image_patterns = [
+            r"(?:\$|usd\s*)?([0-9]+(?:\.[0-9]+)?)\s*(?:/|per\s*)(?:image|img|张|幅|次)",
+            r"(?:每\s*张|每\s*幅|单\s*张)\s*(?:\$|usd\s*)?([0-9]+(?:\.[0-9]+)?)",
+        ]
+        seen_image_prices = set()
+        for pattern in image_patterns:
+            for m in re.finditer(pattern, combined, flags=re.IGNORECASE):
+                raw_price = str(m.group(1) or "").strip()
+                if not raw_price or raw_price in seen_image_prices:
+                    continue
+                seen_image_prices.add(raw_price)
+                price = self._safe_non_negative_float(raw_price)
+                if price <= 0:
+                    continue
+                candidates.append({
+                    "provider": provider_hint,
+                    "category": "Image",
+                    "model": model_hint,
+                    "unit_type": "per_call",
+                    "supplier_price": price,
+                    "multiplier": 1.0,
+                    "source": "read_webpage",
+                })
+                if len(candidates) >= 6:
+                    break
+            if len(candidates) >= 6:
+                break
+
+        input_match = re.search(
+            r"(?:input|prompt|输入)\D{0,30}(?:\$|usd\s*)?([0-9]+(?:\.[0-9]+)?)",
+            combined,
+            flags=re.IGNORECASE,
+        )
+        output_match = re.search(
+            r"(?:output|completion|输出)\D{0,30}(?:\$|usd\s*)?([0-9]+(?:\.[0-9]+)?)",
+            combined,
+            flags=re.IGNORECASE,
+        )
+        if input_match or output_match:
+            in_price = self._safe_non_negative_float(input_match.group(1)) if input_match else 0.0
+            out_price = self._safe_non_negative_float(output_match.group(1)) if output_match else 0.0
+            if in_price > 0 or out_price > 0:
+                candidates.append({
+                    "provider": provider_hint,
+                    "category": "LLM",
+                    "model": model_hint,
+                    "unit_type": "per_million_tokens",
+                    "supplier_price_input": in_price if in_price > 0 else None,
+                    "supplier_price_output": out_price if out_price > 0 else None,
+                    "multiplier": 1.0,
+                    "source": "read_webpage",
+                })
+
+        return candidates[:6]
+
+    def _extract_next_page_url(self, html: str, current_url: str) -> str:
+        raw_html = str(html or "")
+        if not raw_html:
+            return ""
+
+        rel_next = re.search(
+            r'<link[^>]*rel=["\']?next["\']?[^>]*href=["\']([^"\']+)["\']',
+            raw_html,
+            flags=re.IGNORECASE,
+        )
+        if rel_next:
+            href = str(rel_next.group(1) or "").strip()
+            return urljoin(current_url, href) if href else ""
+
+        anchor_patterns = [
+            r'<a[^>]*href=["\']([^"\']+)["\'][^>]*>\s*(?:下一页|下页|next|next\s*page|›|&gt;|>)\s*</a>',
+            r'<a[^>]*>\s*(?:下一页|下页|next|next\s*page|›|&gt;|>)\s*</a>',
+        ]
+
+        for pattern in anchor_patterns:
+            for match in re.finditer(pattern, raw_html, flags=re.IGNORECASE):
+                if match.lastindex and match.lastindex >= 1:
+                    href = str(match.group(1) or "").strip()
+                    if href:
+                        return urljoin(current_url, href)
+
+        generic_next = re.search(
+            r'<a[^>]*href=["\']([^"\']+)["\'][^>]*(?:class|id)=["\'][^"\']*(?:next|pagination-next|pager-next)[^"\']*["\'][^>]*>',
+            raw_html,
+            flags=re.IGNORECASE,
+        )
+        if generic_next:
+            href = str(generic_next.group(1) or "").strip()
+            return urljoin(current_url, href) if href else ""
+
+        return ""
+
     def _build_system_management_action_summary(self, actions: List[AgentAction]) -> str:
         if not actions:
             return ""
@@ -327,6 +508,36 @@ Output must be JSON object with keys: reply, plan.
                     f"{action.result.get('action')} | "
                     f"{action.result.get('provider')}/{action.result.get('category')}/{action.result.get('model')}"
                 )
+
+            if action.tool == "read_webpage" and isinstance(action.result, dict):
+                title = str(action.result.get("title") or "").strip()
+                url = str(action.result.get("url") or "").strip()
+                excerpt = str(action.result.get("excerpt") or "").strip()
+                pages_read = int(action.result.get("pages_read") or 1)
+                next_page_url = str(action.result.get("next_page_url") or "").strip()
+                lines.append(f"网页读取：{title or url}（已读 {pages_read} 页）")
+                if excerpt:
+                    lines.append(excerpt[:500])
+                if next_page_url:
+                    lines.append(f"下一页：{next_page_url}")
+                pricing_candidates = action.result.get("pricing_candidates") if isinstance(action.result.get("pricing_candidates"), list) else []
+                if pricing_candidates:
+                    lines.append(f"识别到价格候选：{len(pricing_candidates)} 条")
+                    for idx, item in enumerate(pricing_candidates[:5], start=1):
+                        category = str(item.get("category") or "").strip() or "LLM"
+                        provider = str(item.get("provider") or "").strip() or "(待补充provider)"
+                        model = str(item.get("model") or "").strip() or "(待补充model)"
+                        if category.lower() == "image":
+                            price = self._safe_non_negative_float(item.get("supplier_price") or 0)
+                            lines.append(f"  - {idx}. {provider}/{category}/{model} per_image={price:.2f}")
+                        else:
+                            in_price = self._safe_non_negative_float(item.get("supplier_price_input") or 0)
+                            out_price = self._safe_non_negative_float(item.get("supplier_price_output") or 0)
+                            if in_price > 0 or out_price > 0:
+                                lines.append(f"  - {idx}. {provider}/{category}/{model} in/out={in_price:.2f}/{out_price:.2f}")
+                            else:
+                                price = self._safe_non_negative_float(item.get("supplier_price") or 0)
+                                lines.append(f"  - {idx}. {provider}/{category}/{model} cost={price:.2f}")
 
         return "\n".join(lines).strip()
     def _safe_json_dict_or_none(self, value: Any) -> Optional[Dict[str, Any]]:
@@ -876,6 +1087,7 @@ Output must be JSON object with keys: reply, plan.
         system_management_tools = {
             "search_system_api_settings",
             "upsert_system_api_pricing",
+            "read_webpage",
         }
         if tool in system_management_tools and not bool(getattr(user, "is_superuser", False)):
             return "Only superuser can use system management tools"
@@ -952,6 +1164,8 @@ Output must be JSON object with keys: reply, plan.
 
         merged_context = dict(request.context or {})
         merged_context["agent_mode"] = "system_management"
+        merged_context["query"] = request.query
+        merged_context["history"] = request.history or []
         merged_context["auth"] = {
             "user_id": user.id,
             "is_superuser": True,
@@ -970,6 +1184,7 @@ Output must be JSON object with keys: reply, plan.
 
         if not (llm_result.get("plan") or []):
             query_text = str(request.query or "").strip().lower()
+            requested_pages = self._extract_requested_page_count(request.query)
             list_intent_tokens = [
                 "api设置",
                 "api 設置",
@@ -1007,6 +1222,43 @@ Output must be JSON object with keys: reply, plan.
                 ]
                 if not str(llm_result.get("reply") or "").strip():
                     llm_result["reply"] = "正在为您查询现有系统 API 配置。"
+
+            url_match = re.search(r"https?://[^\s)]+", str(request.query or ""), flags=re.IGNORECASE)
+            if url_match and not (llm_result.get("plan") or []):
+                llm_result["plan"] = [
+                    {
+                        "tool": "read_webpage",
+                        "parameters": {
+                            "url": url_match.group(0),
+                            "max_chars": 6000,
+                        },
+                    }
+                ]
+                if not str(llm_result.get("reply") or "").strip():
+                    llm_result["reply"] = "正在读取并解析您提供的网页内容。"
+
+            continue_page_tokens = [
+                "继续读下一页",
+                "继续读取下一页",
+                "下一页",
+                "next page",
+                "continue to next",
+            ]
+            if any(token in query_text for token in continue_page_tokens) and not (llm_result.get("plan") or []):
+                next_url = self._extract_next_page_url_from_history(request.history or [])
+                if next_url:
+                    llm_result["plan"] = [
+                        {
+                            "tool": "read_webpage",
+                            "parameters": {
+                                "url": next_url,
+                                "max_chars": 6000,
+                                "max_pages": requested_pages,
+                            },
+                        }
+                    ]
+                    if not str(llm_result.get("reply") or "").strip():
+                        llm_result["reply"] = "正在继续逐页读取下一页内容。"
 
         actions: List[AgentAction] = []
         updated_data = None
@@ -1051,6 +1303,48 @@ Output must be JSON object with keys: reply, plan.
             if execution_result.get("data_update"):
                 updated_data = execution_result.get("data_update")
             actions.append(action)
+
+        write_intent_tokens = ["更新", "应用", "写入", "保存", "创建", "apply", "update", "create", "set", "sync"]
+        query_lower = str(request.query or "").strip().lower()
+        has_write_intent = any(token in query_lower for token in write_intent_tokens)
+
+        if has_write_intent and not pending_write_previews:
+            auto_blocked_actions: List[AgentAction] = []
+            for action in actions:
+                if action.tool != "read_webpage" or action.status != "completed" or not isinstance(action.result, dict):
+                    continue
+                candidates = action.result.get("pricing_candidates") if isinstance(action.result.get("pricing_candidates"), list) else []
+                for candidate in candidates[:3]:
+                    params = {
+                        "provider": str(candidate.get("provider") or "").strip(),
+                        "category": str(candidate.get("category") or "LLM").strip() or "LLM",
+                        "model": str(candidate.get("model") or "").strip(),
+                        "unit_type": str(candidate.get("unit_type") or "per_call").strip() or "per_call",
+                        "supplier_price": candidate.get("supplier_price"),
+                        "supplier_price_input": candidate.get("supplier_price_input"),
+                        "supplier_price_output": candidate.get("supplier_price_output"),
+                        "multiplier": candidate.get("multiplier") if candidate.get("multiplier") is not None else 1.0,
+                    }
+                    if not params["provider"] or not params["model"]:
+                        continue
+                    if (
+                        params.get("supplier_price") is None
+                        and params.get("supplier_price_input") is None
+                        and params.get("supplier_price_output") is None
+                    ):
+                        continue
+
+                    preview = self._normalize_system_upsert_preview(params)
+                    pending_write_previews.append(preview)
+                    auto_blocked_actions.append(AgentAction(
+                        tool="upsert_system_api_pricing",
+                        parameters=params,
+                        status="blocked",
+                        result="Write confirmation required. Auto-generated from webpage pricing extraction.",
+                    ))
+
+            if auto_blocked_actions:
+                actions.extend(auto_blocked_actions)
 
         if pending_write_previews:
             preview_lines = []
@@ -1387,6 +1681,120 @@ Output must be JSON object with keys: reply, plan.
                 "data_update": {
                     "type": "system_ai_pricing_updated",
                     "payload": payload,
+                },
+            }
+
+        if tool == "read_webpage":
+            url = str(params.get("url") or "").strip()
+            if not url:
+                return {"status": "failed", "result": "url is required"}
+
+            if not re.match(r"^https?://", url, flags=re.IGNORECASE):
+                return {"status": "failed", "result": "url must start with http:// or https://"}
+
+            try:
+                max_chars = int(params.get("max_chars") or 4000)
+            except Exception:
+                max_chars = 4000
+            max_chars = max(500, min(12000, max_chars))
+
+            try:
+                max_pages = int(params.get("max_pages") or 1)
+            except Exception:
+                max_pages = 1
+            max_pages = max(1, min(5, max_pages))
+
+            pages: List[Dict[str, Any]] = []
+            visited = set()
+            current_url = url
+            final_next_page_url = ""
+
+            for _ in range(max_pages):
+                if not current_url or current_url in visited:
+                    break
+                visited.add(current_url)
+
+                try:
+                    resp = await asyncio.to_thread(
+                        lambda u=current_url: requests.get(
+                            u,
+                            timeout=25,
+                            headers={
+                                "User-Agent": "Mozilla/5.0 (compatible; AIStory-SystemAgent/1.0)",
+                                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                            },
+                        )
+                    )
+                except Exception as e:
+                    if not pages:
+                        return {"status": "failed", "result": f"read_webpage request failed: {e}"}
+                    break
+
+                if resp.status_code >= 400:
+                    if not pages:
+                        return {"status": "failed", "result": f"read_webpage HTTP {resp.status_code}"}
+                    break
+
+                html = str(resp.text or "")
+                title_match = re.search(r"<title[^>]*>([\s\S]*?)</title>", html, flags=re.IGNORECASE)
+                title = re.sub(r"\s+", " ", title_match.group(1)).strip() if title_match else ""
+
+                cleaned = re.sub(r"<script[\s\S]*?</script>", " ", html, flags=re.IGNORECASE)
+                cleaned = re.sub(r"<style[\s\S]*?</style>", " ", cleaned, flags=re.IGNORECASE)
+                cleaned = re.sub(r"<[^>]+>", " ", cleaned)
+                cleaned = re.sub(r"\s+", " ", cleaned).strip()
+                excerpt = cleaned[:max_chars]
+
+                next_page_url = self._extract_next_page_url(html, current_url)
+                pages.append({
+                    "url": current_url,
+                    "title": title,
+                    "excerpt": excerpt,
+                    "content_length": len(cleaned),
+                    "next_page_url": next_page_url,
+                })
+
+                if not next_page_url:
+                    final_next_page_url = ""
+                    break
+                final_next_page_url = next_page_url
+                current_url = next_page_url
+
+            if not pages:
+                return {"status": "failed", "result": "read_webpage returned no content"}
+
+            first = pages[0]
+            merged_excerpt = "\n\n".join(
+                [
+                    f"[Page {idx + 1}] {item.get('title') or item.get('url')}\n{str(item.get('excerpt') or '')}"
+                    for idx, item in enumerate(pages)
+                ]
+            )[: max_chars * max_pages]
+
+            result = {
+                "url": first.get("url"),
+                "title": first.get("title"),
+                "excerpt": merged_excerpt,
+                "content_length": sum(int(item.get("content_length") or 0) for item in pages),
+                "pages_read": len(pages),
+                "pages": pages,
+                "next_page_url": final_next_page_url,
+                "pricing_candidates": self._extract_pricing_candidates_from_webpage(
+                    {
+                        "url": first.get("url"),
+                        "title": first.get("title"),
+                        "excerpt": merged_excerpt,
+                    },
+                    str((context or {}).get("query") or ""),
+                    (context or {}).get("history") if isinstance((context or {}).get("history"), list) else [],
+                ),
+            }
+            return {
+                "status": "completed",
+                "result": result,
+                "data_update": {
+                    "type": "webpage_read_result",
+                    "result": result,
                 },
             }
 
