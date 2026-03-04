@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { API_URL, BASE_URL } from '../config';
+import { API_URL, BASE_URL, FALLBACK_API_URL } from '../config';
 import { normalizeEntityToken } from '../lib/entityToken';
 
 // Use API_URL from config which supports production env vars
@@ -7,6 +7,45 @@ export const api = axios.create({
   baseURL: API_URL,
   timeout: 300000, // 5 minutes timeout for long generation tasks
 });
+
+const shouldRetryWithFallback = (error) => {
+    const status = Number(error?.response?.status || 0);
+    const code = String(error?.code || '');
+    const message = String(error?.message || '').toLowerCase();
+    const payload = error?.response?.data;
+    const payloadText = typeof payload === 'string' ? payload.toLowerCase() : '';
+
+    if (code === 'ERR_NETWORK') return true;
+    if (status >= 500) return true;
+
+    if (status === 404 && payloadText.includes('cannot get /api/')) {
+        return true;
+    }
+
+    return message.includes('network error');
+};
+
+api.interceptors.response.use(
+    (response) => response,
+    async (error) => {
+        const originalConfig = error?.config || {};
+        if (!FALLBACK_API_URL || originalConfig.__fallbackRetried) {
+            return Promise.reject(error);
+        }
+
+        if (!shouldRetryWithFallback(error)) {
+            return Promise.reject(error);
+        }
+
+        const retryConfig = {
+            ...originalConfig,
+            __fallbackRetried: true,
+            baseURL: FALLBACK_API_URL,
+        };
+
+        return api.request(retryConfig);
+    }
+);
 
 const VIDEO_JOB_TIMEOUT_MS_DEFAULT = (() => {
     const parsed = Number(import.meta?.env?.VITE_VIDEO_JOB_TIMEOUT_MS || 10 * 60 * 1000);

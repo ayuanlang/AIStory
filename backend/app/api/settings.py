@@ -810,10 +810,32 @@ def get_settings(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    _ensure_default_system_selection_for_user(db, current_user.id)
-    db.commit()
-    settings = db.query(APISetting).filter(APISetting.user_id == current_user.id).all()
-    return settings
+    try:
+        _ensure_default_system_selection_for_user(db, current_user.id)
+
+        rows = db.query(APISetting).filter(APISetting.user_id == current_user.id).all()
+        result: List[APISettingOut] = []
+        for row in rows:
+            result.append(APISettingOut(
+                id=row.id,
+                user_id=row.user_id,
+                name=row.name,
+                provider=row.provider,
+                category=row.category,
+                api_key=row.api_key,
+                base_url=row.base_url,
+                model=row.model,
+                config=_safe_json_dict(row.config),
+                is_active=bool(row.is_active),
+            ))
+        return result
+    except Exception as exc:
+        logger.exception("Failed to get settings for user_id=%s: %s", getattr(current_user, "id", None), exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return []
 
 @router.post("/settings", response_model=APISettingOut)
 def update_setting(
