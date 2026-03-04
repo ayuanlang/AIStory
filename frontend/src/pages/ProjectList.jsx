@@ -557,10 +557,8 @@ const ProjectList = ({ initialTab = 'projects' }) => {
             {/* Sidebar */}
             <aside className="w-64 border-r bg-card/30 flex flex-col p-6">
                 <div className="flex items-center gap-2 mb-10 px-2">
-                    <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
-                        <Layout className="w-5 h-5 text-primary-foreground" />
-                    </div>
-                    <span className="text-xl font-bold tracking-tight">AI Story</span>
+                    <img src="/woola.jpg" alt="woola AI story" className="w-8 h-8 rounded-lg object-cover" />
+                    <span className="text-xl font-bold tracking-tight">woola AI story</span>
                 </div>
 
                 <div className="space-y-2 flex-1">

@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Clapperboard, Menu, X } from 'lucide-react';
+import { Menu, X } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { getUiLang, tUI } from '../lib/uiLang';
 
@@ -29,8 +29,8 @@ const Navbar = ({ forceSolid = false, hideMenu = false, className = '' }) => {
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                 <div className="flex items-center justify-between h-16">
                     <Link to="/" className="flex items-center space-x-2 text-primary font-bold text-xl">
-                        <Clapperboard className="w-8 h-8" />
-                        <span>AI Story</span>
+                        <img src="/woola.jpg" alt="woola AI story" className="w-8 h-8 rounded-md object-cover" />
+                        <span>woola AI story</span>
                     </Link>
 
                     {/* Desktop Menu */}
