@@ -12152,6 +12152,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     );
 
     const [assetDetailModal, setAssetDetailModal] = useState({ open: false, type: 'start', keyframeIndex: -1 });
+    const [shotAssetsMetaIndex, setShotAssetsMetaIndex] = useState({});
+    const [shotAssetsMetaLoading, setShotAssetsMetaLoading] = useState(false);
 
     const openAssetDetailModal = (type, keyframeIndex = -1) => {
         setAssetDetailModal({ open: true, type, keyframeIndex });
@@ -12160,6 +12162,158 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const closeAssetDetailModal = () => {
         setAssetDetailModal({ open: false, type: 'start', keyframeIndex: -1 });
     };
+
+    const normalizeAssetUrlToken = useCallback((value) => {
+        const raw = String(value || '').trim();
+        if (!raw) return '';
+        try {
+            const parsed = new URL(raw, BASE_URL || window.location.origin);
+            return `${parsed.origin}${parsed.pathname}`.toLowerCase();
+        } catch (e) {
+            return raw.split('?')[0].split('#')[0].toLowerCase();
+        }
+    }, []);
+
+    const formatBytes = useCallback((bytesValue) => {
+        const num = Number(bytesValue);
+        if (!Number.isFinite(num) || num <= 0) {
+            const text = String(bytesValue || '').trim();
+            return text;
+        }
+        if (num >= 1024 * 1024 * 1024) return `${(num / 1024 / 1024 / 1024).toFixed(2)} GB`;
+        if (num >= 1024 * 1024) return `${(num / 1024 / 1024).toFixed(2)} MB`;
+        if (num >= 1024) return `${(num / 1024).toFixed(2)} KB`;
+        return `${num} B`;
+    }, []);
+
+    const deriveAspectRatio = useCallback((width, height) => {
+        const w = Number(width);
+        const h = Number(height);
+        if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return '';
+        const gcd = (a, b) => {
+            let x = Math.abs(Math.round(a));
+            let y = Math.abs(Math.round(b));
+            while (y) {
+                const temp = y;
+                y = x % y;
+                x = temp;
+            }
+            return x || 1;
+        };
+        const divisor = gcd(w, h);
+        return `${Math.round(w / divisor)}:${Math.round(h / divisor)}`;
+    }, []);
+
+    const parseResolution = useCallback((meta = {}) => {
+        const width = Number(meta.width);
+        const height = Number(meta.height);
+        if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+            return { width, height, resolution: `${Math.round(width)}x${Math.round(height)}` };
+        }
+        const resolutionText = String(meta.resolution || '').trim();
+        if (resolutionText) {
+            const matched = resolutionText.match(/(\d+)\s*[xX]\s*(\d+)/);
+            if (matched) {
+                const parsedWidth = Number(matched[1]);
+                const parsedHeight = Number(matched[2]);
+                if (Number.isFinite(parsedWidth) && Number.isFinite(parsedHeight) && parsedWidth > 0 && parsedHeight > 0) {
+                    return { width: parsedWidth, height: parsedHeight, resolution: `${parsedWidth}x${parsedHeight}` };
+                }
+            }
+            return { width: null, height: null, resolution: resolutionText };
+        }
+        return { width: null, height: null, resolution: '' };
+    }, []);
+
+    const resolveShotAssetByUrl = useCallback((url, preferredType = '') => {
+        const token = normalizeAssetUrlToken(url);
+        if (!token) return null;
+        const candidates = Array.isArray(shotAssetsMetaIndex[token]) ? shotAssetsMetaIndex[token] : [];
+        if (candidates.length === 0) return null;
+        const expectedType = String(preferredType || '').trim().toLowerCase();
+        if (expectedType) {
+            const matched = candidates.find((asset) => String(asset?.type || '').trim().toLowerCase() === expectedType);
+            if (matched) return matched;
+        }
+        return candidates[0] || null;
+    }, [normalizeAssetUrlToken, shotAssetsMetaIndex]);
+
+    const buildShotAssetDetail = useCallback((asset, fallbackType = 'image', fallbackUrl = '') => {
+        const meta = (asset?.meta_info && typeof asset.meta_info === 'object') ? asset.meta_info : {};
+        const { width, height, resolution } = parseResolution(meta);
+        const aspectRatio = String(meta.aspect_ratio || meta.aspectRatio || '').trim() || deriveAspectRatio(width, height);
+        const fileSize =
+            String(meta.file_size_display || '').trim()
+            || String(meta.size_display || '').trim()
+            || formatBytes(meta.file_size_bytes)
+            || formatBytes(meta.size)
+            || formatBytes(meta.size_bytes)
+            || String(meta.size || '').trim();
+        const durationRaw = meta.duration;
+        let durationText = '';
+        if (durationRaw !== undefined && durationRaw !== null && String(durationRaw).trim() !== '') {
+            const durationNum = Number(durationRaw);
+            if (Number.isFinite(durationNum) && durationNum > 0) {
+                durationText = `${Number(durationNum.toFixed(2))}s`;
+            } else {
+                durationText = String(durationRaw).trim();
+            }
+        }
+
+        return {
+            type: String(asset?.type || fallbackType || '').trim().toLowerCase(),
+            url: String(asset?.url || fallbackUrl || '').trim(),
+            filename: String(asset?.filename || '').trim(),
+            createdAt: asset?.created_at ? new Date(asset.created_at).toLocaleString() : '',
+            resolution,
+            aspectRatio,
+            fileSize,
+            format: String(meta.format || '').trim(),
+            duration: durationText,
+            source: String(meta.source || '').trim(),
+            provider: String(meta.provider || '').trim(),
+            model: String(meta.model || '').trim(),
+            rawMeta: meta,
+        };
+    }, [deriveAspectRatio, formatBytes, parseResolution]);
+
+    useEffect(() => {
+        if (!editingShot?.id) {
+            setShotAssetsMetaIndex({});
+            setShotAssetsMetaLoading(false);
+            return;
+        }
+
+        let active = true;
+        const loadShotAssets = async () => {
+            setShotAssetsMetaLoading(true);
+            try {
+                const params = { shot_id: editingShot.id, limit: 300 };
+                if (projectId) params.project_id = projectId;
+                const data = await fetchAssets(params);
+                if (!active) return;
+
+                const nextIndex = {};
+                (Array.isArray(data) ? data : []).forEach((asset) => {
+                    const token = normalizeAssetUrlToken(asset?.url);
+                    if (!token) return;
+                    if (!Array.isArray(nextIndex[token])) nextIndex[token] = [];
+                    nextIndex[token].push(asset);
+                });
+                setShotAssetsMetaIndex(nextIndex);
+            } catch (e) {
+                console.error('Failed to load shot assets metadata', e);
+                if (active) setShotAssetsMetaIndex({});
+            } finally {
+                if (active) setShotAssetsMetaLoading(false);
+            }
+        };
+
+        loadShotAssets();
+        return () => {
+            active = false;
+        };
+    }, [editingShot?.id, normalizeAssetUrlToken, projectId]);
 
     const overwriteShotField = useCallback((field, value, extra = {}) => {
         const nextValue = String(value ?? '');
@@ -13477,6 +13631,91 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         return [...new Set(refs)];
     }, [entities]);
 
+    const getPromptMatchedEntities = useCallback((shot, sourceText = '') => {
+        if (!shot || !Array.isArray(entities) || entities.length === 0) return [];
+
+        const normalizeName = (text) => normalizeEntityToken(text);
+        const regexes = [
+            /\[([\s\S]+?)\]/g,
+            /\{([\s\S]+?)\}/g,
+            /【([\s\S]+?)】/g,
+            /｛([\s\S]+?)｝/g,
+            /(?:^|[\s,，;；])(@[^\s,，;；\]\[\(\)（）\{\}【】]+)/g,
+        ];
+
+        const textToScan = String(sourceText || '').trim();
+        if (!textToScan) return [];
+
+        const candidateSet = new Set();
+        regexes.forEach((regex) => {
+            regex.lastIndex = 0;
+            let matched;
+            while ((matched = regex.exec(textToScan)) !== null) {
+                const token = normalizeName(matched?.[1] || '');
+                if (token) candidateSet.add(token);
+            }
+        });
+
+        const candidates = Array.from(candidateSet);
+        if (candidates.length === 0) return [];
+
+        return entities.filter((entity) => {
+            const nameCn = normalizeName(entity?.name || '');
+            const nameEn = normalizeName(entity?.name_en || '');
+            if (!nameCn && !nameEn) return false;
+            return candidates.some((candidate) => candidate === nameCn || (nameEn && candidate === nameEn));
+        });
+    }, [entities]);
+
+    const getEndFrameVisibleRefs = useCallback((shot, sourceText = '') => {
+        const tech = JSON.parse(shot?.technical_notes || '{}');
+        const isManualMode = Array.isArray(tech.end_ref_image_urls);
+        const isUserEdited = Boolean(tech.end_ref_image_urls_user_edited);
+        const isLockedManual = isManualMode && isUserEdited;
+        const deletedRefs = Array.isArray(tech.deleted_ref_urls) ? tech.deleted_ref_urls : [];
+
+        const matchedEntities = getPromptMatchedEntities(shot, sourceText);
+        const autoMatches = matchedEntities
+            .map((entity) => String(entity?.image_url || '').trim())
+            .filter(Boolean);
+        const environmentRefSet = new Set(
+            matchedEntities
+                .filter((entity) => {
+                    const entityType = String(entity?.type || '').trim().toLowerCase();
+                    return entityType.includes('environment') || entityType.includes('env') || entityType.includes('scene');
+                })
+                .map((entity) => String(entity?.image_url || '').trim())
+                .filter(Boolean)
+        );
+
+        let refs = [];
+        if (isLockedManual) {
+            refs = [...tech.end_ref_image_urls];
+        } else if (isManualMode) {
+            const savedRefs = [...tech.end_ref_image_urls];
+            const newAutoMatches = autoMatches.filter((url) => !savedRefs.includes(url) && !deletedRefs.includes(url));
+            refs = [...savedRefs, ...newAutoMatches];
+        } else {
+            refs = [...autoMatches];
+        }
+
+        const currentStartFrame = String(shot?.image_url || '').trim();
+        if (!isLockedManual && currentStartFrame && !refs.includes(currentStartFrame) && !deletedRefs.includes(currentStartFrame)) {
+            refs.unshift(currentStartFrame);
+        }
+
+        if (currentStartFrame && refs.includes(currentStartFrame) && environmentRefSet.size > 0) {
+            refs = refs.filter((url) => {
+                const normalized = String(url || '').trim();
+                if (!normalized) return false;
+                if (normalized === currentStartFrame) return true;
+                return !environmentRefSet.has(normalized);
+            });
+        }
+
+        return [...new Set(refs.map((url) => String(url || '').trim()).filter(Boolean))];
+    }, [getPromptMatchedEntities]);
+
     // Initialize Reference Images in technical_notes if empty
     useEffect(() => {
         if (editingShot && entities.length > 0) {
@@ -14038,31 +14277,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
              }
 
              try {
-                // Include Entity Refs + Manual Refs
                 const tech = JSON.parse(editingShot.technical_notes || '{}');
-                const isManualMode = Array.isArray(tech.end_ref_image_urls);
-                const isUserEdited = Boolean(tech.end_ref_image_urls_user_edited);
-                const isLockedManual = isManualMode && isUserEdited;
-                // Use End Refs specifically
-                const refs = [];
-                
-                if (isLockedManual) {
-                    refs.push(...tech.end_ref_image_urls);
-                } else if (isManualMode) {
-                    refs.push(...tech.end_ref_image_urls);
-                } else {
-                    const suggested = getSuggestedRefImages(editingShot, rawPrompt, true);
-                    refs.push(...suggested);
-                }
-                
-                const deletedRefs = Array.isArray(tech.deleted_ref_urls) ? tech.deleted_ref_urls : [];
-                const isDeleted = deletedRefs.includes(editingShot.image_url);
-                
-                if (!isLockedManual && editingShot.image_url && !refs.includes(editingShot.image_url) && !isDeleted) {
-                    refs.unshift(editingShot.image_url);
-                }
-                
-                const uniqueRefs = [...new Set(refs)].filter(Boolean);
+                const uniqueRefs = getEndFrameVisibleRefs(editingShot, rawPrompt);
                 
                 // NEW: Inject Global Context
                 const globalCtx = getGlobalContextStr();
@@ -15728,6 +15944,87 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 };
                                                 const modalType = assetDetailModal.type;
                                                 const keyframe = modalType === 'keyframe' ? localKeyframes[assetDetailModal.keyframeIndex] : null;
+                                                const endFrameUrl = String(tech.end_frame_url || '');
+
+                                                let detailUrl = '';
+                                                let detailType = 'image';
+                                                if (modalType === 'start') {
+                                                    detailUrl = String(editingShot.image_url || '');
+                                                    detailType = 'image';
+                                                } else if (modalType === 'end') {
+                                                    detailUrl = endFrameUrl;
+                                                    detailType = 'image';
+                                                } else if (modalType === 'video') {
+                                                    detailUrl = String(editingShot.video_url || '');
+                                                    detailType = 'video';
+                                                } else {
+                                                    detailUrl = String(keyframe?.url || '');
+                                                    detailType = 'image';
+                                                }
+
+                                                const linkedAsset = resolveShotAssetByUrl(detailUrl, detailType);
+                                                const linkedAssetDetail = buildShotAssetDetail(linkedAsset, detailType, detailUrl);
+                                                const linkedAssetMeta = linkedAssetDetail.rawMeta;
+
+                                                const renderAssetMetaPanel = () => (
+                                                    <div className="space-y-2 rounded-lg border border-white/10 bg-black/30 p-3">
+                                                        <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('资产元数据', 'Asset Metadata')}</div>
+                                                        {shotAssetsMetaLoading && (
+                                                            <div className="text-xs text-muted-foreground flex items-center gap-1">
+                                                                <Loader2 className="w-3 h-3 animate-spin" />
+                                                                {t('加载中...', 'Loading...')}
+                                                            </div>
+                                                        )}
+                                                        <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
+                                                            <div>
+                                                                <div className="text-[10px] text-muted-foreground uppercase">{t('分辨率', 'Resolution')}</div>
+                                                                <div className="text-white/90">{linkedAssetDetail.resolution || '-'}</div>
+                                                            </div>
+                                                            <div>
+                                                                <div className="text-[10px] text-muted-foreground uppercase">{t('画幅比', 'Aspect Ratio')}</div>
+                                                                <div className="text-white/90">{linkedAssetDetail.aspectRatio || '-'}</div>
+                                                            </div>
+                                                            <div>
+                                                                <div className="text-[10px] text-muted-foreground uppercase">{t('文件大小', 'File Size')}</div>
+                                                                <div className="text-white/90">{linkedAssetDetail.fileSize || '-'}</div>
+                                                            </div>
+                                                            <div>
+                                                                <div className="text-[10px] text-muted-foreground uppercase">{t('格式', 'Format')}</div>
+                                                                <div className="text-white/90">{linkedAssetDetail.format || '-'}</div>
+                                                            </div>
+                                                            <div>
+                                                                <div className="text-[10px] text-muted-foreground uppercase">{t('时长', 'Duration')}</div>
+                                                                <div className="text-white/90">{linkedAssetDetail.duration || '-'}</div>
+                                                            </div>
+                                                            <div>
+                                                                <div className="text-[10px] text-muted-foreground uppercase">{t('来源', 'Source')}</div>
+                                                                <div className="text-white/90">{linkedAssetDetail.source || '-'}</div>
+                                                            </div>
+                                                            <div>
+                                                                <div className="text-[10px] text-muted-foreground uppercase">Provider</div>
+                                                                <div className="text-white/90">{linkedAssetDetail.provider || '-'}</div>
+                                                            </div>
+                                                            <div>
+                                                                <div className="text-[10px] text-muted-foreground uppercase">Model</div>
+                                                                <div className="text-white/90">{linkedAssetDetail.model || '-'}</div>
+                                                            </div>
+                                                            <div className="col-span-2">
+                                                                <div className="text-[10px] text-muted-foreground uppercase">{t('文件名', 'Filename')}</div>
+                                                                <div className="text-white/90 break-all">{linkedAssetDetail.filename || linkedAssetDetail.url.split('/').pop() || '-'}</div>
+                                                            </div>
+                                                            <div className="col-span-2">
+                                                                <div className="text-[10px] text-muted-foreground uppercase">{t('创建时间', 'Created At')}</div>
+                                                                <div className="text-white/90">{linkedAssetDetail.createdAt || '-'}</div>
+                                                            </div>
+                                                        </div>
+                                                        {linkedAssetMeta && Object.keys(linkedAssetMeta).length > 0 && (
+                                                            <details className="pt-1">
+                                                                <summary className="text-[10px] uppercase text-muted-foreground cursor-pointer">{t('原始元数据', 'Raw Metadata')}</summary>
+                                                                <pre className="mt-2 p-2 rounded border border-white/10 bg-black/40 text-[10px] text-gray-300 overflow-auto max-h-36">{JSON.stringify(linkedAssetMeta, null, 2)}</pre>
+                                                            </details>
+                                                        )}
+                                                    </div>
+                                                );
 
                                                 if (modalType === 'start') {
                                                     return (
@@ -15744,6 +16041,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                 </div>
                                                                 <div className="text-xs text-muted-foreground break-all">{t('图片 URL', 'Image URL')}: {editingShot.image_url || '-'}</div>
                                                                 <div className="text-xs text-muted-foreground">{t('参考图数量', 'Ref Count')}: {(Array.isArray(tech.ref_image_urls) ? tech.ref_image_urls.length : 0)}</div>
+                                                                {renderAssetMetaPanel()}
                                                             </div>
                                                             <div className="space-y-3">
                                                                 <div className="flex items-center gap-2">
@@ -15792,7 +16090,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 }
 
                                                 if (modalType === 'end') {
-                                                    const endFrameUrl = tech.end_frame_url || '';
                                                     return (
                                                         <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_1fr] gap-4">
                                                             <div className="space-y-3">
@@ -15807,6 +16104,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                 </div>
                                                                 <div className="text-xs text-muted-foreground break-all">{t('结束帧 URL', 'End Frame URL')}: {endFrameUrl || '-'}</div>
                                                                 <div className="text-xs text-muted-foreground">{t('参考图数量', 'Ref Count')}: {(Array.isArray(tech.end_ref_image_urls) ? tech.end_ref_image_urls.length : 0)}</div>
+                                                                {renderAssetMetaPanel()}
                                                             </div>
                                                             <div className="space-y-3">
                                                                 <div className="flex items-center gap-2">
@@ -15881,6 +16179,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                 <div className="text-xs text-muted-foreground break-all">{t('视频 URL', 'Video URL')}: {editingShot.video_url || '-'}</div>
                                                                 <div className="text-xs text-muted-foreground">{t('时长', 'Duration')}: {editingShot.duration || '5'}</div>
                                                                 <div className="text-xs text-muted-foreground">{t('模式', 'Mode')}: {tech.video_mode_unified || tech.video_gen_mode || 'start'}</div>
+                                                                {renderAssetMetaPanel()}
                                                             </div>
                                                             <div className="space-y-3">
                                                                 <div className="flex items-center gap-2">
@@ -15958,6 +16257,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                 {keyframe?.url ? <img src={getFullUrl(keyframe.url)} className="w-full h-full object-cover"/> : <ImageIcon className="w-8 h-8 opacity-30" />}
                                                             </div>
                                                             <div className="text-xs text-muted-foreground break-all">{t('关键帧 URL', 'Keyframe URL')}: {keyframe?.url || '-'}</div>
+                                                            {renderAssetMetaPanel()}
                                                         </div>
                                                         <div className="space-y-3">
                                                             <div className="flex items-center gap-2">
