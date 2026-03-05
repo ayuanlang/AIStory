@@ -1,9 +1,21 @@
 import React, { createContext, useState, useEffect } from 'react';
-import { getSettings } from '../services/api';
+import { getSettings, getMaintenanceStatus } from '../services/api';
 
 export const StoreContext = createContext();
 
 export const StoreProvider = ({ children }) => {
+    const decodeJwtPayload = (token) => {
+        try {
+            const parts = String(token || '').split('.');
+            if (parts.length < 2) return null;
+            const base64Url = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+            const padded = base64Url.padEnd(Math.ceil(base64Url.length / 4) * 4, '=');
+            return JSON.parse(atob(padded));
+        } catch {
+            return null;
+        }
+    };
+
     // LLM Config
     const [llmConfig, setLLMConfig] = useState(() => {
         try {
@@ -56,6 +68,20 @@ export const StoreProvider = ({ children }) => {
         try {
             const token = localStorage.getItem('token');
             if (!token) return;
+
+            const payload = decodeJwtPayload(token);
+            const isSuperuser = !!(payload?.is_superuser || payload?.superuser);
+
+            if (!isSuperuser) {
+                try {
+                    const maintenance = await getMaintenanceStatus();
+                    if (maintenance?.is_active) {
+                        return;
+                    }
+                } catch {
+                    // ignore maintenance-status failures and proceed with existing behavior
+                }
+            }
 
             const settings = await getSettings();
             if (!settings || !Array.isArray(settings)) return;
@@ -148,6 +174,10 @@ export const StoreProvider = ({ children }) => {
             }
 
         } catch (e) {
+            const detail = String(e?.response?.data?.detail || e?.message || '');
+            if (e?.response?.status === 503 && detail.includes('系统正在维护')) {
+                return;
+            }
             console.warn("Failed to refresh settings from backend (may be offline or logged out)", e);
         }
     };

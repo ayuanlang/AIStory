@@ -1239,6 +1239,26 @@ export const getAdminStorageUsage = async () => {
     return response.data;
 };
 
+export const getAdminMaintenanceConfig = async () => {
+    const response = await api.get('/admin/maintenance-config');
+    return response.data;
+};
+
+export const updateAdminMaintenanceConfig = async (payload = {}) => {
+    const response = await api.post('/admin/maintenance-config', payload || {});
+    return response.data;
+};
+
+export const getMaintenanceStatus = async () => {
+    const response = await api.get('/admin/maintenance-status', {
+        headers: {
+            'Cache-Control': 'no-cache',
+            Pragma: 'no-cache',
+        },
+    });
+    return response.data;
+};
+
 export const fetchUnreferencedAssetIds = async () => {
     const response = await api.get('/assets/unreferenced-ids');
     return response.data;
@@ -1460,6 +1480,8 @@ export const injectEntityFeatures = (prompt, entities = []) => {
 export const getBillingOptions = async () => (await api.get('/billing/options')).data;
 export const getBillingFeaturePricing = async () => (await api.get('/billing/feature-pricing')).data;
 export const updateBillingFeaturePricing = async (featurePricing) => (await api.put('/billing/feature-pricing', { feature_pricing: featurePricing || {} })).data;
+export const getBillingDefaultApiPricing = async () => (await api.get('/billing/default-api-pricing')).data;
+export const updateBillingDefaultApiPricing = async (defaultApiPricing) => (await api.put('/billing/default-api-pricing', { default_api_pricing: defaultApiPricing || {} })).data;
 export const getAgentToolPolicy = async () => (await api.get('/settings/system/agent/tools-policy')).data;
 export const updateAgentToolPolicy = async (payload = {}) => (await api.put('/settings/system/agent/tools-policy', payload || {})).data;
 export const getSystemAIAssistantAnalyze = async (payload = {}) => (await api.post('/settings/system/ai-assistant/analyze', payload || {})).data;

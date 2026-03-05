@@ -1,23 +1,26 @@
 
 from contextlib import asynccontextmanager
 from typing import Iterable, Tuple
+from datetime import datetime
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 from app.core.config import settings
 from app.api import endpoints, settings as settings_api
-from app.db.session import engine
-from app.models.all_models import Base
+from app.db.session import engine, SessionLocal
+from app.models.all_models import Base, APISetting, User
 from app.core.logging import LoggingMiddleware, logger, configure_uvicorn_logging_noise_reduction
 from app.db.init_db import check_and_migrate_tables, create_default_superuser, init_initial_data
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from jose import JWTError, jwt
+import time
 
 # Create DB tables
 Base.metadata.create_all(bind=engine)
@@ -122,6 +125,156 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+_MAINTENANCE_CATEGORY = "System_Maintenance"
+_MAINTENANCE_PROVIDER = "maintenance_mode"
+_MAINTENANCE_CACHE_TTL_SECONDS = 5
+_maintenance_cache = {
+    "checked_at": 0.0,
+    "status": {
+        "enabled": False,
+        "is_active": False,
+        "ends_at": None,
+        "message": "系统正在维护",
+    },
+}
+
+
+def _parse_iso_datetime_safe(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        normalized = raw.replace("Z", "+00:00") if raw.endswith("Z") else raw
+        dt = datetime.fromisoformat(normalized)
+        if dt.tzinfo is not None:
+            return dt.astimezone().replace(tzinfo=None)
+        return dt
+    except Exception:
+        return None
+
+
+def _read_maintenance_status_from_db():
+    try:
+        with SessionLocal() as db:
+            row = db.query(APISetting).filter(
+                APISetting.category == _MAINTENANCE_CATEGORY,
+                APISetting.provider == _MAINTENANCE_PROVIDER,
+            ).first()
+            cfg = dict(row.config or {}) if row else {}
+
+            enabled = bool(cfg.get("enabled", False))
+            ends_at = str(cfg.get("ends_at") or "").strip() or None
+            message = str(cfg.get("message") or "").strip() or "系统正在维护"
+
+            ends_at_dt = _parse_iso_datetime_safe(ends_at)
+            is_active = bool(enabled and (not ends_at_dt or datetime.utcnow() < ends_at_dt))
+
+            return {
+                "enabled": enabled,
+                "is_active": is_active,
+                "ends_at": ends_at,
+                "message": message,
+            }
+    except Exception as e:
+        logger.warning("Failed to read maintenance status: %s", e)
+        return {
+            "enabled": False,
+            "is_active": False,
+            "ends_at": None,
+            "message": "系统正在维护",
+        }
+
+
+def _get_maintenance_status_cached(force: bool = False):
+    now = time.time()
+    if force or (now - float(_maintenance_cache.get("checked_at", 0.0))) > _MAINTENANCE_CACHE_TTL_SECONDS:
+        _maintenance_cache["status"] = _read_maintenance_status_from_db()
+        _maintenance_cache["checked_at"] = now
+    return _maintenance_cache["status"]
+
+
+def _is_superuser_request(request: Request) -> bool:
+    auth = str(request.headers.get("authorization") or "")
+    if not auth.lower().startswith("bearer "):
+        return False
+
+    token = auth.split(" ", 1)[1].strip()
+    if not token:
+        return False
+
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+    except JWTError:
+        return False
+
+    uid = payload.get("uid")
+    username = str(payload.get("uname") or payload.get("sub") or "").strip()
+
+    try:
+        with SessionLocal() as db:
+            user = None
+            if uid is not None:
+                try:
+                    user = db.query(User).filter(User.id == int(uid)).first()
+                except Exception:
+                    user = None
+            if not user and username:
+                user = db.query(User).filter(User.username == username).first()
+            return bool(user and bool(getattr(user, "is_superuser", False)))
+    except Exception:
+        return False
+
+
+@app.middleware("http")
+async def maintenance_mode_middleware(request: Request, call_next):
+    path = str(request.url.path or "")
+    api_prefix = str(settings.API_V1_STR or "")
+    exempt_paths = {
+        "/",
+        "/healthz",
+        f"{api_prefix}/admin/maintenance-status",
+        f"{api_prefix}/admin/maintenance-config",
+        f"{api_prefix}/login",
+        f"{api_prefix}/login/access-token",
+    }
+
+    if path in exempt_paths:
+        return await call_next(request)
+
+    status = _get_maintenance_status_cached()
+    if not bool(status.get("is_active", False)):
+        return await call_next(request)
+
+    if _is_superuser_request(request):
+        return await call_next(request)
+
+    detail = str(status.get("message") or "系统正在维护")
+    if path.startswith(api_prefix):
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": detail,
+                "maintenance": {
+                    "enabled": bool(status.get("enabled", False)),
+                    "is_active": True,
+                    "ends_at": status.get("ends_at"),
+                },
+            },
+        )
+
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": detail,
+            "maintenance": {
+                "enabled": bool(status.get("enabled", False)),
+                "is_active": True,
+                "ends_at": status.get("ends_at"),
+            },
+        },
+    )
 
 
 @app.middleware("http")

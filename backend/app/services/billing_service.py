@@ -13,6 +13,15 @@ class BillingService:
     TOKEN_UNIT_TYPES = {'per_token', 'per_1k_tokens', 'per_million_tokens'}
     FEATURE_PRICING_PROVIDER = "feature_pricing"
     FEATURE_PRICING_MODEL = "global"
+    DEFAULT_API_PRICING_PROVIDER = "default_api_pricing"
+    DEFAULT_API_PRICING_MODEL = "global"
+    DEFAULT_API_PRICING_BY_CATEGORY = {
+        "LLM": {"unit_type": "per_million_tokens", "cost": 90, "cost_input": 90, "cost_output": 700},
+        "Vision": {"unit_type": "per_million_tokens", "cost": 120, "cost_input": 120, "cost_output": 800},
+        "Image": {"unit_type": "per_call", "cost": 10, "cost_input": 0, "cost_output": 0},
+        "Video": {"unit_type": "per_second", "cost": 30, "cost_input": 0, "cost_output": 0},
+        "Tools": {"unit_type": "per_call", "cost": 5, "cost_input": 0, "cost_output": 0},
+    }
 
     @staticmethod
     def _to_int(value: Any, default: int = 0) -> int:
@@ -54,6 +63,107 @@ class BillingService:
         if normalized == "llm_chat":
             return "LLM"
         return "Tools"
+
+    @staticmethod
+    def _normalize_api_pricing_config(raw_config: Dict[str, Any]) -> Dict[str, Any]:
+        config = dict(raw_config or {})
+        unit_type = str(config.get("unit_type", "per_call") or "per_call").strip()
+        allowed_unit_types = {"per_call", "per_second", "per_minute", *BillingService.TOKEN_UNIT_TYPES}
+        if unit_type not in allowed_unit_types:
+            unit_type = "per_call"
+
+        return {
+            "unit_type": unit_type,
+            "cost": max(0, BillingService._to_int(config.get("cost", 0), 0)),
+            "cost_input": max(0, BillingService._to_int(config.get("cost_input", 0), 0)),
+            "cost_output": max(0, BillingService._to_int(config.get("cost_output", 0), 0)),
+        }
+
+    @staticmethod
+    def _has_effective_api_pricing(config: Dict[str, Any]) -> bool:
+        normalized = BillingService._normalize_api_pricing_config(config)
+        return any(normalized.get(key, 0) > 0 for key in ("cost", "cost_input", "cost_output"))
+
+    @staticmethod
+    def _normalize_default_api_pricing_map(pricing_map: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+        normalized: Dict[str, Dict[str, Any]] = {}
+        source = pricing_map if isinstance(pricing_map, dict) else {}
+        for category, fallback_cfg in BillingService.DEFAULT_API_PRICING_BY_CATEGORY.items():
+            raw = source.get(category)
+            if isinstance(raw, dict):
+                normalized[category] = BillingService._normalize_api_pricing_config(raw)
+                continue
+            if raw is not None:
+                normalized[category] = BillingService._normalize_api_pricing_config({
+                    "unit_type": "per_call",
+                    "cost": raw,
+                    "cost_input": 0,
+                    "cost_output": 0,
+                })
+                continue
+            normalized[category] = BillingService._normalize_api_pricing_config(fallback_cfg)
+        return normalized
+
+    @staticmethod
+    def get_recommended_default_api_pricing_map() -> Dict[str, Dict[str, Any]]:
+        return BillingService._normalize_default_api_pricing_map(BillingService.DEFAULT_API_PRICING_BY_CATEGORY)
+
+    @staticmethod
+    def get_default_api_pricing_map(db: Session) -> Dict[str, Dict[str, Any]]:
+        row = db.query(SystemAPISetting).filter(
+            SystemAPISetting.category == "System_Payment",
+            SystemAPISetting.provider == BillingService.DEFAULT_API_PRICING_PROVIDER,
+            SystemAPISetting.model == BillingService.DEFAULT_API_PRICING_MODEL,
+        ).order_by(SystemAPISetting.id.desc()).first()
+
+        if not row:
+            return BillingService.get_recommended_default_api_pricing_map()
+
+        cfg = BillingService._safe_json_dict(row.config)
+        raw_map = cfg.get("default_api_pricing") if isinstance(cfg.get("default_api_pricing"), dict) else {}
+        return BillingService._normalize_default_api_pricing_map(raw_map)
+
+    @staticmethod
+    def set_default_api_pricing_map(db: Session, pricing_map: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+        normalized = BillingService._normalize_default_api_pricing_map(pricing_map)
+
+        row = db.query(SystemAPISetting).filter(
+            SystemAPISetting.category == "System_Payment",
+            SystemAPISetting.provider == BillingService.DEFAULT_API_PRICING_PROVIDER,
+            SystemAPISetting.model == BillingService.DEFAULT_API_PRICING_MODEL,
+        ).order_by(SystemAPISetting.id.desc()).first()
+
+        if not row:
+            row = SystemAPISetting(
+                name="Default API Pricing",
+                category="System_Payment",
+                provider=BillingService.DEFAULT_API_PRICING_PROVIDER,
+                api_key="",
+                base_url="",
+                model=BillingService.DEFAULT_API_PRICING_MODEL,
+                deprecated=False,
+                config={"default_api_pricing": normalized},
+                is_active=True,
+            )
+            db.add(row)
+            db.commit()
+            return normalized
+
+        cfg = BillingService._safe_json_dict(row.config)
+        cfg["default_api_pricing"] = normalized
+        row.config = cfg
+        db.commit()
+        return normalized
+
+    @staticmethod
+    def _default_api_pricing_config(db: Session, task_type: str) -> Dict[str, Any]:
+        pricing_map = BillingService.get_default_api_pricing_map(db)
+        category = BillingService._task_type_to_category(task_type)
+        default_cfg = pricing_map.get(
+            category,
+            pricing_map.get("Tools") or BillingService.DEFAULT_API_PRICING_BY_CATEGORY["Tools"],
+        )
+        return BillingService._normalize_api_pricing_config(default_cfg)
 
     @staticmethod
     def get_feature_pricing_map(db: Session) -> Dict[str, int]:
@@ -141,6 +251,7 @@ class BillingService:
         provider_text = str(provider or "").strip()
         model_text = str(model or "").strip()
         category = BillingService._task_type_to_category(task_type)
+        default_pricing = BillingService._default_api_pricing_config(db, task_type)
 
         query = db.query(SystemAPISetting).filter(
             SystemAPISetting.category == category,
@@ -168,19 +279,21 @@ class BillingService:
             row = query_any_category.order_by(SystemAPISetting.id.desc()).first()
 
         if not row:
-            return {}
+            return default_pricing
 
         cfg = BillingService._safe_json_dict(row.config)
         api_pricing = cfg.get("api_pricing") if isinstance(cfg.get("api_pricing"), dict) else {}
-        if api_pricing:
-            return api_pricing
-
-        return {
+        resolved = api_pricing if api_pricing else {
             "unit_type": cfg.get("billing_unit_type", "per_call"),
             "cost": cfg.get("billing_cost", 0),
             "cost_input": cfg.get("billing_cost_input", 0),
             "cost_output": cfg.get("billing_cost_output", 0),
         }
+        resolved = BillingService._normalize_api_pricing_config(resolved)
+
+        if not BillingService._has_effective_api_pricing(resolved):
+            return default_pricing
+        return resolved
 
     @staticmethod
     def _estimate_api_cost_from_config(config: Dict[str, Any], details: dict = None) -> int:

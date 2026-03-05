@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getAgentToolPolicy, updateAgentToolPolicy, getSystemSettingsManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, exportSystemSettingsManage, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, getAdminLlmLogFiles, getAdminLlmLogView, getAdminStorageUsage } from '../services/api';
+import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getSystemSettingsManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, exportSystemSettingsManage, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, getAdminLlmLogFiles, getAdminLlmLogView, getAdminStorageUsage, getAdminMaintenanceConfig, updateAdminMaintenanceConfig } from '../services/api';
 import Footer from '../components/Footer';
 import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive } from 'lucide-react';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
@@ -14,6 +14,10 @@ const UserAdmin = () => {
     const [featurePricingMap, setFeaturePricingMap] = useState({});
     const [featurePricingRows, setFeaturePricingRows] = useState([]);
     const [isFeaturePricingSaving, setIsFeaturePricingSaving] = useState(false);
+    const [defaultApiPricingMap, setDefaultApiPricingMap] = useState({});
+    const [recommendedDefaultApiPricingMap, setRecommendedDefaultApiPricingMap] = useState({});
+    const [defaultApiPricingRows, setDefaultApiPricingRows] = useState([]);
+    const [isDefaultApiPricingSaving, setIsDefaultApiPricingSaving] = useState(false);
     const [agentToolPolicy, setAgentToolPolicy] = useState({ default_allow: true, roles: {} });
     const [agentToolPolicyDraft, setAgentToolPolicyDraft] = useState('{\n  "default_allow": true,\n  "roles": {}\n}');
     const [isAgentToolPolicySaving, setIsAgentToolPolicySaving] = useState(false);
@@ -44,6 +48,12 @@ const UserAdmin = () => {
         frontend_base_url: '',
     });
     const [isSmtpConfigLoading, setIsSmtpConfigLoading] = useState(false);
+    const [maintenanceConfig, setMaintenanceConfig] = useState({
+        enabled: false,
+        ends_at: '',
+        message: '系统正在维护',
+    });
+    const [isMaintenanceLoading, setIsMaintenanceLoading] = useState(false);
     const [smtpTestEmail, setSmtpTestEmail] = useState('');
     const [isSmtpTestLoading, setIsSmtpTestLoading] = useState(false);
     const [smtpBroadcast, setSmtpBroadcast] = useState({
@@ -133,6 +143,59 @@ const UserAdmin = () => {
             next[name] = Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
         });
         return next;
+    };
+
+    const DEFAULT_API_PRICING_CATEGORY_ORDER = ['LLM', 'Vision', 'Image', 'Video', 'Tools'];
+    const DEFAULT_API_PRICING_FALLBACK = {
+        LLM: { unit_type: 'per_million_tokens', cost: 90, cost_input: 90, cost_output: 700 },
+        Vision: { unit_type: 'per_million_tokens', cost: 120, cost_input: 120, cost_output: 800 },
+        Image: { unit_type: 'per_call', cost: 10, cost_input: 0, cost_output: 0 },
+        Video: { unit_type: 'per_second', cost: 30, cost_input: 0, cost_output: 0 },
+        Tools: { unit_type: 'per_call', cost: 5, cost_input: 0, cost_output: 0 },
+    };
+
+    const normalizeDefaultApiPricingMap = (obj = {}) => {
+        const source = (obj && typeof obj === 'object' && !Array.isArray(obj)) ? obj : {};
+        const out = {};
+        DEFAULT_API_PRICING_CATEGORY_ORDER.forEach((category) => {
+            const raw = (source[category] && typeof source[category] === 'object' && !Array.isArray(source[category]))
+                ? source[category]
+                : {};
+            out[category] = {
+                unit_type: normalizeApiPricingUnitType(raw?.unit_type ?? DEFAULT_API_PRICING_FALLBACK[category].unit_type),
+                cost: toNonNegativeInt(raw?.cost ?? DEFAULT_API_PRICING_FALLBACK[category].cost),
+                cost_input: toNonNegativeInt(raw?.cost_input ?? DEFAULT_API_PRICING_FALLBACK[category].cost_input),
+                cost_output: toNonNegativeInt(raw?.cost_output ?? DEFAULT_API_PRICING_FALLBACK[category].cost_output),
+            };
+        });
+        return out;
+    };
+
+    const buildDefaultApiPricingRows = (obj = {}) => {
+        const normalized = normalizeDefaultApiPricingMap(obj);
+        return DEFAULT_API_PRICING_CATEGORY_ORDER.map((category) => ({
+            id: `default-api-pricing-${category}`,
+            category,
+            unit_type: normalized[category].unit_type,
+            cost: String(normalized[category].cost),
+            cost_input: String(normalized[category].cost_input),
+            cost_output: String(normalized[category].cost_output),
+        }));
+    };
+
+    const buildDefaultApiPricingMapFromRows = (rows = []) => {
+        const next = {};
+        (rows || []).forEach((row) => {
+            const category = String(row?.category || '').trim();
+            if (!category || !DEFAULT_API_PRICING_CATEGORY_ORDER.includes(category)) return;
+            next[category] = {
+                unit_type: normalizeApiPricingUnitType(row?.unit_type),
+                cost: toNonNegativeInt(row?.cost),
+                cost_input: toNonNegativeInt(row?.cost_input),
+                cost_output: toNonNegativeInt(row?.cost_output),
+            };
+        });
+        return normalizeDefaultApiPricingMap(next);
     };
 
     const createEmptyFeaturePricingRow = () => ({
@@ -280,6 +343,7 @@ const UserAdmin = () => {
     useEffect(() => {
         if (activeTab === 'smtp') {
             fetchSmtpConfig();
+            fetchMaintenanceConfig();
         }
     }, [activeTab]);
 
@@ -945,6 +1009,39 @@ const UserAdmin = () => {
         }
     };
 
+    const toDatetimeLocalValue = (isoValue) => {
+        const raw = String(isoValue || '').trim();
+        if (!raw) return '';
+        const date = new Date(raw);
+        if (Number.isNaN(date.getTime())) return '';
+        const pad = (n) => String(n).padStart(2, '0');
+        return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    };
+
+    const toIsoFromDatetimeLocal = (localValue) => {
+        const raw = String(localValue || '').trim();
+        if (!raw) return '';
+        const date = new Date(raw);
+        if (Number.isNaN(date.getTime())) return '';
+        return date.toISOString();
+    };
+
+    const fetchMaintenanceConfig = async () => {
+        setIsMaintenanceLoading(true);
+        try {
+            const data = await getAdminMaintenanceConfig();
+            setMaintenanceConfig({
+                enabled: !!data?.enabled,
+                ends_at: toDatetimeLocalValue(data?.ends_at),
+                message: String(data?.message || '系统正在维护'),
+            });
+        } catch (e) {
+            console.error('Failed to load maintenance config', e);
+        } finally {
+            setIsMaintenanceLoading(false);
+        }
+    };
+
     const handleSavePaymentConfig = async () => {
         try {
             await api.post('/admin/payment-config', paymentConfig);
@@ -1081,6 +1178,38 @@ const UserAdmin = () => {
         }
     };
 
+    const handleToggleMaintenance = async () => {
+        const nextEnabled = !maintenanceConfig.enabled;
+        const endsAtIso = toIsoFromDatetimeLocal(maintenanceConfig.ends_at);
+
+        if (nextEnabled && !endsAtIso) {
+            alert(t('请先输入维护结束时间。', 'Please input maintenance end time first.'));
+            return;
+        }
+
+        setIsMaintenanceLoading(true);
+        try {
+            const saved = await updateAdminMaintenanceConfig({
+                enabled: nextEnabled,
+                ends_at: nextEnabled ? endsAtIso : null,
+                message: String(maintenanceConfig.message || '系统正在维护').trim() || '系统正在维护',
+            });
+
+            setMaintenanceConfig({
+                enabled: !!saved?.enabled,
+                ends_at: toDatetimeLocalValue(saved?.ends_at),
+                message: String(saved?.message || '系统正在维护'),
+            });
+
+            alert(nextEnabled ? t('系统维护已开启。', 'Maintenance mode enabled.') : t('系统维护已关闭。', 'Maintenance mode disabled.'));
+        } catch (e) {
+            console.error('Failed to update maintenance config', e);
+            alert(e?.response?.data?.detail || e?.message || t('维护配置更新失败', 'Failed to update maintenance config'));
+        } finally {
+            setIsMaintenanceLoading(false);
+        }
+    };
+
     // Credit Edit State
     const [creditEditUser, setCreditEditUser] = useState(null);
     const [creditAmount, setCreditAmount] = useState(0);
@@ -1088,11 +1217,12 @@ const UserAdmin = () => {
     const fetchAllData = async () => {
         setLoading(true);
         try {
-            const [usersRes, transRes, optionsRes, featurePricingRes, agentToolPolicyRes] = await Promise.allSettled([
+            const [usersRes, transRes, optionsRes, featurePricingRes, defaultApiPricingRes, agentToolPolicyRes] = await Promise.allSettled([
                 api.get('/users'),
                 getTransactions(50, transactionFilterUser || null),
                 getBillingOptions(),
                 getBillingFeaturePricing(),
+                getBillingDefaultApiPricing(),
                 getAgentToolPolicy(),
             ]);
 
@@ -1120,6 +1250,19 @@ const UserAdmin = () => {
                 const normalized = normalizeFeaturePricing(featurePricingRes.value?.feature_pricing || {});
                 setFeaturePricingMap(normalized);
                 setFeaturePricingRows(buildFeaturePricingRows(normalized));
+            }
+
+            if (defaultApiPricingRes.status === 'fulfilled') {
+                const normalizedDefault = normalizeDefaultApiPricingMap(defaultApiPricingRes.value?.default_api_pricing || {});
+                const normalizedRecommended = normalizeDefaultApiPricingMap(defaultApiPricingRes.value?.recommended_default_api_pricing || {});
+                setDefaultApiPricingMap(normalizedDefault);
+                setRecommendedDefaultApiPricingMap(normalizedRecommended);
+                setDefaultApiPricingRows(buildDefaultApiPricingRows(normalizedDefault));
+            } else {
+                const fallbackDefault = normalizeDefaultApiPricingMap({});
+                setDefaultApiPricingMap(fallbackDefault);
+                setRecommendedDefaultApiPricingMap(fallbackDefault);
+                setDefaultApiPricingRows(buildDefaultApiPricingRows(fallbackDefault));
             }
 
             if (agentToolPolicyRes.status === 'fulfilled') {
@@ -1188,6 +1331,40 @@ const UserAdmin = () => {
 
     const handleResetFeaturePricingRows = () => {
         setFeaturePricingRows(buildFeaturePricingRows(featurePricingMap || {}));
+    };
+
+    const handleDefaultApiPricingRowChange = (rowId, field, value) => {
+        setDefaultApiPricingRows((prev) => prev.map((row) => {
+            if (row.id !== rowId) return row;
+            if (field === 'unit_type') {
+                return { ...row, unit_type: normalizeApiPricingUnitType(value) };
+            }
+            return { ...row, [field]: String(value).replace(/[^0-9]/g, '') };
+        }));
+    };
+
+    const handleSaveDefaultApiPricing = async () => {
+        try {
+            setIsDefaultApiPricingSaving(true);
+            const normalized = buildDefaultApiPricingMapFromRows(defaultApiPricingRows);
+            const res = await updateBillingDefaultApiPricing(normalized);
+            const saved = normalizeDefaultApiPricingMap(res?.default_api_pricing || {});
+            setDefaultApiPricingMap(saved);
+            setDefaultApiPricingRows(buildDefaultApiPricingRows(saved));
+            alert(t('默认 API 定价映射已保存', 'Default API pricing map saved'));
+        } catch (e) {
+            alert(t('保存默认 API 定价映射失败：', 'Failed to save default API pricing map: ') + (e?.message || 'unknown error'));
+        } finally {
+            setIsDefaultApiPricingSaving(false);
+        }
+    };
+
+    const handleResetDefaultApiPricingRows = () => {
+        setDefaultApiPricingRows(buildDefaultApiPricingRows(defaultApiPricingMap || {}));
+    };
+
+    const handleRestoreRecommendedDefaultApiPricingRows = () => {
+        setDefaultApiPricingRows(buildDefaultApiPricingRows(recommendedDefaultApiPricingMap || {}));
     };
 
     const handleSaveAgentToolPolicy = async () => {
@@ -1467,6 +1644,31 @@ const UserAdmin = () => {
                             </h2>
 
                             <div className="space-y-6 max-w-4xl">
+                                <div className="border border-yellow-400/30 bg-yellow-500/10 rounded-lg p-4 space-y-3">
+                                    <h3 className="text-sm font-bold text-yellow-200">{t('系统维护模式', 'System Maintenance Mode')}</h3>
+                                    <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-3">
+                                        <input
+                                            type="datetime-local"
+                                            value={maintenanceConfig.ends_at}
+                                            onChange={(e) => setMaintenanceConfig((prev) => ({ ...prev, ends_at: e.target.value }))}
+                                            className="w-full bg-black/40 border border-gray-700 rounded p-2.5 text-sm focus:border-primary outline-none focus:ring-1 focus:ring-primary"
+                                        />
+                                        <button
+                                            onClick={handleToggleMaintenance}
+                                            disabled={isMaintenanceLoading}
+                                            className={`px-4 py-2.5 rounded-lg font-bold disabled:opacity-50 flex items-center justify-center gap-2 ${maintenanceConfig.enabled ? 'bg-green-600 text-white hover:bg-green-500' : 'bg-yellow-500 text-black hover:opacity-90'}`}
+                                        >
+                                            {isMaintenanceLoading ? <RefreshCw className="animate-spin" size={16}/> : <Settings size={16}/>}
+                                            {maintenanceConfig.enabled ? t('恢复正常', 'Restore Normal') : t('启动维护', 'Start Maintenance')}
+                                        </button>
+                                    </div>
+                                    <p className="text-xs text-yellow-100">
+                                        {maintenanceConfig.enabled
+                                            ? t(`系统正在维护，预计 ${maintenanceConfig.ends_at || '-'} 结束。`, `System is under maintenance, estimated end at ${maintenanceConfig.ends_at || '-'}.`)
+                                            : t('维护模式关闭，用户可正常访问。', 'Maintenance mode is off; users can access normally.')}
+                                    </p>
+                                </div>
+
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                     <div className="space-y-4">
                                         <div>
@@ -1944,6 +2146,94 @@ const UserAdmin = () => {
                                     >
                                         {t('前往系统 API 配置', 'Go to System API Settings')}
                                     </button>
+                                </div>
+
+                                <div className="bg-black/30 border border-white/10 rounded-lg p-4">
+                                    <h3 className="text-lg font-bold mb-2">{t('默认 API 定价映射（兜底）', 'Default API Pricing Map (Fallback)')}</h3>
+                                    <p className="text-xs text-gray-400 mb-3">
+                                        {t('当 System API 定价为空或 <= 0 时，将按 API 类型使用这里的默认价。', 'When System API pricing is empty or <= 0, billing falls back to this map by API category.')}
+                                    </p>
+
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full text-xs border-collapse">
+                                            <thead>
+                                                <tr className="border-b border-white/10 text-gray-400">
+                                                    <th className="text-left p-2">{t('API 类型', 'API Category')}</th>
+                                                    <th className="text-left p-2">unit_type</th>
+                                                    <th className="text-left p-2">cost</th>
+                                                    <th className="text-left p-2">cost_input</th>
+                                                    <th className="text-left p-2">cost_output</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {defaultApiPricingRows.map((row) => (
+                                                    <tr key={row.id} className="border-b border-white/5">
+                                                        <td className="p-2 text-gray-200 font-medium">{row.category}</td>
+                                                        <td className="p-2">
+                                                            <select
+                                                                value={row.unit_type}
+                                                                onChange={(e) => handleDefaultApiPricingRowChange(row.id, 'unit_type', e.target.value)}
+                                                                className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-xs text-gray-200"
+                                                            >
+                                                                <option value="per_call">per_call</option>
+                                                                <option value="per_second">per_second</option>
+                                                                <option value="per_minute">per_minute</option>
+                                                                <option value="per_token">per_token</option>
+                                                                <option value="per_1k_tokens">per_1k_tokens</option>
+                                                                <option value="per_million_tokens">per_million_tokens</option>
+                                                            </select>
+                                                        </td>
+                                                        <td className="p-2">
+                                                            <input
+                                                                value={row.cost}
+                                                                onChange={(e) => handleDefaultApiPricingRowChange(row.id, 'cost', e.target.value)}
+                                                                inputMode="numeric"
+                                                                className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-xs text-gray-200"
+                                                            />
+                                                        </td>
+                                                        <td className="p-2">
+                                                            <input
+                                                                value={row.cost_input}
+                                                                onChange={(e) => handleDefaultApiPricingRowChange(row.id, 'cost_input', e.target.value)}
+                                                                inputMode="numeric"
+                                                                className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-xs text-gray-200"
+                                                            />
+                                                        </td>
+                                                        <td className="p-2">
+                                                            <input
+                                                                value={row.cost_output}
+                                                                onChange={(e) => handleDefaultApiPricingRowChange(row.id, 'cost_output', e.target.value)}
+                                                                inputMode="numeric"
+                                                                className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-xs text-gray-200"
+                                                            />
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+
+                                    <div className="mt-3 flex items-center gap-2">
+                                        <button
+                                            onClick={handleSaveDefaultApiPricing}
+                                            disabled={isDefaultApiPricingSaving}
+                                            className="bg-primary hover:bg-primary/90 text-white px-3 py-1 rounded disabled:opacity-50"
+                                        >
+                                            {isDefaultApiPricingSaving ? t('保存中...', 'Saving...') : t('保存默认映射', 'Save Default Map')}
+                                        </button>
+                                        <button
+                                            onClick={handleRestoreRecommendedDefaultApiPricingRows}
+                                            className="bg-blue-700 hover:bg-blue-600 text-white px-3 py-1 rounded"
+                                        >
+                                            {t('恢复推荐默认方案', 'Restore Recommended Defaults')}
+                                        </button>
+                                        <button
+                                            onClick={handleResetDefaultApiPricingRows}
+                                            className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded"
+                                        >
+                                            {t('重置草稿', 'Reset Draft')}
+                                        </button>
+                                    </div>
                                 </div>
 
                                 <div className="bg-black/30 border border-white/10 rounded-lg p-4">

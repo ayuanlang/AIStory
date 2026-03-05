@@ -67,3 +67,12 @@ class FeaturePricingUpdate(BaseModel):
 
 class FeaturePricingOut(BaseModel):
     feature_pricing: dict[str, int] = {}
+
+
+class DefaultApiPricingUpdate(BaseModel):
+    default_api_pricing: dict[str, dict[str, Any]] = {}
+
+
+class DefaultApiPricingOut(BaseModel):
+    default_api_pricing: dict[str, dict[str, Any]] = {}
+    recommended_default_api_pricing: dict[str, dict[str, Any]] = {}

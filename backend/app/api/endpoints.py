@@ -8327,6 +8327,14 @@ def authenticate_user(db: Session, username: str, password: str):
         return None
     return user
 
+
+def _is_maintenance_active_for_login(db: Session) -> bool:
+    try:
+        status = _resolve_maintenance_config_raw(db)
+        return bool(status.get("is_active", False))
+    except Exception:
+        return False
+
 @router.post("/login/access-token", response_model=Token)
 @limiter.limit(settings.RATE_LIMIT_LOGIN)
 def login_access_token(request: Request, form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
@@ -8337,6 +8345,8 @@ def login_access_token(request: Request, form_data: OAuth2PasswordRequestForm = 
     user = authenticate_user(db, form_data.username, form_data.password)
     if not user:
         raise HTTPException(status_code=400, detail="Incorrect email or password")
+    if _is_maintenance_active_for_login(db) and (not bool(getattr(user, "is_superuser", False))):
+        raise HTTPException(status_code=403, detail="System is under maintenance. Only system administrators can login now")
     if (
         user.account_status == -1
         and (not bool(user.is_active))
@@ -8358,7 +8368,13 @@ def login_access_token(request: Request, form_data: OAuth2PasswordRequestForm = 
     
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
-        data={"sub": user.username, "uid": user.id, "uname": user.username}, expires_delta=access_token_expires
+        data={
+            "sub": user.username,
+            "uid": user.id,
+            "uname": user.username,
+            "is_superuser": bool(getattr(user, "is_superuser", False)),
+        },
+        expires_delta=access_token_expires
     )
     return {"access_token": access_token, "token_type": "bearer"}
 
@@ -8374,6 +8390,8 @@ def login_json(request: Request, login_data: LoginRequest, db: Session = Depends
         # Optional: Log failed login attempts?
         # log_action(db, user_id=None, user_name=login_data.username, action="LOGIN_FAILED", details="Incorrect password")
         raise HTTPException(status_code=400, detail="Incorrect email or password")
+    if _is_maintenance_active_for_login(db) and (not bool(getattr(user, "is_superuser", False))):
+        raise HTTPException(status_code=403, detail="System is under maintenance. Only system administrators can login now")
     if (
         user.account_status == -1
         and (not bool(user.is_active))
@@ -8395,7 +8413,13 @@ def login_json(request: Request, login_data: LoginRequest, db: Session = Depends
     
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
-        data={"sub": user.username, "uid": user.id, "uname": user.username}, expires_delta=access_token_expires
+        data={
+            "sub": user.username,
+            "uid": user.id,
+            "uname": user.username,
+            "is_superuser": bool(getattr(user, "is_superuser", False)),
+        },
+        expires_delta=access_token_expires
     )
     return {"access_token": access_token, "token_type": "bearer"}
 
@@ -9540,7 +9564,7 @@ def rebind_shot_media_from_assets(
 
 
 
-from app.schemas.billing import PricingRuleCreate, PricingRuleUpdate, PricingRuleOut, TransactionOut, FeaturePricingUpdate, FeaturePricingOut
+from app.schemas.billing import PricingRuleCreate, PricingRuleUpdate, PricingRuleOut, TransactionOut, FeaturePricingUpdate, FeaturePricingOut, DefaultApiPricingUpdate, DefaultApiPricingOut
 from app.models.all_models import RechargePlan, PaymentOrder
 import uuid
 import io
@@ -9597,6 +9621,61 @@ class SMTPBroadcastRequest(BaseModel):
     content_html: Optional[str] = ""
     content_text: Optional[str] = ""
     confirm_phrase: str
+
+
+class MaintenanceConfig(BaseModel):
+    enabled: bool = False
+    ends_at: Optional[str] = None
+    message: Optional[str] = ""
+
+
+class MaintenanceStatusOut(BaseModel):
+    enabled: bool = False
+    is_active: bool = False
+    ends_at: Optional[str] = None
+    message: Optional[str] = ""
+
+
+_MAINTENANCE_CATEGORY = "System_Maintenance"
+_MAINTENANCE_PROVIDER = "maintenance_mode"
+
+
+def _parse_iso_datetime_safe(value: Any) -> Optional[datetime]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        normalized = raw.replace("Z", "+00:00") if raw.endswith("Z") else raw
+        dt = datetime.fromisoformat(normalized)
+        if dt.tzinfo is not None:
+            return dt.astimezone().replace(tzinfo=None)
+        return dt
+    except Exception:
+        return None
+
+
+def _resolve_maintenance_config_raw(db: Session) -> Dict[str, Any]:
+    setting = db.query(APISetting).filter(
+        APISetting.category == _MAINTENANCE_CATEGORY,
+        APISetting.provider == _MAINTENANCE_PROVIDER,
+    ).first()
+
+    cfg = dict(setting.config or {}) if setting else {}
+    enabled = bool(cfg.get("enabled", False))
+    ends_at_raw = str(cfg.get("ends_at") or "").strip()
+    message = str(cfg.get("message") or "").strip()
+    if not message:
+        message = "系统正在维护"
+
+    ends_at_dt = _parse_iso_datetime_safe(ends_at_raw)
+    is_active = bool(enabled and (not ends_at_dt or datetime.utcnow() < ends_at_dt))
+
+    return {
+        "enabled": enabled,
+        "is_active": is_active,
+        "ends_at": ends_at_raw or None,
+        "message": message,
+    }
 
 @router.get("/admin/payment-config", response_model=PaymentConfig)
 def get_payment_config(
@@ -9853,6 +9932,70 @@ def broadcast_email_to_all_users(
         "invalid": invalid_count,
         "errors": errors,
     }
+
+
+@router.get("/admin/maintenance-status", response_model=MaintenanceStatusOut)
+def get_maintenance_status(db: Session = Depends(get_db)):
+    status = _resolve_maintenance_config_raw(db)
+    return MaintenanceStatusOut(**status)
+
+
+@router.get("/admin/maintenance-config", response_model=MaintenanceConfig)
+def get_maintenance_config(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    status = _resolve_maintenance_config_raw(db)
+    return MaintenanceConfig(
+        enabled=bool(status.get("enabled")),
+        ends_at=status.get("ends_at"),
+        message=status.get("message") or "系统正在维护",
+    )
+
+
+@router.post("/admin/maintenance-config", response_model=MaintenanceConfig)
+def update_maintenance_config(
+    idx: MaintenanceConfig,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    setting = db.query(APISetting).filter(
+        APISetting.category == _MAINTENANCE_CATEGORY,
+        APISetting.provider == _MAINTENANCE_PROVIDER
+    ).first()
+
+    if not setting:
+        setting = APISetting(
+            user_id=current_user.id,
+            category=_MAINTENANCE_CATEGORY,
+            provider=_MAINTENANCE_PROVIDER,
+            name="System Maintenance Config",
+            is_active=True,
+        )
+        db.add(setting)
+
+    ends_at = str(idx.ends_at or "").strip()
+    if ends_at and not _parse_iso_datetime_safe(ends_at):
+        raise HTTPException(status_code=400, detail="ends_at must be a valid ISO datetime")
+
+    setting.config = {
+        "enabled": bool(idx.enabled),
+        "ends_at": ends_at or None,
+        "message": str(idx.message or "系统正在维护").strip() or "系统正在维护",
+    }
+    db.commit()
+
+    return MaintenanceConfig(
+        enabled=bool(setting.config.get("enabled", False)),
+        ends_at=setting.config.get("ends_at"),
+        message=setting.config.get("message") or "系统正在维护",
+    )
 
 
 @router.get("/admin/runtime-stats")
@@ -10418,6 +10561,36 @@ def update_billing_feature_pricing(
 
     saved = billing_service.set_feature_pricing_map(db, payload.feature_pricing or {})
     return FeaturePricingOut(feature_pricing=saved)
+
+
+@router.get("/billing/default-api-pricing", response_model=DefaultApiPricingOut)
+def get_billing_default_api_pricing(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    return DefaultApiPricingOut(
+        default_api_pricing=billing_service.get_default_api_pricing_map(db),
+        recommended_default_api_pricing=billing_service.get_recommended_default_api_pricing_map(),
+    )
+
+
+@router.put("/billing/default-api-pricing", response_model=DefaultApiPricingOut)
+def update_billing_default_api_pricing(
+    payload: DefaultApiPricingUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    saved = billing_service.set_default_api_pricing_map(db, payload.default_api_pricing or {})
+    return DefaultApiPricingOut(
+        default_api_pricing=saved,
+        recommended_default_api_pricing=billing_service.get_recommended_default_api_pricing_map(),
+    )
 
 
 @router.get("/billing/taxonomy/preview")

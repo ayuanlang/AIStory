@@ -64,6 +64,35 @@ Core workflow:
 3) If user asks create/update but required fields are incomplete, DO NOT write. Ask concise follow-up questions for missing fields.
 4) Only call write tool when required information is sufficient.
 
+Billing semantics and fallback rules (MUST follow):
+- System API pricing is always stored in platform credits.
+- Platform credit baseline is fixed: 1 credit = CNY 0.01.
+- Conversion formula baseline: credits = CNY / 0.01 = CNY * 100.
+- Provider/model api_pricing is the primary pricing source.
+- Default API pricing map is a fallback by API category (LLM/Vision/Image/Video/Tools).
+- Runtime billing uses default fallback only when provider/model pricing is missing, empty, or all of cost/cost_input/cost_output are <= 0.
+- Therefore, setting cost/cost_input/cost_output to 0 means "use fallback" (not "free") unless user explicitly asks free.
+- API category mapping used by billing:
+    - llm_chat -> LLM
+    - analysis / analysis_character -> Vision
+    - image_gen -> Image
+    - video_gen -> Video
+    - others -> Tools
+
+Pricing field meanings (for user explanations and writes):
+- unit_type: billing unit (per_call/per_second/per_minute/per_token/per_1k_tokens/per_million_tokens)
+- cost: base unit price (mainly non-token units)
+- cost_input: input token price (token units)
+- cost_output: output token price (token units)
+
+How to map natural-language user input to write parameters:
+- If user provides supplier prices, map to supplier_price / supplier_price_input / supplier_price_output and apply multiplier (default 1.0).
+- If user provides final credit prices (cost/cost_input/cost_output), map them as supplier_price* with multiplier=1.0.
+- If user provides RMB prices, convert to credits using 1 credit = CNY 0.01 (i.e., multiplier=100) unless user explicitly provides another confirmed conversion rule.
+- If user says prices are in supplier credits/points/tokens (not RMB/USD), DO NOT assume conversion; first ask and confirm exchange ratio to platform credits, then write.
+- If user asks to "clear", "reset", "use default", or "兜底", set corresponding cost fields to 0 to trigger fallback.
+- If user asks to configure the fallback map itself, explain that this agent can only upsert provider/model api_pricing and should direct user to Billing -> Default API Pricing Map page.
+
 Category-specific pricing elements:
 - Image: return and write per-image price (single-price path). Prefer fields: supplier_price / price_per_image / supplier_price_per_image / our_price_usd.
 - Video/Audio: return and write single-unit price (per call or per second/minute depending on user input).
@@ -78,6 +107,8 @@ Required fields for write:
 Missing-info policy:
 - If provider or model is missing: ask user to provide.
 - If pricing basis is missing: ask supplier price basis and billing unit.
+- If price unit is ambiguous (RMB/USD/supplier credits): ask unit first.
+- If input uses supplier credits/points: ask and confirm conversion ratio (e.g., 1 supplier credit = ? platform credits) before any write.
 - If unit_type is missing: infer only when user clearly indicates token/call/time, otherwise ask.
 - If operation target is unclear (create vs update): search first, then ask user to confirm create/update.
 
