@@ -1219,6 +1219,11 @@ export const importSystemProviderBundleManage = async (payload) => {
     return response.data;
 }
 
+export const validateSystemProviderBundleManage = async (payload) => {
+    const response = await api.post('/settings/system/manage/provider-bundle/validate', payload);
+    return response.data;
+};
+
 export const getAdminLlmLogFiles = async () => {
     const response = await api.get('/admin/llm-logs/files');
     return response.data;

@@ -309,6 +309,91 @@ def _normalize_key_weights(values, keys: List[str]) -> List[float]:
     return parsed[:len(keys)]
 
 
+def _validate_provider_bundle_payload(providers: List[Any]) -> Dict[str, Any]:
+    errors: List[Dict[str, Any]] = []
+    warnings: List[Dict[str, Any]] = []
+    provider_count = 0
+    model_count = 0
+
+    seen_triplets = set()
+
+    for p_idx, provider_item in enumerate(providers or []):
+        provider_name = str(getattr(provider_item, "provider", "") or "").strip()
+        if not provider_name:
+            errors.append({
+                "type": "provider_missing",
+                "provider_index": p_idx,
+                "message": "provider is required",
+            })
+            continue
+
+        provider_count += 1
+        keys = _normalize_api_keys(getattr(provider_item, "api_keys", []))
+        strategy = _normalize_key_strategy(getattr(provider_item, "strategy", None))
+        weights = _normalize_key_weights(getattr(provider_item, "weights", None), keys)
+        if strategy == "weighted" and keys and len(weights) != len(keys):
+            warnings.append({
+                "type": "weights_normalized",
+                "provider": provider_name,
+                "message": "weights length adjusted to match api_keys",
+            })
+
+        models = getattr(provider_item, "models", []) or []
+        if not models:
+            warnings.append({
+                "type": "provider_without_models",
+                "provider": provider_name,
+                "message": "provider has no models",
+            })
+
+        for m_idx, model_item in enumerate(models):
+            category = str(getattr(model_item, "category", "LLM") or "LLM").strip() or "LLM"
+            model = str(getattr(model_item, "model", "") or "").strip()
+            model_count += 1
+
+            if not model:
+                errors.append({
+                    "type": "model_missing",
+                    "provider": provider_name,
+                    "provider_index": p_idx,
+                    "model_index": m_idx,
+                    "message": "model is required",
+                })
+                continue
+
+            triplet = (provider_name.lower(), category.lower(), model.lower())
+            if triplet in seen_triplets:
+                warnings.append({
+                    "type": "duplicate_triplet",
+                    "provider": provider_name,
+                    "category": category,
+                    "model": model,
+                    "message": "duplicate provider/category/model found; later item may overwrite earlier one",
+                })
+            else:
+                seen_triplets.add(triplet)
+
+            cfg = getattr(model_item, "config", None)
+            if cfg is not None and not isinstance(cfg, dict):
+                warnings.append({
+                    "type": "config_not_object",
+                    "provider": provider_name,
+                    "category": category,
+                    "model": model,
+                    "message": "config is not an object; will be normalized to {}",
+                })
+
+    return {
+        "ok": len(errors) == 0,
+        "providers": provider_count,
+        "models": model_count,
+        "error_count": len(errors),
+        "warning_count": len(warnings),
+        "errors": errors,
+        "warnings": warnings,
+    }
+
+
 def _extract_provider_key_pool_from_row(row: SystemAPISetting) -> List[str]:
     cfg = _safe_json_dict(row.config)
     pooled = _normalize_api_keys(cfg.get("provider_api_keys"))
@@ -2006,6 +2091,19 @@ def import_system_provider_bundle_for_manage(
         except Exception:
             pass
         raise HTTPException(status_code=500, detail=f"provider bundle import failed: {type(exc).__name__}")
+
+
+@router.post("/settings/system/manage/provider-bundle/validate")
+def validate_system_provider_bundle_for_manage(
+    payload: SystemAPIProviderImportRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+
+    providers = payload.providers or []
+    return _validate_provider_bundle_payload(providers)
 
 
 @router.post("/settings/system/manage/import")

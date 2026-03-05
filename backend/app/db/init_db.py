@@ -64,6 +64,7 @@ def check_and_migrate_tables():
     
     try:
         inspector = inspect(engine)
+        is_postgres = engine.dialect.name == 'postgresql'
 
         # Ensure dedicated system_api_settings table exists
         try:
@@ -72,6 +73,47 @@ def check_and_migrate_tables():
                 logger.info("Created system_api_settings table")
         except Exception as e:
             logger.error(f"Failed to ensure system_api_settings table: {e}")
+
+        # Ensure legacy system_api_settings schema is compatible with current model.
+        # Render DB may have an older table shape missing columns like deprecated/config/is_active.
+        try:
+            inspector = inspect(engine)
+            existing_system_cols = {c['name'] for c in inspector.get_columns('system_api_settings')}
+            system_columns_to_check = [
+                ("deprecated", "BOOLEAN DEFAULT FALSE"),
+                ("config", "JSON"),
+                ("is_active", "BOOLEAN DEFAULT FALSE"),
+            ]
+
+            with engine.begin() as conn:
+                for col_name, col_type in system_columns_to_check:
+                    try:
+                        if is_postgres:
+                            conn.execute(text(f"ALTER TABLE system_api_settings ADD COLUMN IF NOT EXISTS {col_name} {col_type}"))
+                        elif col_name not in existing_system_cols:
+                            conn.execute(text(f"ALTER TABLE system_api_settings ADD COLUMN {col_name} {col_type}"))
+                    except Exception as e:
+                        logger.error(f"Failed to ensure system_api_settings.{col_name}: {e}")
+
+                try:
+                    conn.execute(text("UPDATE system_api_settings SET deprecated = FALSE WHERE deprecated IS NULL"))
+                except Exception as e:
+                    logger.warning(f"Failed to backfill system_api_settings.deprecated: {e}")
+
+                try:
+                    conn.execute(text("UPDATE system_api_settings SET is_active = FALSE WHERE is_active IS NULL"))
+                except Exception as e:
+                    logger.warning(f"Failed to backfill system_api_settings.is_active: {e}")
+
+                try:
+                    if is_postgres:
+                        conn.execute(text("UPDATE system_api_settings SET config = '{}'::json WHERE config IS NULL"))
+                    else:
+                        conn.execute(text("UPDATE system_api_settings SET config = '{}' WHERE config IS NULL"))
+                except Exception as e:
+                    logger.warning(f"Failed to backfill system_api_settings.config: {e}")
+        except Exception as e:
+            logger.error(f"Failed to migrate system_api_settings schema: {e}")
 
         # Migrate legacy system-owned rows from api_settings into system_api_settings (opt-in only).
         if _should_manage_api_settings_on_init():
@@ -102,8 +144,6 @@ def check_and_migrate_tables():
         else:
             logger.info("Skip legacy API settings migration on init (AISTORY_MANAGE_API_SETTINGS_ON_INIT is disabled)")
 
-        is_postgres = engine.dialect.name == 'postgresql'
-        
         if is_postgres:
             # Robust Postgres Strategy
             user_columns_pg = [

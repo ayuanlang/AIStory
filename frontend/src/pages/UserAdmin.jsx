@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getAgentToolPolicy, updateAgentToolPolicy, getSystemSettingsManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, exportSystemSettingsManage, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, getAdminLlmLogFiles, getAdminLlmLogView, getAdminStorageUsage } from '../services/api';
+import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getAgentToolPolicy, updateAgentToolPolicy, getSystemSettingsManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, exportSystemSettingsManage, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, getAdminLlmLogFiles, getAdminLlmLogView, getAdminStorageUsage } from '../services/api';
 import Footer from '../components/Footer';
 import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive } from 'lucide-react';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
@@ -825,6 +825,29 @@ const UserAdmin = () => {
             if (!providers.length) {
                 alert('No providers found in import file. Expected { providers: [...] }.');
                 return;
+            }
+
+            const validation = await validateSystemProviderBundleManage({ providers, replace_all: false });
+            const errorCount = Number(validation?.error_count || 0);
+            const warningCount = Number(validation?.warning_count || 0);
+
+            if (errorCount > 0) {
+                const firstError = Array.isArray(validation?.errors) && validation.errors.length
+                    ? String(validation.errors[0]?.message || '')
+                    : '';
+                alert(`导入预检失败：发现 ${errorCount} 个错误。${firstError ? `\n首个错误：${firstError}` : ''}`);
+                return;
+            }
+
+            if (warningCount > 0) {
+                const proceed = await confirmUiMessage(`导入预检发现 ${warningCount} 个警告，是否继续导入？`, {
+                    title: 'Import Validation Warning',
+                    confirmText: 'Continue Import',
+                    cancelText: 'Cancel',
+                });
+                if (!proceed) {
+                    return;
+                }
             }
 
             const replaceAll = await confirmUiMessage('Replace all existing system API settings before provider import? Click Cancel for merge/update mode.', {
