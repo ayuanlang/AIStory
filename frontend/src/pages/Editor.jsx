@@ -7444,18 +7444,9 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
                // 用户已手动调整后：完全以用户列表为准，不再自动匹配/注入
                activeRefs = [...tech[storageKey]];
            } else if (isManualMode) {
-             // Manual Mode: Use saved list
-             // User Request: "Detected in Prompt" should be directly visible in Refs even in Manual Mode
-             // Logic: Merge saved refs with auto-detected matches, unless they are explicitly deleted.
-             const savedRefs = [...tech[storageKey]];
-             const deletedRefs = tech.deleted_ref_urls || [];
-             
-             // Identify auto matches that are NOT in saved list AND NOT in deleted list
-             const newAutoMatches = autoMatches.filter(url => 
-                !savedRefs.includes(url) && !deletedRefs.includes(url)
-             );
-
-             activeRefs = [...savedRefs, ...newAutoMatches];
+                         // Manual but not locked: treat stored list as cache only.
+                         // Recompute from current subject/entity latest images each reload.
+                         activeRefs = [...autoMatches];
         } else {
              // Auto Mode: Visualize what will be used by default (since nothing saved yet)
              activeRefs = [...autoMatches];
@@ -13692,9 +13683,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         if (isLockedManual) {
             refs = [...tech.end_ref_image_urls];
         } else if (isManualMode) {
-            const savedRefs = [...tech.end_ref_image_urls];
-            const newAutoMatches = autoMatches.filter((url) => !savedRefs.includes(url) && !deletedRefs.includes(url));
-            refs = [...savedRefs, ...newAutoMatches];
+            // Manual but not locked: refresh by current entity images.
+            refs = autoMatches.filter((url) => !deletedRefs.includes(url));
         } else {
             refs = [...autoMatches];
         }
@@ -14176,15 +14166,9 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     if (isLockedManual) {
                         refs = [...tech.ref_image_urls];
                     } else if (isManualMode) {
-                        // Manual Mode: Merge saved list with NEW auto-matches (respecting deletions)
-                        const savedRefs = tech.ref_image_urls;
+                        // Manual but not locked: refresh refs by latest entity images.
                         const deletedRefs = tech.deleted_ref_urls || [];
-                        
-                        const newAutoMatches = autoMatches.filter(url => 
-                            !savedRefs.includes(url) && !deletedRefs.includes(url)
-                        );
-                        
-                        refs = [...savedRefs, ...newAutoMatches];
+                        refs = autoMatches.filter(url => !deletedRefs.includes(url));
                     } else {
                         // Auto-populate mode
                         refs = autoMatches;
