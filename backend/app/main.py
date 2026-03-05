@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from app.core.config import settings
 from app.api import endpoints, settings as settings_api
 from app.db.session import engine, SessionLocal
@@ -21,6 +21,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from jose import JWTError, jwt
 import time
+import re
 
 # Create DB tables
 Base.metadata.create_all(bind=engine)
@@ -105,6 +106,7 @@ if not origins:
     origins = ["http://localhost:3000", "http://localhost:5173"]
 
 origin_regex = (settings.CORS_ALLOW_ORIGIN_REGEX or "").strip() or None
+compiled_origin_regex = re.compile(origin_regex) if origin_regex else None
 
 allow_credentials = True
 if "*" in origins:
@@ -125,6 +127,36 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _origin_is_cors_allowed(origin: str) -> bool:
+    candidate = str(origin or "").strip()
+    if not candidate:
+        return False
+    if candidate in origins:
+        return True
+    if compiled_origin_regex and compiled_origin_regex.match(candidate):
+        return True
+    return False
+
+
+def _apply_cors_headers_to_response(request: Request, response: Response) -> Response:
+    origin = str(request.headers.get("origin") or "").strip()
+    if not _origin_is_cors_allowed(origin):
+        return response
+
+    response.headers["Access-Control-Allow-Origin"] = origin
+    response.headers["Vary"] = "Origin"
+    response.headers["Access-Control-Allow-Credentials"] = "true" if allow_credentials else "false"
+    response.headers["Access-Control-Allow-Methods"] = "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT"
+
+    requested_headers = str(request.headers.get("access-control-request-headers") or "").strip()
+    if requested_headers:
+        response.headers["Access-Control-Allow-Headers"] = requested_headers
+    else:
+        response.headers["Access-Control-Allow-Headers"] = "*"
+
+    return response
 
 
 _MAINTENANCE_CATEGORY = "System_Maintenance"
@@ -229,6 +261,9 @@ def _is_superuser_request(request: Request) -> bool:
 
 @app.middleware("http")
 async def maintenance_mode_middleware(request: Request, call_next):
+    if str(request.method or "").upper() == "OPTIONS":
+        return _apply_cors_headers_to_response(request, Response(status_code=204))
+
     path = str(request.url.path or "")
     api_prefix = str(settings.API_V1_STR or "")
     exempt_paths = {
@@ -252,7 +287,7 @@ async def maintenance_mode_middleware(request: Request, call_next):
 
     detail = str(status.get("message") or "系统正在维护")
     if path.startswith(api_prefix):
-        return JSONResponse(
+        return _apply_cors_headers_to_response(request, JSONResponse(
             status_code=503,
             content={
                 "detail": detail,
@@ -262,9 +297,9 @@ async def maintenance_mode_middleware(request: Request, call_next):
                     "ends_at": status.get("ends_at"),
                 },
             },
-        )
+        ))
 
-    return JSONResponse(
+    return _apply_cors_headers_to_response(request, JSONResponse(
         status_code=503,
         content={
             "detail": detail,
@@ -274,7 +309,7 @@ async def maintenance_mode_middleware(request: Request, call_next):
                 "ends_at": status.get("ends_at"),
             },
         },
-    )
+    ))
 
 
 @app.middleware("http")
