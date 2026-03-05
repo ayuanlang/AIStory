@@ -141,7 +141,7 @@ const Auth = () => {
                         <div className="relative z-20 p-10 flex flex-col h-full justify-between">
                             <div>
                                 <div className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-black/30 px-3 py-1 text-xs text-white backdrop-blur-md">
-                                    <img src="/woola.png" alt="Woola AI story" className="h-3.5 w-3.5 object-contain" />
+                                    <img src="/woola-transparent.png?v=4" alt="Woola AI story" className="h-3.5 w-3.5 object-contain" />
                                     Woola AI story
                                 </div>
                                 <h2 className="mt-6 text-3xl font-semibold tracking-tight text-white drop-shadow-md">

@@ -18,6 +18,7 @@ npm-debug.log
 *.jpeg
 *.mp4
 *.webm
+!frontend/public/woola-transparent.png
 backend/uploads/
 backend/data/uploads/
 backend/logs/
