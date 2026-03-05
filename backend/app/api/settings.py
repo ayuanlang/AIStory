@@ -1903,90 +1903,109 @@ def import_system_provider_bundle_for_manage(
     if not _can_manage_system_settings(current_user):
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
-    providers = payload.providers or []
-    if not providers:
-        return {"ok": True, "providers": 0, "created": 0, "updated": 0, "key_updated_providers": 0, "total": 0}
+    try:
+        providers = payload.providers or []
+        if not providers:
+            return {"ok": True, "providers": 0, "created": 0, "updated": 0, "key_updated_providers": 0, "total": 0}
 
-    if payload.replace_all:
-        db.query(SystemAPISetting).filter(
-            SystemAPISetting.category != "System_Payment",
-        ).delete(synchronize_session=False)
-        db.flush()
+        if payload.replace_all:
+            db.query(SystemAPISetting).filter(
+                SystemAPISetting.category != "System_Payment",
+            ).delete(synchronize_session=False)
+            db.flush()
 
-    created = 0
-    updated = 0
-    key_updated_providers = 0
-    providers_processed = 0
-    last_active_id_by_category: Dict[str, int] = {}
+        created = 0
+        updated = 0
+        key_updated_providers = 0
+        providers_processed = 0
+        skipped_models = 0
+        last_active_id_by_category: Dict[str, int] = {}
 
-    for provider_item in providers:
-        provider_name = str(provider_item.provider or "").strip()
-        if not provider_name:
-            continue
+        for provider_item in providers:
+            provider_name = str(provider_item.provider or "").strip()
+            if not provider_name:
+                continue
 
-        providers_processed += 1
-        keys = _normalize_api_keys(provider_item.api_keys)
-        strategy = _normalize_key_strategy(provider_item.strategy)
-        weights = _normalize_key_weights(provider_item.weights, keys)
-        models = provider_item.models or []
+            providers_processed += 1
+            keys = _normalize_api_keys(provider_item.api_keys)
+            strategy = _normalize_key_strategy(provider_item.strategy)
+            weights = _normalize_key_weights(provider_item.weights, keys)
+            models = provider_item.models or []
 
-        for model_item in models:
-            category = str(model_item.category or "LLM").strip() or "LLM"
-            model = (model_item.model or "").strip()
+            for model_item in models:
+                category = str(model_item.category or "LLM").strip() or "LLM"
+                model = str(model_item.model or "").strip()
+                if not model:
+                    skipped_models += 1
+                    continue
 
-            target = _find_system_setting_by_normalized_triplet(db, provider_name, category, model)
+                target = _find_system_setting_by_normalized_triplet(db, provider_name, category, model)
 
-            if target:
-                target.name = (model_item.name or target.name or "System Setting").strip() or "System Setting"
-                target.base_url = model_item.base_url
-                target.model = model_item.model
-                target.config = _normalize_system_api_billing_config(model_item.config if isinstance(model_item.config, dict) else {})
-                target.deprecated = _is_setting_deprecated(target.config, model_item.deprecated)
-                target.is_active = bool(model_item.is_active)
-                updated += 1
-            else:
-                target = SystemAPISetting(
-                    name=(model_item.name or "System Setting").strip() or "System Setting",
-                    category=category,
-                    provider=provider_name,
-                    api_key="",
-                    base_url=model_item.base_url,
-                    model=model_item.model,
-                    deprecated=_is_setting_deprecated(model_item.config if isinstance(model_item.config, dict) else {}, model_item.deprecated),
-                    config=_normalize_system_api_billing_config(model_item.config if isinstance(model_item.config, dict) else {}),
-                    is_active=bool(model_item.is_active),
+                normalized_cfg = _normalize_system_api_billing_config(
+                    model_item.config if isinstance(model_item.config, dict) else {}
                 )
-                db.add(target)
-                db.flush()
-                created += 1
 
-            if bool(model_item.is_active):
-                last_active_id_by_category[category] = target.id
+                if target:
+                    target.name = (model_item.name or target.name or "System Setting").strip() or "System Setting"
+                    target.base_url = model_item.base_url
+                    target.model = model
+                    target.config = normalized_cfg
+                    target.deprecated = _is_setting_deprecated(target.config, model_item.deprecated)
+                    target.is_active = bool(model_item.is_active)
+                    updated += 1
+                else:
+                    target = SystemAPISetting(
+                        name=(model_item.name or "System Setting").strip() or "System Setting",
+                        category=category,
+                        provider=provider_name,
+                        api_key="",
+                        base_url=model_item.base_url,
+                        model=model,
+                        deprecated=_is_setting_deprecated(normalized_cfg, model_item.deprecated),
+                        config=normalized_cfg,
+                        is_active=bool(model_item.is_active),
+                    )
+                    db.add(target)
+                    db.flush()
+                    created += 1
 
-        provider_rows = db.query(SystemAPISetting).filter(
-            SystemAPISetting.provider == provider_name,
-            SystemAPISetting.category != "System_Payment",
-        ).all()
-        if provider_rows:
-            _apply_provider_key_bundle_to_rows(provider_rows, keys, strategy, weights)
-            key_updated_providers += 1
+                if bool(model_item.is_active):
+                    last_active_id_by_category[category] = target.id
 
-    for category, keep_id in last_active_id_by_category.items():
-        db.query(SystemAPISetting).filter(
-            SystemAPISetting.category == category,
-            SystemAPISetting.id != keep_id,
-            SystemAPISetting.is_active == True,
-        ).update({"is_active": False}, synchronize_session=False)
+            provider_rows = db.query(SystemAPISetting).filter(
+                SystemAPISetting.provider == provider_name,
+                SystemAPISetting.category != "System_Payment",
+            ).all()
+            if provider_rows:
+                _apply_provider_key_bundle_to_rows(provider_rows, keys, strategy, weights)
+                key_updated_providers += 1
 
-    db.commit()
-    return {
-        "ok": True,
-        "providers": providers_processed,
-        "created": created,
-        "updated": updated,
-        "key_updated_providers": key_updated_providers,
-        "total": created + updated,
-    }
+        for category, keep_id in last_active_id_by_category.items():
+            db.query(SystemAPISetting).filter(
+                SystemAPISetting.category == category,
+                SystemAPISetting.id != keep_id,
+                SystemAPISetting.is_active == True,
+            ).update({"is_active": False}, synchronize_session=False)
+
+        db.commit()
+        return {
+            "ok": True,
+            "providers": providers_processed,
+            "created": created,
+            "updated": updated,
+            "key_updated_providers": key_updated_providers,
+            "skipped_models": skipped_models,
+            "total": created + updated,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Failed to import provider bundle: %s", exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=f"provider bundle import failed: {type(exc).__name__}")
 
 
 @router.post("/settings/system/manage/import")
