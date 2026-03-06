@@ -16,7 +16,8 @@ const shouldRetryWithFallback = (error) => {
     const payloadText = typeof payload === 'string' ? payload.toLowerCase() : '';
 
     if (code === 'ERR_NETWORK') return true;
-    if (status >= 500) return true;
+    // Only retry on gateway errors (502/504), NOT on 500/503 which are meaningful responses
+    if (status === 502 || status === 504) return true;
 
     if (status === 404 && payloadText.includes('cannot get /api/')) {
         return true;
