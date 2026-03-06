@@ -2180,6 +2180,7 @@ def export_system_settings_for_manage(
                 "api_key": row.api_key,
                 "base_url": row.base_url,
                 "model": row.model,
+                "modality": row.modality,
                 "config": row.config or {},
                 "deprecated": bool(row.deprecated),
                 "is_active": bool(row.is_active),
@@ -2410,6 +2411,7 @@ def import_system_settings_for_manage(
             target.name = (item.name or target.name or "System Setting").strip() or "System Setting"
             target.base_url = item.base_url
             target.model = item.model
+            target.modality = item.modality
             target.config = _normalize_system_api_billing_config(item.config if isinstance(item.config, dict) else {})
             target.deprecated = _is_setting_deprecated(target.config, item.deprecated)
             target.is_active = bool(item.is_active)
@@ -2422,6 +2424,7 @@ def import_system_settings_for_manage(
                 api_key="",
                 base_url=item.base_url,
                 model=item.model,
+                modality=item.modality,
                 deprecated=_is_setting_deprecated(item.config if isinstance(item.config, dict) else {}, item.deprecated),
                 config=_normalize_system_api_billing_config(item.config if isinstance(item.config, dict) else {}),
                 is_active=bool(item.is_active),

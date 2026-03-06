@@ -2,6 +2,7 @@
 import logging
 import bcrypt
 import os
+import json
 from sqlalchemy import text, inspect
 from app.db.session import engine, SessionLocal
 from app.models.all_models import PricingRule, APISetting, User, SystemAPISetting
@@ -907,6 +908,109 @@ def init_system_api_settings(db):
     else:
         logger.info("System kie models already initialized")
 
+
+SYSTEM_API_SEED_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "system_api_seed.json")
+
+
+def sync_system_api_from_seed(db):
+    """
+    Import system_api_settings from the seed JSON file committed in the repo.
+    Uses (provider, category, model) as the match key – same as the UI import.
+    Existing rows are updated in-place; new rows are created; rows not in the
+    seed file are left untouched (no deletions) so payment settings etc. survive.
+    """
+    seed_path = os.path.normpath(SYSTEM_API_SEED_FILE)
+    if not os.path.isfile(seed_path):
+        logger.info("No system API seed file found at %s — skipping sync", seed_path)
+        return
+
+    try:
+        with open(seed_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        logger.error("Failed to read system API seed file: %s", e)
+        return
+
+    items = data.get("items", [])
+    if not items:
+        logger.info("System API seed file is empty — skipping sync")
+        return
+
+    existing_rows = db.query(SystemAPISetting).all()
+    lookup = {}
+    for row in existing_rows:
+        key = (
+            (row.provider or "").strip().lower(),
+            (row.category or "").strip().lower(),
+            (row.model or "").strip().lower(),
+        )
+        lookup[key] = row
+
+    created = 0
+    updated = 0
+    for item in items:
+        provider = (item.get("provider") or "").strip()
+        category = (item.get("category") or "LLM").strip() or "LLM"
+        model = (item.get("model") or "").strip()
+        if not provider:
+            continue
+
+        key = (provider.lower(), category.lower(), model.lower())
+        target = lookup.get(key)
+
+        api_key = (item.get("api_key") or "").strip()
+        base_url = item.get("base_url")
+        name = (item.get("name") or "System Setting").strip() or "System Setting"
+        config = item.get("config") or {}
+        deprecated = bool(item.get("deprecated", False))
+        is_active = bool(item.get("is_active", False))
+        modality = item.get("modality")
+
+        if target:
+            target.name = name
+            target.base_url = base_url
+            target.model = model  # preserve original casing
+            # Merge config: preserve server-side key pools
+            merged_config = dict(config)
+            existing_cfg = target.config or {}
+            for keep_key in ("provider_api_keys", "provider_api_key_weights"):
+                if keep_key in existing_cfg:
+                    merged_config[keep_key] = existing_cfg[keep_key]
+            target.config = merged_config
+            target.deprecated = deprecated
+            target.is_active = is_active
+            target.modality = modality
+            # api_key is never overwritten — keys are managed on the server
+            updated += 1
+            lookup[key] = target
+        else:
+            # For new rows, try to inherit api_key from same-provider siblings
+            inherited_key = api_key
+            if not inherited_key:
+                for existing in lookup.values():
+                    if (existing.provider or "").strip().lower() == provider.lower() and (existing.api_key or "").strip():
+                        inherited_key = existing.api_key.strip()
+                        break
+            target = SystemAPISetting(
+                name=name,
+                category=category,
+                provider=provider,
+                api_key=inherited_key,
+                base_url=base_url,
+                model=model,
+                modality=modality,
+                config=config,
+                deprecated=deprecated,
+                is_active=is_active,
+            )
+            db.add(target)
+            created += 1
+            lookup[key] = target
+
+    db.commit()
+    logger.info("System API seed sync done — created: %s, updated: %s, total in seed: %s", created, updated, len(items))
+
+
 def init_initial_data():
     db = SessionLocal()
     try:
@@ -917,7 +1021,7 @@ def init_initial_data():
             normalize_grsai_user_api_settings(db)
             init_system_api_settings(db)
         else:
-            logger.info("Skip API settings data init/normalize on deploy (managed via import/export)")
+            sync_system_api_from_seed(db)
     except Exception as e:
         logger.error(f"Failed to initialize data: {e}")
     finally:
