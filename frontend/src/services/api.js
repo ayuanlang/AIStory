@@ -831,6 +831,104 @@ const isTransientPollingError = (error) => {
     return code === 'ECONNABORTED' || code === 'ERR_NETWORK';
 };
 
+const isLocalLikeHostname = (hostname) => {
+    const host = String(hostname || '').trim().toLowerCase();
+    if (!host) return false;
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return true;
+    if (host.endsWith('.local')) return true;
+    if (host.startsWith('10.')) return true;
+    if (host.startsWith('192.168.')) return true;
+    if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(host)) return true;
+    return false;
+};
+
+const isLocalDeployment = () => {
+    try {
+        const apiHost = new URL(String(API_URL || ''), window.location.origin).hostname;
+        if (isLocalLikeHostname(apiHost)) return true;
+    } catch {
+        // ignore
+    }
+
+    try {
+        if (isLocalLikeHostname(window.location.hostname)) return true;
+    } catch {
+        // ignore
+    }
+
+    return false;
+};
+
+const resolveDefaultCallbackPollingEnabled = () => {
+    const explicit = String(import.meta?.env?.VITE_GENERATION_CALLBACK_POLLING || '').trim().toLowerCase();
+    if (explicit === '1' || explicit === 'true' || explicit === 'yes' || explicit === 'on') {
+        return true;
+    }
+    if (explicit === '0' || explicit === 'false' || explicit === 'no' || explicit === 'off') {
+        return false;
+    }
+    return !isLocalDeployment();
+};
+
+const DEFAULT_CALLBACK_POLLING_ENABLED = resolveDefaultCallbackPollingEnabled();
+
+const createGenerationCallbackTicket = (kind = 'gen') => {
+    const now = Date.now();
+    const rand = Math.random().toString(36).slice(2, 10);
+    return `${kind}-${now}-${rand}`;
+};
+
+const buildGenerationCallbackUrl = (ticket) => {
+    const stableTicket = String(ticket || '').trim();
+    if (!stableTicket) return '';
+    const base = String(API_URL || '').trim().replace(/\/$/, '');
+    if (!base) return '';
+    return `${base}/generate/callback/${encodeURIComponent(stableTicket)}`;
+};
+
+const pollGenerationCallbackUntilDone = async (
+    ticket,
+    { timeoutMs = 10 * 60 * 1000, pollIntervalMs = 3000, kind = 'generation' } = {}
+) => {
+    const stableTicket = String(ticket || '').trim();
+    if (!stableTicket) throw new Error('Missing callback ticket');
+
+    const start = Date.now();
+    let intervalMs = Math.max(1200, Number(pollIntervalMs || 3000));
+    const maxIntervalMs = 10000;
+
+    while (Date.now() - start < timeoutMs) {
+        try {
+            const response = await api.get(`/generate/callback/${encodeURIComponent(stableTicket)}`);
+            const data = response?.data || {};
+            const received = !!data?.received;
+
+            if (received) {
+                const payload = (data?.payload && typeof data.payload === 'object') ? data.payload : {};
+                const status = String(payload?.status || '').toLowerCase();
+
+                if (status === 'succeeded') {
+                    return payload?.result || {};
+                }
+                if (status === 'failed' || status === 'canceled' || status === 'cancelled') {
+                    throw new Error(payload?.error || `${kind} callback returned ${status}`);
+                }
+            }
+
+            await sleep(intervalMs);
+            intervalMs = Math.min(maxIntervalMs, Math.round(intervalMs * 1.25));
+        } catch (error) {
+            if (!isTransientPollingError(error)) {
+                throw error;
+            }
+            await sleep(Math.min(maxIntervalMs, Math.round(intervalMs * 1.5)));
+            intervalMs = Math.min(maxIntervalMs, Math.round(intervalMs * 1.5));
+        }
+    }
+
+    throw new Error(`${kind} generation timed out while waiting callback result`);
+};
+
 const pollImageJobUntilDone = async (jobId, { timeoutMs = 10 * 60 * 1000, pollIntervalMs = 3000 } = {}) => {
     const start = Date.now();
     let intervalMs = Math.max(2000, Number(pollIntervalMs || 3000));
@@ -921,7 +1019,19 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
         ...requestOptions
     } = options || {};
     const effectiveNegativePrompt = String(negative_prompt ?? options?.negative_prompt ?? '').trim();
-    const payload = { prompt, provider, ref_image_url, ...requestOptions, ...(effectiveNegativePrompt ? { negative_prompt: effectiveNegativePrompt } : {}) };
+    const callbackPollingEnabled = Object.prototype.hasOwnProperty.call(options || {}, 'callback_polling')
+        ? options?.callback_polling !== false
+        : DEFAULT_CALLBACK_POLLING_ENABLED;
+    const callbackTicket = callbackPollingEnabled ? createGenerationCallbackTicket('img') : '';
+    const callbackUrl = callbackPollingEnabled ? buildGenerationCallbackUrl(callbackTicket) : '';
+    const payload = {
+        prompt,
+        provider,
+        ref_image_url,
+        ...requestOptions,
+        ...(effectiveNegativePrompt ? { negative_prompt: effectiveNegativePrompt } : {}),
+        ...(callbackUrl ? { callback_url: callbackUrl } : {}),
+    };
     const idempotencyKey = getOrCreateImageSubmitIdempotencyKey(payload, options?.idempotency_key);
 
     let submitResp;
@@ -961,10 +1071,27 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
         }
     }
 
-    const result = await pollImageJobUntilDone(jobId, {
-        timeoutMs: Number(job_timeout_ms || 10 * 60 * 1000),
-        pollIntervalMs: Number(job_poll_interval_ms || 3000),
-    });
+    let result;
+    if (callbackUrl && callbackTicket) {
+        try {
+            result = await pollGenerationCallbackUntilDone(callbackTicket, {
+                timeoutMs: Number(job_timeout_ms || 10 * 60 * 1000),
+                pollIntervalMs: Number(job_poll_interval_ms || 3000),
+                kind: 'image',
+            });
+        } catch (callbackErr) {
+            console.warn('[generateImage] callback path failed, fallback to job polling:', callbackErr);
+            result = await pollImageJobUntilDone(jobId, {
+                timeoutMs: Number(job_timeout_ms || 10 * 60 * 1000),
+                pollIntervalMs: Number(job_poll_interval_ms || 3000),
+            });
+        }
+    } else {
+        result = await pollImageJobUntilDone(jobId, {
+            timeoutMs: Number(job_timeout_ms || 10 * 60 * 1000),
+            pollIntervalMs: Number(job_poll_interval_ms || 3000),
+        });
+    }
 
     if (shouldAutoDownloadForRequest(options) && result?.url) {
         try {
@@ -985,10 +1112,16 @@ export const generateVideo = async (prompt, provider = null, ref_image_url = nul
         on_job_created,
         ...requestOptions
     } = options || {};
+    const callbackPollingEnabled = Object.prototype.hasOwnProperty.call(options || {}, 'callback_polling')
+        ? options?.callback_polling !== false
+        : DEFAULT_CALLBACK_POLLING_ENABLED;
+    const callbackTicket = callbackPollingEnabled ? createGenerationCallbackTicket('vid') : '';
+    const callbackUrl = callbackPollingEnabled ? buildGenerationCallbackUrl(callbackTicket) : '';
     const payload = {
         prompt,
         duration,
         ...requestOptions,
+        ...(callbackUrl ? { callback_url: callbackUrl } : {}),
         ...(provider ? { provider } : {}),
         ...(ref_image_url !== null && ref_image_url !== undefined && ref_image_url !== '' ? { ref_image_url } : {}),
         ...(last_frame_url !== null && last_frame_url !== undefined && last_frame_url !== '' ? { last_frame_url } : {}),
@@ -1035,10 +1168,27 @@ export const generateVideo = async (prompt, provider = null, ref_image_url = nul
         }
     }
 
-    const result = await pollVideoJobUntilDone(jobId, {
-        timeoutMs: normalizeVideoJobTimeoutMs(job_timeout_ms),
-        pollIntervalMs: Number(job_poll_interval_ms || 3000),
-    });
+    let result;
+    if (callbackUrl && callbackTicket) {
+        try {
+            result = await pollGenerationCallbackUntilDone(callbackTicket, {
+                timeoutMs: normalizeVideoJobTimeoutMs(job_timeout_ms),
+                pollIntervalMs: Number(job_poll_interval_ms || 3000),
+                kind: 'video',
+            });
+        } catch (callbackErr) {
+            console.warn('[generateVideo] callback path failed, fallback to job polling:', callbackErr);
+            result = await pollVideoJobUntilDone(jobId, {
+                timeoutMs: normalizeVideoJobTimeoutMs(job_timeout_ms),
+                pollIntervalMs: Number(job_poll_interval_ms || 3000),
+            });
+        }
+    } else {
+        result = await pollVideoJobUntilDone(jobId, {
+            timeoutMs: normalizeVideoJobTimeoutMs(job_timeout_ms),
+            pollIntervalMs: Number(job_poll_interval_ms || 3000),
+        });
+    }
 
     if (shouldAutoDownloadForRequest(options) && result?.url) {
         try {

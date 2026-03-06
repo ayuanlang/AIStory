@@ -232,7 +232,7 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - 单实体 `generation_prompt_en` 建议 1–4 句。
 
 ### 1) Environment Prompt Template
-`[Global Style]. {Base Environment Reference}: 【base_env_name / reference image id】. {Environment Delta}: 【only changed items; if REUSE write 'None'】. {Viewpoint Anchor}: 【exact observer placement in/around environment】. {Viewing Direction}: 【Front/Reverse/Side + facing target/vector】. {Camera Setup}: 【Height/Angle/Framing】. {Composition Layers}: 【FG: elements + depth relation; MG: primary structure/subject anchor; BG: distant structure/light anchor; Primary Subject + Secondary Subject】. {Lighting Setup}: 【key/fill/back source position + quality + intensity + color temperature】. {Lens & Focus Baseline}: 【focal length family + DOF strategy】. {Grain/Noise Strategy}: 【clean digital / fine film grain / medium grain + shadow readability】. Atmosphere: 【mood keywords】. Details: 【materials, textures】. **No humans or characters present.**`
+`[Global Style]. {Base Environment Reference}: 【base_env_name / reference image id】. {Environment Delta}: 【only changed items; if REUSE write 'None'】. {Viewpoint Anchor}: 【exact observer placement in/around environment】. {Viewing Direction}: 【Front/Reverse/Side + facing target/vector】. {Viewpoint Setup}: 【Height/Angle/Framing】. {Composition Layers}: 【FG: elements + depth relation; MG: primary structure/subject anchor; BG: distant structure/light anchor; Primary Subject + Secondary Subject】. {Lighting Setup}: 【key/fill/back source position + quality + intensity + color temperature】. {Lens & Focus Baseline}: 【focal length family + DOF strategy】. {Grain/Noise Strategy}: 【clean digital / fine film grain / medium grain + shadow readability】. Atmosphere: 【mood keywords】. Details: 【materials, textures】. **No humans or characters present.**`
 
 - 变体写作必须 Delta-only；可追溯 Base；Delta 顺序必须合法。
 - 缩写映射：`CPD/AS/BG/LD/FR/DP`。
@@ -402,7 +402,7 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
       "atmosphere": "Atmosphere",
       "visual_params": "Wide/Interior/Day",
       "description_cn": "Chinese Desc",
-      "generation_prompt_en": "[Global Style] Camera ...",
+      "generation_prompt_en": "[Global Style]  ...",
       "negative_prompt_en": "Style-aware negative prompt for this environment (English only)",
       "anchor_description": "English visual tags only",
       "visual_dependencies": [],

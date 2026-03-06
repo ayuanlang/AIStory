@@ -2953,21 +2953,48 @@ class MediaGenerationService:
 
         model_lower = str(model or "").strip().lower()
         use_veo_api = bool(gen_type == "video" and model_lower.startswith("veo"))
+        use_runway_api = bool(gen_type == "video" and "runway" in model_lower)
+        use_4o_image_api = bool(gen_type == "image" and ("gpt4o-image" in model_lower or "4o-image" in model_lower))
+        use_flux_kontext_api = bool(gen_type == "image" and ("flux-kontext" in model_lower or "flux/kontext" in model_lower))
+        use_suno_api = bool(gen_type == "audio" and "suno" in model_lower)
         is_kling_3_video = bool(gen_type == "video" and ("kling-3.0" in model_lower or model_lower == "kling3"))
 
         base_url = (config.get("base_url") or tool_conf.get("base_url") or "https://api.kie.ai").strip().rstrip("/")
         if "/api/v1/jobs" in base_url:
             base_url = base_url.split("/api/v1/jobs")[0]
+            
+        for suffix in ["/api/v1/veo", "/api/v1/runway", "/api/v1/flux/kontext", "/api/v1/gpt4o-image", "/api/v1/generate"]:
+            if base_url.endswith(suffix):
+                base_url = base_url[:-len(suffix)]
 
         submit_url = (tool_conf.get("endpoint") or f"{base_url}/api/v1/jobs/createTask").strip()
         query_url = (tool_conf.get("query_endpoint") or f"{base_url}/api/v1/jobs/recordInfo").strip()
         if use_veo_api:
             submit_url = (tool_conf.get("veo_endpoint") or f"{base_url}/api/v1/veo/generate").strip()
             query_url = (tool_conf.get("veo_query_endpoint") or f"{base_url}/api/v1/veo/record-info").strip()
+        elif use_runway_api:
+            submit_url = (tool_conf.get("runway_endpoint") or f"{base_url}/api/v1/runway/generate").strip()
+            query_url = (tool_conf.get("runway_query_endpoint") or f"{base_url}/api/v1/runway/record-detail").strip()
+        elif use_4o_image_api:
+            submit_url = (tool_conf.get("gpt4o_image_endpoint") or f"{base_url}/api/v1/gpt4o-image/generate").strip()
+            query_url = (tool_conf.get("gpt4o_image_query_endpoint") or f"{base_url}/api/v1/gpt4o-image/record-info").strip()
+        elif use_flux_kontext_api:
+            submit_url = (tool_conf.get("flux_kontext_endpoint") or f"{base_url}/api/v1/flux/kontext/generate").strip()
+            query_url = (tool_conf.get("flux_kontext_query_endpoint") or f"{base_url}/api/v1/flux/kontext/record-info").strip()
+        elif use_suno_api:
+            submit_url = (tool_conf.get("suno_endpoint") or f"{base_url}/api/v1/generate").strip()
+            query_url = (tool_conf.get("suno_query_endpoint") or f"{base_url}/api/v1/record-info").strip()  # Needs verification
 
+        route_mode = "market"
+        if use_veo_api: route_mode = "veo"
+        elif use_runway_api: route_mode = "runway"
+        elif use_4o_image_api: route_mode = "4o_image"
+        elif use_flux_kontext_api: route_mode = "flux_kontext"
+        elif use_suno_api: route_mode = "suno"
+        
         logger.info(
             "KIE route selected | mode=%s model=%s submit_url=%s query_url=%s",
-            "veo" if use_veo_api else "market",
+            route_mode,
             model,
             submit_url,
             query_url,
@@ -3189,6 +3216,69 @@ class MediaGenerationService:
                 )
             except Exception:
                 pass
+        elif use_runway_api:
+            # Handle Runway payload (generate-ai-video or aleph)
+            payload = {
+                "prompt": prompt,
+                "duration": "10" if str(duration) in {"10"} else "5",
+                "quality": "1080p" if "1080" in str(tool_conf.get("resolution") or "") else "720p",
+                "aspectRatio": normalized_ar if normalized_ar in {"16:9", "4:3", "1:1", "3:4", "9:16"} else "16:9",
+                "waterMark": str(tool_conf.get("watermark") or ""),
+            }
+            if callback_url and callback_url != "-1":
+                payload["callBackUrl"] = callback_url
+            if resolved_refs:
+                payload["imageUrl"] = resolved_refs[0]
+            
+            logger.info("KIE Runway submit payload | endpoint=%s", submit_url)
+        elif use_4o_image_api:
+            # Handle 4o image payload
+            payload = {
+                "prompt": prompt,
+                "size": tool_conf.get("size") or "1:1",
+                "isEnhance": bool(tool_conf.get("isEnhance")),
+                "uploadCn": bool(tool_conf.get("uploadCn")),
+                "enableFallback": bool(tool_conf.get("enableFallback")),
+                "fallbackModel": tool_conf.get("fallbackModel", "FLUX_MAX"),
+            }
+            if callback_url and callback_url != "-1":
+                payload["callBackUrl"] = callback_url
+            if resolved_refs:
+                payload["filesUrl"] = resolved_refs
+            
+            logger.info("KIE 4o Image submit payload | endpoint=%s", submit_url)
+        elif use_flux_kontext_api:
+            # Handle Flux Kontext payload
+            payload = {
+                "prompt": prompt,
+                "model": "flux-kontext-max" if "max" in model_lower else "flux-kontext-pro",
+                "aspectRatio": normalized_ar if normalized_ar in {"21:9", "16:9", "4:3", "1:1", "3:4", "9:16"} else "16:9",
+                "outputFormat": tool_conf.get("outputFormat", "jpeg"),
+                "promptUpsampling": bool(tool_conf.get("promptUpsampling")),
+                "safetyTolerance": int(tool_conf.get("safetyTolerance", 2)),
+                "enableTranslation": bool(tool_conf.get("enableTranslation", True)),
+                "uploadCn": bool(tool_conf.get("uploadCn")),
+            }
+            if tool_conf.get("watermark"):
+                payload["watermark"] = str(tool_conf.get("watermark"))
+            if callback_url and callback_url != "-1":
+                payload["callBackUrl"] = callback_url
+            if resolved_refs:
+                payload["inputImage"] = resolved_refs[0]
+            
+            logger.info("KIE Flux Kontext submit payload | endpoint=%s model=%s", submit_url, payload["model"])
+        elif use_suno_api:
+            payload = {
+                "prompt": prompt,
+                "model": "V5" if "v5" in model_lower else ("V4_5" if "v4.5" in model_lower or "4.5" in model_lower else "V4"),
+                "customMode": bool(tool_conf.get("customMode", False)),
+                "instrumental": bool(tool_conf.get("instrumental", False)),
+            }
+            if payload["customMode"]:
+                payload["style"] = tool_conf.get("style", "Pop")
+                payload["title"] = tool_conf.get("title", "AI Generated Track")
+            if callback_url and callback_url != "-1":
+                payload["callBackUrl"] = callback_url
         elif is_kling_3_video:
             kling_model = "kling-3.0/video"
 
@@ -3665,10 +3755,10 @@ class MediaGenerationService:
             if not ordered:
                 return None
 
-            if gen_type == "video":
+            if gen_type == "video" or gen_type == "audio":
                 for url in ordered:
                     lower_url = url.lower()
-                    if any(token in lower_url for token in (".mp4", ".mov", ".webm", "video/")):
+                    if any(token in lower_url for token in (".mp4", ".mov", ".webm", "video/", ".mp3", "audio/")):
                         return url
 
             return ordered[0]
@@ -3686,7 +3776,7 @@ class MediaGenerationService:
                         return
                     if raw.startswith("http://") or raw.startswith("https://"):
                         lowered = raw.lower()
-                        if any(token in lowered for token in (".mp4", ".mov", ".webm", "video/")):
+                        if any(token in lowered for token in (".mp4", ".mov", ".webm", "video/", ".mp3", "audio/")):
                             video_like_urls.append(raw)
                         return
                     if raw.startswith("{") or raw.startswith("["):
@@ -3712,6 +3802,8 @@ class MediaGenerationService:
                             "result_video_url",
                             "outputvideourl",
                             "output_video_url",
+                            "audiourl",
+                            "audio_url",
                         }:
                             if isinstance(item, str):
                                 text = item.strip()
@@ -3802,7 +3894,7 @@ class MediaGenerationService:
                 if not video_urls and isinstance(record.get("response"), dict):
                     video_urls = _extract_kie_video_urls(record.get("response"))
 
-                if gen_type == "video":
+                if gen_type == "video" or gen_type == "audio":
                     selected_video_url = _pick_preferred_kie_media_url(video_urls)
                     if selected_video_url:
                         meta = {"raw": poll_data}
@@ -3826,7 +3918,7 @@ class MediaGenerationService:
                 if not video_urls and isinstance(record.get("response"), dict):
                     video_urls = _extract_kie_video_urls(record.get("response"))
 
-                if gen_type == "video":
+                if gen_type == "video" or gen_type == "audio":
                     selected_video_url = _pick_preferred_kie_media_url(video_urls)
                     if selected_video_url:
                         meta = {"raw": poll_data}

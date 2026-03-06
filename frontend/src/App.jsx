@@ -31,6 +31,8 @@ const PublicRoute = ({ children, bypassRedirect = false }) => {
 };
 
 function App() {
+  const AUTH_LOGIN_SUCCESS_EVENT = 'AUTH_LOGIN_SUCCESS';
+  const AUTH_LOGOUT_EVENT = 'AUTH_LOGOUT';
   const [appUiLang, setAppUiLang] = useState(getUiLang());
   const [aiAssistantInstanceKey, setAiAssistantInstanceKey] = useState(0);
   const [maintenanceStatus, setMaintenanceStatus] = useState({ is_active: false, ends_at: null, message: '' });
@@ -95,11 +97,23 @@ function App() {
       }
     };
 
-    checkMaintenance();
-    const timer = window.setInterval(checkMaintenance, 30000);
+    const handleLoginSuccess = () => {
+      checkMaintenance();
+    };
+
+    const handleLogout = () => {
+      if (!cancelled) {
+        setMaintenanceStatus({ is_active: false, ends_at: null, message: '' });
+      }
+    };
+
+    window.addEventListener(AUTH_LOGIN_SUCCESS_EVENT, handleLoginSuccess);
+    window.addEventListener(AUTH_LOGOUT_EVENT, handleLogout);
+
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      window.removeEventListener(AUTH_LOGIN_SUCCESS_EVENT, handleLoginSuccess);
+      window.removeEventListener(AUTH_LOGOUT_EVENT, handleLogout);
     };
   }, []);
 
@@ -125,6 +139,7 @@ function App() {
               onClick={() => {
                 if (typeof window !== 'undefined') {
                   localStorage.removeItem('token');
+                  window.dispatchEvent(new Event('AUTH_LOGOUT'));
                   window.location.href = '/auth';
                 }
               }}

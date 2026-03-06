@@ -50,3 +50,34 @@
 ## 验证记录
 - 前端已执行 `npm run build` 成功。
 - 改动文件已通过编辑器错误检查（无语法错误）。
+
+## 追加审计：KIE 模型枚举一致性（2026-03-06）
+
+### 背景
+- 对 KIE Market 模型名进行“严格枚举对齐”复核，重点覆盖 Kling / Bytedance / Hailuo / Wan / Veo 相关文档页。
+- 目标：确保系统内置配置、DB 种子数据、运行时别名映射与官方文档保持一致，并对文档歧义保留可追溯裁决记录。
+
+### 本次落地
+- 已完成高置信差异修正：
+  - `kling/2.6-text-to-video` → `kling-2.6/text-to-video`
+  - `kling/2.6-image-to-video` → `kling-2.6/image-to-video`
+  - `kling/v25-turbo-text-to-video-pro` → `kling/v2-5-turbo-text-to-video-pro`
+  - `kling/2.6-motion-control` → `kling-2.6/motion-control`
+  - `kling/v25-turbo-image-to-video-pro` → `kling/v2-5-turbo-image-to-video-pro`
+- 已同步运行时兼容别名，确保历史值仍可被解析，不破坏存量数据。
+- 已补充别名文档与“歧义裁决依据”：`docs/kie_model_alias_map.md`。
+
+### 取证与裁决原则
+- 证据来源：`https://docs.kie.ai/sitemap.xml` + 目标模型中英文页面交叉核对。
+- 裁决规则：
+  1. 优先采用页面内 `model` 的 Value/Default/Example（若内部一致）；
+  2. 若英文页内部冲突，交叉中文对应页；
+  3. 仍冲突时，按页面路径语义与同族页面一致性裁决；
+  4. 对被替换旧值必须保留 alias 做向后兼容。
+
+### 变更时间线
+- 2026-03-06（第一阶段）：完成批量枚举抓取、对照与首批高置信修正（Kling 2.6 T2V/I2V、Kling v2.5 Turbo T2V）。
+- 2026-03-06（第二阶段）：完成歧义项二次核验并修正（Kling 2.6 Motion Control、Kling v2.5 Turbo I2V）；补充审计依据文档。
+
+### 验证
+- 受影响后端文件已完成错误检查（无新增语法/诊断错误）。

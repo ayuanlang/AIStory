@@ -32,7 +32,7 @@ from app.schemas.settings import (
     SystemAIAssistantSuggestion,
 )
 from app.api.deps import get_current_user
-from typing import List, Dict, Tuple, Any
+from typing import List, Dict, Tuple, Any, Optional
 
 router = APIRouter()
 logger = logging.getLogger("settings_api")
@@ -244,6 +244,45 @@ def _safe_json_dict(value) -> Dict:
     return {}
 
 
+def _is_json_object_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, dict):
+        return True
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            value = value.decode("utf-8", errors="ignore")
+        except Exception:
+            return False
+    if isinstance(value, str):
+        raw_obj: Any = value
+        for _ in range(3):
+            if isinstance(raw_obj, dict):
+                return True
+            if not isinstance(raw_obj, str):
+                return False
+
+            raw = raw_obj.strip()
+            if not raw:
+                return True
+
+            parsed = None
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                try:
+                    parsed = ast.literal_eval(raw)
+                except Exception:
+                    parsed = None
+
+            if parsed is None:
+                return False
+            raw_obj = parsed
+
+        return isinstance(raw_obj, dict)
+    return False
+
+
 def _to_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -403,8 +442,19 @@ def _extract_provider_key_pool_from_row(row: SystemAPISetting) -> List[str]:
     return [single] if single else []
 
 
+def _normalize_system_provider_name(provider: Any) -> str:
+    return str(provider or "").strip().lower()
+
+
+def _system_provider_case_insensitive_filter(provider: Any):
+    provider_norm = _normalize_system_provider_name(provider)
+    return func.lower(func.trim(func.coalesce(SystemAPISetting.provider, ""))) == provider_norm
+
+
 def _get_system_provider_key_pool(db: Session, provider: str) -> List[str]:
-    rows = db.query(SystemAPISetting).filter(SystemAPISetting.provider == provider).order_by(SystemAPISetting.id.asc()).all()
+    rows = db.query(SystemAPISetting).filter(
+        _system_provider_case_insensitive_filter(provider)
+    ).order_by(SystemAPISetting.id.asc()).all()
     merged: List[str] = []
     seen = set()
     for row in rows:
@@ -418,9 +468,13 @@ def _get_system_provider_key_pool(db: Session, provider: str) -> List[str]:
 
 def _apply_system_provider_key_pool(db: Session, provider: str, keys: List[str]) -> None:
     normalized = _normalize_api_keys(keys)
-    rows = db.query(SystemAPISetting).filter(SystemAPISetting.provider == provider).all()
+    provider_name = _normalize_system_provider_name(provider)
+    rows = db.query(SystemAPISetting).filter(
+        _system_provider_case_insensitive_filter(provider_name)
+    ).all()
     primary_key = normalized[0] if normalized else ""
     for row in rows:
+        row.provider = provider_name
         cfg = _safe_json_dict(row.config)
         cfg["provider_api_keys"] = normalized
         strategy = _normalize_key_strategy(cfg.get("provider_api_key_strategy"))
@@ -458,9 +512,12 @@ def _can_manage_system_settings(user: User) -> bool:
 
 
 def _ensure_default_system_selection_for_user(db: Session, user_id: int) -> None:
-    existing_count = db.query(APISetting).filter(APISetting.user_id == user_id).count()
-    if existing_count > 0:
-        return
+    # Get all active categories the user has configured
+    user_active_categories = db.query(APISetting.category).filter(
+        APISetting.user_id == user_id,
+        APISetting.is_active == True
+    ).distinct().all()
+    user_active_categories_set = {str(cat[0]).strip() for cat in user_active_categories if cat[0]}
 
     active_system_rows = db.query(SystemAPISetting).filter(
         SystemAPISetting.is_active == True,
@@ -475,7 +532,9 @@ def _ensure_default_system_selection_for_user(db: Session, user_id: int) -> None
         category = str(row.category or "").strip()
         if not category or category in selected_by_category:
             continue
-        selected_by_category[category] = row
+        # Only add default if user doesn't already have an active setting for this category
+        if category not in user_active_categories_set:
+            selected_by_category[category] = row
 
     for _, system_setting in selected_by_category.items():
         marker_config = dict(system_setting.config or {})
@@ -494,6 +553,52 @@ def _ensure_default_system_selection_for_user(db: Session, user_id: int) -> None
         ))
 
     db.flush()
+
+
+def _normalize_user_active_settings(db: Session, user_id: int) -> None:
+    rows = db.query(APISetting).filter(
+        APISetting.user_id == user_id,
+        APISetting.is_active == True,
+    ).order_by(APISetting.category.asc(), APISetting.id.desc()).all()
+
+    grouped: Dict[str, List[APISetting]] = {}
+    for row in rows:
+        category = str(row.category or "LLM").strip() or "LLM"
+        grouped.setdefault(category, []).append(row)
+
+    changed = False
+    for category, items in grouped.items():
+        if len(items) <= 1:
+            continue
+
+        def _score(item: APISetting):
+            cfg = _safe_json_dict(item.config)
+            selection_source = str((cfg or {}).get("selection_source") or "").strip().lower()
+            is_system_selected = 1 if selection_source == "system" else 0
+            has_model = 1 if str(item.model or "").strip() else 0
+            has_provider = 1 if str(item.provider or "").strip() else 0
+            return (is_system_selected, has_model, has_provider, int(item.id or 0))
+
+        winner = max(items, key=_score)
+        dropped_ids: List[int] = []
+        for item in items:
+            should_active = (item.id == winner.id)
+            if bool(item.is_active) != should_active:
+                item.is_active = should_active
+                changed = True
+            if not should_active:
+                dropped_ids.append(item.id)
+
+        logger.warning(
+            "Normalize duplicate active api settings | user_id=%s category=%s keep_id=%s drop_ids=%s",
+            user_id,
+            category,
+            winner.id,
+            dropped_ids,
+        )
+
+    if changed:
+        db.flush()
 
 
 def _sync_provider_shared_key(db: Session, user_id: int, provider: str, current_setting_id: int, incoming_api_key: str = None) -> str:
@@ -522,6 +627,8 @@ def _sync_provider_shared_key(db: Session, user_id: int, provider: str, current_
 def _sync_system_provider_shared_key(db: Session, provider: str, current_setting_id: int, incoming_api_key: str = None) -> str:
     if not provider:
         return incoming_api_key or ""
+
+    provider = _normalize_system_provider_name(provider)
 
     key = (incoming_api_key or "").strip()
     pool = _get_system_provider_key_pool(db, provider)
@@ -719,22 +826,55 @@ def _migrate_legacy_pricing_rules_to_system_api_pricing(db: Session) -> int:
 def _ensure_builtin_system_settings(db: Session) -> None:
     kie_base_url = "https://api.kie.ai"
 
-    def _kie_item(name: str, category: str, model: str) -> Dict[str, Any]:
+    def _kie_item(name: str, category: str, model: str, extra_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        config = {
+            "endpoint": f"{kie_base_url}/api/v1/jobs/createTask",
+            "query_endpoint": f"{kie_base_url}/api/v1/jobs/recordInfo",
+            "credits_endpoint": f"{kie_base_url}/api/v1/user/credits",
+            "credits_endpoint_v2": f"{kie_base_url}/api/v1/chat/credit",
+            "deprecated": False,
+        }
+        if isinstance(extra_config, dict) and extra_config:
+            config.update(extra_config)
         return {
             "name": name,
             "category": category,
             "provider": "kie",
             "base_url": kie_base_url,
             "model": model,
-            "config": {
-                "endpoint": f"{kie_base_url}/api/v1/jobs/createTask",
-                "query_endpoint": f"{kie_base_url}/api/v1/jobs/recordInfo",
-                "credits_endpoint": f"{kie_base_url}/api/v1/user/credits",
-                "deprecated": False,
-            },
+            "config": config,
         }
 
     builtins = [
+        _kie_item("Kie Seedream 4.5", "Image", "seedream/4.5-text-to-image"),
+        _kie_item("Kie Seedream 4.5 Edit", "Image", "seedream/4.5-edit"),
+        _kie_item("Kie Google Imagen4 Fast (Canonical)", "Image", "google/imagen4-fast"),
+        _kie_item("Kie Google Imagen4 Ultra (Canonical)", "Image", "google/imagen4-ultra"),
+        _kie_item("Kie Google Imagen4", "Image", "google/imagen4"),
+        _kie_item("Kie Google Nano Banana", "Image", "google/nano-banana"),
+        _kie_item("Kie Google Nano Banana Edit", "Image", "google/nano-banana-edit"),
+        _kie_item("Kie Google Nano Banana 2", "Image", "google/nanobanana2"),
+        _kie_item("Kie Google Pro Image-to-Image", "Image", "google/pro-image-to-image"),
+        _kie_item("Kie Grok Imagine T2I (Canonical)", "Image", "grok-imagine/text-to-image"),
+        _kie_item("Kie Grok Imagine I2I (Canonical)", "Image", "grok-imagine/image-to-image"),
+        _kie_item("Kie Grok Imagine Upscale (Canonical)", "Image", "grok-imagine/upscale"),
+        _kie_item("Kie Qwen T2I (Canonical)", "Image", "qwen/text-to-image"),
+        _kie_item("Kie Qwen I2I (Canonical)", "Image", "qwen/image-to-image"),
+        _kie_item("Kie Qwen Edit (Canonical)", "Image", "qwen/image-edit"),
+        _kie_item("Kie Flux2 Pro T2I (Canonical)", "Image", "flux-2/pro-text-to-image"),
+        _kie_item("Kie Flux2 Pro I2I (Canonical)", "Image", "flux-2/pro-image-to-image"),
+        _kie_item("Kie Flux2 Flex T2I (Canonical)", "Image", "flux-2/flex-text-to-image"),
+        _kie_item("Kie Flux2 Flex I2I (Canonical)", "Image", "flux-2/flex-image-to-image"),
+        _kie_item("Kie GPT Image 1.5 T2I", "Image", "gpt-image/1-5-text-to-image"),
+        _kie_item("Kie GPT Image 1.5 I2I", "Image", "gpt-image/1-5-image-to-image"),
+        _kie_item("Kie Topaz Image Upscale", "Image", "topaz/image-upscale"),
+        _kie_item("Kie Recraft Remove BG", "Image", "recraft/remove-background"),
+        _kie_item("Kie Recraft Crisp Upscale", "Image", "recraft/crisp-upscale"),
+        _kie_item("Kie Ideogram V3 Reframe", "Image", "ideogram/v3-reframe"),
+        _kie_item("Kie Ideogram Character", "Image", "ideogram/character"),
+        _kie_item("Kie Ideogram Character Edit", "Image", "ideogram/character-edit"),
+        _kie_item("Kie Ideogram Character Remix", "Image", "ideogram/character-remix"),
+
         _kie_item("Kie Z-image v4.0", "Image", "z-image-v4.0"),
         _kie_item("Kie Z-image v4.5", "Image", "z-image-v4.5"),
         _kie_item("Kie Grok Imagine", "Image", "grok-imagine"),
@@ -746,6 +886,52 @@ def _ensure_builtin_system_settings(db: Session) -> None:
         _kie_item("Kie Recraft", "Image", "recraft"),
         _kie_item("Kie Topaz", "Image", "topaz"),
 
+        _kie_item("Kie Kling 3.0", "Video", "kling-3.0/video"),
+        _kie_item("Kie Kling 2.6 T2V", "Video", "kling-2.6/text-to-video"),
+        _kie_item("Kie Kling 2.6 I2V", "Video", "kling-2.6/image-to-video"),
+        _kie_item("Kie Kling 2.6 Motion Control", "Video", "kling-2.6/motion-control"),
+        _kie_item("Kie Kling 2.5 Turbo T2V Pro", "Video", "kling/v2-5-turbo-text-to-video-pro"),
+        _kie_item("Kie Kling 2.5 Turbo I2V Pro", "Video", "kling/v2-5-turbo-image-to-video-pro"),
+        _kie_item("Kie Kling V2.1 Pro", "Video", "kling/v2-1-pro"),
+        _kie_item("Kie Kling V2.1 Standard", "Video", "kling/v2-1-standard"),
+        _kie_item("Kie Kling V2.1 Master T2V", "Video", "kling/v2-1-master-text-to-video"),
+        _kie_item("Kie Kling V2.1 Master I2V", "Video", "kling/v2-1-master-image-to-video"),
+        _kie_item("Kie Bytedance V1 Pro T2V (Canonical)", "Video", "bytedance/v1-pro-text-to-video"),
+        _kie_item("Kie Bytedance V1 Pro I2V (Canonical)", "Video", "bytedance/v1-pro-image-to-video"),
+        _kie_item("Kie Bytedance V1 Pro Fast I2V (Canonical)", "Video", "bytedance/v1-pro-fast-image-to-video"),
+        _kie_item("Kie Bytedance V1 Lite T2V (Canonical)", "Video", "bytedance/v1-lite-text-to-video"),
+        _kie_item("Kie Bytedance V1 Lite I2V (Canonical)", "Video", "bytedance/v1-lite-image-to-video"),
+        _kie_item("Kie Hailuo Pro T2V (Canonical)", "Video", "hailuo/02-text-to-video-pro"),
+        _kie_item("Kie Hailuo Pro I2V (Canonical)", "Video", "hailuo/02-image-to-video-pro"),
+        _kie_item("Kie Hailuo Standard T2V (Canonical)", "Video", "hailuo/02-text-to-video-standard"),
+        _kie_item("Kie Hailuo Standard I2V (Canonical)", "Video", "hailuo/02-image-to-video-standard"),
+        _kie_item("Kie Hailuo 2.3 Pro I2V", "Video", "hailuo/2-3-image-to-video-pro"),
+        _kie_item("Kie Hailuo 2.3 Standard I2V", "Video", "hailuo/2-3-image-to-video-standard"),
+        _kie_item("Kie Wan 2.6 T2V (Canonical)", "Video", "wan/2-6-text-to-video"),
+        _kie_item("Kie Wan 2.6 I2V (Canonical)", "Video", "wan/2-6-image-to-video"),
+        _kie_item("Kie Wan 2.6 V2V (Canonical)", "Video", "wan/2-6-video-to-video"),
+        _kie_item("Kie Wan 2.2 A14B T2V Turbo", "Video", "wan/2-2-a14b-text-to-video-turbo"),
+        _kie_item("Kie Wan 2.2 A14B I2V Turbo", "Video", "wan/2-2-a14b-image-to-video-turbo"),
+        _kie_item("Kie Wan 2.2 A14B Speech2Video", "Video", "wan/2-2-a14b-speech-to-video-turbo"),
+        _kie_item("Kie Wan Animate Move", "Video", "wan/2-2-animate-move"),
+        _kie_item("Kie Wan Animate Replace", "Video", "wan/2-2-animate-replace"),
+        _kie_item("Kie Wan 2.6 Flash I2V", "Video", "wan/2-6-flash-image-to-video"),
+        _kie_item("Kie Wan 2.6 Flash V2V", "Video", "wan/2-6-flash-video-to-video"),
+        _kie_item("Kie Sora2 T2V (Canonical)", "Video", "sora-2-text-to-video"),
+        _kie_item("Kie Sora2 I2V (Canonical)", "Video", "sora-2-image-to-video"),
+        _kie_item("Kie Sora2 Pro T2V (Canonical)", "Video", "sora-2-pro-text-to-video"),
+        _kie_item("Kie Sora2 Pro I2V (Canonical)", "Video", "sora-2-pro-image-to-video"),
+        _kie_item("Kie Sora2 Watermark Remover", "Video", "sora-watermark-remover"),
+        _kie_item("Kie Sora2 Pro Storyboard", "Video", "sora-2-pro-storyboard"),
+        _kie_item("Kie Sora2 Characters", "Video", "sora-2-characters"),
+        _kie_item("Kie Sora2 Characters Pro", "Video", "sora-2-characters-pro"),
+        _kie_item("Kie Grok Imagine T2V (Canonical)", "Video", "grok-imagine/text-to-video"),
+        _kie_item("Kie Grok Imagine I2V (Canonical)", "Video", "grok-imagine/image-to-video"),
+        _kie_item("Kie Topaz Video Upscale", "Video", "topaz/video-upscale"),
+        _kie_item("Kie Infinitalk From Audio", "Video", "infinitalk/from-audio"),
+
+        _kie_item("Kie Veo 3.1 Quality", "Video", "veo3"),
+        _kie_item("Kie Veo 3.1 Fast", "Video", "veo3_fast"),
         _kie_item("Kie Kling v2.1", "Video", "kling-v2.1"),
         _kie_item("Kie Kling v2.5", "Video", "kling-v2.5"),
         _kie_item("Kie Sora2", "Video", "sora2"),
@@ -756,13 +942,34 @@ def _ensure_builtin_system_settings(db: Session) -> None:
         _kie_item("Kie Grok Imagine Video", "Video", "grok-imagine-video"),
 
         _kie_item("Kie ElevenLabs", "Tools", "elevenlabs"),
+        _kie_item("Kie ElevenLabs Text to Dialogue v3", "Tools", "elevenlabs/text-to-dialogue-v3"),
+        _kie_item("Kie ElevenLabs TTS Turbo 2.5", "Tools", "elevenlabs/text-to-speech-turbo-2-5"),
+        _kie_item("Kie ElevenLabs TTS Multilingual v2", "Tools", "elevenlabs/text-to-speech-multilingual-v2"),
+        _kie_item("Kie ElevenLabs Speech-to-Text", "Tools", "elevenlabs/speech-to-text"),
+        _kie_item("Kie ElevenLabs Sound Effect v2", "Tools", "elevenlabs/sound-effect-v2"),
+        _kie_item("Kie ElevenLabs Audio Isolation", "Tools", "elevenlabs/audio-isolation"),
 
         _kie_item("Kie Gemini 2.5 Flash", "LLM", "gemini-2.5-flash"),
         _kie_item("Kie Gemini 2.5 Pro", "LLM", "gemini-2.5-pro"),
+        _kie_item("Kie Gemini 3 Pro", "LLM", "gemini-3-pro"),
+        _kie_item("Kie GPT-5-2", "LLM", "gpt-5-2"),
+        _kie_item("Kie Claude Sonnet 4.5", "LLM", "claude-sonnet-4.5"),
+        _kie_item("Kie Claude Opus 4.5", "LLM", "claude-opus-4.5"),
     ]
 
+    # Merge provider aliases by case (e.g. "KIE" -> "kie") before builtin upsert.
+    kie_case_rows = db.query(SystemAPISetting).filter(
+        _system_provider_case_insensitive_filter("kie")
+    ).all()
+    for row in kie_case_rows:
+        row.provider = "kie"
+
+    kie_pool = _get_system_provider_key_pool(db, "kie")
+    if kie_pool:
+        _apply_system_provider_key_pool(db, "kie", kie_pool)
+
     existing = db.query(SystemAPISetting.category, SystemAPISetting.provider, SystemAPISetting.model).filter(
-        SystemAPISetting.provider == "kie"
+        _system_provider_case_insensitive_filter("kie")
     ).all()
     existing_keys = {
         ((c or "").strip().lower(), (p or "").strip().lower(), (m or "").strip().lower())
@@ -781,11 +988,12 @@ def _ensure_builtin_system_settings(db: Session) -> None:
         to_create.append(item)
 
     if not to_create:
-        return
+        # continue to normalize existing KIE video rows
+        pass
 
     shared_key = ""
     key_row = db.query(SystemAPISetting.api_key).filter(
-        SystemAPISetting.provider == "kie",
+        _system_provider_case_insensitive_filter("kie"),
         SystemAPISetting.api_key.isnot(None),
         SystemAPISetting.api_key != "",
     ).order_by(SystemAPISetting.id.desc()).first()
@@ -804,6 +1012,26 @@ def _ensure_builtin_system_settings(db: Session) -> None:
             config=item["config"],
             is_active=False,
         ))
+
+    # Normalize existing KIE Video rows: clear previous forced deprecation for known KIE video built-ins.
+    known_kie_video_models = {
+        str(item.get("model") or "").strip().lower()
+        for item in builtins
+        if str(item.get("provider") or "").strip().lower() == "kie"
+        and str(item.get("category") or "").strip().lower() == "video"
+    }
+    kie_video_rows = db.query(SystemAPISetting).filter(
+        _system_provider_case_insensitive_filter("kie"),
+        SystemAPISetting.category == "Video",
+    ).all()
+    for row in kie_video_rows:
+        model_text = str(row.model or "").strip().lower()
+        cfg = _safe_json_dict(row.config)
+
+        if model_text in known_kie_video_models:
+            cfg["deprecated"] = False
+            row.deprecated = False
+            row.config = cfg
 
     db.flush()
 
@@ -882,10 +1110,14 @@ DEFAULTS = {
         "category": "Video",
         "name": "KIE AI",
         "base_url": "https://api.kie.ai",
-        "model": "veo3-fast",
+        "model": "veo3_fast",
         "config": {
             "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
-            "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo"
+            "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
+            "credits_endpoint": "https://api.kie.ai/api/v1/user/credits",
+            "credits_endpoint_v2": "https://api.kie.ai/api/v1/chat/credit",
+            "veo_endpoint": "https://api.kie.ai/api/v1/veo/generate",
+            "veo_query_endpoint": "https://api.kie.ai/api/v1/veo/record-info"
         }
     }
 }
@@ -897,6 +1129,8 @@ def get_settings(
 ):
     try:
         _ensure_default_system_selection_for_user(db, current_user.id)
+        _normalize_user_active_settings(db, current_user.id)
+        db.commit()
 
         rows = db.query(APISetting).filter(APISetting.user_id == current_user.id).all()
         result: List[APISettingOut] = []
@@ -910,7 +1144,7 @@ def get_settings(
                 api_key=row.api_key,
                 base_url=row.base_url,
                 model=row.model,
-                config=_safe_json_dict(row.config),
+        config=_safe_json_dict(row.config),
                 is_active=bool(row.is_active),
             ))
         return result
@@ -928,27 +1162,33 @@ def update_setting(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    
-    # Identify Category
-    provider = setting_in.provider
+    # Check if we are updating an existing ID
+    existing_setting = None
+    if setting_in.id:
+        existing_setting = db.query(APISetting).filter(
+            APISetting.id == setting_in.id,
+            APISetting.user_id == current_user.id,
+        ).first()
+        if not existing_setting:
+            raise HTTPException(status_code=404, detail="Setting not found")
+
+    # Identify effective provider/category with existing-row fallback.
+    provider = setting_in.provider or (existing_setting.provider if existing_setting else None)
     default_info = DEFAULTS.get(provider, {})
-    category = setting_in.category or default_info.get("category", "LLM")
-    
-    # If this request is setting item to Active, we must deactivate others in same category
+    category = setting_in.category or (existing_setting.category if existing_setting else None) or default_info.get("category", "LLM")
+
+    # If this request is setting item to Active, deactivate others in the same effective category.
     if setting_in.is_active:
         existing_active = db.query(APISetting).filter(
             APISetting.user_id == current_user.id,
             APISetting.category == category,
-            APISetting.is_active == True
+            APISetting.is_active == True,
         ).all()
         for s in existing_active:
             s.is_active = False
-            
-    # Check if we are updating an existing ID
+
     if setting_in.id:
-        db_setting = db.query(APISetting).filter(APISetting.id == setting_in.id, APISetting.user_id == current_user.id).first()
-        if not db_setting:
-            raise HTTPException(status_code=404, detail="Setting not found")
+        db_setting = existing_setting
             
         # Update fields
         # Loop through fields in schema but skip None
@@ -995,6 +1235,8 @@ def update_setting(
     )
     db_setting.api_key = effective_key
 
+    _normalize_user_active_settings(db, current_user.id)
+
     db.commit()
     db.refresh(db_setting)
     return db_setting
@@ -1012,6 +1254,7 @@ def get_system_settings(
         _ensure_builtin_system_settings(db)
 
         _ensure_default_system_selection_for_user(db, current_user.id)
+        _normalize_user_active_settings(db, current_user.id)
         db.commit()
 
         system_settings = db.query(
@@ -1055,8 +1298,9 @@ def get_system_settings(
         for item in system_settings:
             provider = item.provider or "unknown"
             category = item.category or "LLM"
+            raw_config = getattr(item, "config_raw", None)
             item_config = _safe_json_dict(getattr(item, "config_raw", None))
-            if getattr(item, "config_raw", None) and not item_config:
+            if isinstance(raw_config, str) and raw_config.strip() and not _is_json_object_value(raw_config):
                 logger.warning(
                     "Invalid JSON in system setting config, fallback to empty dict | setting_id=%s provider=%s category=%s",
                     item.id,
@@ -1191,6 +1435,8 @@ def select_system_setting(
     if _is_setting_deprecated(system_setting.config, system_setting.deprecated):
         raise HTTPException(status_code=400, detail="This system API setting is deprecated and cannot be activated")
 
+    _normalize_user_active_settings(db, current_user.id)
+
     # Enforce one-active-per-category for current user.
     db.query(APISetting).filter(
         APISetting.user_id == current_user.id,
@@ -1226,7 +1472,7 @@ def select_system_setting(
             api_key="",
             base_url=system_setting.base_url,
             model=system_setting.model,
-            config=marker_config,
+        config=marker_config,
             is_active=True,
         )
         db.add(selected)
@@ -1262,6 +1508,7 @@ def list_system_settings_for_manage(
             api_key=row.api_key,
             base_url=row.base_url,
             model=row.model,
+            modality=row.modality,
             config=_normalize_system_api_billing_config(row.config),
             deprecated=_is_setting_deprecated(row.config, row.deprecated),
             is_active=bool(row.is_active),
@@ -1417,6 +1664,7 @@ def create_system_setting_for_manage(
         existing.name = (payload.name or existing.name or "System Setting").strip() or "System Setting"
         existing.base_url = payload.base_url
         existing.model = payload.model
+        existing.modality = payload.modality
         existing.config = target_cfg
         existing.is_active = bool(payload.is_active)
 
@@ -1446,6 +1694,7 @@ def create_system_setting_for_manage(
             api_key=existing.api_key,
             base_url=existing.base_url,
             model=existing.model,
+            modality=existing.modality,
             config=out_cfg,
             deprecated=_is_setting_deprecated(out_cfg, existing.deprecated),
             is_active=bool(existing.is_active),
@@ -1460,6 +1709,7 @@ def create_system_setting_for_manage(
         api_key="",
         base_url=payload.base_url,
         model=payload.model,
+        modality=payload.modality,
         deprecated=False,
         config=create_config,
         is_active=bool(payload.is_active),
@@ -1494,6 +1744,7 @@ def create_system_setting_for_manage(
         api_key=new_setting.api_key,
         base_url=new_setting.base_url,
         model=new_setting.model,
+        modality=new_setting.modality,
         config=out_cfg,
         deprecated=_is_setting_deprecated(out_cfg, new_setting.deprecated),
         is_active=bool(new_setting.is_active),
@@ -1549,6 +1800,7 @@ def update_system_setting_for_manage(
         api_key=target.api_key,
         base_url=target.base_url,
         model=target.model,
+        modality=target.modality,
         config=out_cfg,
         deprecated=_is_setting_deprecated(out_cfg, target.deprecated),
         is_active=bool(target.is_active),
@@ -1663,6 +1915,7 @@ def toggle_system_setting_deprecated_for_manage(
         api_key=target.api_key,
         base_url=target.base_url,
         model=target.model,
+        modality=target.modality,
         config=out_cfg,
         deprecated=_is_setting_deprecated(out_cfg, target.deprecated),
         is_active=bool(target.is_active),
@@ -1758,6 +2011,7 @@ def toggle_system_setting_deprecated_by_key_for_manage(
         api_key=latest.api_key,
         base_url=latest.base_url,
         model=latest.model,
+        modality=latest.modality,
         config=out_cfg,
         deprecated=_is_setting_deprecated(out_cfg, latest.deprecated),
         is_active=bool(latest.is_active),
@@ -1778,7 +2032,11 @@ def batch_toggle_system_provider_deprecated_for_manage(
     if not provider_name:
         raise HTTPException(status_code=400, detail="provider is required")
 
-    query = db.query(SystemAPISetting).filter(SystemAPISetting.provider == provider_name)
+    provider_name = _normalize_system_provider_name(provider_name)
+
+    query = db.query(SystemAPISetting).filter(
+        _system_provider_case_insensitive_filter(provider_name)
+    )
     category = str(payload.category or "").strip()
     if category:
         query = query.filter(SystemAPISetting.category == category)
@@ -1827,8 +2085,12 @@ def get_system_provider_keys_for_manage(
     if not provider_name:
         raise HTTPException(status_code=400, detail="provider is required")
 
+    provider_name = _normalize_system_provider_name(provider_name)
+
     pool = _get_system_provider_key_pool(db, provider_name)
-    first_row = db.query(SystemAPISetting).filter(SystemAPISetting.provider == provider_name).order_by(SystemAPISetting.id.asc()).first()
+    first_row = db.query(SystemAPISetting).filter(
+        _system_provider_case_insensitive_filter(provider_name)
+    ).order_by(SystemAPISetting.id.asc()).first()
     cfg = _safe_json_dict(first_row.config if first_row else {})
     strategy = _normalize_key_strategy(cfg.get("provider_api_key_strategy"))
     weights = _normalize_key_weights(cfg.get("provider_api_key_weights"), pool)
@@ -1856,7 +2118,11 @@ def set_system_provider_keys_for_manage(
     if not provider_name:
         raise HTTPException(status_code=400, detail="provider is required")
 
-    rows = db.query(SystemAPISetting).filter(SystemAPISetting.provider == provider_name).all()
+    provider_name = _normalize_system_provider_name(provider_name)
+
+    rows = db.query(SystemAPISetting).filter(
+        _system_provider_case_insensitive_filter(provider_name)
+    ).all()
     if not rows:
         raise HTTPException(status_code=404, detail="No system API settings found for provider")
 
@@ -1864,7 +2130,9 @@ def set_system_provider_keys_for_manage(
     strategy = _normalize_key_strategy(payload.strategy)
     weights = _normalize_key_weights(payload.weights, pool)
 
-    rows = db.query(SystemAPISetting).filter(SystemAPISetting.provider == provider_name).all()
+    rows = db.query(SystemAPISetting).filter(
+        _system_provider_case_insensitive_filter(provider_name)
+    ).all()
     primary_key = pool[0] if pool else ""
     for row in rows:
         cfg = _safe_json_dict(row.config)

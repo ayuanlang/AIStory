@@ -10941,6 +10941,18 @@ def _build_runtime_llm_config(provider: Optional[str], model: Optional[str], med
 def _build_video_provider_options(req: VideoGenerationRequest) -> Dict[str, Any]:
     options: Dict[str, Any] = {}
 
+    callback_candidate = (
+        req.callback_url
+        or req.callbackUrl
+        or req.callBackUrl
+    )
+    callback_url = _normalize_callback_url(callback_candidate)
+    if callback_url:
+        # Keep both key styles for downstream provider adapters.
+        options["callback_url"] = callback_url
+        options["callBackUrl"] = callback_url
+        options["webHook"] = callback_url
+
     if isinstance(req.image_urls, list):
         image_urls = [str(item).strip() for item in req.image_urls if str(item).strip()]
         if image_urls:
@@ -11030,24 +11042,31 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
     try:
         # Determine paths
         import urllib.parse
-        fname = os.path.basename(urllib.parse.urlparse(url).path)
-        file_path = os.path.join(settings.UPLOAD_DIR, fname)
+        parsed_url_path = urllib.parse.urlparse(url).path
+        if parsed_url_path.startswith('/uploads/'):
+            rel_path = parsed_url_path[len('/uploads/'):]
+            file_path = os.path.join(settings.UPLOAD_DIR, rel_path)
+            fname = os.path.basename(parsed_url_path)
+        else:
+            fname = os.path.basename(parsed_url_path)
+            file_path = os.path.join(settings.UPLOAD_DIR, fname)
+            
         lower_url = str(url or "").lower()
         is_image = lower_url.endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"))
         is_video = lower_url.endswith((".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"))
-        
+
         meta = {}
         # Copy known fields
         for field in ["shot_number", "shot_id", "project_id", "asset_type", "entity_id", "entity_name", "subject_name", "subject_type", "entity_type"]:
             val = get_attr(req, field)
             if val: meta[field] = val
-        
+
         if get_attr(req, "asset_type"): meta["frame_type"] = get_attr(req, "asset_type")
         if get_attr(req, "category"): meta["category"] = get_attr(req, "category")
-        
-        # Merge Source Metadata (Provider, Model)
+
+        # Merge Source Metadata (Provider, Model, Dimensions, etc.)
         if source_metadata:
-            for k in ["provider", "model", "duration"]:
+            for k in ["provider", "model", "duration", "width", "height", "aspect_ratio", "submit_aspect_ratio", "prompt", "seed"]:
                 if k in source_metadata:
                     meta[k] = source_metadata[k]
 
@@ -11080,6 +11099,46 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
             meta["width"] = w
             meta["height"] = h
             meta["resolution"] = f"{w}x{h}"
+            
+            # Calculate approx aspect ratio if not already provided
+            if "aspect_ratio" not in meta:
+                import math
+                gcd = math.gcd(w, h)
+                rw, rh = w // gcd, h // gcd
+                
+                # Standardize common ratios like 16:9, 9:16, 4:3, etc.
+                ratio_map = {
+                    (16, 9): "16:9",
+                    (9, 16): "9:16",
+                    (4, 3): "4:3",
+                    (3, 4): "3:4",
+                    (1, 1): "1:1",
+                    (21, 9): "21:9",
+                    (3, 2): "3:2",
+                    (2, 3): "2:3",
+                }
+                
+                # Try getting approx match if not exact
+                matched = False
+                if (rw, rh) in ratio_map:
+                    meta["aspect_ratio"] = ratio_map[(rw, rh)]
+                    matched = True
+                else:
+                    # Tolerance matching for values like 16.03:9
+                    float_ratio = w / h
+                    ratios_target = {
+                        "16:9": 16/9, "9:16": 9/16, "4:3": 4/3, "3:4": 3/4, 
+                        "1:1": 1.0, "21:9": 21/9, "3:2": 3/2, "2:3": 2/3
+                    }
+                    for r_name, r_val in ratios_target.items():
+                        if abs(float_ratio - r_val) < 0.05:
+                            meta["aspect_ratio"] = r_name
+                            matched = True
+                            break
+                            
+                if not matched:
+                    # Fallback string
+                    meta["aspect_ratio"] = f"{rw}:{rh}"
 
         is_subject_generation = str(get_attr(req, "asset_type") or "").strip().lower() == "subject"
         if is_subject_generation:

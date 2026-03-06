@@ -72,6 +72,7 @@ const Auth = () => {
                 // Use the JSON login endpoint
                 const response = await apiLogin(formData.username, formData.password);
                 localStorage.setItem('token', response.access_token);
+                window.dispatchEvent(new Event('AUTH_LOGIN_SUCCESS'));
                 try {
                     sessionStorage.removeItem(PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY);
                 } catch {

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getSystemSettingsManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, exportSystemSettingsManage, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, getAdminLlmLogFiles, getAdminLlmLogView, getAdminStorageUsage, getAdminMaintenanceConfig, updateAdminMaintenanceConfig } from '../services/api';
+import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getSystemSettingsManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, exportSystemSettingsManage, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, getAdminLlmLogFiles, getAdminLlmLogView, getAdminStorageUsage, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt } from '../services/api';
 import Footer from '../components/Footer';
 import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive } from 'lucide-react';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
@@ -109,6 +109,11 @@ const UserAdmin = () => {
     const [storageUsage, setStorageUsage] = useState(null);
     const [isStorageUsageLoading, setIsStorageUsageLoading] = useState(false);
     const [storageUsageError, setStorageUsageError] = useState('');
+    const [promptSkills, setPromptSkills] = useState([]);
+    const [isPromptSkillsLoading, setIsPromptSkillsLoading] = useState(false);
+    const [selectedPromptSkillId, setSelectedPromptSkillId] = useState('');
+    const [selectedPromptSkillText, setSelectedPromptSkillText] = useState('');
+    const [isPromptSkillTextLoading, setIsPromptSkillTextLoading] = useState(false);
 
     // ... existing code ...
 
@@ -356,6 +361,65 @@ const UserAdmin = () => {
     useEffect(() => {
         if (activeTab === 'storage_usage') {
             fetchStorageUsage();
+        }
+    }, [activeTab]);
+
+    const loadPromptSkills = async () => {
+        setIsPromptSkillsLoading(true);
+        try {
+            const res = await fetchPromptSkills();
+            const items = Array.isArray(res?.skills) ? res.skills : [];
+            setPromptSkills(items);
+
+            if (items.length > 0) {
+                const firstSkillId = String(items[0]?.id || '').trim();
+                setSelectedPromptSkillId(firstSkillId);
+                if (firstSkillId) {
+                    setIsPromptSkillTextLoading(true);
+                    try {
+                        const promptRes = await fetchPrompt(`skill:${firstSkillId}/system_prompt.txt`);
+                        setSelectedPromptSkillText(String(promptRes?.content || ''));
+                    } catch {
+                        setSelectedPromptSkillText('');
+                    } finally {
+                        setIsPromptSkillTextLoading(false);
+                    }
+                } else {
+                    setSelectedPromptSkillText('');
+                }
+            } else {
+                setSelectedPromptSkillId('');
+                setSelectedPromptSkillText('');
+            }
+        } catch (err) {
+            console.error('Failed to load prompt skills', err);
+            setPromptSkills([]);
+            setSelectedPromptSkillId('');
+            setSelectedPromptSkillText('');
+        } finally {
+            setIsPromptSkillsLoading(false);
+        }
+    };
+
+    const handleSelectPromptSkill = async (skillId) => {
+        const id = String(skillId || '').trim();
+        if (!id) return;
+        setSelectedPromptSkillId(id);
+        setIsPromptSkillTextLoading(true);
+        try {
+            const promptRes = await fetchPrompt(`skill:${id}/system_prompt.txt`);
+            setSelectedPromptSkillText(String(promptRes?.content || ''));
+        } catch (err) {
+            console.error('Failed to load skill prompt text', err);
+            setSelectedPromptSkillText('');
+        } finally {
+            setIsPromptSkillTextLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        if (activeTab === 'prompt_skills') {
+            loadPromptSkills();
         }
     }, [activeTab]);
 
@@ -1504,6 +1568,7 @@ const UserAdmin = () => {
                         <TabButton id="pricing" label={t('定价', 'Pricing')} icon={DollarSign} />
                         <TabButton id="transactions" label={t('记录', 'History')} icon={Activity} />
                         <TabButton id="system_api" label={t('系统 API', 'System API')} icon={Key} />
+                        <TabButton id="prompt_skills" label={t('Prompt Skills', 'Prompt Skills')} icon={List} />
                         <TabButton id="storage_usage" label={t('磁盘统计', 'Storage Usage')} icon={HardDrive} />
                         <TabButton id="llm_logs" label={t('LLM 日志', 'LLM Logs')} icon={List} />
                         <TabButton id="payment" label={t('支付', 'Payment')} icon={CreditCard} />
@@ -2971,6 +3036,63 @@ const UserAdmin = () => {
                                     </tbody>
                                 </table>
                             </div>
+                        </div>
+                    )}
+
+                    {activeTab === 'prompt_skills' && (
+                        <div className="space-y-4">
+                            <div className="flex items-center justify-between gap-3">
+                                <h3 className="text-lg font-bold">{t('Prompt Skills 浏览器', 'Prompt Skills Browser')}</h3>
+                                <button
+                                    onClick={loadPromptSkills}
+                                    disabled={isPromptSkillsLoading}
+                                    className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded flex items-center gap-2 disabled:opacity-50"
+                                >
+                                    <RefreshCw size={16} className={isPromptSkillsLoading ? 'animate-spin' : ''} /> {t('刷新', 'Refresh')}
+                                </button>
+                            </div>
+
+                            <p className="text-xs text-muted-foreground">
+                                {t('用于查看按 skills 组织的提示词（Claude skills 风格），方便排查与运营配置。', 'Browse skills-organized prompts (Claude skills style) for operations and debugging.')}
+                            </p>
+
+                            {isPromptSkillsLoading ? (
+                                <div className="text-sm text-muted-foreground">{t('加载 Prompt Skills 中...', 'Loading prompt skills...')}</div>
+                            ) : promptSkills.length === 0 ? (
+                                <div className="text-sm text-muted-foreground">{t('暂无 Prompt Skills。', 'No prompt skills found.')}</div>
+                            ) : (
+                                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                                    <div className="lg:col-span-1 space-y-2">
+                                        {promptSkills.map((item) => {
+                                            const id = String(item?.id || '').trim();
+                                            if (!id) return null;
+                                            return (
+                                                <button
+                                                    key={id}
+                                                    onClick={() => handleSelectPromptSkill(id)}
+                                                    className={`w-full text-left px-3 py-2 rounded border transition-colors ${selectedPromptSkillId === id ? 'bg-primary/20 text-primary border-primary/40' : 'bg-white/5 text-muted-foreground border-white/10 hover:bg-white/10 hover:text-white'}`}
+                                                >
+                                                    <div className="text-sm font-medium">{item?.title || id}</div>
+                                                    <div className="text-[11px] opacity-75 font-mono">{id}</div>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+
+                                    <div className="lg:col-span-2 border border-white/10 rounded-lg bg-black/20 p-3">
+                                        <div className="text-xs text-muted-foreground mb-2">
+                                            {t('system_prompt.txt 预览', 'system_prompt.txt preview')}
+                                        </div>
+                                        {isPromptSkillTextLoading ? (
+                                            <div className="text-sm text-muted-foreground">{t('加载提示词中...', 'Loading prompt...')}</div>
+                                        ) : selectedPromptSkillText ? (
+                                            <pre className="whitespace-pre-wrap break-words text-xs text-gray-200 max-h-[420px] overflow-auto">{selectedPromptSkillText}</pre>
+                                        ) : (
+                                            <div className="text-sm text-muted-foreground">{t('该 skill 暂无 system_prompt.txt。', 'No system_prompt.txt for this skill.')}</div>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     )}
 

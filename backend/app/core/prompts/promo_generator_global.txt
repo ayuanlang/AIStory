@@ -97,7 +97,7 @@ Generate Episode 1..N. Each line must include:
 ## 6.5) 高端拍摄技巧清单（必须，可执行）
 List at least 12 usable premium filmmaking techniques, grouped by category. Each item must include: `Technique` / `Best Use` / `Expected Effect` / `Cost-Risk Note`.
 Suggested categories:
-- Camera Movement（运镜）: stabilized long take, robotic repeatable move, precision dolly, controlled handheld
+- Viewpoint Movement（运镜）: stabilized long take, robotic repeatable move, precision dolly, controlled handheld
 - Lens & Framing（镜头与构图）: anamorphic language, macro detail storytelling, long-lens compression, foreground layering
 - Lighting（光线）: motivated cinematic lighting, volumetric atmosphere, negative fill contrast shaping, practical-light integration
 - Transition & Time（转场与时序）: match cut, whip transition, speed-ramp punctuation, time-slice montage

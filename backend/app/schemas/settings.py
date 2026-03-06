@@ -49,6 +49,7 @@ class SystemAPIModelOption(BaseModel):
     provider: str
     category: Optional[str] = None
     model: Optional[str] = None
+    modality: Optional[str] = None
     base_url: Optional[str] = None
     webhook_url: Optional[str] = None
     deprecated: bool = False
@@ -75,6 +76,7 @@ class SystemAPISettingManageUpdate(BaseModel):
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     model: Optional[str] = None
+    modality: Optional[str] = None
     config: Optional[Dict[str, Any]] = None
     is_active: Optional[bool] = None
 
@@ -86,6 +88,7 @@ class SystemAPISettingManageCreate(BaseModel):
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     model: Optional[str] = None
+    modality: Optional[str] = None
     config: Optional[Dict[str, Any]] = {}
     is_active: bool = False
 
@@ -121,6 +124,7 @@ class SystemAPISettingOut(BaseModel):
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     model: Optional[str] = None
+    modality: Optional[str] = None
     config: Optional[Dict[str, Any]] = {}
     deprecated: bool = False
     is_active: bool = False
@@ -136,6 +140,7 @@ class SystemAPISettingImportItem(BaseModel):
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     model: Optional[str] = None
+    modality: Optional[str] = None
     config: Optional[Dict[str, Any]] = {}
     deprecated: Optional[bool] = None
     is_active: bool = False
@@ -151,6 +156,7 @@ class SystemAPIProviderModelImportItem(BaseModel):
     category: str = "LLM"
     base_url: Optional[str] = None
     model: Optional[str] = None
+    modality: Optional[str] = None
     config: Optional[Dict[str, Any]] = {}
     deprecated: Optional[bool] = None
     is_active: bool = False
@@ -189,6 +195,7 @@ class SystemAIAssistantModelInput(BaseModel):
     name: Optional[str] = None
     category: str = "LLM"
     model: str
+    modality: Optional[str] = None
     base_url: Optional[str] = None
     endpoint: Optional[str] = None
     unit_type: str = "per_call"
@@ -211,6 +218,7 @@ class SystemAIAssistantSuggestion(BaseModel):
     provider: str
     category: str
     model: str
+    modality: Optional[str] = None
     name: Optional[str] = None
     base_url: Optional[str] = None
     unit_type: str

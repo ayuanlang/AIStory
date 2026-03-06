@@ -14132,7 +14132,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         
         let success = false;
         let attempts = 0;
-        const maxAttempts = 3; // Reduced from 10
+        const maxAttempts = 1;
 
         while (!success && attempts < maxAttempts) {
              if (abortGenerationRef.current) {
@@ -14246,7 +14246,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
         let success = false;
         let attempts = 0;
-        const maxAttempts = 3; // Reduced from 10
+        const maxAttempts = 1;
 
         while (!success && attempts < maxAttempts) {
              if (abortGenerationRef.current) {

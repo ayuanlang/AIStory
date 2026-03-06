@@ -1,5 +1,5 @@
 import React, { createContext, useState, useEffect } from 'react';
-import { getSettings, getMaintenanceStatus } from '../services/api';
+import { getSettings } from '../services/api';
 
 export const StoreContext = createContext();
 
@@ -73,14 +73,7 @@ export const StoreProvider = ({ children }) => {
             const isSuperuser = !!(payload?.is_superuser || payload?.superuser);
 
             if (!isSuperuser) {
-                try {
-                    const maintenance = await getMaintenanceStatus();
-                    if (maintenance?.is_active) {
-                        return;
-                    }
-                } catch {
-                    // ignore maintenance-status failures and proceed with existing behavior
-                }
+                // Maintenance status is checked in App-level guard; avoid duplicate API calls here.
             }
 
             const settings = await getSettings();

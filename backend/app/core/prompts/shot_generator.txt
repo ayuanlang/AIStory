@@ -92,7 +92,7 @@
 ### 2. 分镜逻辑与拆分 (Shot Logic & Breakdown Strategy)
 - **核心原则：信息增量驱动 (Information-Driven Cuts)**
   - 不要为了凑数量而切分。只有当需要提供**新的视觉信息**（新的角度、新的反应、新的空间关系）时才切镜。
-  - 若动作连续且在同一景别下能清晰表达，优先使用**长镜头 (Long Take)** 或 **运镜跟随 (Camera Movement)** 而非切碎。
+  - 若动作连续且在同一景别下能清晰表达，优先使用**长镜头 (Long Take)** 或 **运镜跟随 (Viewpoint Movement)** 而非切碎。
 - **动作打包 (Action Bundling)**：区分主节拍与微节拍。
   - **Primary Beat (主节拍)**: 核心叙事动作（如“开枪”、“摔倒”）。-> **独立成镜**。
   - **Micro-Beats (微节拍)**: 连贯的过渡动作（如“抬手”、“瞄准”、“深呼吸”）。-> **必须合并**在同一个镜头内连续发生，利用时长(Duration)来消化细节。
@@ -215,8 +215,8 @@
 - **单镜主技法原则 (Primary-Tech Rule)**：每个 Shot 默认仅允许 1 个主高级技法；若叠加第 2 个技法，必须属于“允许组合”，且不破坏可生成稳定性。
 - **术语上限规则 (Technique Count Cap, 强制)**：每个 Shot 的 `Video Content` 中，运镜术语总数（基础+高级）最多 **2 个**；超过即视为过度设计并判定不合规。
 - **计数示例 (Count Examples, 执行参考)**：
-  - **合规示例**：`{Camera Movement}: Slow Dolly In + Rack Focus`（共 2 个术语，合规）。
-  - **不合规示例**：`{Camera Movement}: Whip Pan + Dolly Zoom + Crane Down`（共 3 个术语，不合规）。
+  - **合规示例**：`{Viewpoint Movement}: Slow Dolly In + Rack Focus`（共 2 个术语，合规）。
+  - **不合规示例**：`{Viewpoint Movement}: Whip Pan + Dolly Zoom + Crane Down`（共 3 个术语，不合规）。
   - **不合规改写示例**：保留 `Dolly Zoom + Whip Pan`（2 个术语），将 `Crane Down` 改写为动作结果描述：`background height relationship shifts as {@Subject} drops lower in frame`（不再计作运镜术语）。
 - **硬禁配 (Forbidden Pairs, 同一 Shot 禁止同时使用)**：
   - `Whip Pan` + `Dolly Zoom`
@@ -272,7 +272,7 @@
 ### 2. 动作追逐 (Action & Chase)
 - **Core Logic**: "Geography & Impact". 观众必须清楚 A 和 B 的空间关系 (Geography)，以及动作的力量感 (Impact)。
 - **Advanced Technical Planning (高级规划)**:
-  - **Whip Pan (Advanced FX)**: 用于极速转场或模拟撞击。Video Content 描述 "Camera whips pan about a quarter-turn, strictly syncing with impact" -> Resulting in Motion Blur.
+  - **Whip Pan (Advanced FX)**: 用于极速转场或模拟撞击。Video Content 描述 "Viewpoint whips pan about a quarter-turn, strictly syncing with impact" -> Resulting in Motion Blur.
   - **Low-Mode Tracking (Perspective)**: 追逐戏。Start Frame 为低角度 (Low Angle) 捕捉脚步，Video Content 描述相机贴地（ankle-level / near ground）快速后退 (Truck Back) 或跟随。
   - **Shaky Cam (Handheld)**: 必须配合 "Quantification" (e.g., "Violent shake simulating explosion shockwave").
 - **Space Destruction**: 仅在剧情/动作本身需要冲击或破坏时才加入（例如撞击造成翻倒、追逐带起水花、开枪后烟雾）。不要为了“看起来更刺激”而凭空打碎环境物体，避免引入未定义道具与连续性错误。
@@ -300,7 +300,7 @@
 
 ### 6. 复杂调度 (Complex Blocking)
 - **Core Logic**: "Inner Montage". 长镜头，以调度代剪辑。
-- **Planning**: 在一个镜头内完成 Wide -> Close -> Two-shot 的变化。Video Content 必须精准描述 "Subject walks into Close-up" 或 "Camera pulls back to reveal Environment".
+- **Planning**: 在一个镜头内完成 Wide -> Close -> Two-shot 的变化。Video Content 必须精准描述 "Subject walks into Close-up" 或 "Viewpoint Pulls Back to reveal Environment".
 
 ### 7. 视觉转场 (Visual Transition Focus)
 - **Core Logic**: "Seamless Connection". 场景连接处的平滑过渡。
@@ -341,7 +341,7 @@
 - **Tag 格式**：使用 `{Tag: Value}`。
   - `{Viewpoint Anchor: exact observer placement relative to [Environment Anchor]}`
   - `{Viewing Direction: front/reverse/side + facing target/vector}`
-  - `{Camera: Focal Length, Angle, Stability, Framing}`
+  - `{Viewpoint: Focal Length, Angle, Stability, Framing}`
   - `{Image Fidelity: Noise/Grain Strategy + Anti-Copy Constraint from references}`
   - `{Lighting: Style, Source}`
   - `{Composition: Placement, Depth}`
@@ -372,7 +372,7 @@
   - **Keyframes 输出**：必须生成中间的关键帧描述。
   - **Keyframe Full Description Logic (关键帧全量描述逻辑)**：
   - **核心原则**：同 **二-0 独立描述原则**：每个 Keyframe 都必须是**自包含、完整的视觉描述** (Self-Contained Full Description)，严禁任何增量/差分写法 (No Delta Description)。
-      - **Format**: `{Time: XXs} [Global Style]... **{Camera}**: ...`
+      - **Format**: `{Time: XXs} [Global Style]... **{Viewpoint}**: ...`
       - **Separator**: Multiple keyframes must be separated by a double newline `\n\n`.
       - **Requirements**: 必须完整定义该时刻的构图、机位、图层及角色状态，确保单帧生图质量独立于其他帧。格式必须与 **Start Frame** 完全一致。
 
@@ -384,9 +384,9 @@
   - 一旦使用 `SAP`，本节其余 Start Frame 描述要求对该镜头不再展开（无需重复写机位/构图/层级文本）。
 - **非SAP严禁 "Same as" (Strictly Forbidden)**：同 **二-0 独立描述原则**，禁止任何 “Same as/Continued/Unchanged/See previous” 之类的省略写法。
 - **强制机位物理定义 (Mandatory Camera Physics)**：
-  - 在描述任何视觉内容前，必须先使用自然语言明确 **{Camera Setup}**。
+  - 在描述任何视觉内容前，必须先使用自然语言明确 **{Viewpoint Setup}**。
   - **Environment-Relative (环境基准)**：机位描述必须以 **[Environment Anchor]** 为坐标系，绝对位置固定（如 "Near the north window"），严禁仅使用 "Behind character" 等相对描述。即使是跟拍，也要说明 "Tracking character along the corridor walls"。
-  - **格式**：`{Camera Setup}: Placed at {Specific Location in Env}, facing {Cardinal Direction/Target}.`
+  - **格式**：`{Viewpoint Setup}: Placed at {Specific Location in Env}, facing {Cardinal Direction/Target}.`
   - **例如**：
     - GOOD: `Placed at the alley entrance, facing the dumpster where {@Subject} stands.`
     - BAD: `Placed behind {@Subject}.`
@@ -396,9 +396,9 @@
   - **{Viewpoint Anchor} + {Viewing Direction} (强制同时出现)**：必须同时给出视点落位与观察朝向，缺一不可。
   - **禁止器材入画 (No Gear in Frame)**：默认不得写出 camera/camcorder/lens rig/tripod/operator 等器材实体；若剧情确有器材道具，必须显式标注“作为道具出现”，避免被误注入。
   - **角色朝向显式化 (Facing Declaration, 强制)**：在 Start Frame 中，每个可见核心角色都必须明确写出其相对镜头朝向；不得省略。
-    - 可用枚举：`Facing Camera`（正对镜头）/ `Back to Lens`（背对镜头）/ `Profile Left`（左侧对）/ `Profile Right`（右侧对）/ `3/4 View Left` / `3/4 View Right`。
+    - 可用枚举：`Facing Viewer`（正对镜头）/ `Back to Lens`（背对镜头）/ `Profile Left`（左侧对）/ `Profile Right`（右侧对）/ `3/4 View Left` / `3/4 View Right`。
     - 禁止模糊词：如 `facing sideways`、`turned a bit`、`angled`、`partially facing` 等不可判定表达。
-  - **{Camera Description}**: 必须包含 **Focal Length** (焦距), **Framing** (景别) 和 **Angle** (角度)。
+  - **{Shot Description}**: 必须包含 **Focal Length** (焦距), **Framing** (景别) 和 **Angle** (角度)。
   - **{Image Fidelity}**: 必须包含 **Noise/Grain 控制** 与 **Anti-Copy 约束**（继承 reference 的身份锚点，但重构构图/光线/姿态，禁止复制粘贴参考图构图）。
   - **{Style Mapping Note}**：必须声明该镜头采用的风格映射（至少 1 句），说明为何使用当前光照/焦距/颗粒组合；真人剧需强调写实质感控制。
   - **主角布光加权 (Lead Lighting Weighting)**：若该镜头主叙事主体为主角，必须显式写出美人光/美化布光策略与保真约束（提升颜值但不失真）。
@@ -410,13 +410,13 @@
       - `{Midground} (中景)`: **主要叙事区域**。主体通常在此层。
       - `{Background} (后景)`: 环境基底（e.g., "Distant city lights", "Wall texture"）。
     - **Standard Static Syntax (标准静态句式)**：在主体出现的层级中，紧接主体名称必须严格遵循以下标准句式：
-      - **Formula**: `{@Subject Name} {Subject Info: Shot Size + Screen Position + Camera-Relative Facing + Static Pose + Expression}`
+      - **Formula**: `{@Subject Name} {Subject Info: Shot Size + Screen Position + Viewer-Relative Facing + Static Pose + Expression}`
       - **Constraint**: Each field must use **Relative/Visual terms**, not absolute physics.
-      - **Facing Mandatory Check**：`Subject Info` 中的 `Camera-Relative Facing` 为必填且必须可判定 Front/Back/Left/Right/3/4；缺失或模糊视为无效输出。
+      - **Facing Mandatory Check**：`Subject Info` 中的 `Viewer-Relative Facing` 为必填且必须可判定 Front/Back/Left/Right/3/4；缺失或模糊视为无效输出。
       - **Element Definition**:
         - `Shot Size`: Visual scale (e.g., "Full Body", "Cowboy Shot", "Extreme Close Up").
         - `Screen Position`: 2D Plane coordinates. (e.g., "Center", "Rule of Thirds Left/Right", "Bottom Frame").
-        - `Facing`: **Must be Camera-Relative**. (e.g., "Facing Camera", "Profile Left", "Back to Lens", "3/4 View Right").
+        - `Facing`: **Must be Viewer-Relative**. (e.g., "Facing Viewer", "Profile Left", "Back to Lens", "3/4 View Right").
         - `Static Pose`: Physical state at T=0. (e.g., "Arms crossed", "Leaning on wall", "Mid-stride").
         - `Expression`: Micro-expression at T=0. (e.g., "Gritted teeth", "Eyes narrowed").
     - **Spatial Relation (相对关系)**: 
@@ -424,7 +424,7 @@
       - Valid: "CHAR:[@Character A] stands **slightly behind** CHAR:[@Character B]", "CHAR:[@Character A] towers over CHAR:[@Character B]", "CHAR:[@Character A] and CHAR:[@Character B] stand **shoulder to shoulder**".
     - **Example**: `Layers: {Foreground} Out-of-focus rain. {Midground} CHAR:[@Kael] {Subject Info: Cowboy Shot (Thigh up); Rule of Thirds Left; Profile Right; Hand on holster; Gritted teeth}. {Background} ENV:[Neon signs].`
   - **Sentence Structure Optimization (首帧标准句式)**:
-    - **Global Formula**: `[Global Style]. **{Camera Setup}**: ... **{Lighting}**: ... **{Composition}**: ... **Layers**: {Foreground} ... {Midground} {@Subject Name} {Subject Info: ...} {Background} ...`
+    - **Global Formula**: `[Global Style]. **{Viewpoint Setup}**: ... **{Lighting}**: ... **{Composition}**: ... **Layers**: {Foreground} ... {Midground} {@Subject Name} {Subject Info: ...} {Background} ...`
     - **Narrative Integration**: In the **Layers** section, enforce the "Subject IS State" sentence flow for clarity.
     - **Multi-Subject Logic**: If multiple characters act in the same layer, use explicit **Spatial Connectors** (e.g., "standing next to", "looming behind", "face-to-face with") to link their `{Subject Info}` blocks.
     - **Example**: `... **Layers**: {Foreground} Empty. {Midground} CHAR:[@Kael] {Subject Info: Medium Shot; Right; Profile Left} aiming gun at CHAR:[@Ren] {Subject Info: Medium Shot; Left; Profile Right; Hands raised}. {Background} ...`
@@ -441,28 +441,28 @@
 #### C. 动态维度 (Video Content)
 - **定义**：描述从 `Start Frame` 到 `End Frame` 的完整时空演变过程。
 - **角色朝向链路强制 (Facing Transition Chain, 强制)**：
-  - Video Content 中凡涉及角色转身/位移/交互，必须明确记录其相对镜头朝向变化链路（例如：`Profile Left -> Facing Camera -> 3/4 View Right`）。
+  - Video Content 中凡涉及角色转身/位移/交互，必须明确记录其相对镜头朝向变化链路（例如：`Profile Left -> Facing Viewer -> 3/4 View Right`）。
   - 若角色朝向在整段动作中不变，必须显式写明 `facing remains unchanged`（或等效明确表述）。
   - 禁止仅写“turns/moves/reacts”而不交代朝向结果；禁止模糊朝向词（如 `slightly turned`、`angled`）而无可判定方向。
 - **核心原则：视动协同 (Synergy of Camera & Action)**：
   - **Motivated Movement (动机驱动)**：每一个运镜都必须服务于动作或情绪。严禁为了运镜而运镜。
-    - *Reaction*: 运镜是对动作的反应。e.g. "As {@Subject} approaches, Camera pulls back."
-    - *Revelation*: 运镜是为了揭示。e.g. "Camera pans right to reveal the hidden [Object]."
+    - *Reaction*: 运镜是对动作的反应。e.g. "As {@Subject} approaches, Viewpoint Pulls Back."
+    - *Revelation*: 运镜是为了揭示。e.g. "Viewpoint pans right to reveal the hidden [Object]."
   - **Temporal Lock (时序锁定)**：运镜的开始、加速、停止必须与 Action 的节奏点 (Beats) 严格对齐。
 - **强制机位物理定义 (Mandatory Camera Physics)**：
   - 在 `Video Content` 的描述开头，也必须再次强调或确认机位状态。
-  - **格式**：`{Camera Movement}: Starting from {Setup A}, moving to {Setup B}.`
+  - **格式**：`{Viewpoint Movement}: Starting from {Setup A}, moving to {Setup B}.`
   - **方向链路强制 (Direction Chain Mandate)**：必须写清 `A 朝向 -> 运动中朝向变化 -> B 朝向`。若朝向不变，必须显式写 `facing direction remains unchanged`。
   - **原则**：Start Frame 定义的“Placement”必须是 Video Content 的起点；End Frame 定义的“Implied Final Placement”必须是 Video Content 的终点。
 - **核心目标**：填补首尾帧之间的视觉空白，确保从静止画面 `Start Frame`平滑过渡到静止画面 `End Frame`。
 - **Sentence Structure Optimization (Video Content 标准句式)**：
-      *   **Coupling Syntax**: When actions are linked to camera moves, use explicit sync phrases.
-          - `As the Camera pushes in, CHAR:[@Character] {Action}`
-          - `CHAR:[@Character] {Actions}, followed by a Camera whip pan to...`
-          - `Simultaneous with Camera orbit, CHAR:[@Character] {Action}`
-          - **Example**: `**{Camera Movement}**: Medium Shot **tracking** left **slowly**. **Action**: As camera trucks, (1) CHAR:[@Kael] walks **steadily** **screen-left** **matching camera speed** -> resulting in **mid-motion hold** -> (2) CHAR:[@Kael] head turns **sharply** **towards lens** **a quarter-turn** -> resulting in **eye contact**.`
+      *   **Coupling Syntax**: When actions are linked to Viewpoint Moves, use explicit sync phrases.
+          - `As the Viewpoint pushes in, CHAR:[@Character] {Action}`
+          - `CHAR:[@Character] {Actions}, followed by a Viewpoint whip pan to...`
+          - `Simultaneous with Viewpoint orbit, CHAR:[@Character] {Action}`
+          - **Example**: `**{Viewpoint Movement}**: Medium Shot **tracking** left **slowly**. **Action**: As camera trucks, (1) CHAR:[@Kael] walks **steadily** **screen-left** **matching camera speed** -> resulting in **mid-motion hold** -> (2) CHAR:[@Kael] head turns **sharply** **towards lens** **a quarter-turn** -> resulting in **eye contact**.`
 - **内容细则 (Detailed Evolution Rules)**：
-  1.  **镜头运镜演化 (Camera Evolution)**：
+  1.  **镜头运镜演化 (Viewpoint Evolution)**：
       *   **Coupling Syntax (耦合句式)**：在描述运镜时，必须显式提及它所跟随的主体动作。推荐使用 "As...", "Syncing with...", "To follow..." 等连接词。
       *   **绝对禁止跳跃 (Strictly Prohibited Jumps)**：**严禁**在同一 Shot 内发生剧烈的机位方向变化（如从正面突然切到背面，从内突然切到外）。**Camera Axis (机位轴线)** 必须保持稳定。
       *   **允许的运动 (Allowed Movements)**：
@@ -483,12 +483,12 @@
             - **POV**: 把摄像机模拟为主观视点。
       *   **轨迹描述**：必须说明镜头如何从 Start Frame 的初始机位移动到 End Frame 的最终机位。
       *   **相对运动校验 (Relative Motion Check)**: **Critical**. 必须准确判定"机位运动"与"角色运动"叠加后的**视觉结果**。
-          - **Common Error**: 严禁在 "Camera Pulls Back" (后退) 且 "Character Walks Away" (后退) 时描述为 "Approaching/Getting Closer" (靠近)。这是物理悖论。
+          - **Common Error**: 严禁在 "Viewpoint Pulls Back" (后退) 且 "Character Walks Away" (后退) 时描述为 "Approaching/Getting Closer" (靠近)。这是物理悖论。
           - **Correct Logic**: 
-            - Camera Pull Back + Character Walks Forward (towards Camera) = **Visual Distance Constant** (Leading Shot).
-            - Camera Pull Back + Character Static = **Visual Distance Increasing** (Reveal/Pull out).
-            - Camera Pull Back + Character Walks Away = **Visual Distance Rapidly Increasing** (Abandoning).
-            - Camera Push In (Forward) + Character Walks Away = **Visual Distance Constant** (Chasing Shot).
+            - Viewpoint Pull Back + Character Walks Forward (towards viewer) = **Visual Distance Constant** (Leading Shot).
+            - Viewpoint Pull Back + Character Static = **Visual Distance Increasing** (Reveal/Pull out).
+            - Viewpoint Pull Back + Character Walks Away = **Visual Distance Rapidly Increasing** (Abandoning).
+            - Viewpoint Push In (Forward) + Character Walks Away = **Visual Distance Constant** (Chasing Shot).
       *   **速度明确性 (Speed Specification)**: **Critical**. 严禁只描述方向而不描述速度。必须明确运镜的速率。
           - **Adverbs**: Slowly, Rapidly, Gradually, Abruptly, Smoothly.
           - **Example**: "Camera **slowly** pushes in...", "**Abrupt** whip pan to..."
@@ -503,7 +503,7 @@
             - `{@Subject}`: Explicit Name.
             - `{Adverb}`: Velocity/Force (e.g., "violently").
             - `{Direction}`: Physics Vector. **Mandatory Reference Systems**:
-              1. **Camera-Relative** (Prioritized): "towards lens", "away from camera", "screen-left", "screen-right".
+              1. **Viewer-Relative** (Prioritized): "towards lens", "away from viewer", "screen-left", "screen-right".
               2. **Self-Relative**: "forward", "backward", "laterally".
               3. **Target-Relative**: "towards {@Subject B}".
               *   **Avoid Environment-Relative** (e.g., "towards the door", "North") as motion vectors.
@@ -511,13 +511,13 @@
             - `{Result}`: Landing state.
       *   **Constraint Checklist**:
           - Is **Quantification** explicit for every move? YES/NO.
-          - Is the Camera Move visually synced? YES/NO.
+          - Is the Viewpoint Move visually synced? YES/NO.
       *   **Writing Strategy (写作策略)**:
           - **Anticipation & Release**: Use the syntax to build cycles: `(1) Prep -> (2) Execute -> (3) Recover`.
           - **Continuous Flow**: Use natural connectors ("Then", "Simultaneously") between syntax blocks if needed, but the core structure must remain.
       *   **Examples**:
           - `{Bad}`: "(1) He runs back." (Pronoun, no speed, no ref-frame, no quant, no result).
-          - `{Good}`: "(1) CHAR:[@Kael] sprints **explosively** **away from camera** covering **several long strides deeper into the frame** -> resulting in **CHAR:[@Kael] reaching ENV:[warehouse door]**."
+          - `{Good}`: "(1) CHAR:[@Kael] sprints **explosively** **away from viewer** covering **several long strides deeper into the frame** -> resulting in **CHAR:[@Kael] reaching ENV:[warehouse door]**."
           - `{Good}`: "(2) CHAR:[@Kael] punches **violently** **towards lens** extending **full arm reach** -> resulting in **fist occupying foreground**."
 
   3.  **强制密度与填充 (Mandatory Density & Filling)**：
@@ -529,12 +529,12 @@
       *   **Continuous Flow**: 确保 `Start` 到 `End` 之间没有时间真空。
         *   **Density Guideline (密度建议)**: 动作/细节数量应与时长匹配，默认基准密度为 **每秒 1.5 个微节拍（可见变化）**（含动作或运镜变化）。建置镜头或强氛围镜头允许更低密度；但严禁为了凑数制造会改变剧情的无意义抽搐/乱动。
           - `{Formula}: Aim(Index of Actions) ≈ Duration * 1.5`（可按镜头类型在 ±20% 范围内微调）。
-          - `{Example}: Duration 5s 建议 Index 7-8 左右: "(1) {@Subject} head turns left -> (2) Camera pushes in subtly -> (3) {@Subject} lips part slightly -> (4) {@Subject} hand raises -> (5) {@Subject} gaze locks on target -> (6) Shadows shift across {@Subject} face -> (7) {@Subject} exhales and settles."`
+          - `{Example}: Duration 5s 建议 Index 7-8 左右: "(1) {@Subject} head turns left -> (2) Viewpoint pushes in subtly -> (3) {@Subject} lips part slightly -> (4) {@Subject} hand raises -> (5) {@Subject} gaze locks on target -> (6) Shadows shift across {@Subject} face -> (7) {@Subject} exhales and settles."`
 
   4.  **实体状态与交互 (Entity Status & Interaction)**：
       *   **强制状态描述**: 画面中所有可见的 `Linked Characters` 和 `Key Props` 都必须有动态描述。
           - **无动作**：必须显式标记为静止（e.g., "{@Subject} remains static"），严禁忽略。
-      *   **朝向状态描述 (Facing State, 强制)**：每个可见核心角色在动作段落中都必须有可判定朝向（Facing Camera / Back to Lens / Profile Left / Profile Right / 3/4 View Left / 3/4 View Right），并与运镜方向保持可推导一致。
+      *   **朝向状态描述 (Facing State, 强制)**：每个可见核心角色在动作段落中都必须有可判定朝向（Facing Viewer / Back to Lens / Profile Left / Profile Right / 3/4 View Left / 3/4 View Right），并与运镜方向保持可推导一致。
       *   **表情演变 (Facial Expression Evolution)**：必须明确描述表情随时间的演变细节（Micro-expressions）。
           - e.g., "Smile fading into seriousness", "Eyebrows furrowing slightly".
       *   **非焦点反应 (Persistent Presence)**：背景角色或非焦点角色不能冻结，必须有符合情境的持续动作。
@@ -562,26 +562,26 @@
 
 #### D. 结果维度 (End Frame 描述)
 - **定义**：这是 Video Content 演变结束后的最终定格状态 (T=Duration)。
-- **终态朝向明确 (Final Facing Declaration, 强制)**：End Frame 中每个可见核心角色必须明确给出最终朝向（Facing Camera / Back to Lens / Profile Left / Profile Right / 3/4 View Left / 3/4 View Right），禁止省略或模糊。
+- **终态朝向明确 (Final Facing Declaration, 强制)**：End Frame 中每个可见核心角色必须明确给出最终朝向（Facing Viewer / Back to Lens / Profile Left / Profile Right / 3/4 View Left / 3/4 View Right），禁止省略或模糊。
 - **完全一致简化 (Identical Frame)**：仅当 Video Content 为完全静止（无任何运镜与动作）导致 End Frame 与 Start Frame 像素级一致时，填写 **NO**。否则必须完整填写。
 - **核心原则：独立全量重绘 (Independent Full Redraw)**
   - **禁止差分描述 (No Delta)**：同 **二-0 独立描述原则**，严禁任何引用/差分写法；End Frame 必须自包含、可独立生图。
     - **逻辑推演 (Simulation Outcome)**：End Frame 必须是 `Start Frame` 叠加 `Video Content` 后的**物理结果快照**。必须在脑海中运行完动作，然后描述最后一帧的画面。
 - **必须包含要素 (Mandatory Elements)**：
     1.  **[Global Style] & {Lighting} & {Composition}**: 完整复述，确保单帧生图风格统一。
-  2.  **{Viewpoint Anchor} + {Viewing Direction} + {Camera Setup} (Final State)**：明确动作结束时的最终观察位置与观察方向。若 Video Content 包含运镜（如 Dolly In），End Frame 的景别与角度必须体现运动后的结果（如从 Medium 变 Close-up）。
+  2.  **{Viewpoint Anchor} + {Viewing Direction} + {Viewpoint Setup} (Final State)**：明确动作结束时的最终观察位置与观察方向。若 Video Content 包含运镜（如 Dolly In），End Frame 的景别与角度必须体现运动后的结果（如从 Medium 变 Close-up）。
     3.  **{Layers & Subject Recalculation} (Full Recursion)**：
         - **Full Structure**: 必须重新构建 `{Foreground}`, `{Midground}`, `{Background}` 层级。
         - **Subject Info Update**: 针对核心角色，**必须**再次调用 `Standard Static Syntax` 完整重绘其最终状态。
           - **Formula**: `{@Subject Name} {Subject Info: New Shot Size + New Screen Position + New Facing + New Pose + New Expression}`
           - **Facing Mandatory Check**：`New Facing` 必须是可判定枚举值（Front/Back/Profile Left/Profile Right/3/4 Left/3/4 Right）；若 Video Content 存在转身动作，则 End Frame 的 `New Facing` 必须与动作结果一致。
         - **State Recalculation (状态重算)**:
-          - `New Screen Position`: Must reflect the result of Camera Move + Character Move.
+          - `New Screen Position`: Must reflect the result of Viewpoint Move + Character Move.
           - `New Pose`: Must reflect the execution of the Action.
           - `New Expression`: Must reflect the emotional shift.
     4.  **Visual Evidence (视觉证据)**：必须包含动作造成的物理后果（e.g., "Smoke drifting from gun barrel", "Overturned chair", "Sweat on forehead"）。
 - **Sentence Structure Optimization (收尾帧标准句式)**：
-    - **Global Formula**: `[Global Style]. **{Camera Setup}**: ... **{Lighting}**: ... **{Composition}**: ... **Layers**: {Foreground} ... {Midground} {@Subject A} {Subject Info: ...} {Spatial Connector} {@Subject B} {Subject Info: ...} {Background} ...`
+    - **Global Formula**: `[Global Style]. **{Viewpoint Setup}**: ... **{Lighting}**: ... **{Composition}**: ... **Layers**: {Foreground} ... {Midground} {@Subject A} {Subject Info: ...} {Spatial Connector} {@Subject B} {Subject Info: ...} {Background} ...`
     - **Integration**: In the **Layers** section, incorporate the `Visual Evidence` of the completed action and the **final spatial relationship** between characters.
     - **Example**: `... **Layers**: {Foreground} Vapor mist (Visual Evidence). {Midground} CHAR:[@Kael] {Subject Info: Close Up; Right; Kneeling} looming over CHAR:[@Defeated Enemy] {Subject Info: High Angle; Left; Sprawled on ground}. {Background} ...`
 - **稳定性收尾 (End Frame Stability Mandate)**：
@@ -598,7 +598,7 @@
       - **Rationale**: 相比于远景，近景/特写 End Frame 具有极高的像素稳定性与细节控制力，是下一镜头生成连贯性 (Consistency) 的最佳视觉锚点。
       - **Exception**: 仅在剧情明确要求 "Reveal Logic" (拉远揭示环境) 或 "Exit" (角色远离消失) 时才允许以 Wide Shot 结束。否则，默认采取 "Push In to End" 近景收束策略。
 - **逻辑校验 (Consistency Check)**：
-    - **位移闭环**: 若 Video Content 描述 "Camera tracks backward"，End Frame 的 `Shot Size` 必须变宽 (Wider) 或 `Position` 距离变远。
+    - **位移闭环**: 若 Video Content 描述 "Viewpoint tracks backward"，End Frame 的 `Shot Size` 必须变宽 (Wider) 或 `Position` 距离变远。
     - **状态闭环**: Start Frame (Standing) -> Video Content (Sit down) -> End Frame **MUST BE** (Sitting). 严禁状态回滚。
   - **朝向闭环**: Start/Video/End 三段的拍摄方向必须可推导且不冲突；若发生 Front ↔ Reverse 变化，必须在 Video Content 中给出明确转向过程或 cut trigger。
   - **风格参数闭环**: Start/Video/End 的光源结构、焦段策略、颗粒控制必须可推导一致（允许“有动机变化”，禁止“无动机跳变”）。
@@ -624,8 +624,8 @@
 ### 3. 表格输出模板（示例）
 | Shot ID | Shot Name | Scene ID | Shot Logic (CN) | Start Frame | Video Content | Duration (s) | Keyframes | End Frame | Associated Entities |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| EP01_SC01_SH01 | Kael Hesitates | EP01_SC01 | **预估**：时长 5.0s，基准密度 10 个，实策 10 个微节拍。<br>**动态**：方向{Z轴推近}，速率{极慢}，量化{推近一臂距离/动作幅度微小}。<br>**首帧**：CHAR:[@Kael] 侧身站立，举枪瞄准，神情凝重。<br>**过程**：镜头Z轴推近并完成动作链。<br>**尾帧**：镜头推进至特写，CHAR:[@Kael] 垂下枪口，神情释然。{稳定态: 是}，{近景收束: 是}。 | [Global Style] Cyberpunk. **{Viewpoint Anchor}**: At the alley entrance inside ENV:[Dark Alley]. **{Viewing Direction}**: Front-facing towards CHAR:[@Kael]. **{Camera Setup}**: Medium Shot, Eye-level. **{Lighting}**: High contrast neon blue. **{Composition}**: Rule of Thirds. **Layers**: {Foreground} Empty. {Midground} CHAR:[@Kael] {Subject Info: Medium Shot; Rule of Thirds Left; Profile Right; Aiming gun forward; Tense frown}. {Background} ENV:[Dark Alley]. | **{Camera Movement}**: Slow Dolly In with facing direction unchanged. **Action**: (1)...(10) micro-beats ending in final static pose. | 5.0 | NO | [Global Style] Cyberpunk. **{Viewpoint Anchor}**: Mid-corridor in ENV:[Dark Alley]. **{Viewing Direction}**: Front-right 3/4 facing CHAR:[@Kael]. **{CameraSetup}**: Close Up, Eye-level. **{Lighting}**: High contrast neon blue. **{Composition}**: Center Framed. **Layers**: {Foreground} Vapor mist. {Midground} CHAR:[@Kael] {Subject Info: Close Up; Center; Profile Right; Gun lowered; Relieved eyes}. {Background} ENV:[Dark Alley] blurred. | ENV:[Dark Alley], CHAR:[@Kael], PROP:[Plasma Revolver] |
-| EP01_SC01_SH02 | Combat Roll | EP01_SC01 | **预估**：时长 4.0s，基准密度 8 个，实策 8 个微节拍。<br>**动态**：方向{水平横移}，速率{极快}，量化{横移一车身/翻滚整圈}。<br>**首帧**：CHAR:[@Kael] 蹲伏准备闪避。<br>**过程**：完成翻滚与落地动作链。<br>**尾帧**：CHAR:[@Kael] 单膝跪地，枪口指向前方。{稳定态: 是}，{近景收束: 否(需展示全身落地姿态)}。 | [Global Style] Cyberpunk. **{Camera Setup}**: Low Angle, Tracking Mode. **Layers**: {Foreground} Wet pavement reflection. {Midground} CHAR:[@Kael] {Subject Info: Full Body; Center; Facing Camera; Crouched in start stance; Alert}. {Background} ENV:[Rainy Alley]. | **{Camera Movement}**: Tracking right rapidly. **Action**: (1)...(8) synced micro-beats with stable landing. | 4.0 | {Time: 1.5s} [Global Style] Cyberpunk. **{CameraSetup}**: Low Angle, Tilted angle. **Layers**: {Foreground} Water droplets. {Midground} CHAR:[@Kael] {Subject Info: Full Body; Center; Upside down mid-roll}. {Background} ENV:[Rainy Alley]. | [Global Style] Cyberpunk. **{CameraSetup}**: Low Angle. **Layers**: {Foreground} Puddle ripples. {Midground} CHAR:[@Kael] {Subject Info: Full Body (Kneeling); Rule of Thirds Right; Facing Camera; gun raised}. {Background} ENV:[Rainy Alley]. | ENV:[Rainy Alley], CHAR:[@Kael] |
+| EP01_SC01_SH01 | Kael Hesitates | EP01_SC01 | **预估**：时长 5.0s，基准密度 10 个，实策 10 个微节拍。<br>**动态**：方向{Z轴推近}，速率{极慢}，量化{推近一臂距离/动作幅度微小}。<br>**首帧**：CHAR:[@Kael] 侧身站立，举枪瞄准，神情凝重。<br>**过程**：镜头Z轴推近并完成动作链。<br>**尾帧**：镜头推进至特写，CHAR:[@Kael] 垂下枪口，神情释然。{稳定态: 是}，{近景收束: 是}。 | [Global Style] Cyberpunk. **{Viewpoint Anchor}**: At the alley entrance inside ENV:[Dark Alley]. **{Viewing Direction}**: Front-facing towards CHAR:[@Kael]. **{Viewpoint Setup}**: Medium Shot, Eye-level. **{Lighting}**: High contrast neon blue. **{Composition}**: Rule of Thirds. **Layers**: {Foreground} Empty. {Midground} CHAR:[@Kael] {Subject Info: Medium Shot; Rule of Thirds Left; Profile Right; Aiming gun forward; Tense frown}. {Background} ENV:[Dark Alley]. | **{Viewpoint Movement}**: Slow Dolly In with facing direction unchanged. **Action**: (1)...(10) micro-beats ending in final static pose. | 5.0 | NO | [Global Style] Cyberpunk. **{Viewpoint Anchor}**: Mid-corridor in ENV:[Dark Alley]. **{Viewing Direction}**: Front-right 3/4 facing CHAR:[@Kael]. **{CameraSetup}**: Close Up, Eye-level. **{Lighting}**: High contrast neon blue. **{Composition}**: Center Framed. **Layers**: {Foreground} Vapor mist. {Midground} CHAR:[@Kael] {Subject Info: Close Up; Center; Profile Right; Gun lowered; Relieved eyes}. {Background} ENV:[Dark Alley] blurred. | ENV:[Dark Alley], CHAR:[@Kael], PROP:[Plasma Revolver] |
+| EP01_SC01_SH02 | Combat Roll | EP01_SC01 | **预估**：时长 4.0s，基准密度 8 个，实策 8 个微节拍。<br>**动态**：方向{水平横移}，速率{极快}，量化{横移一车身/翻滚整圈}。<br>**首帧**：CHAR:[@Kael] 蹲伏准备闪避。<br>**过程**：完成翻滚与落地动作链。<br>**尾帧**：CHAR:[@Kael] 单膝跪地，枪口指向前方。{稳定态: 是}，{近景收束: 否(需展示全身落地姿态)}。 | [Global Style] Cyberpunk. **{Viewpoint Setup}**: Low Angle, Tracking Mode. **Layers**: {Foreground} Wet pavement reflection. {Midground} CHAR:[@Kael] {Subject Info: Full Body; Center; Facing Viewer; Crouched in start stance; Alert}. {Background} ENV:[Rainy Alley]. | **{Viewpoint Movement}**: Tracking right rapidly. **Action**: (1)...(8) synced micro-beats with stable landing. | 4.0 | {Time: 1.5s} [Global Style] Cyberpunk. **{CameraSetup}**: Low Angle, Tilted angle. **Layers**: {Foreground} Water droplets. {Midground} CHAR:[@Kael] {Subject Info: Full Body; Center; Upside down mid-roll}. {Background} ENV:[Rainy Alley]. | [Global Style] Cyberpunk. **{CameraSetup}**: Low Angle. **Layers**: {Foreground} Puddle ripples. {Midground} CHAR:[@Kael] {Subject Info: Full Body (Kneeling); Rule of Thirds Right; Facing Viewer; gun raised}. {Background} ENV:[Rainy Alley]. | ENV:[Rainy Alley], CHAR:[@Kael] |
 
 
 

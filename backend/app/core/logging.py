@@ -2,6 +2,7 @@
 import logging
 import time
 import re
+import json
 from typing import Optional
 from fastapi import Request
 from starlette.types import ASGIApp, Scope, Receive, Send
@@ -139,7 +140,7 @@ def _extract_first_int_by_regex(path: str, pattern: str) -> Optional[int]:
     return _safe_int(m.group(1))
 
 
-def _resolve_project_id_for_logging(path: str, request: Request) -> Optional[int]:
+def _resolve_project_id_for_logging(path: str, request: Request, body_bytes: Optional[bytes] = None) -> Optional[int]:
     direct_project_id = _extract_first_int_by_regex(path, r"/projects/(\d+)")
     if direct_project_id:
         return direct_project_id
@@ -147,6 +148,19 @@ def _resolve_project_id_for_logging(path: str, request: Request) -> Optional[int
     query_project_id = _safe_int(request.query_params.get("project_id"))
     if query_project_id:
         return query_project_id
+
+    if body_bytes:
+        try:
+            payload = json.loads(body_bytes.decode("utf-8", errors="ignore"))
+            if isinstance(payload, dict):
+                body_project_id = _safe_int(payload.get("project_id"))
+                if body_project_id:
+                    return body_project_id
+                data_project_id = _safe_int((payload.get("data") or {}).get("project_id") if isinstance(payload.get("data"), dict) else None)
+                if data_project_id:
+                    return data_project_id
+        except Exception:
+            pass
 
     return None
 
@@ -183,7 +197,52 @@ class LoggingMiddleware:
             return
 
         start_time = time.time()
-        request = Request(scope, receive=receive)
+        method = str(scope.get("method") or "").upper()
+
+        raw_headers = scope.get("headers") or []
+        header_map = {}
+        for key, value in raw_headers:
+            try:
+                header_map[str(key, "utf-8").lower()] = str(value, "utf-8")
+            except Exception:
+                continue
+
+        content_type = str(header_map.get("content-type") or "").lower()
+        content_length = _safe_int(header_map.get("content-length")) or 0
+        should_buffer_json_body = (
+            method in {"POST", "PUT", "PATCH"}
+            and "application/json" in content_type
+            and content_length > 0
+            and content_length <= 512 * 1024
+        )
+
+        buffered_body = b""
+        receive_for_app = receive
+        if should_buffer_json_body:
+            chunks = []
+            more_body = True
+            while more_body:
+                message = await receive()
+                if message.get("type") != "http.request":
+                    continue
+                body_part = message.get("body") or b""
+                if body_part:
+                    chunks.append(body_part)
+                more_body = bool(message.get("more_body", False))
+
+            buffered_body = b"".join(chunks)
+            sent = False
+
+            async def replay_receive():
+                nonlocal sent, buffered_body
+                if sent:
+                    return {"type": "http.request", "body": b"", "more_body": False}
+                sent = True
+                return {"type": "http.request", "body": buffered_body, "more_body": False}
+
+            receive_for_app = replay_receive
+
+        request = Request(scope, receive=receive_for_app)
 
         method = request.method
         path = request.url.path
@@ -213,7 +272,7 @@ class LoggingMiddleware:
             username = user.get("username") or "Guest"
             user_id = user.get("user_id")
 
-        project_id = _resolve_project_id_for_logging(path, request)
+        project_id = _resolve_project_id_for_logging(path, request, buffered_body)
         response_status: Optional[int] = None
 
         async def send_wrapper(message):
@@ -223,7 +282,7 @@ class LoggingMiddleware:
             await send(message)
 
         try:
-            await self.app(scope, receive, send_wrapper)
+            await self.app(scope, receive_for_app, send_wrapper)
         except Exception as e:
             process_ms = int((time.time() - start_time) * 1000)
             if not is_noise:

@@ -119,13 +119,14 @@ Update strategy:
 
 You may only use these tools:
 1) search_system_api_settings
-   - Parameters: provider (optional), category (optional), model (optional), limit (optional, max 50)
+   - Parameters: provider (optional), category (optional), model (optional), modality (optional), limit (optional, max 50)
 2) upsert_system_api_pricing
    - Parameters:
      - provider (required)
      - category (required, default LLM)
      - model (required)
      - name (optional)
+     - modality (optional)
      - base_url (optional)
      - unit_type (optional: per_call/per_second/per_minute/per_token/per_1k_tokens/per_million_tokens)
      - supplier_price (optional)
@@ -1556,6 +1557,7 @@ Output must be JSON object with keys: reply, plan.
             provider = str(params.get("provider") or "").strip()
             category = str(params.get("category") or "").strip()
             model = str(params.get("model") or "").strip()
+            modality = str(params.get("modality") or "").strip()
             try:
                 limit = int(params.get("limit") or 20)
             except Exception:
@@ -1569,6 +1571,8 @@ Output must be JSON object with keys: reply, plan.
                 query = query.filter(SystemAPISetting.category == category)
             if model:
                 query = query.filter(SystemAPISetting.model.ilike(f"%{model}%"))
+            if modality:
+                query = query.filter(SystemAPISetting.modality == modality)
 
             rows = query.order_by(SystemAPISetting.id.desc()).limit(limit).all()
             items = []
@@ -1581,6 +1585,7 @@ Output must be JSON object with keys: reply, plan.
                     "provider": row.provider,
                     "category": row.category,
                     "model": row.model,
+                    "modality": row.modality,
                     "base_url": row.base_url,
                     "is_active": bool(row.is_active),
                     "api_pricing": api_pricing,
@@ -1678,6 +1683,8 @@ Output must be JSON object with keys: reply, plan.
                     row.base_url = str(params.get("base_url") or "").strip()
                 if params.get("name"):
                     row.name = str(params.get("name") or "").strip()
+                if params.get("modality"):
+                    row.modality = str(params.get("modality") or "").strip()
                 if params.get("is_active") is not None:
                     row.is_active = bool(params.get("is_active"))
             else:
@@ -1689,6 +1696,7 @@ Output must be JSON object with keys: reply, plan.
                     api_key="",
                     base_url=str(params.get("base_url") or "").strip() or None,
                     model=model,
+                    modality=str(params.get("modality") or "").strip() or None,
                     deprecated=False,
                     config=patch_cfg,
                     is_active=bool(params.get("is_active")) if params.get("is_active") is not None else False,
@@ -1703,6 +1711,7 @@ Output must be JSON object with keys: reply, plan.
                 "provider": provider,
                 "category": category,
                 "model": model,
+                "modality": getattr(row, "modality", None),
                 "api_pricing": patch_cfg.get("api_pricing") or {},
                 "multiplier": multiplier,
             }
