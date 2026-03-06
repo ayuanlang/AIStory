@@ -75,6 +75,7 @@ const UserAdmin = () => {
     const [selectedSystemApiId, setSelectedSystemApiId] = useState('');
     const [systemApiFilterCategory, setSystemApiFilterCategory] = useState('all');
     const [systemApiFilterProvider, setSystemApiFilterProvider] = useState('all');
+    const [systemApiHideDeprecated, setSystemApiHideDeprecated] = useState(false);
     const [systemApiSortMode, setSystemApiSortMode] = useState('default');
     const [systemApiKeyProvider, setSystemApiKeyProvider] = useState('');
     const [providerKeysText, setProviderKeysText] = useState('');
@@ -615,7 +616,10 @@ const UserAdmin = () => {
     }, [systemApiRows, systemApiFilterCategory, systemApiFilterProvider]);
 
     const visibleSystemApiRows = React.useMemo(() => {
-        const rows = [...filteredSystemApiRows];
+        let rows = [...filteredSystemApiRows];
+        if (systemApiHideDeprecated) {
+            rows = rows.filter((row) => !isSystemApiDeprecated(row));
+        }
         if (systemApiSortMode === 'priority') {
             rows.sort((a, b) => {
                 const pa = getSmartPriority(a);
@@ -625,7 +629,7 @@ const UserAdmin = () => {
             });
         }
         return rows;
-    }, [filteredSystemApiRows, systemApiSortMode]);
+    }, [filteredSystemApiRows, systemApiSortMode, systemApiHideDeprecated]);
 
     const getSmartPriority = (row) => {
         const cfg = getSystemApiConfig(row);
@@ -2620,14 +2624,21 @@ const UserAdmin = () => {
                                                     ))}
                                                 </select>
                                             </div>
-                                            <div className="flex items-end">
+                                            <div className="flex items-end gap-2">
+                                                <button
+                                                    onClick={() => setSystemApiHideDeprecated(h => !h)}
+                                                    className={`px-3 py-2 rounded text-sm border whitespace-nowrap ${systemApiHideDeprecated ? 'bg-amber-500/20 text-amber-200 border-amber-500/40 hover:bg-amber-500/30' : 'bg-white/5 text-gray-300 border-white/10 hover:bg-white/10'}`}
+                                                >
+                                                    {systemApiHideDeprecated ? t('已隐藏弃用', 'Deprecated Hidden') : t('显示弃用', 'Show Deprecated')}
+                                                </button>
                                                 <button
                                                     onClick={() => {
                                                         setSystemApiFilterCategory('all');
                                                         setSystemApiFilterProvider('all');
+                                                        setSystemApiHideDeprecated(false);
                                                         setSystemApiSortMode('default');
                                                     }}
-                                                    className="w-full bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded text-sm"
+                                                    className="px-3 py-2 rounded text-sm bg-gray-700 hover:bg-gray-600 text-white whitespace-nowrap"
                                                 >
                                                     {t('重置筛选', 'Reset Filters')}
                                                 </button>
