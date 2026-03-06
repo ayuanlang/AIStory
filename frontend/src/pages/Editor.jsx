@@ -12145,6 +12145,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const [assetDetailModal, setAssetDetailModal] = useState({ open: false, type: 'start', keyframeIndex: -1 });
     const [shotAssetsMetaIndex, setShotAssetsMetaIndex] = useState({});
     const [shotAssetsMetaLoading, setShotAssetsMetaLoading] = useState(false);
+    const [shotAssetsRefreshKey, setShotAssetsRefreshKey] = useState(0);
+    const refreshShotAssetsMeta = useCallback(() => setShotAssetsRefreshKey(k => k + 1), []);
 
     const openAssetDetailModal = (type, keyframeIndex = -1) => {
         setAssetDetailModal({ open: true, type, keyframeIndex });
@@ -12304,7 +12306,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         return () => {
             active = false;
         };
-    }, [editingShot?.id, normalizeAssetUrlToken, projectId]);
+    }, [editingShot?.id, normalizeAssetUrlToken, projectId, shotAssetsRefreshKey]);
 
     const overwriteShotField = useCallback((field, value, extra = {}) => {
         const nextValue = String(value ?? '');
@@ -12737,6 +12739,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                 delete pausedResumeVideoJobsRef.current[jobId];
                                 clearPendingVideoJobsByJobId(jobId);
                                 setShotGeneratingState(stableShotId, 'video', false);
+                                refreshShotAssetsMeta();
                                 await refreshShots();
                                 break;
                             }
@@ -12756,6 +12759,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                     delete pausedResumeVideoJobsRef.current[jobId];
                                     clearPendingVideoJobsByJobId(jobId);
                                     setShotGeneratingState(stableShotId, 'video', false);
+                                    refreshShotAssetsMeta();
                                     await refreshShots();
                                     break;
                                 }
@@ -13925,6 +13929,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 setLocalKeyframes([...updated]); // Force re-render with image
                 await reconstructKeyframes(updated);
                 onLog?.(`Keyframe T=${kf.time} Generated.`, 'success');
+                refreshShotAssetsMeta();
             }
         } catch(e) {
             console.error(e);
@@ -14208,6 +14213,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     setEditingShot(prev => (prev && prev.id === targetShotId ? { ...prev, ...newData } : prev)); 
                     onLog?.('Start Frame Generated', 'success');
                     showNotification('Start Frame Generated', 'success');
+                    refreshShotAssetsMeta();
                     success = true;
                 } else {
                     throw new Error("No image URL returned");
@@ -14292,6 +14298,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     setEditingShot(prev => (prev && prev.id === targetShotId ? { ...prev, ...newData } : prev));
                     onLog?.('End Frame Generated', 'success');
                     showNotification('End Frame Generated', 'success');
+                    refreshShotAssetsMeta();
                     success = true;
                 } else {
                      throw new Error("No image URL returned");
@@ -14614,6 +14621,9 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     console.error("Failed to save shot update to backend:", updateErr);
                     // We don't block the UI - the video is here.
                 }
+
+                // 3. Refresh asset metadata so resolution/aspect_ratio show immediately
+                refreshShotAssetsMeta();
             }
         } catch (e) {
              if (createdVideoJobId && isClientInterruptionError(e)) {
