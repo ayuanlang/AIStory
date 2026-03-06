@@ -8438,11 +8438,22 @@ def send_password_reset_email(to_email: str, reset_link: str) -> None:
 
 def authenticate_user(db: Session, username: str, password: str):
     username = str(username or "").strip()
-    # Try by username
-    user = db.query(User).filter(User.username == username).first()
-    if not user:
-        # Try by email
-        user = db.query(User).filter(User.email == str(username or "").strip().lower()).first()
+    try:
+        # Try by username
+        user = db.query(User).filter(User.username == username).first()
+        if not user:
+            # Try by email
+            user = db.query(User).filter(User.email == str(username or "").strip().lower()).first()
+    except Exception as exc:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        logger.error("DB lookup failed in authenticate_user: %s", type(exc).__name__)
+        raise HTTPException(
+            status_code=503,
+            detail="Database temporarily unavailable, please retry",
+        )
     
     if not user:
         return None

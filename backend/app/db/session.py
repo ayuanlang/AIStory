@@ -43,8 +43,8 @@ if not is_sqlite:
         _raw_dsn = _re.sub(
             r"^postgres(ql)?(\+psycopg2)?://", "postgresql://", settings.DATABASE_URL
         )
-        _MAX_CONNECT_RETRIES = 3
-        _CONNECT_RETRY_DELAY = 1.0  # seconds
+        _MAX_CONNECT_RETRIES = 5
+        _CONNECT_RETRY_DELAY = 2.0  # seconds
 
         def _connect_with_retry():
             last_err = None
