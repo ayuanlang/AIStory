@@ -1542,7 +1542,7 @@ const UserAdmin = () => {
 
     return (
         <div className="min-h-screen bg-[#09090b] text-white flex flex-col font-sans">
-            <main className="flex-1 container mx-auto px-4 pt-8 pb-8">
+            <main className="flex-1 w-full max-w-[1920px] mx-auto px-4 pt-8 pb-8">
                 <div className="mb-4 flex items-start justify-between gap-3">
                     <div>
                         <h1 className="text-2xl font-bold flex items-center gap-2">
@@ -2585,7 +2585,7 @@ const UserAdmin = () => {
                                         </div>
                                     </div>
 
-                                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                    <div className="flex flex-col gap-4">
                                     <div className="border border-white/10 rounded-lg p-4 bg-black/20 space-y-3">
                                         <div className="text-[11px] text-gray-300 bg-white/5 border border-white/10 rounded p-2 leading-relaxed">
                                             {t('智能路由规则：多参考图（>4）会优先尝试“多图默认 API”；主通道达到重试上限后，按同类别优先级（数字越小越优先）依次回退。', 'Smart routing rule: multi-reference image jobs (>4) first try the “multi-ref default API”; after retry limit on the main path, fallback follows same-category priority (lower number first).')}
@@ -2675,18 +2675,21 @@ const UserAdmin = () => {
                                             ))}
                                         </select>
 
-                                        <div className="overflow-y-auto max-h-[420px] border border-white/10 rounded">
-                                            <table className="w-full text-xs">
+                                        <div className="overflow-auto max-h-[520px] border border-white/10 rounded">
+                                            <table className="w-full text-xs min-w-[1000px]">
                                                 <thead className="bg-white/5 text-gray-400 sticky top-0">
                                                     <tr>
-                                                        <th className="text-left p-2">{t('编号', 'ID')}</th>
-                                                        <th className="text-left p-2">{t('类别', 'Category')}</th>
-                                                        <th className="text-left p-2">{t('提供方', 'Provider')}</th>
-                                                        <th className="text-left p-2">{t('模型', 'Model')}</th>
-                                                        <th className="text-left p-2">{t('弃用', 'Deprecated')}</th>
-                                                        <th className="text-left p-2">{t('智能策略', 'Smart Strategy')}</th>
-                                                        <th className="text-left p-2">{t('启用', 'Active')}</th>
-                                                        <th className="text-left p-2">{t('操作', 'Actions')}</th>
+                                                        <th className="text-left p-2 whitespace-nowrap">{t('编号', 'ID')}</th>
+                                                        <th className="text-left p-2 whitespace-nowrap">{t('类别', 'Category')}</th>
+                                                        <th className="text-left p-2 whitespace-nowrap">{t('提供方', 'Provider')}</th>
+                                                        <th className="text-left p-2 whitespace-nowrap">{t('模型', 'Model')}</th>
+                                                        <th className="text-left p-2 whitespace-nowrap">{t('名称', 'Name')}</th>
+                                                        <th className="text-left p-2 whitespace-nowrap">{t('Base URL', 'Base URL')}</th>
+                                                        <th className="text-left p-2 whitespace-nowrap">{t('模态', 'Modality')}</th>
+                                                        <th className="text-left p-2 whitespace-nowrap">{t('弃用', 'Deprecated')}</th>
+                                                        <th className="text-left p-2 whitespace-nowrap">{t('智能策略', 'Smart Strategy')}</th>
+                                                        <th className="text-left p-2 whitespace-nowrap">{t('启用', 'Active')}</th>
+                                                        <th className="text-left p-2 whitespace-nowrap">{t('操作', 'Actions')}</th>
                                                     </tr>
                                                 </thead>
                                                 <tbody>
@@ -2699,7 +2702,10 @@ const UserAdmin = () => {
                                                             <td className="p-2">{row.id}</td>
                                                             <td className="p-2">{row.category}</td>
                                                             <td className="p-2">{row.provider}</td>
-                                                            <td className="p-2">{row.model || '-'}</td>
+                                                            <td className="p-2 max-w-[220px] truncate" title={row.model || '-'}>{row.model || '-'}</td>
+                                                            <td className="p-2 max-w-[160px] truncate" title={row.name || '-'}>{row.name || '-'}</td>
+                                                            <td className="p-2 max-w-[200px] truncate" title={row.base_url || '-'}>{row.base_url || '-'}</td>
+                                                            <td className="p-2 max-w-[160px] truncate" title={row.modality || '-'}>{row.modality || '-'}</td>
                                                             <td className="p-2">
                                                                 {isSystemApiDeprecated(row) ? (
                                                                     <span className="px-1.5 py-0.5 rounded bg-red-500/20 text-red-300 border border-red-500/30">{t('已弃用', 'Deprecated')}</span>
@@ -2741,7 +2747,7 @@ const UserAdmin = () => {
                                                     ))}
                                                     {visibleSystemApiRows.length === 0 && (
                                                         <tr className="border-t border-white/10">
-                                                            <td className="p-3 text-gray-400" colSpan={8}>
+                                                            <td className="p-3 text-gray-400" colSpan={11}>
                                                                 {t('无匹配结果，请调整筛选条件。', 'No matching settings. Adjust your filters.')}
                                                             </td>
                                                         </tr>
