@@ -39,20 +39,38 @@ if not is_sqlite:
     # Falls back to external DB URL if internal DNS keeps failing.
     if "postgresql" in settings.DATABASE_URL:
         import psycopg2 as _psycopg2
+        from urllib.parse import urlparse as _urlparse, urlunparse as _urlunparse
 
         # Build DSN usable by psycopg2 (strip SQLAlchemy dialect suffix)
         _raw_dsn = _re.sub(
             r"^postgres(ql)?(\+psycopg2)?://", "postgresql://", settings.DATABASE_URL
         )
-        _raw_dsn_ext = ""
+
+        # Build external fallback DSN: explicit env var or auto-derive from internal
+        _ext_fallbacks = []
         if settings.DATABASE_URL_EXTERNAL:
-            _raw_dsn_ext = _re.sub(
+            _ext_fallbacks = [_re.sub(
                 r"^postgres(ql)?(\+psycopg2)?://", "postgresql://",
                 settings.DATABASE_URL_EXTERNAL,
-            )
+            )]
+        else:
+            # Auto-derive: Render internal hostnames like "dpg-xxx-a" become
+            # "dpg-xxx-a.region-postgres.render.com" externally.
+            _parsed = _urlparse(_raw_dsn)
+            _host = _parsed.hostname or ""
+            if _re.match(r"^dpg-[a-z0-9]+-[a-z]$", _host):
+                _RENDER_REGIONS = ["oregon", "ohio", "frankfurt", "singapore"]
+                _ext_fallbacks = [
+                    _urlunparse(_parsed._replace(
+                        netloc=_parsed.netloc.replace(_host, f"{_host}.{r}-postgres.render.com", 1)
+                    ))
+                    for r in _RENDER_REGIONS
+                ]
+                _logger.info("Auto-derived %d external DB URL candidates from internal host %s",
+                             len(_ext_fallbacks), _host)
 
         _MAX_CONNECT_RETRIES = 6
-        _CONNECT_RETRY_DELAYS = [1, 2, 3, 4, 5]  # exponential-ish: total ~15s
+        _CONNECT_RETRY_DELAYS = [1, 2, 3, 4, 5]  # total ~15s
 
         def _connect_with_retry():
             last_err = None
@@ -69,14 +87,14 @@ if not is_sqlite:
                         )
                         _time.sleep(delay)
 
-            # All internal retries exhausted — try external URL once as fallback
-            if _raw_dsn_ext:
+            # All internal retries exhausted — try external URL(s) as fallback
+            for _ext_url in _ext_fallbacks:
                 try:
-                    _logger.warning("Internal DB DNS failed %d times, falling back to external URL",
+                    _logger.warning("Internal DB DNS failed %d times, trying external URL fallback",
                                     _MAX_CONNECT_RETRIES)
-                    return _psycopg2.connect(_raw_dsn_ext, **_connect_args)
+                    return _psycopg2.connect(_ext_url, **_connect_args)
                 except _psycopg2.OperationalError:
-                    pass  # fall through to raise original error
+                    continue
             raise last_err
 
         engine_kwargs["creator"] = _connect_with_retry

@@ -68,10 +68,6 @@ services:
         fromDatabase:
           name: aistory-db
           property: connectionString
-      - key: DATABASE_URL_EXTERNAL
-        fromDatabase:
-          name: aistory-db
-          property: externalConnectionString
     disk:
       name: uploads
       mountPath: /opt/render/project/src/backend/uploads
