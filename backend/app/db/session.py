@@ -43,8 +43,8 @@ if not is_sqlite:
         _raw_dsn = _re.sub(
             r"^postgres(ql)?(\+psycopg2)?://", "postgresql://", settings.DATABASE_URL
         )
-        _MAX_CONNECT_RETRIES = 5
-        _CONNECT_RETRY_DELAY = 2.0  # seconds
+        _MAX_CONNECT_RETRIES = 6
+        _CONNECT_RETRY_DELAYS = [1, 2, 3, 4, 5]  # exponential-ish: total ~15s
 
         def _connect_with_retry():
             last_err = None
@@ -54,12 +54,12 @@ if not is_sqlite:
                 except _psycopg2.OperationalError as exc:
                     last_err = exc
                     if _attempt < _MAX_CONNECT_RETRIES - 1:
+                        delay = _CONNECT_RETRY_DELAYS[_attempt]
                         _logger.warning(
-                            "DB connect attempt %d/%d failed: %s — retrying in %.1fs",
-                            _attempt + 1, _MAX_CONNECT_RETRIES, exc,
-                            _CONNECT_RETRY_DELAY,
+                            "DB connect attempt %d/%d failed: %s — retrying in %ds",
+                            _attempt + 1, _MAX_CONNECT_RETRIES, exc, delay,
                         )
-                        _time.sleep(_CONNECT_RETRY_DELAY)
+                        _time.sleep(delay)
             raise last_err
 
         engine_kwargs["creator"] = _connect_with_retry
