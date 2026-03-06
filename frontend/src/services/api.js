@@ -48,6 +48,43 @@ api.interceptors.response.use(
     }
 );
 
+// ── Async LLM task polling utilities ────────────────────────────────────
+// Backend LLM endpoints accept ?async=1 and return { task_id, async: true }.
+// pollTask() polls GET /tasks/{task_id} until completed or failed.
+
+const LLM_POLL_INTERVAL = 2500;   // ms between polls
+const LLM_POLL_TIMEOUT  = 600000; // 10 min max wait
+
+async function pollTask(taskId, { interval = LLM_POLL_INTERVAL, timeout = LLM_POLL_TIMEOUT } = {}) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const res = await api.get(`/tasks/${taskId}`);
+    const info = res.data;
+    if (info.status === 'completed') return info.result;
+    if (info.status === 'failed') {
+      const err = new Error(info.error || 'Task failed');
+      err.errorCode = info.error_code || 500;
+      err.response = { status: info.error_code || 500, data: { detail: info.error } };
+      throw err;
+    }
+    await new Promise(r => setTimeout(r, interval));
+  }
+  throw new Error('LLM task polling timed out');
+}
+
+/**
+ * Wrapper: POST to an LLM endpoint with ?async=1, then poll for result.
+ * Falls back to direct response if backend doesn't return task_id (backward compat).
+ */
+async function asyncLLMPost(url, data, config = {}) {
+  const sep = url.includes('?') ? '&' : '?';
+  const res = await api.post(`${url}${sep}async=1`, data, config);
+  if (res.data && res.data.task_id && res.data.async) {
+    return await pollTask(res.data.task_id, config.pollOptions);
+  }
+  return res.data;
+}
+
 const VIDEO_JOB_TIMEOUT_MS_DEFAULT = (() => {
     const parsed = Number(import.meta?.env?.VITE_VIDEO_JOB_TIMEOUT_MS || 10 * 60 * 1000);
     if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -340,21 +377,19 @@ api.interceptors.response.use(
 );
 
 export const sendAgentCommand = async (query, context = {}, history = []) => {
-    const response = await api.post('/agent/command', {
+    return await asyncLLMPost('/agent/command', {
         query,
         context,
         history
     });
-    return response.data;
 };
 
 export const sendSystemManagementAgentCommand = async (query, context = {}, history = []) => {
-    const response = await api.post('/agent/system-management/command', {
+    return await asyncLLMPost('/agent/system-management/command', {
         query,
         context,
         history,
     });
-    return response.data;
 };
 
 export const fetchProjects = async () => {
@@ -408,13 +443,11 @@ export const updateProject = async (id, data) => {
 }
 
 export const generateProjectStoryGlobal = async (projectId, payload) => {
-    const response = await api.post(`/projects/${projectId}/story_generator/global`, payload);
-    return response.data;
+    return await asyncLLMPost(`/projects/${projectId}/story_generator/global`, payload);
 }
 
 export const analyzeProjectNovel = async (projectId, payload) => {
-    const response = await api.post(`/projects/${projectId}/story_generator/analyze_novel`, payload);
-    return response.data;
+    return await asyncLLMPost(`/projects/${projectId}/story_generator/analyze_novel`, payload);
 }
 
 // Project Story Generator (Global/Project) draft input persistence (no LLM call)
@@ -481,8 +514,7 @@ export const deleteScene = async (sceneId) => {
 }
 
 export const regenerateScene = async (sceneId, payload) => {
-    const response = await api.post(`/scenes/${sceneId}/regenerate`, payload || {});
-    return response.data;
+    return await asyncLLMPost(`/scenes/${sceneId}/regenerate`, payload || {});
 }
 
 // Shots
@@ -525,9 +557,7 @@ export const generateSceneShots = async (sceneId, promptData = null) => {
         systemPromptLen: String(promptData?.system_prompt || '').length,
     };
     try {
-        const response = await api.post(`/scenes/${sceneId}/ai_generate_shots`, promptData);
-        const data = response?.data;
-        return data;
+        return await asyncLLMPost(`/scenes/${sceneId}/ai_generate_shots`, promptData);
     } catch (error) {
         console.error('[API] generateSceneShots failed', {
             sceneId,
@@ -558,14 +588,12 @@ export const applySceneAIResult = async (sceneId, data = null) => {
 
 // Episode Character Canon
 export const generateEpisodeCharacterProfile = async (episodeId, payload) => {
-    const response = await api.post(`/episodes/${episodeId}/character_profiles/generate`, payload);
-    return response.data;
+    return await asyncLLMPost(`/episodes/${episodeId}/character_profiles/generate`, payload);
 }
 
 // Project Character Canon (Overview)
 export const generateProjectCharacterProfile = async (projectId, payload) => {
-    const response = await api.post(`/projects/${projectId}/character_profiles/generate`, payload);
-    return response.data;
+    return await asyncLLMPost(`/projects/${projectId}/character_profiles/generate`, payload);
 }
 
 // Project Character Canon draft input persistence (no LLM call)
@@ -601,8 +629,7 @@ export const updateProjectCharacterProfiles = async (projectId, character_profil
 
 // Episode Story Generator (Global/Episode)
 export const generateEpisodeStory = async (episodeId, payload) => {
-    const response = await api.post(`/episodes/${episodeId}/story_generator`, payload);
-    return response.data;
+    return await asyncLLMPost(`/episodes/${episodeId}/story_generator`, payload);
 }
 
 // Episode Story Generator draft input persistence (no LLM call)
@@ -612,18 +639,16 @@ export const saveEpisodeStoryGeneratorInput = async (episodeId, payload) => {
 }
 
 export const generateEpisodeScenes = async (episodeId, payload) => {
-    const response = await api.post(`/episodes/${episodeId}/script_generator/scenes`, payload);
-    return response.data;
+    return await asyncLLMPost(`/episodes/${episodeId}/script_generator/scenes`, payload);
 }
 
 // Project Script Generator (Episodes -> Script drafts)
 export const generateProjectEpisodeScripts = async (projectId, payload) => {
-    const response = await api.post(
+    return await asyncLLMPost(
         `/projects/${projectId}/script_generator/episodes/scripts`,
         payload,
-        { timeout: 30 * 60 * 1000 }
+        { pollOptions: { timeout: 30 * 60 * 1000 } }
     );
-    return response.data;
 }
 
 export const getProjectEpisodeScriptsStatus = async (projectId) => {
@@ -1538,13 +1563,11 @@ export const rebindShotMediaAssets = async (payload = {}) => {
 };
 
 export const translateText = async (q, from_lang = 'en', to_lang = 'zh') => {
-    const response = await api.post('/tools/translate', { q, from_lang, to_lang });
-    return response.data;
+    return await asyncLLMPost('/tools/translate', { q, from_lang, to_lang });
 };
 
 export const refinePrompt = async (original_prompt, instruction, type = 'image') => {
-    const response = await api.post('/tools/refine_prompt', { original_prompt, instruction, type });
-    return response.data;
+    return await asyncLLMPost('/tools/refine_prompt', { original_prompt, instruction, type });
 };
 
 export const analyzeScene = async (scriptText, systemPrompt = null, projectMetadata = null, episodeId = null, analysisAttentionNotes = null, reuseSubjectAssets = null) => {
@@ -1565,8 +1588,7 @@ export const analyzeScene = async (scriptText, systemPrompt = null, projectMetad
     if (Array.isArray(reuseSubjectAssets) && reuseSubjectAssets.length > 0) {
         payload.reuse_subject_assets = reuseSubjectAssets;
     }
-    const response = await api.post('/analyze_scene', payload);
-    const data = response?.data ?? {};
+    const data = (await asyncLLMPost('/analyze_scene', payload)) ?? {};
 
     const explicitSuccess = typeof data?.success === 'boolean' ? data.success : null;
     const statusText = String(data?.status || '').trim().toLowerCase();

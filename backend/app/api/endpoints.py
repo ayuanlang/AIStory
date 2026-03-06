@@ -1,5 +1,5 @@
 
-from fastapi import APIRouter, Depends, HTTPException, Body, Request
+from fastapi import APIRouter, Depends, HTTPException, Body, Request, Query
 import logging
 import smtplib
 from email.message import EmailMessage
@@ -15,6 +15,7 @@ from app.services.tool_billing_taxonomy_service import tool_billing_taxonomy_ser
 from app.core.prompts.skills_loader import get_skill_prompt_text, load_skills_registry, get_skill_meta
 from app.services.llm_service import llm_service
 from app.services.payment_service import payment_service
+from app.services.task_manager import submit as _submit_task, get_status as _get_task_status, submit_async_endpoint as _submit_async
 from app.db.init_db import check_and_migrate_tables  # EMERGENCY FIX IMPORT
 import os
 
@@ -22,6 +23,7 @@ import os
 from app.services.media_service import MediaGenerationService
 from app.services.video_service import create_montage
 from app.api.deps import get_current_user  # Import dependency
+from fastapi.responses import JSONResponse
 from typing import List, Optional, Dict, Any, Union, Tuple
 from pydantic import BaseModel
 import bcrypt
@@ -103,6 +105,14 @@ def get_password_hash(password):
 router = APIRouter()
 media_service = MediaGenerationService()
 logger = logging.getLogger("api_logger")
+
+# ── Generic async-task polling endpoint ──────────────────────────────────
+@router.get("/tasks/{task_id}")
+def poll_task(task_id: str, current_user: User = Depends(get_current_user)):
+    info = _get_task_status(task_id, user_id=current_user.id)
+    if info is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return info
 
 IMAGE_JOB_STORE: Dict[str, Dict[str, Any]] = {}
 IMAGE_JOB_LOCK = threading.Lock()
@@ -1203,11 +1213,15 @@ async def get_prompt_skill_detail(skill_id: str, current_user: User = Depends(ge
     return meta
 
 @router.post("/analyze_scene", response_model=Dict[str, Any])
-async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)): # user auth optional depending on reqs, kept for safety
+async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db), async_mode: str = Query("0")): # user auth optional depending on reqs, kept for safety
     """
     Submits raw script text to LLM for Scene/Beat analysis using a specific prompt template.
     Returns the raw analysis result (Markdown/JSON).
     """
+    if async_mode == "1":
+        tid = _submit_async(analyze_scene, user_id=current_user.id, kind="analyze_scene",
+                            request=request, async_mode="0")
+        return JSONResponse({"task_id": tid, "async": True})
     logger.info("Received analyze_scene request")
     try:
         logger.info(f"[analyze_scene] request.episode_id={getattr(request, 'episode_id', None)}")
@@ -2045,8 +2059,13 @@ class TranslateRequest(BaseModel):
 async def translate_text(
     req: TranslateRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    async_mode: str = Query("0"),
 ):
+    if async_mode == "1":
+        tid = _submit_async(translate_text, user_id=current_user.id, kind="translate",
+                            req=req, async_mode="0")
+        return JSONResponse({"task_id": tid, "async": True})
     request_id = uuid.uuid4().hex[:12]
     started_at = datetime.utcnow()
     text = str(req.q or "")
@@ -2305,8 +2324,13 @@ class RefinePromptRequest(BaseModel):
 async def refine_prompt(
     req: RefinePromptRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    async_mode: str = Query("0"),
 ):
+    if async_mode == "1":
+        tid = _submit_async(refine_prompt, user_id=current_user.id, kind="refine_prompt",
+                            req=req, async_mode="0")
+        return JSONResponse({"task_id": tid, "async": True})
     # 1. Get LLM Config
     config = agent_service.get_active_llm_config(current_user.id)
     if not config or not config.get("api_key"):
@@ -2372,8 +2396,13 @@ async def refine_prompt(
 async def process_agent_command(
     request: AgentRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    async_mode: str = Query("0"),
 ):
+    if async_mode == "1":
+        tid = _submit_async(process_agent_command, user_id=current_user.id, kind="agent_command",
+                            request=request, async_mode="0")
+        return JSONResponse({"task_id": tid, "async": True})
     # Resolve Project ID
     project_id = request.project_id or request.context.get("projectId")
     
@@ -2482,8 +2511,13 @@ async def process_agent_command(
 async def process_system_management_agent_command(
     request: AgentRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    async_mode: str = Query("0"),
 ):
+    if async_mode == "1":
+        tid = _submit_async(process_system_management_agent_command, user_id=current_user.id,
+                            kind="system_agent_command", request=request, async_mode="0")
+        return JSONResponse({"task_id": tid, "async": True})
     if not bool(getattr(current_user, "is_superuser", False)):
         raise HTTPException(status_code=403, detail="Only superuser can use system management AI agent")
 
@@ -3123,7 +3157,12 @@ async def generate_project_story_dna_global(
     req: "StoryGeneratorRequest",
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    async_mode: str = Query("0"),
 ):
+    if async_mode == "1":
+        tid = _submit_async(generate_project_story_dna_global, user_id=current_user.id,
+                            kind="story_dna_global", project_id=project_id, req=req, async_mode="0")
+        return JSONResponse({"task_id": tid, "async": True})
     project = _require_project_access(db, project_id, current_user)
 
     gi_existing = dict(project.global_info or {})
@@ -3565,7 +3604,12 @@ async def analyze_project_novel_to_story_generator_fields(
     req: AnalyzeNovelRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    async_mode: str = Query("0"),
 ):
+    if async_mode == "1":
+        tid = _submit_async(analyze_project_novel_to_story_generator_fields, user_id=current_user.id,
+                            kind="analyze_novel", project_id=project_id, req=req, async_mode="0")
+        return JSONResponse({"task_id": tid, "async": True})
     project = _require_project_access(db, project_id, current_user)
 
     novel_text = (req.novel_text or "").strip()
@@ -4165,7 +4209,12 @@ async def generate_project_character_profile(
     req: CharacterProfileGenerateRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    async_mode: str = Query("0"),
 ):
+    if async_mode == "1":
+        tid = _submit_async(generate_project_character_profile, user_id=current_user.id,
+                            kind="char_profile_project", project_id=project_id, req=req, async_mode="0")
+        return JSONResponse({"task_id": tid, "async": True})
     project = _require_project_access(db, project_id, current_user)
 
     name = (req.name or "").strip()
@@ -4495,8 +4544,13 @@ async def generate_episode_character_profile(
     episode_id: int,
     req: CharacterProfileGenerateRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    async_mode: str = Query("0"),
 ):
+    if async_mode == "1":
+        tid = _submit_async(generate_episode_character_profile, user_id=current_user.id,
+                            kind="char_profile_episode", episode_id=episode_id, req=req, async_mode="0")
+        return JSONResponse({"task_id": tid, "async": True})
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
@@ -4620,7 +4674,12 @@ async def generate_episode_story_dna(
     req: "StoryGeneratorRequest",
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    async_mode: str = Query("0"),
 ):
+    if async_mode == "1":
+        tid = _submit_async(generate_episode_story_dna, user_id=current_user.id,
+                            kind="story_dna_episode", episode_id=episode_id, req=req, async_mode="0")
+        return JSONResponse({"task_id": tid, "async": True})
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
@@ -4768,7 +4827,12 @@ async def generate_episode_scenes_from_story(
     req: ScriptScenesGenerateRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    async_mode: str = Query("0"),
 ):
+    if async_mode == "1":
+        tid = _submit_async(generate_episode_scenes_from_story, user_id=current_user.id,
+                            kind="episode_scenes", episode_id=episode_id, req=req, async_mode="0")
+        return JSONResponse({"task_id": tid, "async": True})
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
@@ -5018,6 +5082,7 @@ async def generate_project_episode_scripts_from_global_framework(
     req: ProjectEpisodeScriptsGenerateRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    async_mode: str = Query("0"),
 ):
     """Generate per-episode script drafts from Project Overview artifacts.
 
@@ -5027,6 +5092,10 @@ async def generate_project_episode_scripts_from_global_framework(
 
     Creates missing episodes up to N and writes each draft into Episode.script_content.
     """
+    if async_mode == "1":
+        tid = _submit_async(generate_project_episode_scripts_from_global_framework, user_id=current_user.id,
+                            kind="episode_scripts", project_id=project_id, req=req, async_mode="0")
+        return JSONResponse({"task_id": tid, "async": True})
     started_at = datetime.utcnow()
     started_at_iso = started_at.isoformat()
     call_meta = {
@@ -5995,8 +6064,13 @@ async def regenerate_scene(
     scene_id: int,
     req: SceneRegenerateRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    async_mode: str = Query("0"),
 ):
+    if async_mode == "1":
+        tid = _submit_async(regenerate_scene, user_id=current_user.id,
+                            kind="regenerate_scene", scene_id=scene_id, req=req, async_mode="0")
+        return JSONResponse({"task_id": tid, "async": True})
     db_scene = db.query(Scene).filter(Scene.id == scene_id).first()
     if not db_scene:
         raise HTTPException(status_code=404, detail="Scene not found")
@@ -6992,8 +7066,13 @@ async def ai_generate_shots(
     scene_id: int,
     req: Optional[AIShotGenRequest] = None,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    async_mode: str = Query("0"),
 ):
+    if async_mode == "1":
+        tid = _submit_async(ai_generate_shots, user_id=current_user.id,
+                            kind="ai_generate_shots", scene_id=scene_id, req=req, async_mode="0")
+        return JSONResponse({"task_id": tid, "async": True})
     try:
         req_has_custom_user_prompt = bool(req and (req.user_prompt or "").strip())
         req_has_custom_system_prompt = bool(req and (req.system_prompt or "").strip())
@@ -7839,11 +7918,16 @@ async def generate_sora_character(
     entity_id: int,
     req: SoraCharacterGenRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    async_mode: str = Query("0"),
 ):
     """
     Generate a Sora Character definition/asset based on uploaded images and references.
     """
+    if async_mode == "1":
+        tid = _submit_async(generate_sora_character, user_id=current_user.id,
+                            kind="sora_character", entity_id=entity_id, req=req, async_mode="0")
+        return JSONResponse({"task_id": tid, "async": True})
     # 1. Validation
     entity = db.query(Entity).filter(Entity.id == entity_id).first()
     if not entity:
