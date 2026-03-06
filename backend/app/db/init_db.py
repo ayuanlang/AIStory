@@ -978,7 +978,7 @@ def sync_system_api_from_seed(db):
                     merged_config[keep_key] = existing_cfg[keep_key]
             target.config = merged_config
             target.deprecated = deprecated
-            target.is_active = is_active
+            # is_active is NOT overwritten — activation state is managed on the server
             target.modality = modality
             # api_key is never overwritten — keys are managed on the server
             updated += 1

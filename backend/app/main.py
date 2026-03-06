@@ -93,6 +93,13 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         content={"detail": exc.errors()},
     )
 
+# Global exception handler: ensure unhandled errors still carry CORS headers
+# (Without this, RuntimeError etc. bypass CORSMiddleware and the browser blocks the response.)
+@app.exception_handler(Exception)
+async def _global_exception_handler(request: Request, exc: Exception):
+    logger.error("Unhandled exception on %s %s: %s", request.method, request.url.path, exc, exc_info=True)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
 # CORS configuration
 origins = [item.strip() for item in (settings.CORS_ORIGINS or "").split(",") if item.strip()]
 frontend_origin = (settings.FRONTEND_BASE_URL or "").strip()
