@@ -22,7 +22,7 @@ from typing import List, Dict, Any, Optional, Union
 from app.db.session import SessionLocal
 from app.models.all_models import APISetting, SystemAPISetting
 from app.core.config import settings
-from sqlalchemy import cast, String
+from sqlalchemy import cast, String, func
 
 # Suppress InsecureRequestWarning from urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -38,6 +38,10 @@ class MediaGenerationService:
     DOUBAO_MIN_IMAGE_PIXELS = 3_686_400
     SMART_ROUTER_PROVIDER = "smart_router"
     _provider_key_cursors: Dict[str, int] = {}
+
+    def _provider_ci_filter(self, provider: Any):
+        provider_norm = str(provider or "").strip().lower()
+        return func.lower(func.trim(func.coalesce(SystemAPISetting.provider, ""))) == provider_norm
 
     def _vendor_label(self, provider: Any) -> str:
         raw = str(provider or "").strip()
@@ -65,6 +69,37 @@ class MediaGenerationService:
                 return {}
             return parsed if isinstance(parsed, dict) else {}
         return {}
+
+    def _is_json_object_value(self, value: Any) -> bool:
+        if value is None:
+            return True
+        if isinstance(value, dict):
+            return True
+        if isinstance(value, (bytes, bytearray)):
+            try:
+                value = value.decode("utf-8", errors="ignore")
+            except Exception:
+                return False
+        if isinstance(value, str):
+            raw_obj: Any = value
+            for _ in range(3):
+                if isinstance(raw_obj, dict):
+                    return True
+                if not isinstance(raw_obj, str):
+                    return False
+
+                raw = raw_obj.strip()
+                if not raw:
+                    return True
+
+                try:
+                    parsed = json.loads(raw)
+                except Exception:
+                    return False
+                raw_obj = parsed
+
+            return isinstance(raw_obj, dict)
+        return False
 
     def _flatten_text(self, value: Any) -> str:
         if value is None:
@@ -209,27 +244,80 @@ class MediaGenerationService:
     def _pick_runtime_api_key(self, config_value: Any, fallback_key: Any = None) -> str:
         cfg = self._safe_json_dict(config_value)
         pooled = self._normalize_api_keys(cfg.get("provider_api_keys"))
-        if pooled:
-            strategy = str(cfg.get("provider_api_key_strategy") or "random").strip().lower()
+        strategy = str(cfg.get("provider_api_key_strategy") or "random").strip().lower()
+
+        def _pick_from_pool(keys: List[str]) -> str:
+            if not keys:
+                return ""
             if strategy == "round_robin":
                 cursor_key = str(cfg.get("provider") or cfg.get("__provider") or "default")
                 cursor = int(self._provider_key_cursors.get(cursor_key, 0))
-                selected = pooled[cursor % len(pooled)]
+                selected = keys[cursor % len(keys)]
                 self._provider_key_cursors[cursor_key] = cursor + 1
                 return selected
             if strategy == "weighted":
                 raw_weights = cfg.get("provider_api_key_weights")
                 if isinstance(raw_weights, list) and raw_weights:
                     weights = []
-                    for i in range(len(pooled)):
+                    for i in range(len(keys)):
                         try:
                             w = float(raw_weights[i]) if i < len(raw_weights) else 1.0
                         except Exception:
                             w = 1.0
                         weights.append(w if w > 0 else 1.0)
-                    return random.choices(pooled, weights=weights, k=1)[0]
-            return random.choice(pooled)
+                    return random.choices(keys, weights=weights, k=1)[0]
+            return random.choice(keys)
+
+        if pooled:
+            return _pick_from_pool(pooled)
+
+        fallback_pool = self._normalize_api_keys(fallback_key)
+        if fallback_pool:
+            return _pick_from_pool(fallback_pool)
         return str(fallback_key or "").strip()
+
+    def _collect_provider_key_pool_bundle(self, session, category: str, provider: str) -> Dict[str, Any]:
+        rows = session.query(SystemAPISetting).filter(
+            SystemAPISetting.category == category,
+            self._provider_ci_filter(provider),
+        ).order_by(SystemAPISetting.id.desc()).all()
+
+        merged_keys: List[str] = []
+        seen = set()
+        selected_strategy = "random"
+        selected_weights: List[float] = []
+
+        for row in rows:
+            cfg = self._safe_json_dict(getattr(row, "config", None))
+            row_keys = self._normalize_api_keys(cfg.get("provider_api_keys"))
+            for key in row_keys:
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged_keys.append(key)
+
+            if selected_strategy == "random":
+                candidate_strategy = str(cfg.get("provider_api_key_strategy") or "").strip().lower()
+                if candidate_strategy in {"random", "round_robin", "weighted"}:
+                    selected_strategy = candidate_strategy
+
+            if not selected_weights:
+                raw_weights = cfg.get("provider_api_key_weights")
+                if isinstance(raw_weights, list) and raw_weights:
+                    normalized_weights: List[float] = []
+                    for item in raw_weights:
+                        try:
+                            val = float(item)
+                        except Exception:
+                            val = 1.0
+                        normalized_weights.append(val if val > 0 else 1.0)
+                    selected_weights = normalized_weights
+
+        return {
+            "provider_api_keys": merged_keys,
+            "provider_api_key_strategy": selected_strategy,
+            "provider_api_key_weights": selected_weights,
+        }
 
     def _infer_image_size_from_dimensions(self, width: Any, height: Any) -> str:
         try:
@@ -255,7 +343,7 @@ class MediaGenerationService:
         bad_ids: List[int] = []
         for row in q.all():
             raw = getattr(row, "config_raw", None)
-            if isinstance(raw, str) and raw.strip() and not self._safe_json_dict(raw):
+            if isinstance(raw, str) and raw.strip() and not self._is_json_object_value(raw):
                 bad_ids.append(row.id)
 
         if bad_ids:
@@ -274,12 +362,12 @@ class MediaGenerationService:
         if category:
             q = q.filter(SystemAPISetting.category == category)
         if provider:
-            q = q.filter(SystemAPISetting.provider == provider)
+            q = q.filter(self._provider_ci_filter(provider))
 
         bad_ids: List[int] = []
         for row in q.all():
             raw = getattr(row, "config_raw", None)
-            if isinstance(raw, str) and raw.strip() and not self._safe_json_dict(raw):
+            if isinstance(raw, str) and raw.strip() and not self._is_json_object_value(raw):
                 bad_ids.append(row.id)
 
         if bad_ids:
@@ -292,7 +380,7 @@ class MediaGenerationService:
 
     def _system_setting_query(self, session, provider: str, category: str = None):
         query = session.query(SystemAPISetting).filter(
-            SystemAPISetting.provider == provider,
+            self._provider_ci_filter(provider),
         )
         if category:
             query = query.filter(SystemAPISetting.category == category)
@@ -307,11 +395,63 @@ class MediaGenerationService:
         }
 
     def _get_active_user_setting(self, session, user_id: int, category: str) -> Optional[APISetting]:
-        return session.query(APISetting).filter(
+        rows = session.query(APISetting).filter(
             APISetting.user_id == user_id,
             APISetting.category == category,
             APISetting.is_active == True,
-        ).order_by(APISetting.id.desc()).first()
+        ).order_by(APISetting.id.desc()).all()
+
+        if len(rows) > 1:
+            logger.warning(
+                "Multiple active api settings found | user_id=%s category=%s active_ids=%s",
+                user_id,
+                category,
+                [r.id for r in rows],
+            )
+
+        def _score(item: APISetting):
+            normalized_provider = self._normalize_provider_name(getattr(item, "provider", None), category)
+            provider_supported = 1 if self._is_supported_provider(category, normalized_provider) else 0
+            has_model = 1 if str(getattr(item, "model", "") or "").strip() else 0
+            cfg = self._safe_json_dict(getattr(item, "config", None))
+            selection_source = str((cfg or {}).get("selection_source") or "").strip().lower()
+            is_system_selected = 1 if selection_source == "system" else 0
+            return (provider_supported, has_model, is_system_selected, int(getattr(item, "id", 0) or 0))
+
+        best_active = max(rows, key=_score) if rows else None
+
+        def _is_viable(item: Optional[APISetting]) -> bool:
+            if not item:
+                return False
+            normalized_provider = self._normalize_provider_name(getattr(item, "provider", None), category)
+            if not self._is_supported_provider(category, normalized_provider):
+                return False
+            return bool(str(getattr(item, "model", "") or "").strip())
+
+        if _is_viable(best_active):
+            return best_active
+
+        # Active row missing model/unsupported provider: promote best viable setting in this category.
+        all_rows = session.query(APISetting).filter(
+            APISetting.user_id == user_id,
+            APISetting.category == category,
+        ).order_by(APISetting.id.desc()).all()
+        viable_rows = [r for r in all_rows if _is_viable(r)]
+        if not viable_rows:
+            return best_active
+
+        promoted = max(viable_rows, key=_score)
+        for row in all_rows:
+            row.is_active = bool(row.id == promoted.id)
+        session.commit()
+        logger.warning(
+            "Auto-heal active api setting in media service | user_id=%s category=%s old_active_id=%s promoted_id=%s",
+            user_id,
+            category,
+            getattr(best_active, "id", None),
+            promoted.id,
+        )
+        return promoted
 
     def _normalize_provider_name(self, provider: Optional[str], category: Optional[str] = None) -> str:
         raw = str(provider or "").strip().lower()
@@ -339,6 +479,31 @@ class MediaGenerationService:
         if category == "Video" and raw == "ark":
             return "doubao"
         return raw
+
+    def _is_supported_provider(self, category: str, provider: Optional[str]) -> bool:
+        normalized = self._normalize_provider_name(provider, category)
+        cat = str(category or "").strip().lower()
+        if cat == "image":
+            return normalized in {"doubao", "grsai", "kie", "tencent", "stability"}
+        if cat == "video":
+            return normalized in {"doubao", "grsai", "kie", "tencent", "wanxiang", "vidu"}
+        return False
+
+    def _pick_system_setting_fallback(self, session, category: str, provider: Optional[str] = None) -> Optional[SystemAPISetting]:
+        query = session.query(SystemAPISetting).filter(SystemAPISetting.category == category)
+        normalized_provider = self._normalize_provider_name(provider, category) if provider else ""
+        if normalized_provider:
+            query = query.filter(self._provider_ci_filter(normalized_provider))
+
+        rows = query.order_by(SystemAPISetting.id.desc()).all()
+        for row in rows:
+            if self._is_deprecated_system_config(getattr(row, "config", None), getattr(row, "deprecated", None)):
+                continue
+            row_provider = self._normalize_provider_name(getattr(row, "provider", None), category)
+            if not self._is_supported_provider(category, row_provider):
+                continue
+            return row
+        return None
 
     def _is_smart_routing_enabled(self, session, user_id: int) -> bool:
         rows = session.query(APISetting).filter(
@@ -370,7 +535,7 @@ class MediaGenerationService:
             "elevenlabs": {"base_url": "https://api.elevenlabs.io/v1", "model": "premade/Adam"},
             "doubao": {"base_url": "https://ark.cn-beijing.volces.com/api/v3", "model": "doubao-seedream-4-5-251128"},
             "grsai": {"base_url": "https://grsaiapi.com", "model": "sora-image"},
-            "kie": {"base_url": "https://api.kie.ai", "model": "veo3-fast"},
+            "kie": {"base_url": "https://api.kie.ai", "model": "veo-3-1-fast"},
             "tencent": {"base_url": "https://aiart.tencentcloudapi.com", "model": "hunyuan-vision"},
             "wanxiang": {"base_url": "https://dashscope.aliyuncs.com/api/v1/services/aigc/image2video/video-synthesis", "model": "wanx2.1-i2v-plus"},
             "vidu": {"base_url": "https://api.vidu.studio/open/v1/creation/video", "model": "vidu2.0"},
@@ -381,6 +546,7 @@ class MediaGenerationService:
         ).order_by(SystemAPISetting.id.asc()).all()
 
         candidates: List[Dict[str, Any]] = []
+        provider_bundle_cache: Dict[str, Dict[str, Any]] = {}
         for row in rows:
             provider = self._normalize_provider_name(row.provider, category)
             if not provider:
@@ -388,6 +554,21 @@ class MediaGenerationService:
             if self._is_deprecated_system_config(row.config, getattr(row, "deprecated", None)):
                 continue
             cfg = self._safe_json_dict(row.config)
+
+            if provider not in provider_bundle_cache:
+                provider_bundle_cache[provider] = self._collect_provider_key_pool_bundle(session, category, provider)
+            provider_pool_bundle = provider_bundle_cache.get(provider) or {}
+
+            merged_config = self._safe_json_dict(row.config)
+            pooled_keys = self._normalize_api_keys(provider_pool_bundle.get("provider_api_keys"))
+            if pooled_keys:
+                merged_config["provider_api_keys"] = pooled_keys
+                strategy = str(provider_pool_bundle.get("provider_api_key_strategy") or "random").strip().lower()
+                if strategy in {"random", "round_robin", "weighted"}:
+                    merged_config["provider_api_key_strategy"] = strategy
+                if strategy == "weighted":
+                    merged_config["provider_api_key_weights"] = provider_pool_bundle.get("provider_api_key_weights") or []
+
             priority_raw = cfg.get("smart_priority", cfg.get("priority", 100))
             retry_raw = cfg.get("smart_retry_limit", cfg.get("retry_limit"))
             try:
@@ -405,7 +586,10 @@ class MediaGenerationService:
                 "priority": priority,
                 "retry_limit": retry_limit,
                 "is_multi_ref_default": bool(cfg.get("smart_multi_ref_default")),
-                "config": self._setting_to_config(row, provider, defaults),
+                "config": {
+                    **self._setting_to_config(row, provider, defaults),
+                    "config": merged_config,
+                },
             })
 
         return candidates
@@ -426,73 +610,148 @@ class MediaGenerationService:
         duration: int = 5,
         keyframes: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        if category == "Image":
-            if width and height:
-                if not api_config.get("config"):
-                    api_config["config"] = {}
-                api_config["config"]["width"] = width
-                api_config["config"]["height"] = height
-            normalized_image_size = self._normalize_image_size_value(image_size)
-            if normalized_image_size:
-                if not api_config.get("config"):
-                    api_config["config"] = {}
-                api_config["config"]["image_size"] = normalized_image_size
+        runtime_config = dict(api_config or {})
+        runtime_inner_cfg = self._safe_json_dict(runtime_config.get("config"))
+        if provider:
+            runtime_inner_cfg.setdefault("provider", provider)
+            runtime_inner_cfg.setdefault("__provider", provider)
 
-            if provider in ["doubao", "ark"]:
-                return await self._handle_doubao_generation("image", prompt, api_config, reference_image_url, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt)
-            if provider == "grsai":
-                return await self._handle_grsai_generation("image", prompt, api_config, reference_image_url, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt, image_size=normalized_image_size)
-            if provider == "kie":
-                return await self._handle_kie_generation(
-                    "image",
-                    prompt,
-                    api_config,
-                    reference_image_url,
-                    aspect_ratio=aspect_ratio,
-                    negative_prompt=negative_prompt,
-                    image_size=normalized_image_size,
+        provider_key_pool = self._normalize_api_keys(runtime_inner_cfg.get("provider_api_keys"))
+        fallback_key_pool = self._normalize_api_keys(runtime_config.get("api_key"))
+        selectable_key_pool = provider_key_pool or fallback_key_pool
+
+        runtime_config["api_key"] = self._pick_runtime_api_key(
+            runtime_inner_cfg,
+            selectable_key_pool if selectable_key_pool else runtime_config.get("api_key"),
+        )
+        runtime_config["config"] = runtime_inner_cfg
+
+        def _is_auth_key_error(result: Dict[str, Any]) -> bool:
+            if not isinstance(result, dict):
+                return False
+            error_text = self._flatten_text(result.get("error") or "").lower()
+            details_text = self._flatten_text(result.get("details") or "").lower()
+            merged = f"{error_text} {details_text}".strip()
+            if not merged:
+                return False
+            markers = (
+                "apikey error",
+                "api key error",
+                "invalid api key",
+                "invalid_api_key",
+                "authentication",
+                "unauthorized",
+                "401",
+            )
+            return any(token in merged for token in markers)
+
+        async def _dispatch_with_config(active_config: Dict[str, Any]) -> Dict[str, Any]:
+            if category == "Image":
+                if width and height:
+                    if not active_config.get("config"):
+                        active_config["config"] = {}
+                    active_config["config"]["width"] = width
+                    active_config["config"]["height"] = height
+                normalized_image_size = self._normalize_image_size_value(image_size)
+                if normalized_image_size:
+                    if not active_config.get("config"):
+                        active_config["config"] = {}
+                    active_config["config"]["image_size"] = normalized_image_size
+
+                if provider in ["doubao", "ark"]:
+                    return await self._handle_doubao_generation("image", prompt, active_config, reference_image_url, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt)
+                if provider == "grsai":
+                    return await self._handle_grsai_generation("image", prompt, active_config, reference_image_url, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt, image_size=normalized_image_size)
+                if provider == "kie":
+                    return await self._handle_kie_generation(
+                        "image",
+                        prompt,
+                        active_config,
+                        reference_image_url,
+                        aspect_ratio=aspect_ratio,
+                        negative_prompt=negative_prompt,
+                        image_size=normalized_image_size,
+                    )
+                if provider == "tencent":
+                    return await self._handle_tencent_generation("image", prompt, active_config, reference_image_url, negative_prompt=negative_prompt)
+                if provider in ["stability", "stable diffusion"]:
+                    return await self._handle_stability_generation("image", prompt, active_config, reference_image_url, negative_prompt=negative_prompt)
+
+                print(f"Unsupported Image provider: {provider}")
+                return {
+                    "error": f"Unsupported image provider: {provider}",
+                    "submit_failed": True,
+                    "details": {
+                        "provider": provider,
+                        "model": active_config.get("model", "default"),
+                        "category": "Image",
+                    },
+                }
+
+            if category == "Video":
+                if provider in ["doubao", "ark"]:
+                    return await self._handle_doubao_generation("video", prompt, active_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt)
+                if provider == "grsai":
+                    return await self._handle_grsai_generation("video", prompt, active_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt)
+                if provider == "kie":
+                    return await self._handle_kie_generation(
+                        "video",
+                        prompt,
+                        active_config,
+                        reference_image_url,
+                        last_frame_url=last_frame_url,
+                        duration=duration,
+                        aspect_ratio=aspect_ratio,
+                        negative_prompt=negative_prompt,
+                    )
+                if provider == "tencent":
+                    return await self._handle_tencent_generation("video", prompt, active_config, reference_image_url, duration=duration, negative_prompt=negative_prompt)
+                if provider in ["wanxiang", "wanx"]:
+                    return await self._handle_wanxiang_generation("video", prompt, active_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt)
+                if provider == "vidu":
+                    return await self._handle_vidu_generation("video", prompt, active_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio, keyframes=keyframes, negative_prompt=negative_prompt)
+
+                print(f"Unsupported Video provider: {provider}")
+                return {
+                    "error": f"Unsupported video provider: {provider}",
+                    "submit_failed": True,
+                    "details": {
+                        "provider": provider,
+                        "model": active_config.get("model", "default"),
+                        "duration": duration,
+                        "category": "Video",
+                    },
+                }
+
+            return {"error": f"Unsupported category: {category}"}
+
+        first_result = await _dispatch_with_config(runtime_config)
+
+        # When upstream rejects current key (e.g. "apikey error"), rotate within pool and retry.
+        if bool((first_result or {}).get("submit_failed")) and _is_auth_key_error(first_result) and len(selectable_key_pool) > 1:
+            selected_key = str(runtime_config.get("api_key") or "").strip()
+            retry_keys = [k for k in selectable_key_pool if str(k or "").strip() and str(k).strip() != selected_key]
+            last_result = first_result
+            for idx, alt_key in enumerate(retry_keys, start=1):
+                retry_config = dict(runtime_config)
+                retry_config["api_key"] = str(alt_key).strip()
+                key_tail = str(alt_key).strip()[-4:] if str(alt_key).strip() else ""
+                logger.warning(
+                    "Provider auth retry with alternate pooled key | provider=%s category=%s retry=%s key_tail=%s",
+                    provider,
+                    category,
+                    idx,
+                    key_tail,
                 )
-            if provider == "tencent":
-                return await self._handle_tencent_generation("image", prompt, api_config, reference_image_url, negative_prompt=negative_prompt)
-            if provider in ["stability", "stable diffusion"]:
-                return await self._handle_stability_generation("image", prompt, api_config, reference_image_url, negative_prompt=negative_prompt)
+                retry_result = await _dispatch_with_config(retry_config)
+                if not bool((retry_result or {}).get("submit_failed")):
+                    return retry_result
+                last_result = retry_result
+                if not _is_auth_key_error(retry_result):
+                    return retry_result
+            return last_result
 
-            print(f"Mocking Image Gen for {provider}")
-            return {
-                "url": "https://pub-8415848529ba47329437b600ab383416.r2.dev/generated_image.png",
-                "metadata": {"provider": provider, "model": api_config.get("model", "default")}
-            }
-
-        if category == "Video":
-            if provider in ["doubao", "ark"]:
-                return await self._handle_doubao_generation("video", prompt, api_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt)
-            if provider == "grsai":
-                return await self._handle_grsai_generation("video", prompt, api_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt)
-            if provider == "kie":
-                return await self._handle_kie_generation(
-                    "video",
-                    prompt,
-                    api_config,
-                    reference_image_url,
-                    last_frame_url=last_frame_url,
-                    duration=duration,
-                    aspect_ratio=aspect_ratio,
-                    negative_prompt=negative_prompt,
-                )
-            if provider == "tencent":
-                return await self._handle_tencent_generation("video", prompt, api_config, reference_image_url, duration=duration, negative_prompt=negative_prompt)
-            if provider in ["wanxiang", "wanx"]:
-                return await self._handle_wanxiang_generation("video", prompt, api_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt)
-            if provider == "vidu":
-                return await self._handle_vidu_generation("video", prompt, api_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio, keyframes=keyframes, negative_prompt=negative_prompt)
-
-            print(f"Mocking Video Gen for {provider}")
-            return {
-                "url": "https://pub-8415848529ba47329437b600ab383416.r2.dev/generated_video.mp4",
-                "metadata": {"provider": provider, "duration": duration}
-            }
-
-        return {"error": f"Unsupported category: {category}"}
+        return first_result
 
     async def _generate_with_smart_routing(
         self,
@@ -513,7 +772,7 @@ class MediaGenerationService:
         requested_model: Optional[str] = None,
         explicit_selection: bool = False,
         allow_priority_fallback_when_explicit: bool = False,
-        fallback_candidate_limit: int = 3,
+        fallback_candidate_limit: int = 1,
     ) -> Dict[str, Any]:
         with SessionLocal() as session:
             smart_enabled = self._is_smart_routing_enabled(session, user_id)
@@ -560,10 +819,10 @@ class MediaGenerationService:
         if fallback_candidate_limit and fallback_candidate_limit > 0:
             fallback_candidates = fallback_candidates[: int(fallback_candidate_limit)]
 
-        retry_limit = 3
+        retry_limit = 1
         for c in candidates:
             if c.get("provider") == effective_provider and c.get("retry_limit") is not None:
-                retry_limit = max(3, int(c.get("retry_limit")))
+                retry_limit = max(1, int(c.get("retry_limit")))
                 break
 
         multi_ref_count = len(reference_image_url) if isinstance(reference_image_url, list) else 0
@@ -610,6 +869,16 @@ class MediaGenerationService:
         fallback_unlocked = False
 
         for index, attempt in enumerate(deduped_attempts, start=1):
+            if attempt.get("tag") == "active_retry" and fallback_unlocked:
+                logger.info(
+                    "Smart routing skip active retry | category=%s user_id=%s attempt=%s/%s reason=fallback_unlocked",
+                    category,
+                    user_id,
+                    index,
+                    len(deduped_attempts),
+                )
+                continue
+
             if attempt.get("tag") == "priority_fallback" and not fallback_unlocked:
                 logger.info(
                     "Smart routing skip fallback | category=%s user_id=%s attempt=%s/%s reason=no_explicit_submit_failure",
@@ -680,23 +949,105 @@ class MediaGenerationService:
                 return result
 
             final_error = result or {"error": "Generation failed"}
+            if isinstance(final_error, dict):
+                runtime_model = final_error.get("runtime_model")
+                final_error["_attempt_provider"] = selected_provider
+                final_error["_attempt_model"] = runtime_model or selected_config.get("model")
+                final_error["_attempt_tag"] = attempt.get("tag")
             has_error = bool((result or {}).get("error"))
-            fallback_triggered_now = bool((result or {}).get("submit_failed"))
-            if has_error and attempt.get("tag") in {"active_retry", "multi_ref_default"}:
+            has_output = bool((result or {}).get("url")) or bool((result or {}).get("video_url"))
+            submit_failed = bool((result or {}).get("submit_failed"))
+            fallback_reason = ""
+            fallback_triggered_now = submit_failed
+            if has_error or not has_output:
                 fallback_triggered_now = True
 
             if fallback_triggered_now:
+                if submit_failed:
+                    fallback_reason = "submit_failed"
+                elif has_error:
+                    fallback_reason = "generation_failed"
+                elif not has_output:
+                    fallback_reason = "no_output"
+                else:
+                    fallback_reason = "unknown"
+
+            error_detail = str((result or {}).get("error") or "").strip() if isinstance(result, dict) else ""
+            error_details_extra = ""
+            if isinstance(result, dict):
+                raw_details = result.get("details")
+                if raw_details is not None:
+                    try:
+                        if isinstance(raw_details, (dict, list)):
+                            error_details_extra = json.dumps(raw_details, ensure_ascii=False)[:1000]
+                        else:
+                            error_details_extra = str(raw_details)[:1000]
+                    except Exception:
+                        error_details_extra = str(raw_details)[:1000]
+            next_fallback_provider = ""
+            next_fallback_model = ""
+            if fallback_triggered_now:
+                for next_attempt in deduped_attempts[index:]:
+                    if next_attempt.get("tag") != "priority_fallback":
+                        continue
+                    candidate_provider = self._normalize_provider_name(next_attempt.get("provider"), category)
+                    if not candidate_provider:
+                        continue
+                    next_fallback_provider = candidate_provider
+                    next_fallback_model = str((next_attempt.get("config") or {}).get("model") or "").strip()
+                    break
+
+            logger.warning(
+                "Smart routing attempt failed | category=%s user_id=%s attempt=%s/%s provider=%s model=%s tag=%s reason=%s submit_failed=%s has_error=%s has_output=%s next_fallback_provider=%s next_fallback_model=%s error=%s",
+                category,
+                user_id,
+                index,
+                len(deduped_attempts),
+                selected_provider,
+                selected_config.get("model"),
+                attempt.get("tag"),
+                fallback_reason or "non_fallback",
+                submit_failed,
+                has_error,
+                has_output,
+                next_fallback_provider,
+                next_fallback_model,
+                error_detail,
+            )
+            if error_details_extra:
+                logger.warning(
+                    "Smart routing attempt failed details | category=%s user_id=%s attempt=%s/%s provider=%s model=%s details=%s",
+                    category,
+                    user_id,
+                    index,
+                    len(deduped_attempts),
+                    selected_provider,
+                    selected_config.get("model"),
+                    error_details_extra,
+                )
+
+            if fallback_triggered_now:
                 if not fallback_unlocked:
-                    reason = "submit_failed" if bool((result or {}).get("submit_failed")) else "execution_failed"
                     logger.info(
                         "Smart routing fallback triggered | category=%s user_id=%s trigger_attempt=%s provider=%s reason=%s",
                         category,
                         user_id,
                         index,
                         selected_provider,
-                        reason,
+                        fallback_reason,
                     )
                 fallback_unlocked = True
+                continue
+
+            logger.info(
+                "Smart routing stop without fallback | category=%s user_id=%s attempt=%s/%s provider=%s reason=non_submit_failure",
+                category,
+                user_id,
+                index,
+                len(deduped_attempts),
+                selected_provider,
+            )
+            return final_error
 
         return final_error
 
@@ -707,6 +1058,7 @@ class MediaGenerationService:
         category: str = None,
         requested_model: Optional[str] = None,
         user_credits: int = 0,
+        strict_provider: bool = False,
     ) -> Dict[str, Any]:
         """Resolves runtime API configuration by category active user setting -> system provider+model match."""
         defaults = {
@@ -733,7 +1085,19 @@ class MediaGenerationService:
                 self._repair_invalid_system_config_rows(session, category=category, provider=provider)
 
                 user_setting = self._get_active_user_setting(session, user_id, resolved_category)
-                if not user_setting:
+                requested_provider = self._normalize_provider_name(str(provider or "").strip(), resolved_category)
+                requested_model_value = str(requested_model or "").strip()
+
+                if strict_provider and (not requested_provider or not self._is_supported_provider(resolved_category, requested_provider)):
+                    logger.warning(
+                        "Explicit provider unsupported/missing in media service | user_id=%s category=%s provider=%s",
+                        user_id,
+                        resolved_category,
+                        provider,
+                    )
+                    return {}
+
+                if not user_setting and not (strict_provider and requested_provider):
                     logger.warning(
                         "No active user api setting found in media service | user_id=%s category=%s",
                         user_id,
@@ -741,28 +1105,136 @@ class MediaGenerationService:
                     )
                     return {}
 
-                target_provider = str(user_setting.provider or "").strip()
-                target_model = str(user_setting.model or "").strip()
-                if not target_provider or not target_model:
+                if strict_provider and requested_provider:
+                    target_provider = requested_provider
+                    target_model = requested_model_value
+                else:
+                    target_provider = self._normalize_provider_name(str((user_setting.provider if user_setting else "") or "").strip(), resolved_category)
+                    target_model = requested_model_value or str((user_setting.model if user_setting else "") or "").strip()
+
+                provider_locked = bool(target_provider)
+
+                if not target_provider or not self._is_supported_provider(resolved_category, target_provider):
                     logger.warning(
-                        "Active user setting missing provider/model in media service | user_id=%s category=%s setting_id=%s provider=%s model=%s",
+                        "Active user setting provider unsupported/missing in media service | user_id=%s category=%s setting_id=%s provider=%s",
                         user_id,
                         resolved_category,
-                        user_setting.id,
-                        user_setting.provider,
-                        user_setting.model,
+                        (user_setting.id if user_setting else None),
+                        (user_setting.provider if user_setting else None),
+                    )
+                    if strict_provider and requested_provider:
+                        return {}
+                    fallback_any = self._pick_system_setting_fallback(session, resolved_category, None)
+                    if fallback_any:
+                        target_provider = self._normalize_provider_name(fallback_any.provider, resolved_category)
+                        target_model = str(fallback_any.model or "").strip()
+
+                if target_provider and not target_model:
+                    logger.warning(
+                        "Active user setting missing model in media service | user_id=%s category=%s setting_id=%s provider=%s",
+                        user_id,
+                        resolved_category,
+                        (user_setting.id if user_setting else None),
+                        target_provider,
+                    )
+                    fallback_same_provider = self._pick_system_setting_fallback(session, resolved_category, target_provider)
+                    if fallback_same_provider:
+                        target_model = str(fallback_same_provider.model or "").strip()
+
+                if not target_provider:
+                    if strict_provider and requested_provider:
+                        logger.warning(
+                            "Explicit provider has no resolvable provider in media service | user_id=%s category=%s provider=%s requested_model=%s",
+                            user_id,
+                            resolved_category,
+                            requested_provider,
+                            requested_model_value,
+                        )
+                        return {}
+                    fallback_any = self._pick_system_setting_fallback(session, resolved_category, None)
+                    if fallback_any:
+                        target_provider = self._normalize_provider_name(fallback_any.provider, resolved_category)
+                        target_model = str(fallback_any.model or "").strip()
+
+                if target_provider and not target_model and strict_provider and requested_provider:
+                    logger.warning(
+                        "Explicit provider has no resolvable model in media service | user_id=%s category=%s provider=%s requested_model=%s",
+                        user_id,
+                        resolved_category,
+                        requested_provider,
+                        requested_model_value,
                     )
                     return {}
 
-                system_setting = session.query(SystemAPISetting).filter(
-                    SystemAPISetting.category == resolved_category,
-                    SystemAPISetting.provider == target_provider,
-                    SystemAPISetting.model == target_model,
-                ).order_by(SystemAPISetting.id.desc()).first()
+                if not target_provider or not target_model:
+                    logger.warning(
+                        "Unable to resolve provider/model in media service | user_id=%s category=%s setting_id=%s provider=%s model=%s",
+                        user_id,
+                        resolved_category,
+                        (user_setting.id if user_setting else None),
+                        (user_setting.provider if user_setting else None),
+                        (user_setting.model if user_setting else None),
+                    )
+                    return {}
 
+                system_setting = None
                 resolved_source = f"system_by_user_provider_model:{target_provider}/{target_model}"
 
+                if target_provider and target_model:
+                    system_setting = session.query(SystemAPISetting).filter(
+                        SystemAPISetting.category == resolved_category,
+                        self._provider_ci_filter(target_provider),
+                        SystemAPISetting.model == target_model,
+                    ).order_by(SystemAPISetting.id.desc()).first()
+
+                if not system_setting:
+                    system_setting = self._pick_system_setting_fallback(session, resolved_category, target_provider)
+                    if system_setting:
+                        resolved_source = f"system_by_provider_fallback:{target_provider}/{system_setting.model}"
+
+                if not system_setting:
+                    if strict_provider and requested_provider:
+                        logger.warning(
+                            "Explicit provider has no available system setting in media service | user_id=%s category=%s provider=%s model=%s",
+                            user_id,
+                            resolved_category,
+                            target_provider,
+                            target_model,
+                        )
+                        return {}
+                    if provider_locked:
+                        logger.warning(
+                            "Provider-locked selection has no available system setting in media service | user_id=%s category=%s provider=%s model=%s",
+                            user_id,
+                            resolved_category,
+                            target_provider,
+                            target_model,
+                        )
+                        return {}
+                    system_setting = self._pick_system_setting_fallback(session, resolved_category, None)
+                    if system_setting:
+                        resolved_source = f"system_by_category_fallback:{system_setting.provider}/{system_setting.model}"
+
                 if system_setting:
+                    resolved_provider = self._normalize_provider_name(system_setting.provider, resolved_category) or target_provider
+                    provider_key_pool_bundle = self._collect_provider_key_pool_bundle(
+                        session,
+                        resolved_category,
+                        resolved_provider,
+                    )
+                    merged_runtime_config = {
+                        **(system_setting.config or {}),
+                        "provider": resolved_provider,
+                    }
+                    pooled_keys = self._normalize_api_keys(provider_key_pool_bundle.get("provider_api_keys"))
+                    if pooled_keys:
+                        merged_runtime_config["provider_api_keys"] = pooled_keys
+                        strategy = str(provider_key_pool_bundle.get("provider_api_key_strategy") or "random").strip().lower()
+                        if strategy in {"random", "round_robin", "weighted"}:
+                            merged_runtime_config["provider_api_key_strategy"] = strategy
+                        if strategy == "weighted":
+                            merged_runtime_config["provider_api_key_weights"] = provider_key_pool_bundle.get("provider_api_key_weights") or []
+
                     if self._is_deprecated_system_config(system_setting.config, getattr(system_setting, "deprecated", None)):
                         logger.warning(
                             "Blocked deprecated system api setting in media service | user_id=%s category=%s provider=%s model=%s setting_id=%s",
@@ -790,9 +1262,9 @@ class MediaGenerationService:
                     )
                     return {
                         "provider": system_setting.provider,
-                        "api_key": self._pick_runtime_api_key({**(system_setting.config or {}), "provider": system_setting.provider}, system_setting.api_key),
-                        "base_url": system_setting.base_url or defaults.get(target_provider, {}).get("base_url"),
-                        "model": system_setting.model or defaults.get(target_provider, {}).get("model"),
+                        "api_key": self._pick_runtime_api_key(merged_runtime_config, system_setting.api_key),
+                        "base_url": system_setting.base_url or defaults.get(resolved_provider, {}).get("base_url"),
+                        "model": system_setting.model or defaults.get(resolved_provider, {}).get("model"),
                         "config": {
                             **(system_setting.config or {}),
                             "__selection_source": "system_only",
@@ -813,6 +1285,7 @@ class MediaGenerationService:
         return {}
 
     async def generate_image(self, prompt: str, negative_prompt: Optional[str] = None, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, width: int = None, height: int = None, image_size: Optional[str] = None, aspect_ratio: str = None, user_id: int = 1, user_credits: int = 0, filename_base: Optional[str] = None, asset_type: Optional[str] = None):
+        explicit_provider_selected = bool((llm_config or {}).get("provider"))
         provider = None
         if llm_config and "provider" in llm_config and llm_config["provider"]:
             provider = self._normalize_provider_name(llm_config["provider"], "Image")
@@ -836,13 +1309,29 @@ class MediaGenerationService:
             category="Image",
             requested_model=(llm_config or {}).get("model"),
             user_credits=user_credits,
+            strict_provider=explicit_provider_selected,
         )
 
         if api_config and api_config.get("__blocked"):
             return {
-                "error": self._vendor_failed_message(provider, api_config.get("__blocked_reason") or "该系统配置已弃用"),
+                "error": self._vendor_failed_message(self._normalize_provider_name((api_config or {}).get("provider"), "Image") or provider, api_config.get("__blocked_reason") or "该系统配置已弃用"),
                 "submit_failed": True,
             }
+
+        resolved_provider = self._normalize_provider_name((api_config or {}).get("provider"), "Image") if api_config else None
+        if resolved_provider:
+            provider = resolved_provider
+
+        logger.info(
+            "Generate image provider resolution | user_id=%s strict_provider=%s requested_provider=%s requested_model=%s resolved_provider=%s resolved_model=%s resolved_source=%s",
+            user_id,
+            explicit_provider_selected,
+            self._normalize_provider_name((llm_config or {}).get("provider"), "Image") if llm_config else None,
+            (llm_config or {}).get("model"),
+            provider,
+            (api_config or {}).get("model"),
+            ((api_config or {}).get("config") or {}).get("__resolved_source"),
+        )
 
         print(f"[MediaService] Generating Image. Provider: {provider}, Refs Type: {type(reference_image_url)}, Refs: {reference_image_url}, W: {width}, H: {height}, image_size: {image_size}, AR: {aspect_ratio}")
 
@@ -861,7 +1350,7 @@ class MediaGenerationService:
             requested_model=(llm_config or {}).get("model"),
             explicit_selection=bool((llm_config or {}).get("provider") or (llm_config or {}).get("model")),
             allow_priority_fallback_when_explicit=str(asset_type or "").strip().lower() in {"subject", "entity", "character", "prop", "environment"},
-            fallback_candidate_limit=3,
+            fallback_candidate_limit=1,
         )
 
         # Download 
@@ -873,10 +1362,12 @@ class MediaGenerationService:
                 user_id,
             )
         if result and result.get("error"):
-            result["error"] = self._vendor_failed_message(provider, result.get("error"))
+            error_provider = result.get("_attempt_provider") if isinstance(result, dict) else None
+            result["error"] = self._vendor_failed_message(error_provider or provider, result.get("error"))
         return result
 
-    async def generate_video(self, prompt: str, negative_prompt: Optional[str] = None, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, last_frame_url: Optional[str] = None, duration: int = 5, aspect_ratio: Optional[str] = None, keyframes: Optional[List[str]] = None, user_id: int = 1, user_credits: int = 0, filename_base: Optional[str] = None):
+    async def generate_video(self, prompt: str, negative_prompt: Optional[str] = None, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, last_frame_url: Optional[str] = None, duration: int = 5, aspect_ratio: Optional[str] = None, keyframes: Optional[List[str]] = None, provider_options: Optional[Dict[str, Any]] = None, user_id: int = 1, user_credits: int = 0, filename_base: Optional[str] = None):
+        explicit_provider_selected = bool((llm_config or {}).get("provider"))
         provider = None
         if llm_config and "provider" in llm_config and llm_config["provider"]:
             provider = self._normalize_provider_name(llm_config["provider"], "Video")
@@ -900,15 +1391,47 @@ class MediaGenerationService:
             category="Video",
             requested_model=(llm_config or {}).get("model"),
             user_credits=user_credits,
+            strict_provider=explicit_provider_selected,
         )
 
         if api_config and api_config.get("__blocked"):
             return {
-                "error": self._vendor_failed_message(provider, api_config.get("__blocked_reason") or "该系统配置已弃用"),
+                "error": self._vendor_failed_message(self._normalize_provider_name((api_config or {}).get("provider"), "Video") or provider, api_config.get("__blocked_reason") or "该系统配置已弃用"),
                 "submit_failed": True,
             }
 
-        print(f"[MediaService] Generating Video. Provider: {provider}, Refs: {reference_image_url}, LastFrame: {last_frame_url}, Ratio: {aspect_ratio}, Keyframes: {len(keyframes) if keyframes else 0}")
+        resolved_provider = self._normalize_provider_name((api_config or {}).get("provider"), "Video") if api_config else None
+        if resolved_provider:
+            provider = resolved_provider
+
+        if api_config is not None and isinstance(provider_options, dict) and provider_options:
+            merged_config = dict((api_config.get("config") or {}))
+            merged_config.update(provider_options)
+            api_config["config"] = merged_config
+
+        resolved_source = str((((api_config or {}).get("config") or {}).get("__resolved_source") or "")).strip().lower()
+        provider_locked_by_active_setting = bool(resolved_provider) and ("system_by_user_provider_model:" in resolved_source)
+        explicit_selection_for_video = bool((llm_config or {}).get("provider") or (llm_config or {}).get("model"))
+
+        logger.info(
+            "Generate video provider resolution | user_id=%s strict_provider=%s requested_provider=%s requested_model=%s resolved_provider=%s resolved_model=%s resolved_source=%s",
+            user_id,
+            explicit_provider_selected,
+            self._normalize_provider_name((llm_config or {}).get("provider"), "Video") if llm_config else None,
+            (llm_config or {}).get("model"),
+            provider,
+            (api_config or {}).get("model"),
+            ((api_config or {}).get("config") or {}).get("__resolved_source"),
+        )
+
+        if provider_locked_by_active_setting and not bool((llm_config or {}).get("provider") or (llm_config or {}).get("model")):
+            logger.info(
+                "Generate video provider lock enabled | user_id=%s provider=%s reason=active_setting_no_explicit_override fallback=enabled_on_failure",
+                user_id,
+                provider,
+            )
+
+        print(f"[MediaService] Generating Video. Provider: {provider}, Model: {(api_config or {}).get('model') or (llm_config or {}).get('model')}, Refs: {reference_image_url}, LastFrame: {last_frame_url}, Ratio: {aspect_ratio}, Keyframes: {len(keyframes) if keyframes else 0}")
 
         result = await self._generate_with_smart_routing(
             category="Video",
@@ -923,7 +1446,7 @@ class MediaGenerationService:
             duration=duration,
             keyframes=keyframes,
             requested_model=(llm_config or {}).get("model"),
-            explicit_selection=bool((llm_config or {}).get("provider") or (llm_config or {}).get("model")),
+            explicit_selection=explicit_selection_for_video,
         )
 
         # Download 
@@ -935,7 +1458,8 @@ class MediaGenerationService:
                 user_id,
             )
         if result and result.get("error"):
-            result["error"] = self._vendor_failed_message(provider, result.get("error"))
+            error_provider = result.get("_attempt_provider") if isinstance(result, dict) else None
+            result["error"] = self._vendor_failed_message(error_provider or provider, result.get("error"))
         
         return result
     
@@ -1021,6 +1545,13 @@ class MediaGenerationService:
                 # Start + End Frame Mode (Explicit Roles Required)
                 start_ref = self._resolve_ref_for_api(start_img_url, force_data_uri_for_local=True)
                 end_ref = self._resolve_ref_for_api(last_frame_url, force_data_uri_for_local=True)
+
+                max_ref_size = 30 * 1024 * 1024
+                start_ref_size = self._data_uri_image_size_bytes(start_ref)
+                end_ref_size = self._data_uri_image_size_bytes(end_ref)
+                if (start_ref_size is not None and start_ref_size > max_ref_size) or (end_ref_size is not None and end_ref_size > max_ref_size):
+                    return {"error": "Doubao reference image too large. Base64 image must be < 30MB."}
+
                 if not start_ref or not end_ref:
                     return {"error": "Failed to resolve reference image(s) for Doubao video"}
                 content_payload.append({
@@ -1036,6 +1567,9 @@ class MediaGenerationService:
             elif start_img_url:
                 # Start Frame Only - Strict 'first_frame' role required for newer models (1.5 Pro)
                 start_ref = self._resolve_ref_for_api(start_img_url, force_data_uri_for_local=True)
+                start_ref_size = self._data_uri_image_size_bytes(start_ref)
+                if start_ref_size is not None and start_ref_size > 30 * 1024 * 1024:
+                    return {"error": "Doubao reference image too large. Base64 image must be < 30MB."}
                 if not start_ref:
                     return {"error": "Failed to resolve start reference image for Doubao video"}
                 content_payload.append({
@@ -1045,10 +1579,13 @@ class MediaGenerationService:
                 })
             elif last_frame_url:
                 # Last Frame Only (Rare, but use role if strictly End frame)
-                 end_ref = self._resolve_ref_for_api(last_frame_url, force_data_uri_for_local=True)
-                 if not end_ref:
+                end_ref = self._resolve_ref_for_api(last_frame_url, force_data_uri_for_local=True)
+                end_ref_size = self._data_uri_image_size_bytes(end_ref)
+                if end_ref_size is not None and end_ref_size > 30 * 1024 * 1024:
+                    return {"error": "Doubao reference image too large. Base64 image must be < 30MB."}
+                if not end_ref:
                     return {"error": "Failed to resolve last reference image for Doubao video"}
-                 content_payload.append({
+                content_payload.append({
                     "type": "image_url", 
                     "image_url": {"url": end_ref},
                     "role": "last_frame"
@@ -2026,13 +2563,33 @@ class MediaGenerationService:
     async def _submit_and_poll_video(self, url, payload, api_key, log_tag, extra_metadata=None, poll_timeout_seconds: int = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS, poll_interval_seconds: int = 2):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         
-        def _post(): return requests.post(url, json=payload, headers=headers, timeout=60, verify=False)
+        print(f"[{log_tag}] Submitting to URL: {url} | Payload: {payload}")
+        
+        def _post(use_proxy=True, connection_close: bool = False):
+            request_headers = dict(headers)
+            if connection_close:
+                request_headers["Connection"] = "close"
+            kwargs = {"json": payload, "headers": request_headers, "timeout": 60, "verify": False}
+            if not use_proxy:
+                kwargs["proxies"] = {"http": None, "https": None}
+            return requests.post(url, **kwargs)
+
+        def _poll(use_proxy=True, task_id=None):
+            kwargs = {"headers": headers, "timeout": 30, "verify": False}
+            if not use_proxy:
+                kwargs["proxies"] = {"http": None, "https": None}
+            return requests.get(f"{url}/{task_id}", **kwargs)
         
         try:
             try:
-                resp = await asyncio.to_thread(_post)
-            except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout):
-                resp = await asyncio.to_thread(_post)
+                resp = await asyncio.to_thread(_post, True)
+            except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                print(f"[{log_tag}] Submit failed with proxy ({str(e)[:120]}), retrying without proxy...")
+                try:
+                    resp = await asyncio.to_thread(_post, False)
+                except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e2:
+                    print(f"[{log_tag}] Submit retry without proxy failed ({str(e2)[:120]}), retrying with connection close...")
+                    resp = await asyncio.to_thread(_post, False, True)
             if resp.status_code not in [200, 201]: 
                 return {"error": f"Submission Failed {resp.status_code}", "details": resp.text, "submit_failed": True}
             
@@ -2046,9 +2603,10 @@ class MediaGenerationService:
             max_attempts = max(1, int(poll_timeout_seconds / max(1, poll_interval_seconds)))
             for _ in range(max_attempts):
                 await asyncio.sleep(poll_interval_seconds)
-                def _poll(): return requests.get(f"{url}/{task_id}", headers=headers, timeout=30, verify=False)
                 try:
-                    p_resp = await asyncio.to_thread(_poll)
+                    p_resp = await asyncio.to_thread(_poll, True, task_id)
+                except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError):
+                    p_resp = await asyncio.to_thread(_poll, False, task_id)
                 except requests.exceptions.Timeout:
                     continue
                 if p_resp.status_code == 200:
@@ -2071,7 +2629,10 @@ class MediaGenerationService:
         except requests.exceptions.Timeout as e:
             return {"error": "Upstream request timeout", "details": str(e), "submit_failed": True}
         except requests.exceptions.RequestException as e:
-            return {"error": "Upstream request failed", "details": str(e), "submit_failed": True}
+            details = str(e)
+            if "10054" in details or "ConnectionResetError" in details:
+                details = f"{details}. Possible network middlebox/proxy reset on large request body; retried with no-proxy once."
+            return {"error": "Upstream request failed", "details": details, "submit_failed": True}
         except Exception as e:
             return {"error": str(e), "submit_failed": True}
 
@@ -2308,8 +2869,91 @@ class MediaGenerationService:
         if not api_key:
             return {"error": "Missing KIE API key", "submit_failed": True}
 
-        model = (config.get("model") or "").strip() or ("flux-kontext-pro" if gen_type == "image" else "veo3-fast")
+        model = (config.get("model") or "").strip() or ("flux-kontext-pro" if gen_type == "image" else "veo-3-1-fast")
+        model_alias = {
+            "veo-3-1-fast": "veo-3-1-fast",
+            "veo3-fast": "veo-3-1-fast",
+            "veo-3-fast": "veo-3-1-fast",
+            "veo3": "veo3",
+            "veo-3": "veo3",
+            "veo": "veo3",
+            "veo-3.1": "veo3",
+            "veo3.1": "veo3",
+
+            "klingv2.5": "kling-v2.5",
+            "klingv2.1": "kling-v2.1",
+            "kling3": "kling-3.0/video",
+            "kling3.0": "kling-3.0/video",
+            "kling-3.0": "kling-3.0/video",
+            "kling-3-0": "kling-3.0/video",
+            "kling-3.0/video": "kling-3.0/video",
+            "kling/2.6-text-to-video": "kling-2.6/text-to-video",
+            "kling/2.6-image-to-video": "kling-2.6/image-to-video",
+            "kling/2.6-motion-control": "kling-2.6/motion-control",
+            "kling/v25-turbo-text-to-video-pro": "kling/v2-5-turbo-text-to-video-pro",
+            "kling/v25-turbo-image-to-video-pro": "kling/v2-5-turbo-image-to-video-pro",
+
+            "grok-imagine": "grok-imagine/text-to-image",
+            "grok-imagine-t2i": "grok-imagine/text-to-image",
+            "grok-imagine-i2i": "grok-imagine/image-to-image",
+            "qwen-image": "qwen/text-to-image",
+            "qwen-i2i": "qwen/image-to-image",
+            "qwen-edit": "qwen/image-edit",
+            "imagen4-fast": "google/imagen4-fast",
+            "imagen4-ultra": "google/imagen4-ultra",
+            "imagen4": "google/imagen4",
+            "nano-banana": "google/nano-banana",
+            "nano-banana-edit": "google/nano-banana-edit",
+            "nanobanana2": "google/nanobanana2",
+            "seedream4.5": "seedream/4.5-text-to-image",
+            "seedream4.5-edit": "seedream/4.5-edit",
+            "flux2-pro": "flux-2/pro-text-to-image",
+            "flux2-pro-i2i": "flux-2/pro-image-to-image",
+            "flux2-flex": "flux-2/flex-text-to-image",
+            "flux2-flex-i2i": "flux-2/flex-image-to-image",
+            "gpt-image-1.5": "gpt-image/1-5-text-to-image",
+            "gpt-image-1.5-i2i": "gpt-image/1-5-image-to-image",
+
+            "sora2": "sora-2-text-to-video",
+            "sora2-t2v": "sora-2-text-to-video",
+            "sora2-i2v": "sora-2-image-to-video",
+            "sora2-pro": "sora-2-pro-text-to-video",
+            "sora2-pro-i2v": "sora-2-pro-image-to-video",
+            "bytedance-v1-pro": "bytedance/v1-pro-text-to-video",
+            "bytedance-v1-pro-i2v": "bytedance/v1-pro-image-to-video",
+            "bytedance-v1-pro-fast-i2v": "bytedance/v1-pro-fast-image-to-video",
+            "bytedance-v1-lite": "bytedance/v1-lite-text-to-video",
+            "bytedance-v1-lite-i2v": "bytedance/v1-lite-image-to-video",
+            "hailuo": "hailuo/02-text-to-video-pro",
+            "hailuo-pro-i2v": "hailuo/02-image-to-video-pro",
+            "hailuo-standard": "hailuo/02-text-to-video-standard",
+            "hailuo-standard-i2v": "hailuo/02-image-to-video-standard",
+            "hailuo-2.3-pro": "hailuo/2-3-image-to-video-pro",
+            "hailuo-2.3-standard": "hailuo/2-3-image-to-video-standard",
+            "wan-turbo": "wan/2-6-text-to-video",
+            "wan-i2v": "wan/2-6-image-to-video",
+            "wan-v2v": "wan/2-6-video-to-video",
+            "wan-a14b-t2v": "wan/2-2-a14b-text-to-video-turbo",
+            "wan-a14b-i2v": "wan/2-2-a14b-image-to-video-turbo",
+            "wan-a14b-s2v": "wan/2-2-a14b-speech-to-video-turbo",
+            "wan-flash-i2v": "wan/2-6-flash-image-to-video",
+            "wan-flash-v2v": "wan/2-6-flash-video-to-video",
+            "grok-imagine-video": "grok-imagine/text-to-video",
+        }
+        if gen_type in {"video", "image"}:
+            remapped_model = model_alias.get(str(model or "").strip().lower())
+            if remapped_model:
+                logger.warning(
+                    "KIE legacy model remapped | from=%s to=%s",
+                    model,
+                    remapped_model,
+                )
+                model = remapped_model
         tool_conf = config.get("config", {}) or {}
+
+        model_lower = str(model or "").strip().lower()
+        use_veo_api = bool(gen_type == "video" and model_lower.startswith("veo"))
+        is_kling_3_video = bool(gen_type == "video" and ("kling-3.0" in model_lower or model_lower == "kling3"))
 
         base_url = (config.get("base_url") or tool_conf.get("base_url") or "https://api.kie.ai").strip().rstrip("/")
         if "/api/v1/jobs" in base_url:
@@ -2317,80 +2961,640 @@ class MediaGenerationService:
 
         submit_url = (tool_conf.get("endpoint") or f"{base_url}/api/v1/jobs/createTask").strip()
         query_url = (tool_conf.get("query_endpoint") or f"{base_url}/api/v1/jobs/recordInfo").strip()
+        if use_veo_api:
+            submit_url = (tool_conf.get("veo_endpoint") or f"{base_url}/api/v1/veo/generate").strip()
+            query_url = (tool_conf.get("veo_query_endpoint") or f"{base_url}/api/v1/veo/record-info").strip()
+
+        logger.info(
+            "KIE route selected | mode=%s model=%s submit_url=%s query_url=%s",
+            "veo" if use_veo_api else "market",
+            model,
+            submit_url,
+            query_url,
+        )
 
         payload_input: Dict[str, Any] = {
             "prompt": prompt,
         }
 
+        raw_ar = str(aspect_ratio or "").strip()
         normalized_ar = self._normalize_aspect_ratio_value(aspect_ratio)
+        if use_veo_api and raw_ar.lower() in {"auto", "adaptive"}:
+            normalized_ar = "Auto"
         if normalized_ar:
-            payload_input["aspectRatio"] = normalized_ar
+            payload_input["aspect_ratio"] = normalized_ar
 
         if gen_type == "image":
             normalized_image_size = self._normalize_image_size_value(
                 image_size or tool_conf.get("image_size") or tool_conf.get("imageSize")
             )
             if normalized_image_size:
-                payload_input["imageSize"] = normalized_image_size
+                payload_input["image_size"] = normalized_image_size
         else:
-            payload_input["duration"] = int(duration) if duration else 5
+            duration_value = 5
+            try:
+                duration_value = int(float(duration if duration is not None else 5))
+            except Exception:
+                duration_value = 5
+            payload_input["duration"] = str(max(1, duration_value))
 
         resolved_refs: List[str] = []
         if ref_image:
             ref_list = ref_image if isinstance(ref_image, list) else [ref_image]
             for ref in ref_list:
-                resolved = self._resolve_ref_for_api(ref, force_data_uri_for_local=True)
+                if use_veo_api:
+                    resolved = self._process_veo_image(ref, normalized_ar or "16:9")
+                else:
+                    resolved = self._resolve_ref_for_api(ref, force_data_uri_for_local=True)
                 if resolved:
                     resolved_refs.append(resolved)
 
         if resolved_refs:
-            payload_input["imageUrl"] = resolved_refs[0]
-            payload_input["imageUrls"] = resolved_refs
+            payload_input["image_urls"] = resolved_refs
+            payload_input["image_url"] = resolved_refs[0]
 
         if last_frame_url:
-            last_ref = self._resolve_ref_for_api(last_frame_url, force_data_uri_for_local=True)
+            if use_veo_api:
+                last_ref = self._process_veo_image(last_frame_url, normalized_ar or "16:9")
+            else:
+                last_ref = self._resolve_ref_for_api(last_frame_url, force_data_uri_for_local=True)
             if last_ref:
-                payload_input["lastFrameUrl"] = last_ref
+                payload_input["last_frame_url"] = last_ref
 
-        callback_url = (tool_conf.get("webHook") or "").strip()
-        payload: Dict[str, Any] = {
-            "model": model,
-            "input": payload_input,
-        }
-        if callback_url and callback_url != "-1":
-            payload["callBackUrl"] = callback_url
+        if not use_veo_api and gen_type == "video":
+            model_lower = str(model or "").strip().lower()
+
+            if model_lower == "bytedance/v1-pro-text-to-video":
+                payload_input.setdefault("aspect_ratio", normalized_ar or "16:9")
+                payload_input.setdefault("resolution", str(tool_conf.get("resolution") or "720p"))
+            elif model_lower == "bytedance/v1-lite-text-to-video":
+                payload_input.setdefault("aspect_ratio", normalized_ar or "16:9")
+                payload_input.setdefault("resolution", str(tool_conf.get("resolution") or "720p"))
+            elif model_lower == "wan/2-6-text-to-video":
+                payload_input["duration"] = "10" if str(payload_input.get("duration")) not in {"5", "10", "15"} else str(payload_input.get("duration"))
+                payload_input.setdefault("resolution", str(tool_conf.get("resolution") or "1080p"))
+            elif model_lower == "sora-2-text-to-video":
+                if "n_frames" not in payload_input:
+                    payload_input["n_frames"] = "10"
+                if "aspect_ratio" not in payload_input:
+                    payload_input["aspect_ratio"] = "portrait" if normalized_ar == "9:16" else "landscape"
+            elif model_lower == "hailuo/02-text-to-video-pro":
+                if "prompt_optimizer" not in payload_input:
+                    payload_input["prompt_optimizer"] = bool(tool_conf.get("prompt_optimizer", True))
+
+        callback_url = str(
+            tool_conf.get("webHook")
+            or tool_conf.get("callBackUrl")
+            or tool_conf.get("callback_url")
+            or tool_conf.get("callbackUrl")
+            or ""
+        ).strip()
+        if use_veo_api:
+            raw_model = str(model or "").strip()
+            # According to KIE API, REFERENCE_2_VIDEO only works with "veo3_fast"
+            veo_model = "veo3_fast"
+
+            if raw_model != veo_model:
+                logger.warning("KIE Veo model canonicalized | from=%s to=%s", raw_model, veo_model)
+
+            veo_image_urls = list(resolved_refs)
+            last_frame_resolved = payload_input.get("last_frame_url") or payload_input.get("lastFrameUrl")
+            if last_frame_resolved:
+                last_frame_text = str(last_frame_resolved).strip()
+                if last_frame_text and last_frame_text not in veo_image_urls:
+                    veo_image_urls.append(last_frame_text)
+
+            generation_type = "TEXT_2_VIDEO"
+            if veo_image_urls:
+                if "fast" in str(veo_model).lower():
+                    generation_type = "REFERENCE_2_VIDEO"
+                    veo_image_urls = veo_image_urls[:3]
+                elif len(veo_image_urls) >= 2:
+                    generation_type = "FIRST_AND_LAST_FRAMES_2_VIDEO"
+                    veo_image_urls = veo_image_urls[:2]
+                else:
+                    # Non-fast Veo variants generally require at least first+last frames.
+                    # Keep this call valid by falling back to pure text mode when only one frame is provided.
+                    generation_type = "TEXT_2_VIDEO"
+                    veo_image_urls = []
+
+            if generation_type == "REFERENCE_2_VIDEO" and "fast" not in str(veo_model).lower():
+                logger.warning(
+                    "KIE Veo generationType adjusted | from=REFERENCE_2_VIDEO to=FIRST_AND_LAST_FRAMES_2_VIDEO reason=model_not_fast model=%s",
+                    veo_model,
+                )
+                generation_type = "FIRST_AND_LAST_FRAMES_2_VIDEO"
+                veo_image_urls = veo_image_urls[:2]
+
+            # Prefer hosted URLs via KIE File Upload API to avoid base64 body limits on Veo submit endpoint.
+            converted_image_urls: List[str] = []
+            for idx, ref in enumerate(veo_image_urls):
+                ref_text = str(ref or "").strip()
+                if not ref_text:
+                    continue
+                if ref_text.startswith("http"):
+                    converted_image_urls.append(ref_text)
+                    continue
+                if not ref_text.startswith("data:"):
+                    converted_image_urls.append(ref_text)
+                    continue
+
+                mime = self._extract_data_uri_mime(ref_text)
+                ext = ".jpg"
+                if "png" in mime:
+                    ext = ".png"
+                elif "webp" in mime:
+                    ext = ".webp"
+
+                generated_name = f"veo-{uuid.uuid4().hex[:10]}-{idx + 1}{ext}"
+                uploaded_url = self._upload_kie_data_uri(
+                    ref_text,
+                    api_key=api_key,
+                    file_name=generated_name,
+                    upload_path="veo-inputs",
+                )
+                if uploaded_url:
+                    converted_image_urls.append(uploaded_url)
+                else:
+                    # Keep data URI as fallback when upload endpoint is unavailable.
+                    converted_image_urls.append(ref_text)
+
+            if converted_image_urls:
+                veo_image_urls = converted_image_urls
+
+            payload: Dict[str, Any] = {
+                "prompt": prompt,
+                "model": veo_model,
+                "generationType": generation_type,
+            }
+
+            if generation_type == "REFERENCE_2_VIDEO":
+                if normalized_ar not in {"16:9", "9:16"}:
+                    logger.warning(
+                        "KIE Veo aspect ratio adjusted | from=%s to=16:9 reason=reference_mode_requires_16_9_or_9_16",
+                        normalized_ar,
+                    )
+                    normalized_ar = "16:9"
+
+            if normalized_ar:
+                payload["aspect_ratio"] = normalized_ar
+            if duration:
+                try:
+                    payload["duration"] = int(duration)
+                except Exception:
+                    pass
+            if veo_image_urls:
+                payload["imageUrls"] = veo_image_urls
+
+            seeds_value = tool_conf.get("seeds")
+            try:
+                if seeds_value is not None and str(seeds_value).strip() != "":
+                    seeds_int = int(seeds_value)
+                    if 10000 <= seeds_int <= 99999:
+                        payload["seeds"] = seeds_int
+            except Exception:
+                pass
+
+            if "enableTranslation" in tool_conf:
+                payload["enableTranslation"] = bool(tool_conf.get("enableTranslation"))
+
+            watermark_text = str(tool_conf.get("watermark") or "").strip()
+            if watermark_text:
+                payload["watermark"] = watermark_text
+
+            if callback_url and callback_url != "-1":
+                payload["callBackUrl"] = callback_url
+
+            logger.info(
+                "KIE Veo submit payload | endpoint=%s model=%s generationType=%s aspect_ratio=%s duration=%s image_count=%s callback_enabled=%s seeds=%s enableTranslation=%s watermark=%s",
+                submit_url,
+                payload.get("model"),
+                payload.get("generationType"),
+                payload.get("aspect_ratio"),
+                payload.get("duration"),
+                len(payload.get("imageUrls") or []),
+                bool(payload.get("callBackUrl")),
+                payload.get("seeds"),
+                payload.get("enableTranslation"),
+                bool(payload.get("watermark")),
+            )
+            try:
+                image_sizes = [self._data_uri_image_size_bytes(item) or 0 for item in (payload.get("imageUrls") or [])]
+                hosted_count = sum(1 for item in (payload.get("imageUrls") or []) if str(item or "").startswith("http"))
+                logger.info(
+                    "KIE Veo image payload bytes | per_image=%s total=%s hosted_count=%s",
+                    image_sizes,
+                    sum(image_sizes),
+                    hosted_count,
+                )
+            except Exception:
+                pass
+        elif is_kling_3_video:
+            kling_model = "kling-3.0/video"
+
+            def _normalize_bool(raw: Any, default: bool) -> bool:
+                if raw is None:
+                    return default
+                if isinstance(raw, bool):
+                    return raw
+                text = str(raw).strip().lower()
+                if text in {"1", "true", "yes", "y", "on"}:
+                    return True
+                if text in {"0", "false", "no", "n", "off"}:
+                    return False
+                return default
+
+            kling_mode = str(tool_conf.get("mode") or tool_conf.get("kling_mode") or "pro").strip().lower()
+            if kling_mode not in {"std", "pro"}:
+                kling_mode = "pro"
+
+            multi_shots = _normalize_bool(tool_conf.get("multi_shots"), False)
+            sound_enabled = _normalize_bool(tool_conf.get("sound"), True if multi_shots else False)
+
+            duration_int = 5
+            try:
+                duration_int = int(float(duration if duration is not None else 5))
+            except Exception:
+                duration_int = 5
+            duration_int = max(3, min(15, duration_int))
+
+            kling_input: Dict[str, Any] = {
+                "prompt": prompt,
+                "sound": sound_enabled,
+                "duration": str(duration_int),
+                "mode": kling_mode,
+                "multi_shots": multi_shots,
+            }
+
+            if normalized_ar in {"16:9", "9:16", "1:1"}:
+                kling_input["aspect_ratio"] = normalized_ar
+
+            configured_image_urls = tool_conf.get("image_urls")
+            kling_image_urls: List[str] = []
+            if isinstance(configured_image_urls, list):
+                kling_image_urls = [str(item).strip() for item in configured_image_urls if str(item).strip()]
+            if not kling_image_urls:
+                kling_image_urls = list(resolved_refs)
+                last_frame_resolved = payload_input.get("last_frame_url") or payload_input.get("lastFrameUrl")
+                if last_frame_resolved:
+                    last_frame_text = str(last_frame_resolved).strip()
+                    if last_frame_text and last_frame_text not in kling_image_urls:
+                        kling_image_urls.append(last_frame_text)
+
+            if multi_shots and len(kling_image_urls) > 1:
+                logger.info(
+                    "KIE Kling3 image_urls truncated for multi-shot | provided=%s kept=1",
+                    len(kling_image_urls),
+                )
+                kling_image_urls = kling_image_urls[:1]
+
+            if kling_image_urls:
+                kling_input["image_urls"] = kling_image_urls
+
+            raw_multi_prompt = tool_conf.get("multi_prompt")
+            normalized_multi_prompt: List[Dict[str, Any]] = []
+            if isinstance(raw_multi_prompt, list):
+                for item in raw_multi_prompt:
+                    if not isinstance(item, dict):
+                        continue
+                    shot_prompt = str(item.get("prompt") or "").strip()
+                    if not shot_prompt:
+                        continue
+                    try:
+                        shot_duration = int(item.get("duration"))
+                    except Exception:
+                        shot_duration = 3
+                    shot_duration = max(1, min(12, shot_duration))
+                    normalized_multi_prompt.append({"prompt": shot_prompt, "duration": shot_duration})
+                    if len(normalized_multi_prompt) >= 5:
+                        break
+
+            if multi_shots:
+                if not normalized_multi_prompt:
+                    normalized_multi_prompt = [{"prompt": prompt, "duration": max(1, min(12, duration_int))}]
+                kling_input["multi_prompt"] = normalized_multi_prompt
+            elif normalized_multi_prompt:
+                kling_input["multi_prompt"] = normalized_multi_prompt
+
+            raw_kling_elements = tool_conf.get("kling_elements")
+            normalized_elements: List[Dict[str, Any]] = []
+            if isinstance(raw_kling_elements, list):
+                for element in raw_kling_elements:
+                    if not isinstance(element, dict):
+                        continue
+                    name = str(element.get("name") or "").strip()
+                    description = str(element.get("description") or "").strip()
+                    if not name or not description:
+                        continue
+
+                    normalized_element: Dict[str, Any] = {
+                        "name": name,
+                        "description": description,
+                    }
+
+                    image_inputs = element.get("element_input_urls")
+                    if isinstance(image_inputs, list):
+                        urls = [str(item).strip() for item in image_inputs if str(item).strip()]
+                        if urls:
+                            normalized_element["element_input_urls"] = urls
+
+                    video_inputs = element.get("element_input_video_urls")
+                    if isinstance(video_inputs, list):
+                        urls = [str(item).strip() for item in video_inputs if str(item).strip()]
+                        if urls:
+                            normalized_element["element_input_video_urls"] = urls
+
+                    normalized_elements.append(normalized_element)
+
+            if normalized_elements:
+                kling_input["kling_elements"] = normalized_elements
+
+            payload = {
+                "model": kling_model,
+                "input": kling_input,
+            }
+
+            if callback_url and callback_url != "-1":
+                payload["callBackUrl"] = callback_url
+
+            logger.info(
+                "KIE Kling3 submit payload | endpoint=%s model=%s mode=%s multi_shots=%s duration=%s aspect_ratio=%s image_count=%s multi_prompt_count=%s elements_count=%s sound=%s callback_enabled=%s",
+                submit_url,
+                payload.get("model"),
+                kling_input.get("mode"),
+                kling_input.get("multi_shots"),
+                kling_input.get("duration"),
+                kling_input.get("aspect_ratio"),
+                len(kling_input.get("image_urls") or []),
+                len(kling_input.get("multi_prompt") or []),
+                len(kling_input.get("kling_elements") or []),
+                kling_input.get("sound"),
+                bool(payload.get("callBackUrl")),
+            )
+        else:
+            payload = {
+                "model": model,
+                "input": payload_input,
+            }
+            if callback_url and callback_url != "-1":
+                payload["callBackUrl"] = callback_url
 
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
 
-        base_metadata = {"provider": "kie", "model": model, "prompt": prompt}
+        def _is_unsupported_model_message(value: Any) -> bool:
+            text = str(value or "").strip().lower()
+            if not text:
+                return False
+            return (
+                "model name you specified is not supported" in text
+                or "model is not supported" in text
+                or "unsupported model" in text
+            )
 
-        def _post_submit():
-            return requests.post(submit_url, json=payload, headers=headers, timeout=90, verify=False)
+        def _is_kie_image_size_error(value: Any) -> bool:
+            text = str(value or "").strip().lower()
+            if not text:
+                return False
+            return "images size exceeds limit" in text or "image size exceeds limit" in text
+
+        def _is_veo_fast_model_name(current_model: Any) -> bool:
+            return "fast" in str(current_model or "").strip().lower()
+
+        def _build_veo_retry_models(initial_model: Any) -> List[str]:
+            initial = str(initial_model or "").strip()
+            initial_lower = initial.lower()
+            fast_candidates = ["veo3_fast", "veo-3-fast", "veo3-fast", "veo_3_fast", "veo31_fast"]
+            quality_candidates = ["veo3", "veo-3", "veo", "veo_3", "veo31"]
+
+            ordered: List[str] = [initial] if initial else []
+            if _is_veo_fast_model_name(initial):
+                ordered.extend(fast_candidates)
+                ordered.extend(quality_candidates)
+            elif initial_lower in {"veo3", "veo-3", "veo", "veo3.1", "veo-3.1"}:
+                ordered.extend(quality_candidates)
+                ordered.extend(fast_candidates)
+            else:
+                ordered.extend(fast_candidates)
+                ordered.extend(quality_candidates)
+
+            deduped: List[str] = []
+            seen = set()
+            for item in ordered:
+                key = str(item or "").strip().lower()
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                deduped.append(str(item).strip())
+            return deduped
+
+        def _adapt_veo_payload_for_model(base_payload: Dict[str, Any], target_model: str) -> Dict[str, Any]:
+            patched = dict(base_payload or {})
+            patched["model"] = target_model
+            current_generation_type = str(patched.get("generationType") or "").strip().upper()
+            if current_generation_type == "REFERENCE_2_VIDEO" and not _is_veo_fast_model_name(target_model):
+                patched["generationType"] = "FIRST_AND_LAST_FRAMES_2_VIDEO"
+                if isinstance(patched.get("imageUrls"), list):
+                    patched["imageUrls"] = patched.get("imageUrls")[:2]
+            return patched
+
+        def _post_submit(submit_payload: Dict[str, Any]):
+            log_payload = dict(submit_payload)
+            if "input" in log_payload and "image_urls" in log_payload["input"]:
+                log_payload["input"] = dict(log_payload["input"])
+                log_payload["input"]["image_urls"] = ["<base64...>" for _ in log_payload["input"]["image_urls"]]
+            if "imageUrls" in log_payload:
+                log_payload["imageUrls"] = ["<base64...>" for _ in log_payload["imageUrls"]]
+            if "images" in log_payload:
+                 log_payload["images"] = [
+                     "<base64...>" if isinstance(img, str) and img.startswith("data:image/") else img 
+                     for img in log_payload["images"]
+                 ]
+            print(f"[KIE_video] Submitting to URL: {submit_url} | Model: {submit_payload.get('model')} | Payload: {log_payload}")
+            
+            logger.info("KIE performing HTTP Request | Method: POST | URL: %s | Payload_model: %s", submit_url, submit_payload.get('model'))
+            return requests.post(submit_url, json=submit_payload, headers=headers, timeout=90, verify=False)
+
+        def _kie_response_details(response: requests.Response) -> Dict[str, Any]:
+            raw_text = ""
+            try:
+                raw_text = str(response.text or "")
+            except Exception:
+                raw_text = ""
+
+            parsed_json: Any = None
+            try:
+                parsed_json = response.json()
+            except Exception:
+                parsed_json = None
+
+            return {
+                "status_code": int(getattr(response, "status_code", 0) or 0),
+                "response_json": parsed_json,
+                "response_text": raw_text[:8000],
+            }
+
+        submit_payload: Dict[str, Any] = dict(payload or {})
+        submitted_model = submit_payload.get("model") if isinstance(submit_payload, dict) else model
+        initial_submitted_model = str(submitted_model or "").strip()
+        veo_retry_models = _build_veo_retry_models(submitted_model) if use_veo_api else []
+
+        def _rebuild_veo_image_urls_with_limit(limit_bytes: int) -> List[str]:
+            rebuilt_refs: List[str] = []
+            if ref_image:
+                src_list = ref_image if isinstance(ref_image, list) else [ref_image]
+                for src in src_list:
+                    rebuilt = self._process_veo_image(src, normalized_ar or "16:9")
+                    if rebuilt:
+                        rebuilt_refs.append(rebuilt)
+            if last_frame_url:
+                rebuilt_last = self._process_veo_image(last_frame_url, normalized_ar or "16:9")
+                if rebuilt_last and rebuilt_last not in rebuilt_refs:
+                    rebuilt_refs.append(rebuilt_last)
+            return rebuilt_refs
+
+        async def _retry_veo_on_image_size_limit(current_resp: requests.Response, current_payload: Dict[str, Any]):
+            if not use_veo_api:
+                return current_resp, current_payload
+
+            try:
+                current_data = current_resp.json() if current_resp.status_code == 200 else None
+            except Exception:
+                current_data = None
+
+            current_msg = ""
+            if current_data and isinstance(current_data, dict):
+                current_msg = current_data.get("msg") or current_data.get("message") or ""
+            elif current_resp is not None:
+                current_msg = getattr(current_resp, "text", "") or ""
+
+            if not _is_kie_image_size_error(current_msg):
+                return current_resp, current_payload
+
+            retry_limits = [70 * 1024, 50 * 1024]
+            retry_resp = current_resp
+            retry_payload = dict(current_payload or {})
+            original_env = os.getenv("KIE_VEO_IMAGE_MAX_BYTES")
+            try:
+                for limit in retry_limits:
+                    os.environ["KIE_VEO_IMAGE_MAX_BYTES"] = str(limit)
+                    rebuilt_urls = _rebuild_veo_image_urls_with_limit(limit)
+                    if not rebuilt_urls:
+                        continue
+                    retry_payload["imageUrls"] = rebuilt_urls[:3]
+                    logger.warning(
+                        "KIE Veo image-size retry | limit=%s image_count=%s",
+                        limit,
+                        len(retry_payload.get("imageUrls") or []),
+                    )
+                    retry_resp = await asyncio.to_thread(_post_submit, retry_payload)
+                    if retry_resp.status_code != 200:
+                        continue
+                    try:
+                        retry_data = retry_resp.json()
+                    except Exception:
+                        continue
+                    retry_code = retry_data.get("code")
+                    retry_msg = retry_data.get("msg") or retry_data.get("message") or ""
+                    if retry_code in (None, 200, "200") or not _is_kie_image_size_error(retry_msg):
+                        return retry_resp, retry_payload
+                return retry_resp, retry_payload
+            finally:
+                if original_env is None:
+                    os.environ.pop("KIE_VEO_IMAGE_MAX_BYTES", None)
+                else:
+                    os.environ["KIE_VEO_IMAGE_MAX_BYTES"] = original_env
 
         try:
-            resp = await asyncio.to_thread(_post_submit)
+            resp = await asyncio.to_thread(_post_submit, submit_payload)
         except requests.exceptions.RequestException as e:
             return {"error": "KIE request failed", "details": str(e), "submit_failed": True}
         except Exception as e:
             return {"error": "KIE request failed", "details": str(e), "submit_failed": True}
 
+        if use_veo_api:
+            resp, submit_payload = await _retry_veo_on_image_size_limit(resp, submit_payload)
+
+        # Veo-specific safety retry for upstream model compatibility drift.
+        if use_veo_api and resp.status_code != 200 and _is_unsupported_model_message(getattr(resp, "text", "")):
+            for alt_model in veo_retry_models:
+                if str(alt_model).strip().lower() == str(submitted_model or "").strip().lower():
+                    continue
+                retry_payload = _adapt_veo_payload_for_model(submit_payload, alt_model)
+                logger.warning(
+                    "KIE Veo model fallback retry | from=%s to=%s reason=unsupported_model_status_%s",
+                    submitted_model,
+                    alt_model,
+                    resp.status_code,
+                )
+                try:
+                    retry_resp = await asyncio.to_thread(_post_submit, retry_payload)
+                    if retry_resp.status_code == 200:
+                        resp = retry_resp
+                        submit_payload = retry_payload
+                        submitted_model = alt_model
+                        break
+                except Exception:
+                    continue
+
         if resp.status_code != 200:
-            return {"error": f"KIE submission failed {resp.status_code}", "details": resp.text, "submit_failed": True}
+            return {
+                "error": f"KIE submission failed {resp.status_code}",
+                "details": _kie_response_details(resp),
+                "submit_failed": True,
+                "runtime_model": submitted_model,
+            }
 
         try:
             data = resp.json()
         except Exception:
             return {"error": "Invalid KIE response", "details": resp.text[:1000], "submit_failed": True}
 
+        if use_veo_api:
+            code_preview = data.get("code")
+            msg_preview = data.get("msg") or data.get("message") or ""
+            if code_preview not in (None, 200, "200") and _is_unsupported_model_message(msg_preview):
+                for alt_model in veo_retry_models:
+                    if str(alt_model).strip().lower() == str(submitted_model or "").strip().lower():
+                        continue
+                    retry_payload = _adapt_veo_payload_for_model(submit_payload, alt_model)
+                    logger.warning(
+                        "KIE Veo model fallback retry | from=%s to=%s reason=unsupported_model_code_%s",
+                        submitted_model,
+                        alt_model,
+                        code_preview,
+                    )
+                    try:
+                        retry_resp = await asyncio.to_thread(_post_submit, retry_payload)
+                        if retry_resp.status_code == 200:
+                            retry_data = retry_resp.json()
+                            retry_code = retry_data.get("code")
+                            if retry_code in (None, 200, "200"):
+                                resp = retry_resp
+                                data = retry_data
+                                submit_payload = retry_payload
+                                submitted_model = alt_model
+                                break
+                    except Exception:
+                        continue
+
+        base_metadata = {"provider": "kie", "model": submitted_model, "prompt": prompt}
+
         code = data.get("code")
         if code not in (None, 200, "200"):
+            details_payload: Any = {
+                "status_code": int(getattr(resp, "status_code", 0) or 0),
+                "code": code,
+                "message": data.get("msg") or data.get("message"),
+                "response_json": data,
+            }
             return {
                 "error": f"KIE submission failed code={code}",
-                "details": data.get("msg") or data.get("message") or data,
+                "details": details_payload,
                 "submit_failed": True,
+                "runtime_model": submitted_model,
             }
 
         data_block = data.get("data") or {}
@@ -2403,12 +3607,157 @@ class MediaGenerationService:
             or data.get("id")
         )
         if not task_id:
-            return {"error": "No taskId from KIE", "details": data, "submit_failed": True}
+            return {"error": "No taskId from KIE", "details": data, "submit_failed": True, "runtime_model": submitted_model}
+
+        if use_veo_api:
+            final_generation_type = str((submit_payload or {}).get("generationType") or "").strip()
+            final_aspect_ratio = str((submit_payload or {}).get("aspect_ratio") or "").strip()
+            final_image_count = len((submit_payload or {}).get("imageUrls") or []) if isinstance((submit_payload or {}).get("imageUrls"), list) else 0
+            logger.info(
+                "KIE Veo final submit resolved | endpoint=%s model=%s generationType=%s aspect_ratio=%s image_count=%s taskId=%s fallback_model_switch=%s",
+                submit_url,
+                submitted_model,
+                final_generation_type,
+                final_aspect_ratio,
+                final_image_count,
+                task_id,
+                bool(str(submitted_model or "").strip().lower() != str(initial_submitted_model or "").strip().lower()),
+            )
+        elif is_kling_3_video:
+            final_input = (submit_payload or {}).get("input") if isinstance((submit_payload or {}).get("input"), dict) else {}
+            final_mode = str(final_input.get("mode") or "").strip()
+            final_multi_shots = bool(final_input.get("multi_shots"))
+            final_aspect_ratio = str(final_input.get("aspect_ratio") or "").strip()
+            final_image_count = len(final_input.get("image_urls") or []) if isinstance(final_input.get("image_urls"), list) else 0
+            final_multi_prompt_count = len(final_input.get("multi_prompt") or []) if isinstance(final_input.get("multi_prompt"), list) else 0
+            final_elements_count = len(final_input.get("kling_elements") or []) if isinstance(final_input.get("kling_elements"), list) else 0
+            logger.info(
+                "KIE Kling3 final submit resolved | endpoint=%s model=%s mode=%s multi_shots=%s aspect_ratio=%s image_count=%s multi_prompt_count=%s elements_count=%s taskId=%s",
+                submit_url,
+                submitted_model,
+                final_mode,
+                final_multi_shots,
+                final_aspect_ratio,
+                final_image_count,
+                final_multi_prompt_count,
+                final_elements_count,
+                task_id,
+            )
+
+        def _is_ok_code(value: Any) -> bool:
+            if value in (None, 200, "200"):
+                return True
+            try:
+                return int(str(value).strip()) == 200
+            except Exception:
+                return False
+
+        def _pick_preferred_kie_media_url(candidates: List[str]) -> Optional[str]:
+            ordered: List[str] = []
+            seen = set()
+            for item in candidates or []:
+                text = str(item or "").strip()
+                if not text or text in seen:
+                    continue
+                seen.add(text)
+                ordered.append(text)
+
+            if not ordered:
+                return None
+
+            if gen_type == "video":
+                for url in ordered:
+                    lower_url = url.lower()
+                    if any(token in lower_url for token in (".mp4", ".mov", ".webm", "video/")):
+                        return url
+
+            return ordered[0]
+
+        def _extract_kie_video_urls(value: Any) -> List[str]:
+            video_like_urls: List[str] = []
+
+            def _walk(node: Any):
+                if node is None:
+                    return
+
+                if isinstance(node, str):
+                    raw = node.strip()
+                    if not raw:
+                        return
+                    if raw.startswith("http://") or raw.startswith("https://"):
+                        lowered = raw.lower()
+                        if any(token in lowered for token in (".mp4", ".mov", ".webm", "video/")):
+                            video_like_urls.append(raw)
+                        return
+                    if raw.startswith("{") or raw.startswith("["):
+                        try:
+                            parsed = json.loads(raw)
+                            _walk(parsed)
+                        except Exception:
+                            pass
+                    return
+
+                if isinstance(node, list):
+                    for item in node:
+                        _walk(item)
+                    return
+
+                if isinstance(node, dict):
+                    for key, item in node.items():
+                        key_lower = str(key or "").strip().lower()
+                        if key_lower in {
+                            "videourl",
+                            "video_url",
+                            "resultvideourl",
+                            "result_video_url",
+                            "outputvideourl",
+                            "output_video_url",
+                        }:
+                            if isinstance(item, str):
+                                text = item.strip()
+                                if text.startswith("http://") or text.startswith("https://"):
+                                    video_like_urls.append(text)
+                            elif isinstance(item, list):
+                                for sub in item:
+                                    if isinstance(sub, str):
+                                        text = sub.strip()
+                                        if text.startswith("http://") or text.startswith("https://"):
+                                            video_like_urls.append(text)
+                            continue
+                        _walk(item)
+
+            _walk(value)
+
+            deduped: List[str] = []
+            seen_urls = set()
+            for url in video_like_urls:
+                stable = str(url or "").strip()
+                if not stable or stable in seen_urls:
+                    continue
+                seen_urls.add(stable)
+                deduped.append(stable)
+            return deduped
 
         def _poll_status():
+            candidates = [
+                {"taskId": task_id},
+                {"task_id": task_id},
+                {"id": task_id},
+            ]
+            last_resp = None
+            for params in candidates:
+                try:
+                    resp = requests.get(query_url, params=params, headers=headers, timeout=45, verify=False)
+                    last_resp = resp
+                    if resp.status_code == 200:
+                        return resp
+                except Exception:
+                    continue
+            if last_resp is not None:
+                return last_resp
             return requests.get(query_url, params={"taskId": task_id}, headers=headers, timeout=45, verify=False)
 
-        for _ in range(120):
+        for i in range(120):
             await asyncio.sleep(3)
             try:
                 poll_resp = await asyncio.to_thread(_poll_status)
@@ -2419,6 +3768,8 @@ class MediaGenerationService:
                 continue
 
             if poll_resp.status_code != 200:
+                if i % 10 == 0:
+                    logger.info("KIE poll non-200 | status=%s task_id=%s", poll_resp.status_code, task_id)
                 continue
 
             try:
@@ -2427,31 +3778,84 @@ class MediaGenerationService:
                 continue
 
             poll_code = poll_data.get("code")
-            if poll_code not in (None, 200, "200"):
+            if not _is_ok_code(poll_code):
                 continue
 
-            record = poll_data.get("data") or {}
+            record = poll_data.get("data") or poll_data.get("result") or poll_data
             state = str(record.get("state") or record.get("status") or "").strip().lower()
+            success_flag = record.get("successFlag")
+            if success_flag is None:
+                success_flag = record.get("success_flag")
+            if success_flag is None and isinstance(record.get("response"), dict):
+                success_flag = record.get("response", {}).get("successFlag")
 
             if state in {"waiting", "queued", "queuing", "processing", "running", "generating", "pending"}:
+                continue
+            if success_flag in {0, "0"}:
                 continue
 
             if state in {"success", "succeeded", "completed", "done"}:
                 result_payload = record.get("resultJson")
+                video_urls = _extract_kie_video_urls(result_payload)
+                if not video_urls:
+                    video_urls = _extract_kie_video_urls(record)
+                if not video_urls and isinstance(record.get("response"), dict):
+                    video_urls = _extract_kie_video_urls(record.get("response"))
+
+                if gen_type == "video":
+                    selected_video_url = _pick_preferred_kie_media_url(video_urls)
+                    if selected_video_url:
+                        meta = {"raw": poll_data}
+                        meta.update(base_metadata)
+                        return {"url": selected_video_url, "metadata": meta}
+
                 urls = self._extract_urls_from_payload(result_payload)
                 if not urls:
                     urls = self._extract_urls_from_payload(record)
-                if not urls:
+                selected_url = _pick_preferred_kie_media_url(urls)
+                if not selected_url:
                     return {"error": "KIE task succeeded but no media URL found", "details": poll_data}
 
                 meta = {"raw": poll_data}
                 meta.update(base_metadata)
-                return {"url": urls[0], "metadata": meta}
+                return {"url": selected_url, "metadata": meta}
+            if success_flag in {1, "1"}:
+                video_urls = _extract_kie_video_urls(record.get("resultUrls"))
+                if not video_urls:
+                    video_urls = _extract_kie_video_urls(record)
+                if not video_urls and isinstance(record.get("response"), dict):
+                    video_urls = _extract_kie_video_urls(record.get("response"))
+
+                if gen_type == "video":
+                    selected_video_url = _pick_preferred_kie_media_url(video_urls)
+                    if selected_video_url:
+                        meta = {"raw": poll_data}
+                        meta.update(base_metadata)
+                        return {"url": selected_video_url, "metadata": meta}
+
+                urls = self._extract_urls_from_payload(record.get("resultUrls"))
+                if not urls:
+                    urls = self._extract_urls_from_payload(record)
+                if not urls and isinstance(record.get("response"), dict):
+                    urls = self._extract_urls_from_payload(record.get("response"))
+                selected_url = _pick_preferred_kie_media_url(urls)
+                if not selected_url:
+                    return {"error": "KIE task succeeded but no media URL found", "details": poll_data}
+                meta = {"raw": poll_data}
+                meta.update(base_metadata)
+                return {"url": selected_url, "metadata": meta}
 
             if state in {"fail", "failed", "error", "canceled", "cancelled"}:
                 return {
                     "error": "KIE generation failed",
                     "details": record.get("failMsg") or record.get("message") or poll_data,
+                    "runtime_model": submitted_model,
+                }
+            if success_flag in {2, "2", 3, "3"}:
+                return {
+                    "error": "KIE generation failed",
+                    "details": record.get("failMsg") or record.get("message") or poll_data,
+                    "runtime_model": submitted_model,
                 }
 
         return {"error": "Timeout polling KIE task"}
@@ -2542,10 +3946,38 @@ class MediaGenerationService:
                 resample = getattr(Image, 'LANCZOS', Image.BICUBIC)
                 img = img.resize((w, h), resample)
                 
-            out = io.BytesIO()
-            img.save(out, format='PNG')
-            b64_final = base64.b64encode(out.getvalue()).decode('utf-8')
-            return f"data:image/png;base64,{b64_final}"
+            # VEO API is sensitive to input image payload size. Prefer JPEG and progressively reduce.
+            # KIE Veo may enforce a stricter per-image limit than source docs for some routes.
+            max_bytes = max(40 * 1024, int(os.getenv("KIE_VEO_IMAGE_MAX_BYTES", str(90 * 1024))))
+            quality_steps = [82, 74, 66, 58, 50, 44, 38]
+            scale_steps = [1.0, 0.85, 0.7, 0.6, 0.5]
+            best_data = b""
+
+            for scale in scale_steps:
+                if scale < 1.0:
+                    scaled_w = max(320, int(w * scale))
+                    scaled_h = max(320, int(h * scale))
+                    scaled_img = img.resize((scaled_w, scaled_h), Image.Resampling.LANCZOS)
+                else:
+                    scaled_img = img
+
+                for quality in quality_steps:
+                    out = io.BytesIO()
+                    scaled_img.save(out, format='JPEG', quality=quality, optimize=True)
+                    candidate = out.getvalue()
+                    best_data = candidate
+                    if len(candidate) <= max_bytes:
+                        break
+
+                if best_data and len(best_data) <= max_bytes:
+                    break
+
+            if not best_data:
+                return ""
+
+            print(f"[Veo] Ref processed size={len(best_data)} bytes target<={max_bytes} ratio={aspect_ratio}")
+            b64_final = base64.b64encode(best_data).decode('utf-8')
+            return f"data:image/jpeg;base64,{b64_final}"
             
         except Exception as e:
             print(f"[Veo] Image Process Error: {e}")
@@ -2593,6 +4025,122 @@ class MediaGenerationService:
         if not encoded or encoded == raw:
             return None
         return encoded
+
+    def _data_uri_image_size_bytes(self, value: Any) -> Optional[int]:
+        raw = str(value or "")
+        if not raw.startswith("data:image/"):
+            return None
+        marker = ";base64,"
+        idx = raw.find(marker)
+        if idx < 0:
+            return None
+        b64 = raw[idx + len(marker):]
+        if not b64:
+            return 0
+        padding = 0
+        if b64.endswith("=="):
+            padding = 2
+        elif b64.endswith("="):
+            padding = 1
+        # Approximate decoded size from base64 length without allocating decode buffer.
+        return max(0, (len(b64) * 3) // 4 - padding)
+
+    def _extract_data_uri_mime(self, value: Any) -> str:
+        raw = str(value or "")
+        if not raw.startswith("data:"):
+            return ""
+        marker = ";base64,"
+        idx = raw.find(marker)
+        if idx <= 5:
+            return ""
+        return raw[5:idx].strip().lower()
+
+    def _upload_kie_data_uri(self, data_uri: str, api_key: str, file_name: Optional[str] = None, upload_path: str = "veo-inputs") -> Optional[str]:
+        if not data_uri or not str(data_uri).startswith("data:"):
+            return None
+        if not api_key:
+            return None
+
+        base_url = str(os.getenv("KIE_FILE_UPLOAD_BASE_URL", "https://kieai.redpandaai.co")).strip().rstrip("/")
+        endpoint = f"{base_url}/api/file-base64-upload"
+        payload: Dict[str, Any] = {
+            "base64Data": data_uri,
+            "uploadPath": upload_path,
+        }
+        if file_name:
+            payload["fileName"] = file_name
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        try:
+            resp = requests.post(endpoint, json=payload, headers=headers, timeout=90, verify=False)
+            if resp.status_code != 200:
+                logger.warning("KIE file upload failed | status=%s body=%s", resp.status_code, (resp.text or "")[:500])
+                return None
+
+            data = resp.json() if resp.content else {}
+            code = data.get("code") if isinstance(data, dict) else None
+            success = data.get("success") if isinstance(data, dict) else None
+            if code not in (None, 200, "200") and success is not True:
+                logger.warning("KIE file upload rejected | code=%s msg=%s", code, (data.get("msg") if isinstance(data, dict) else ""))
+                return None
+
+            data_block = data.get("data") if isinstance(data, dict) else {}
+            if not isinstance(data_block, dict):
+                return None
+            file_url = str(data_block.get("fileUrl") or data_block.get("downloadUrl") or "").strip()
+            if file_url and file_url.startswith("http"):
+                return file_url
+            return None
+        except Exception as e:
+            logger.warning("KIE file upload exception | error=%s", str(e)[:300])
+            return None
+
+    def _optimize_image_bytes_for_data_uri(self, data: bytes, mime: str = "image/png") -> tuple[bytes, str]:
+        # Keep provider compatibility while avoiding very large JSON request payloads.
+        max_bytes = max(512 * 1024, int(os.getenv("VIDEO_REF_DATA_URI_MAX_BYTES", str(6 * 1024 * 1024))))
+        max_edge = max(512, int(os.getenv("VIDEO_REF_DATA_URI_MAX_EDGE", "2048")))
+
+        if not data:
+            return data, mime
+
+        # Fast path: already small enough.
+        if len(data) <= max_bytes:
+            return data, mime
+
+        try:
+            with Image.open(io.BytesIO(data)) as img:
+                has_alpha = img.mode in ("RGBA", "LA", "PA") or (img.mode == "P" and "transparency" in img.info)
+                # JPEG cannot carry alpha; flatten to white background.
+                if has_alpha:
+                    work = Image.new("RGB", img.size, (255, 255, 255))
+                    alpha_src = img.convert("RGBA")
+                    work.paste(alpha_src, mask=alpha_src.split()[-1])
+                else:
+                    work = img.convert("RGB")
+
+                if max(work.width, work.height) > max_edge:
+                    work.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
+
+                quality_steps = [90, 84, 78, 72, 66, 60, 52]
+                best_bytes = b""
+                for q in quality_steps:
+                    out = io.BytesIO()
+                    work.save(out, format="JPEG", quality=q, optimize=True)
+                    candidate = out.getvalue()
+                    best_bytes = candidate
+                    if len(candidate) <= max_bytes:
+                        break
+
+                if best_bytes:
+                    return best_bytes, "image/jpeg"
+        except Exception as e:
+            print(f"[MediaService] Image optimize skipped: {e}")
+
+        return data, mime
 
     def _resolve_ref_list_for_api(self, refs, force_data_uri_for_local=True):
         source = refs if isinstance(refs, list) else [refs]
@@ -2642,6 +4190,12 @@ class MediaGenerationService:
                      print(f"[MediaService] Error: HTTP Download Failed {r.status_code}: {url_or_path}")
             
             if data:
+                if force_data_uri:
+                    before_size = len(data)
+                    data, mime = self._optimize_image_bytes_for_data_uri(data, mime)
+                    after_size = len(data)
+                    if after_size < before_size:
+                        print(f"[MediaService] Ref optimized for data URI: {before_size} -> {after_size} bytes ({mime})")
                 b64 = base64.b64encode(data).decode("utf-8")
                 if force_data_uri: return f"data:{mime};base64,{b64}"
                 return b64

@@ -48,6 +48,9 @@ from pathlib import Path
 from collections import deque
 import threading
 import asyncio
+import hashlib
+import hmac
+import base64
 
 # Import limiter from main app state or create a local reference if needed
 # We will use the request.app.state.limiter in the endpoints
@@ -106,6 +109,7 @@ IMAGE_JOB_LOCK = threading.Lock()
 IMAGE_JOB_TTL_SECONDS = max(300, int(os.getenv("IMAGE_JOB_TTL_SECONDS", "3600")))
 IMAGE_JOB_MAX_ITEMS = max(100, int(os.getenv("IMAGE_JOB_MAX_ITEMS", "500")))
 IMAGE_SUBMIT_IDEMPOTENCY_STORE: Dict[str, Dict[str, Any]] = {}
+IMAGE_ACTIVE_SCOPE_STORE: Dict[str, str] = {}
 IMAGE_SUBMIT_IDEMPOTENCY_TTL_SECONDS = max(30, int(os.getenv("IMAGE_SUBMIT_IDEMPOTENCY_TTL_SECONDS", "120")))
 IMAGE_JOB_FILE_DIR = os.path.join(settings.UPLOAD_DIR, "_image_jobs")
 IMAGE_JOB_TASKS: Dict[str, asyncio.Task] = {}
@@ -115,12 +119,19 @@ VIDEO_JOB_LOCK = threading.Lock()
 VIDEO_JOB_TTL_SECONDS = max(300, int(os.getenv("VIDEO_JOB_TTL_SECONDS", "3600")))
 VIDEO_JOB_MAX_ITEMS = max(100, int(os.getenv("VIDEO_JOB_MAX_ITEMS", "500")))
 VIDEO_SUBMIT_IDEMPOTENCY_STORE: Dict[str, Dict[str, Any]] = {}
+VIDEO_ACTIVE_SCOPE_STORE: Dict[str, str] = {}
 VIDEO_SUBMIT_IDEMPOTENCY_TTL_SECONDS = max(30, int(os.getenv("VIDEO_SUBMIT_IDEMPOTENCY_TTL_SECONDS", "120")))
 VIDEO_JOB_FILE_DIR = os.path.join(settings.UPLOAD_DIR, "_video_jobs")
 VIDEO_JOB_TASKS: Dict[str, asyncio.Task] = {}
 
 IMAGE_JOB_MAX_RUNNING_SECONDS = max(120, int(os.getenv("IMAGE_JOB_MAX_RUNNING_SECONDS", "900")))
 VIDEO_JOB_MAX_RUNNING_SECONDS = max(120, int(os.getenv("VIDEO_JOB_MAX_RUNNING_SECONDS", "1200")))
+
+GENERATION_CALLBACK_STORE: Dict[str, Dict[str, Any]] = {}
+GENERATION_CALLBACK_LOCK = threading.Lock()
+GENERATION_CALLBACK_TTL_SECONDS = max(300, int(os.getenv("GENERATION_CALLBACK_TTL_SECONDS", "1800")))
+WEBHOOK_REPLAY_STORE: Dict[str, float] = {}
+WEBHOOK_REPLAY_LOCK = threading.Lock()
 
 SHOT_MEDIA_BATCH_CANCEL_EVENTS: Dict[int, threading.Event] = {}
 SHOT_MEDIA_BATCH_CANCEL_LOCK = threading.Lock()
@@ -151,6 +162,136 @@ def _is_episode_worker_alive(store: Dict[int, threading.Thread], lock: threading
         if not alive:
             store.pop(int(episode_id), None)
         return alive
+
+
+def _prune_generation_callback_locked() -> None:
+    now = time.time()
+    stale_keys: List[str] = []
+    for ticket, payload in GENERATION_CALLBACK_STORE.items():
+        created_at_raw = payload.get("received_ts")
+        try:
+            created_ts = float(created_at_raw)
+        except Exception:
+            created_ts = 0.0
+        if not created_ts or (now - created_ts) > GENERATION_CALLBACK_TTL_SECONDS:
+            stale_keys.append(ticket)
+
+    for ticket in stale_keys:
+        GENERATION_CALLBACK_STORE.pop(ticket, None)
+
+
+def _set_generation_callback_payload(ticket: str, payload: Dict[str, Any]) -> None:
+    stable_ticket = str(ticket or "").strip()
+    if not stable_ticket:
+        return
+
+    with GENERATION_CALLBACK_LOCK:
+        _prune_generation_callback_locked()
+        GENERATION_CALLBACK_STORE[stable_ticket] = {
+            "ticket": stable_ticket,
+            "received_ts": time.time(),
+            "received_at": datetime.utcnow().isoformat(),
+            "payload": payload if isinstance(payload, dict) else {},
+        }
+
+
+def _extract_callback_task_id(payload: Dict[str, Any]) -> str:
+    if not isinstance(payload, dict):
+        return ""
+
+    direct_candidates = (
+        payload.get("task_id"),
+        payload.get("taskId"),
+        payload.get("job_id"),
+        payload.get("jobId"),
+    )
+    for value in direct_candidates:
+        normalized = str(value or "").strip()
+        if normalized:
+            return normalized
+
+    data = payload.get("data")
+    if isinstance(data, dict):
+        nested_candidates = (
+            data.get("task_id"),
+            data.get("taskId"),
+            data.get("job_id"),
+            data.get("jobId"),
+        )
+        for value in nested_candidates:
+            normalized = str(value or "").strip()
+            if normalized:
+                return normalized
+
+    return ""
+
+
+def _prune_webhook_replay_locked() -> None:
+    now = time.time()
+    ttl_seconds = max(60, int(settings.WEBHOOK_TIMESTAMP_MAX_SKEW_SECONDS) * 2)
+    stale_keys: List[str] = []
+    for replay_key, seen_at in WEBHOOK_REPLAY_STORE.items():
+        try:
+            seen_ts = float(seen_at)
+        except Exception:
+            seen_ts = 0.0
+        if not seen_ts or (now - seen_ts) > ttl_seconds:
+            stale_keys.append(replay_key)
+
+    for replay_key in stale_keys:
+        WEBHOOK_REPLAY_STORE.pop(replay_key, None)
+
+
+def _compute_webhook_signature(task_id: str, timestamp_seconds: int, secret: str) -> str:
+    message = f"{task_id}.{timestamp_seconds}"
+    digest = hmac.new(
+        str(secret).encode("utf-8"),
+        message.encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
+    return base64.b64encode(digest).decode("utf-8")
+
+
+def _verify_kie_webhook_request(request: Request, payload: Dict[str, Any]) -> None:
+    secret = str(settings.WEBHOOK_HMAC_KEY or "").strip()
+    if not secret:
+        if settings.WEBHOOK_HMAC_ALLOW_UNSIGNED:
+            logger.warning("[WebhookVerify] WEBHOOK_HMAC_KEY missing; accepting unsigned callback")
+            return
+        raise HTTPException(status_code=503, detail="Webhook signature key not configured")
+
+    timestamp_raw = str(request.headers.get("x-webhook-timestamp") or "").strip()
+    received_signature = str(request.headers.get("x-webhook-signature") or "").strip()
+    if not timestamp_raw or not received_signature:
+        raise HTTPException(status_code=401, detail="Missing webhook signature headers")
+
+    try:
+        timestamp_seconds = int(timestamp_raw)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid webhook timestamp")
+
+    now_seconds = int(time.time())
+    max_skew = max(30, int(settings.WEBHOOK_TIMESTAMP_MAX_SKEW_SECONDS))
+    if abs(now_seconds - timestamp_seconds) > max_skew:
+        raise HTTPException(status_code=401, detail="Webhook timestamp expired")
+
+    task_id = _extract_callback_task_id(payload)
+    if not task_id:
+        raise HTTPException(status_code=400, detail="Missing task_id in callback payload")
+
+    expected_signature = _compute_webhook_signature(task_id, timestamp_seconds, secret)
+    if len(expected_signature) != len(received_signature):
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
+
+    if not hmac.compare_digest(expected_signature, received_signature):
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
+
+    replay_key = f"{task_id}:{timestamp_seconds}:{received_signature}"
+    with WEBHOOK_REPLAY_LOCK:
+        _prune_webhook_replay_locked()
+        if replay_key in WEBHOOK_REPLAY_STORE:
+            raise HTTPException(status_code=401, detail="Replay webhook request rejected")
+        WEBHOOK_REPLAY_STORE[replay_key] = time.time()
 
 
 def _is_stale_running_payload(payload: Dict[str, Any], stale_minutes: int = 10) -> bool:
@@ -257,6 +398,35 @@ def _build_image_idempotency_store_key(user_id: int, idempotency_key: str) -> st
 
 def _build_video_idempotency_store_key(user_id: int, idempotency_key: str) -> str:
     return f"{int(user_id)}::{idempotency_key.strip()}"
+
+
+def _build_submit_idempotency_token(kind: str, user_id: int, payload: Dict[str, Any]) -> str:
+    normalized_payload = dict(payload or {})
+    normalized_payload.pop("callback_url", None)
+    normalized_payload.pop("callbackUrl", None)
+    normalized_payload.pop("callBackUrl", None)
+
+    raw = json.dumps(normalized_payload, ensure_ascii=False, sort_keys=True, default=str)
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return f"auto:{kind}:{int(user_id)}:{digest}"
+
+
+def _build_generation_task_scope(kind: str, user_id: int, payload: Dict[str, Any]) -> str:
+    stable_payload = dict(payload or {})
+    scope_core = {
+        "kind": str(kind or "").strip().lower(),
+        "user_id": int(user_id),
+        "project_id": stable_payload.get("project_id"),
+        "episode_id": stable_payload.get("episode_id"),
+        "scene_id": stable_payload.get("scene_id"),
+        "shot_id": stable_payload.get("shot_id"),
+        "asset_type": str(stable_payload.get("asset_type") or "").strip().lower(),
+        "entity_id": stable_payload.get("entity_id"),
+        "subject_name": str(stable_payload.get("subject_name") or "").strip().lower(),
+    }
+    raw = json.dumps(scope_core, ensure_ascii=False, sort_keys=True, default=str)
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return f"scope:{scope_core['kind']}:{scope_core['user_id']}:{digest}"
 
 
 def _prune_image_submit_idempotency_locked(now: Optional[datetime] = None) -> None:
@@ -10716,6 +10886,9 @@ class GenerationRequest(BaseModel):
     subject_type: Optional[str] = None
     entity_type: Optional[str] = None
     asset_type: Optional[str] = None
+    callback_url: Optional[str] = None
+    callbackUrl: Optional[str] = None
+    callBackUrl: Optional[str] = None
 
 class VideoGenerationRequest(BaseModel):
     prompt: str
@@ -10723,8 +10896,15 @@ class VideoGenerationRequest(BaseModel):
     provider: Optional[str] = None
     model: Optional[str] = None
     ref_image_url: Optional[Union[str, List[str]]] = None
+    image_urls: Optional[List[str]] = None
     last_frame_url: Optional[str] = None
     duration: Optional[float] = 5.0
+    aspect_ratio: Optional[str] = None
+    mode: Optional[str] = None
+    sound: Optional[bool] = None
+    multi_shots: Optional[bool] = None
+    multi_prompt: Optional[List[Dict[str, Any]]] = None
+    kling_elements: Optional[List[Dict[str, Any]]] = None
     project_id: Optional[int] = None
     shot_id: Optional[int] = None
     shot_number: Optional[str] = None
@@ -10733,6 +10913,57 @@ class VideoGenerationRequest(BaseModel):
     subject_name: Optional[str] = None
     asset_type: Optional[str] = None
     keyframes: Optional[List[str]] = None
+    callback_url: Optional[str] = None
+    callbackUrl: Optional[str] = None
+    callBackUrl: Optional[str] = None
+
+
+def _build_runtime_llm_config(provider: Optional[str], model: Optional[str], media_type: str = "media") -> Optional[Dict[str, str]]:
+    provider_text = str(provider or "").strip()
+    model_text = str(model or "").strip()
+    if provider_text and model_text:
+        return {"provider": provider_text, "model": model_text}
+    if provider_text and not model_text:
+        logger.info(
+            "[%s] Ignore provider-only request override, fallback to active user settings | provider=%s",
+            str(media_type or "media").capitalize(),
+            provider_text,
+        )
+    elif model_text and not provider_text:
+        logger.info(
+            "[%s] Ignore model-only request override, fallback to active user settings | model=%s",
+            str(media_type or "media").capitalize(),
+            model_text,
+        )
+    return None
+
+
+def _build_video_provider_options(req: VideoGenerationRequest) -> Dict[str, Any]:
+    options: Dict[str, Any] = {}
+
+    if isinstance(req.image_urls, list):
+        image_urls = [str(item).strip() for item in req.image_urls if str(item).strip()]
+        if image_urls:
+            options["image_urls"] = image_urls
+
+    if req.mode is not None:
+        mode = str(req.mode).strip().lower()
+        if mode in {"std", "pro"}:
+            options["mode"] = mode
+
+    if req.sound is not None:
+        options["sound"] = bool(req.sound)
+
+    if req.multi_shots is not None:
+        options["multi_shots"] = bool(req.multi_shots)
+
+    if isinstance(req.multi_prompt, list):
+        options["multi_prompt"] = req.multi_prompt
+
+    if isinstance(req.kling_elements, list):
+        options["kling_elements"] = req.kling_elements
+
+    return options
 
 
 class ShotMediaBatchStartRequest(BaseModel):
@@ -11271,7 +11502,7 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
         result = await media_service.generate_image(
             prompt=req.prompt, 
             negative_prompt=req.negative_prompt,
-            llm_config={"provider": req.provider, "model": req.model} if req.provider or req.model else None,
+            llm_config=_build_runtime_llm_config(req.provider, req.model, media_type="image"),
             reference_image_url=req.ref_image_url,
             width=width,
             height=height,
@@ -11344,11 +11575,118 @@ def _set_image_job(job_id: str, **fields) -> None:
         current.update(fields)
         current["job_id"] = job_id
         IMAGE_JOB_STORE[job_id] = current
+
+        status = str(current.get("status") or "").strip().lower()
+        if status in {"succeeded", "failed", "canceled", "cancelled", "error"}:
+            task_scope = str(current.get("task_scope") or "").strip()
+            if task_scope and IMAGE_ACTIVE_SCOPE_STORE.get(task_scope) == job_id:
+                IMAGE_ACTIVE_SCOPE_STORE.pop(task_scope, None)
+
         _write_image_job_file(job_id, current)
+
+
+def _normalize_callback_url(raw: Any) -> str:
+    url = str(raw or "").strip()
+    if not url:
+        return ""
+    try:
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme.lower() not in {"http", "https"}:
+            return ""
+        if not parsed.netloc:
+            return ""
+        return url
+    except Exception:
+        return ""
+
+
+def _resolve_callback_url_from_payload(payload: Any) -> str:
+    if isinstance(payload, dict):
+        for key in ("callback_url", "callbackUrl", "callBackUrl"):
+            val = payload.get(key)
+            normalized = _normalize_callback_url(val)
+            if normalized:
+                return normalized
+        return ""
+
+    for key in ("callback_url", "callbackUrl", "callBackUrl"):
+        try:
+            val = getattr(payload, key, None)
+        except Exception:
+            val = None
+        normalized = _normalize_callback_url(val)
+        if normalized:
+            return normalized
+    return ""
+
+
+def _build_generation_callback_payload(kind: str, job: Dict[str, Any]) -> Dict[str, Any]:
+    status = str(job.get("status") or "").strip().lower()
+    return {
+        "event": "generation.completed",
+        "kind": kind,
+        "job_id": job.get("job_id"),
+        "status": status,
+        "success": status == "succeeded",
+        "user_id": job.get("user_id"),
+        "username": job.get("username"),
+        "created_at": job.get("created_at"),
+        "started_at": job.get("started_at"),
+        "finished_at": job.get("finished_at"),
+        "error": job.get("error"),
+        "result": job.get("result"),
+    }
+
+
+async def _dispatch_generation_callback(kind: str, callback_url: str, job: Dict[str, Any]) -> None:
+    if not callback_url:
+        return
+
+    callback_payload = _build_generation_callback_payload(kind, job)
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "AIStory-Callback/1.0",
+        "X-AIStory-Event": "generation.completed",
+        "X-AIStory-Job-Kind": kind,
+        "X-AIStory-Job-Id": str(job.get("job_id") or ""),
+    }
+
+    secret = str(settings.WEBHOOK_HMAC_KEY or "").strip()
+    task_id_for_signature = _extract_callback_task_id(callback_payload)
+    if secret and task_id_for_signature:
+        timestamp_seconds = int(time.time())
+        headers["X-Webhook-Timestamp"] = str(timestamp_seconds)
+        headers["X-Webhook-Signature"] = _compute_webhook_signature(
+            task_id_for_signature,
+            timestamp_seconds,
+            secret,
+        )
+
+    try:
+        def _post_callback() -> requests.Response:
+            return requests.post(callback_url, json=callback_payload, headers=headers, timeout=15)
+
+        response = await asyncio.to_thread(_post_callback)
+        logger.info(
+            "[GenerationCallback] dispatched kind=%s job_id=%s callback_url=%s status_code=%s",
+            kind,
+            job.get("job_id"),
+            callback_url,
+            getattr(response, "status_code", None),
+        )
+    except Exception as e:
+        logger.warning(
+            "[GenerationCallback] failed kind=%s job_id=%s callback_url=%s error=%s",
+            kind,
+            job.get("job_id"),
+            callback_url,
+            e,
+        )
 
 
 async def _run_generate_image_job(job_id: str, user_id: int, req_payload: Dict[str, Any]) -> None:
     db = SessionLocal()
+    callback_url = _resolve_callback_url_from_payload(req_payload)
     try:
         user = db.query(User).filter(User.id == user_id).first()
         if not user:
@@ -11403,6 +11741,12 @@ async def _run_generate_image_job(job_id: str, user_id: int, req_payload: Dict[s
             error=str(e),
         )
     finally:
+        with IMAGE_JOB_LOCK:
+            snapshot = dict(IMAGE_JOB_STORE.get(job_id) or {})
+        if not callback_url:
+            callback_url = _resolve_callback_url_from_payload(snapshot)
+        await _dispatch_generation_callback("image", callback_url, snapshot)
+
         with IMAGE_JOB_LOCK:
             IMAGE_JOB_TASKS.pop(job_id, None)
         db.close()
@@ -11461,31 +11805,84 @@ async def submit_generate_image_endpoint(
     request: Request,
     current_user: User = Depends(get_current_user),
 ):
-    idempotency_key = str(request.headers.get("X-Idempotency-Key") or "").strip()
+    callback_url = _resolve_callback_url_from_payload(req)
+    explicit_idempotency_key = str(request.headers.get("X-Idempotency-Key") or "").strip()
+    req_payload = req.model_dump()
+    scope_key = _build_generation_task_scope("image", current_user.id, req_payload)
+    fingerprint_token = _build_submit_idempotency_token("image", current_user.id, req_payload)
+    idempotency_key = explicit_idempotency_key or fingerprint_token
+    job_id = ""
+    now = datetime.utcnow().isoformat()
 
+    store_keys: List[str] = []
     if idempotency_key:
-        with IMAGE_JOB_LOCK:
-            _prune_image_jobs_locked()
-            store_key = _build_image_idempotency_store_key(current_user.id, idempotency_key)
+        store_keys.append(_build_image_idempotency_store_key(current_user.id, idempotency_key))
+    store_keys.append(_build_image_idempotency_store_key(current_user.id, fingerprint_token))
+    store_keys = list(dict.fromkeys([k for k in store_keys if str(k or "").strip()]))
+
+    with IMAGE_JOB_LOCK:
+        _prune_image_jobs_locked()
+        active_scope_job_id = str(IMAGE_ACTIVE_SCOPE_STORE.get(scope_key) or "").strip()
+        if active_scope_job_id:
+            active_scope_job = dict(IMAGE_JOB_STORE.get(active_scope_job_id) or {})
+            active_status = str(active_scope_job.get("status") or "").strip().lower()
+            if active_scope_job and active_status in {"queued", "running"}:
+                logger.info(
+                    "[ImageSubmit] scope deduplicated | user_id=%s scope=%s job_id=%s status=%s",
+                    current_user.id,
+                    scope_key,
+                    active_scope_job_id,
+                    active_status,
+                )
+                return {
+                    "job_id": active_scope_job_id,
+                    "status": active_scope_job.get("status") or "queued",
+                    "created_at": active_scope_job.get("created_at") or datetime.utcnow().isoformat(),
+                    "deduplicated": True,
+                    "scope_deduplicated": True,
+                }
+            IMAGE_ACTIVE_SCOPE_STORE.pop(scope_key, None)
+
+        for store_key in store_keys:
             mapped = IMAGE_SUBMIT_IDEMPOTENCY_STORE.get(store_key) or {}
             existing_job_id = str(mapped.get("job_id") or "").strip()
-            if existing_job_id:
-                existing_job = dict(IMAGE_JOB_STORE.get(existing_job_id) or {})
-                if existing_job:
-                    return {
-                        "job_id": existing_job_id,
-                        "status": existing_job.get("status") or "queued",
-                        "created_at": existing_job.get("created_at") or datetime.utcnow().isoformat(),
-                        "deduplicated": True,
-                    }
+            if not existing_job_id:
+                continue
+            existing_job = dict(IMAGE_JOB_STORE.get(existing_job_id) or {})
+            existing_status = str(existing_job.get("status") or "").strip().lower()
+            if existing_job and existing_status in {"queued", "running"}:
+                logger.info(
+                    "[ImageSubmit] deduplicated | user_id=%s key=%s job_id=%s status=%s",
+                    current_user.id,
+                    store_key,
+                    existing_job_id,
+                    existing_job.get("status"),
+                )
+                return {
+                    "job_id": existing_job_id,
+                    "status": existing_job.get("status") or "queued",
+                    "created_at": existing_job.get("created_at") or datetime.utcnow().isoformat(),
+                    "deduplicated": True,
+                }
 
-    job_id = uuid.uuid4().hex
-    now = datetime.utcnow().isoformat()
+        job_id = uuid.uuid4().hex
+        for store_key in store_keys:
+            IMAGE_SUBMIT_IDEMPOTENCY_STORE[store_key] = {
+                "job_id": job_id,
+                "created_at": now,
+            }
+        IMAGE_ACTIVE_SCOPE_STORE[scope_key] = job_id
+
+    if not job_id:
+        job_id = uuid.uuid4().hex
+
     _set_image_job(
         job_id,
         status="queued",
         user_id=current_user.id,
         username=current_user.username,
+        callback_url=callback_url,
+        task_scope=scope_key,
         created_at=now,
         started_at=None,
         finished_at=None,
@@ -11493,15 +11890,7 @@ async def submit_generate_image_endpoint(
         error=None,
     )
 
-    if idempotency_key:
-        with IMAGE_JOB_LOCK:
-            store_key = _build_image_idempotency_store_key(current_user.id, idempotency_key)
-            IMAGE_SUBMIT_IDEMPOTENCY_STORE[store_key] = {
-                "job_id": job_id,
-                "created_at": now,
-            }
-
-    image_task = asyncio.create_task(_run_generate_image_job(job_id, current_user.id, req.model_dump()))
+    image_task = asyncio.create_task(_run_generate_image_job(job_id, current_user.id, req_payload))
     with IMAGE_JOB_LOCK:
         IMAGE_JOB_TASKS[job_id] = image_task
     return {"job_id": job_id, "status": "queued", "created_at": now}
@@ -11773,11 +12162,23 @@ async def generate_video_endpoint(
 
 
 async def _run_generate_video(req: VideoGenerationRequest, current_user: User, db: Session):
-    # Billing
-    cost = billing_service.estimate_cost(db, "video_gen", req.provider, req.model)
-    billing_service.check_can_proceed(current_user, cost)
+    reservation_tx = None
 
     try:
+        reserve_details = {
+            "duration": req.duration,
+            "duration_seconds": req.duration,
+            "billing_mode": "RESERVE",
+        }
+        reservation_tx = billing_service.reserve_credits(
+            db,
+            current_user.id,
+            "video_gen",
+            req.provider,
+            req.model,
+            reserve_details,
+        )
+
         # 1. Resolve Context for Aspect Ratio
         aspect_ratio = None
         episode_info = {}
@@ -11810,9 +12211,11 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
             if isinstance(vis, dict):
                 aspect_ratio = vis.get("aspect_ratio") or vis.get("aspectRatio")
         
-        if not aspect_ratio:
-             # Fallback check
-             aspect_ratio = episode_info.get("aspect_ratio") or episode_info.get("aspectRatio")
+        if req.aspect_ratio:
+            aspect_ratio = req.aspect_ratio
+        elif not aspect_ratio:
+            # Fallback check
+            aspect_ratio = episode_info.get("aspect_ratio") or episode_info.get("aspectRatio")
 
         logger.info(f"[GenerateVideo] Extracted Aspect Ratio: {aspect_ratio}")
         _log_shot_submit_debug(
@@ -11866,12 +12269,13 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
         result = await media_service.generate_video(
             prompt=prompt_text,
             negative_prompt=req.negative_prompt,
-            llm_config={"provider": req.provider, "model": req.model} if req.provider or req.model else None,
+            llm_config=_build_runtime_llm_config(req.provider, req.model, media_type="video"),
             reference_image_url=req.ref_image_url,
             last_frame_url=req.last_frame_url,
             duration=req.duration,
             aspect_ratio=aspect_ratio,
             keyframes=req.keyframes,
+            provider_options=_build_video_provider_options(req),
             user_id=current_user.id,
             user_credits=(current_user.credits or 0),
             filename_base=_build_generation_filename_base(req, db),
@@ -11899,18 +12303,42 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
         if result.get("url"):
             _register_asset_helper(db, current_user.id, result["url"], req, result.get("metadata"))
             _bind_generated_media_to_shot(db, current_user, req, result.get("url"))
-            
-        # Billing Deduct
-        billing_service.deduct_credits(db, current_user.id, "video_gen", req.provider, req.model, {"duration": req.duration})
+
+        if reservation_tx:
+            billing_service.settle_reservation(
+                db,
+                reservation_tx.id,
+                {
+                    "duration": req.duration,
+                    "duration_seconds": req.duration,
+                    "status": "SETTLED",
+                },
+            )
+            reservation_tx = None
 
         return result
     except asyncio.CancelledError:
+        if reservation_tx:
+            try:
+                billing_service.cancel_reservation(db, reservation_tx.id, "video generation cancelled")
+            except Exception:
+                pass
         raise
-    except HTTPException:
+    except HTTPException as e:
+        if reservation_tx:
+            try:
+                billing_service.cancel_reservation(db, reservation_tx.id, str(e.detail))
+            except Exception:
+                pass
         raise
     except Exception as e:
         import traceback
         traceback.print_exc()
+        if reservation_tx:
+            try:
+                billing_service.cancel_reservation(db, reservation_tx.id, str(e))
+            except Exception:
+                pass
         billing_service.log_failed_transaction(db, current_user.id, "video_gen", req.provider, req.model, str(e))
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
@@ -11924,11 +12352,19 @@ def _set_video_job(job_id: str, **fields) -> None:
         current.update(fields)
         current["job_id"] = job_id
         VIDEO_JOB_STORE[job_id] = current
+
+        status = str(current.get("status") or "").strip().lower()
+        if status in {"succeeded", "failed", "canceled", "cancelled", "error"}:
+            task_scope = str(current.get("task_scope") or "").strip()
+            if task_scope and VIDEO_ACTIVE_SCOPE_STORE.get(task_scope) == job_id:
+                VIDEO_ACTIVE_SCOPE_STORE.pop(task_scope, None)
+
         _write_video_job_file(job_id, current)
 
 
 async def _run_generate_video_job(job_id: str, user_id: int, req_payload: Dict[str, Any]) -> None:
     db = SessionLocal()
+    callback_url = _resolve_callback_url_from_payload(req_payload)
     try:
         user = db.query(User).filter(User.id == user_id).first()
         if not user:
@@ -11984,8 +12420,65 @@ async def _run_generate_video_job(job_id: str, user_id: int, req_payload: Dict[s
         )
     finally:
         with VIDEO_JOB_LOCK:
+            snapshot = dict(VIDEO_JOB_STORE.get(job_id) or {})
+        if not callback_url:
+            callback_url = _resolve_callback_url_from_payload(snapshot)
+        await _dispatch_generation_callback("video", callback_url, snapshot)
+
+        with VIDEO_JOB_LOCK:
             VIDEO_JOB_TASKS.pop(job_id, None)
         db.close()
+
+
+@router.post("/generate/callback/{ticket}")
+async def receive_generation_callback(ticket: str, request: Request):
+    stable_ticket = str(ticket or "").strip()
+    if not stable_ticket:
+        raise HTTPException(status_code=400, detail="Invalid callback ticket")
+
+    try:
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            payload = {"raw": payload}
+    except Exception:
+        body_bytes = await request.body()
+        payload = {
+            "raw": body_bytes.decode("utf-8", errors="ignore") if body_bytes else "",
+            "content_type": str(request.headers.get("content-type") or "").strip(),
+        }
+
+    _verify_kie_webhook_request(request, payload if isinstance(payload, dict) else {})
+
+    _set_generation_callback_payload(stable_ticket, payload)
+    return {"ok": True, "ticket": stable_ticket}
+
+
+@router.get("/generate/callback/{ticket}")
+def get_generation_callback_result(ticket: str):
+    stable_ticket = str(ticket or "").strip()
+    if not stable_ticket:
+        raise HTTPException(status_code=400, detail="Invalid callback ticket")
+
+    with GENERATION_CALLBACK_LOCK:
+        _prune_generation_callback_locked()
+        payload = dict(GENERATION_CALLBACK_STORE.get(stable_ticket) or {})
+
+    if not payload:
+        return {
+            "ticket": stable_ticket,
+            "status": "pending",
+            "received": False,
+            "received_at": None,
+            "payload": None,
+        }
+
+    return {
+        "ticket": stable_ticket,
+        "status": "received",
+        "received": True,
+        "received_at": payload.get("received_at"),
+        "payload": payload.get("payload") if isinstance(payload.get("payload"), dict) else {},
+    }
 
 
 @router.post("/generate/video/submit")
@@ -11994,31 +12487,84 @@ async def submit_generate_video_endpoint(
     request: Request,
     current_user: User = Depends(get_current_user),
 ):
-    idempotency_key = str(request.headers.get("X-Idempotency-Key") or "").strip()
+    callback_url = _resolve_callback_url_from_payload(req)
+    explicit_idempotency_key = str(request.headers.get("X-Idempotency-Key") or "").strip()
+    req_payload = req.model_dump()
+    scope_key = _build_generation_task_scope("video", current_user.id, req_payload)
+    fingerprint_token = _build_submit_idempotency_token("video", current_user.id, req_payload)
+    idempotency_key = explicit_idempotency_key or fingerprint_token
+    job_id = ""
+    now = datetime.utcnow().isoformat()
 
+    store_keys: List[str] = []
     if idempotency_key:
-        with VIDEO_JOB_LOCK:
-            _prune_video_jobs_locked()
-            store_key = _build_video_idempotency_store_key(current_user.id, idempotency_key)
+        store_keys.append(_build_video_idempotency_store_key(current_user.id, idempotency_key))
+    store_keys.append(_build_video_idempotency_store_key(current_user.id, fingerprint_token))
+    store_keys = list(dict.fromkeys([k for k in store_keys if str(k or "").strip()]))
+
+    with VIDEO_JOB_LOCK:
+        _prune_video_jobs_locked()
+        active_scope_job_id = str(VIDEO_ACTIVE_SCOPE_STORE.get(scope_key) or "").strip()
+        if active_scope_job_id:
+            active_scope_job = dict(VIDEO_JOB_STORE.get(active_scope_job_id) or {})
+            active_status = str(active_scope_job.get("status") or "").strip().lower()
+            if active_scope_job and active_status in {"queued", "running"}:
+                logger.info(
+                    "[VideoSubmit] scope deduplicated | user_id=%s scope=%s job_id=%s status=%s",
+                    current_user.id,
+                    scope_key,
+                    active_scope_job_id,
+                    active_status,
+                )
+                return {
+                    "job_id": active_scope_job_id,
+                    "status": active_scope_job.get("status") or "queued",
+                    "created_at": active_scope_job.get("created_at") or datetime.utcnow().isoformat(),
+                    "deduplicated": True,
+                    "scope_deduplicated": True,
+                }
+            VIDEO_ACTIVE_SCOPE_STORE.pop(scope_key, None)
+
+        for store_key in store_keys:
             mapped = VIDEO_SUBMIT_IDEMPOTENCY_STORE.get(store_key) or {}
             existing_job_id = str(mapped.get("job_id") or "").strip()
-            if existing_job_id:
-                existing_job = dict(VIDEO_JOB_STORE.get(existing_job_id) or {})
-                if existing_job:
-                    return {
-                        "job_id": existing_job_id,
-                        "status": existing_job.get("status") or "queued",
-                        "created_at": existing_job.get("created_at") or datetime.utcnow().isoformat(),
-                        "deduplicated": True,
-                    }
+            if not existing_job_id:
+                continue
+            existing_job = dict(VIDEO_JOB_STORE.get(existing_job_id) or {})
+            existing_status = str(existing_job.get("status") or "").strip().lower()
+            if existing_job and existing_status in {"queued", "running"}:
+                logger.info(
+                    "[VideoSubmit] deduplicated | user_id=%s key=%s job_id=%s status=%s",
+                    current_user.id,
+                    store_key,
+                    existing_job_id,
+                    existing_job.get("status"),
+                )
+                return {
+                    "job_id": existing_job_id,
+                    "status": existing_job.get("status") or "queued",
+                    "created_at": existing_job.get("created_at") or datetime.utcnow().isoformat(),
+                    "deduplicated": True,
+                }
 
-    job_id = uuid.uuid4().hex
-    now = datetime.utcnow().isoformat()
+        job_id = uuid.uuid4().hex
+        for store_key in store_keys:
+            VIDEO_SUBMIT_IDEMPOTENCY_STORE[store_key] = {
+                "job_id": job_id,
+                "created_at": now,
+            }
+        VIDEO_ACTIVE_SCOPE_STORE[scope_key] = job_id
+
+    if not job_id:
+        job_id = uuid.uuid4().hex
+
     _set_video_job(
         job_id,
         status="queued",
         user_id=current_user.id,
         username=current_user.username,
+        callback_url=callback_url,
+        task_scope=scope_key,
         created_at=now,
         started_at=None,
         finished_at=None,
@@ -12026,15 +12572,7 @@ async def submit_generate_video_endpoint(
         error=None,
     )
 
-    if idempotency_key:
-        with VIDEO_JOB_LOCK:
-            store_key = _build_video_idempotency_store_key(current_user.id, idempotency_key)
-            VIDEO_SUBMIT_IDEMPOTENCY_STORE[store_key] = {
-                "job_id": job_id,
-                "created_at": now,
-            }
-
-    video_task = asyncio.create_task(_run_generate_video_job(job_id, current_user.id, req.model_dump()))
+    video_task = asyncio.create_task(_run_generate_video_job(job_id, current_user.id, req_payload))
     with VIDEO_JOB_LOCK:
         VIDEO_JOB_TASKS[job_id] = video_task
     return {"job_id": job_id, "status": "queued", "created_at": now}
