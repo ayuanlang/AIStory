@@ -2523,8 +2523,9 @@ class MediaGenerationService:
             "Content-Type": "application/json"
         }
         
-        def _post(use_proxy=True):
-            kwargs = {"json": payload, "headers": headers, "timeout": timeout, "verify": False}
+        def _post(use_proxy=True, connect_timeout=None):
+            c_timeout = connect_timeout or timeout
+            kwargs = {"json": payload, "headers": headers, "timeout": (c_timeout, timeout), "verify": False}
             if not use_proxy:
                 kwargs["proxies"] = {"http": None, "https": None}
             return requests.post(url, **kwargs)
@@ -2534,8 +2535,12 @@ class MediaGenerationService:
                 resp = await asyncio.to_thread(_post, True)
             except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
                 # Retry without proxy if connection fails (common for domestic APIs vs Global Proxy)
-                print(f"[{log_tag}] Connection Failed with Proxy ({str(e)[:50]}...). Retrying without proxy...")
-                resp = await asyncio.to_thread(_post, False)
+                print(f"[{log_tag}] Connection Failed with Proxy ({str(e)[:50]}...). Retrying without proxy (connect_timeout=15s)...")
+                try:
+                    resp = await asyncio.to_thread(_post, False, 15)
+                except Exception as e2:
+                    print(f"[{log_tag}] No-proxy retry also failed: {str(e2)[:120]}")
+                    raise
 
             if resp.status_code == 200:
                 data = resp.json()
@@ -2565,11 +2570,12 @@ class MediaGenerationService:
         
         print(f"[{log_tag}] Submitting to URL: {url} | Payload: {payload}")
         
-        def _post(use_proxy=True, connection_close: bool = False):
+        def _post(use_proxy=True, connection_close: bool = False, connect_timeout=None):
             request_headers = dict(headers)
             if connection_close:
                 request_headers["Connection"] = "close"
-            kwargs = {"json": payload, "headers": request_headers, "timeout": 60, "verify": False}
+            c_timeout = connect_timeout or 60
+            kwargs = {"json": payload, "headers": request_headers, "timeout": (c_timeout, 60), "verify": False}
             if not use_proxy:
                 kwargs["proxies"] = {"http": None, "https": None}
             return requests.post(url, **kwargs)
@@ -2584,12 +2590,12 @@ class MediaGenerationService:
             try:
                 resp = await asyncio.to_thread(_post, True)
             except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
-                print(f"[{log_tag}] Submit failed with proxy ({str(e)[:120]}), retrying without proxy...")
+                print(f"[{log_tag}] Submit failed with proxy ({str(e)[:120]}), retrying without proxy (connect_timeout=15s)...")
                 try:
-                    resp = await asyncio.to_thread(_post, False)
+                    resp = await asyncio.to_thread(_post, False, False, 15)
                 except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e2:
                     print(f"[{log_tag}] Submit retry without proxy failed ({str(e2)[:120]}), retrying with connection close...")
-                    resp = await asyncio.to_thread(_post, False, True)
+                    resp = await asyncio.to_thread(_post, False, True, 15)
             if resp.status_code not in [200, 201]: 
                 return {"error": f"Submission Failed {resp.status_code}", "details": resp.text, "submit_failed": True}
             

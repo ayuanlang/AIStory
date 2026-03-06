@@ -1079,11 +1079,13 @@ class LLMService:
             "resolved_setting_id": (extra_config or {}).get("__resolved_setting_id"),
         })
 
-        def _request(bypass_proxy=False):
+        def _request(bypass_proxy=False, connect_timeout=None):
+            read_timeout = DEFAULT_LLM_TIMEOUT_SECONDS
+            c_timeout = connect_timeout or DEFAULT_LLM_TIMEOUT_SECONDS
             kwargs = {
                 "json": payload,
                 "headers": headers,
-                "timeout": DEFAULT_LLM_TIMEOUT_SECONDS
+                "timeout": (c_timeout, read_timeout),
             }
             if bypass_proxy:
                 kwargs["proxies"] = {"http": None, "https": None}
@@ -1092,12 +1094,14 @@ class LLMService:
         try:
             response = await asyncio.to_thread(_request, False)
         except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
-            logger.warning(f"Connection failed ({str(e)}). Retrying without proxy...")
+            logger.warning(f"Connection failed ({str(e)}). Retrying without proxy (connect_timeout=15s)...")
             try:
-                response = await asyncio.to_thread(_request, True)
+                response = await asyncio.to_thread(_request, True, 15)
             except requests.exceptions.Timeout as e2:
-                raise Exception(self._vendor_failed_message(provider, f"Upstream timeout: {e2}"))
+                logger.error(f"No-proxy retry also timed out: {e2}")
+                raise Exception(self._vendor_failed_message(provider, f"Upstream timeout (proxy failed, direct also timed out): {e2}"))
             except Exception as e2:
+                logger.error(f"No-proxy retry also failed: {e2}")
                 raise Exception(self._vendor_failed_message(provider, e2))
         
         if response.status_code != 200:
