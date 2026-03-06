@@ -768,8 +768,7 @@ def init_system_api_settings(db):
         _kie_item("Kie Google Imagen4", "Image", "google/imagen4"),
         _kie_item("Kie Google Nano Banana", "Image", "google/nano-banana"),
         _kie_item("Kie Google Nano Banana Edit", "Image", "google/nano-banana-edit"),
-        _kie_item("Kie Google Nano Banana 2", "Image", "google/nanobanana2"),
-        _kie_item("Kie Google Pro Image-to-Image", "Image", "google/pro-image-to-image"),
+        # google/nanobanana2 and google/pro-image-to-image retired by KIE
         _kie_item("Kie Grok Imagine T2I (Canonical)", "Image", "grok-imagine/text-to-image"),
         _kie_item("Kie Grok Imagine I2I (Canonical)", "Image", "grok-imagine/image-to-image"),
         _kie_item("Kie Grok Imagine Upscale (Canonical)", "Image", "grok-imagine/upscale"),
@@ -780,8 +779,8 @@ def init_system_api_settings(db):
         _kie_item("Kie Flux2 Pro I2I (Canonical)", "Image", "flux-2/pro-image-to-image"),
         _kie_item("Kie Flux2 Flex T2I (Canonical)", "Image", "flux-2/flex-text-to-image"),
         _kie_item("Kie Flux2 Flex I2I (Canonical)", "Image", "flux-2/flex-image-to-image"),
-        _kie_item("Kie GPT Image 1.5 T2I", "Image", "gpt-image/1-5-text-to-image"),
-        _kie_item("Kie GPT Image 1.5 I2I", "Image", "gpt-image/1-5-image-to-image"),
+        _kie_item("Kie GPT Image 1.5 T2I", "Image", "gpt-image/1.5-text-to-image"),
+        _kie_item("Kie GPT Image 1.5 I2I", "Image", "gpt-image/1.5-image-to-image"),
         _kie_item("Kie Topaz Image Upscale", "Image", "topaz/image-upscale"),
         _kie_item("Kie Recraft Remove BG", "Image", "recraft/remove-background"),
         _kie_item("Kie Recraft Crisp Upscale", "Image", "recraft/crisp-upscale"),
@@ -790,8 +789,7 @@ def init_system_api_settings(db):
         _kie_item("Kie Ideogram Character Edit", "Image", "ideogram/character-edit"),
         _kie_item("Kie Ideogram Character Remix", "Image", "ideogram/character-remix"),
 
-        _kie_item("Kie Z-image v4.0", "Image", "z-image-v4.0"),
-        _kie_item("Kie Z-image v4.5", "Image", "z-image-v4.5"),
+        # z-image-v4.0 / z-image-v4.5 retired by KIE
 
         _kie_item("Kie Kling 3.0", "Video", "kling-3.0/video"),
         _kie_item("Kie Kling 2.6 T2V", "Video", "kling-2.6/text-to-video"),
@@ -838,7 +836,7 @@ def init_system_api_settings(db):
         _kie_item("Kie Infinitalk From Audio", "Video", "infinitalk/from-audio"),
 
 
-        _kie_item("Kie ElevenLabs", "Tools", "elevenlabs"),
+        # bare "elevenlabs" retired by KIE; use sub-models below
         _kie_item("Kie ElevenLabs Text to Dialogue v3", "Tools", "elevenlabs/text-to-dialogue-v3"),
         _kie_item("Kie ElevenLabs TTS Turbo 2.5", "Tools", "elevenlabs/text-to-speech-turbo-2-5"),
         _kie_item("Kie ElevenLabs TTS Multilingual v2", "Tools", "elevenlabs/text-to-speech-multilingual-v2"),

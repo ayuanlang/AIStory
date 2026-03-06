@@ -2917,8 +2917,10 @@ class MediaGenerationService:
             "flux2-pro-i2i": "flux-2/pro-image-to-image",
             "flux2-flex": "flux-2/flex-text-to-image",
             "flux2-flex-i2i": "flux-2/flex-image-to-image",
-            "gpt-image-1.5": "gpt-image/1-5-text-to-image",
-            "gpt-image-1.5-i2i": "gpt-image/1-5-image-to-image",
+            "gpt-image-1.5": "gpt-image/1.5-text-to-image",
+            "gpt-image-1.5-i2i": "gpt-image/1.5-image-to-image",
+            "gpt-image/1-5-text-to-image": "gpt-image/1.5-text-to-image",
+            "gpt-image/1-5-image-to-image": "gpt-image/1.5-image-to-image",
 
             "sora2": "sora-2-text-to-video",
             "sora2-t2v": "sora-2-text-to-video",
