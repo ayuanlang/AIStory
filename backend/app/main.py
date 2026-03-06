@@ -23,12 +23,36 @@ from jose import JWTError, jwt
 import time
 import re
 
-# Create DB tables
-Base.metadata.create_all(bind=engine)
-# Run migrations for existing tables and data seeding
-check_and_migrate_tables()
-create_default_superuser()
-init_initial_data()
+# ---------------------------------------------------------------------------
+# Startup DB bootstrap — retry on transient DNS / connection failures so
+# the process doesn't crash during Render's brief internal-DNS blips.
+# ---------------------------------------------------------------------------
+_DB_BOOT_MAX_RETRIES = 5
+_DB_BOOT_RETRY_DELAY = 2  # seconds
+
+
+def _bootstrap_db():
+    """Run DB schema creation, migrations and seed data with retry."""
+    for _attempt in range(1, _DB_BOOT_MAX_RETRIES + 1):
+        try:
+            Base.metadata.create_all(bind=engine)
+            check_and_migrate_tables()
+            create_default_superuser()
+            init_initial_data()
+            return  # success
+        except Exception as exc:
+            if _attempt < _DB_BOOT_MAX_RETRIES:
+                logger.warning(
+                    "DB bootstrap attempt %d/%d failed: %s — retrying in %ds",
+                    _attempt, _DB_BOOT_MAX_RETRIES, exc, _DB_BOOT_RETRY_DELAY,
+                )
+                time.sleep(_DB_BOOT_RETRY_DELAY)
+            else:
+                logger.error("DB bootstrap failed after %d attempts, starting anyway: %s",
+                             _DB_BOOT_MAX_RETRIES, exc)
+
+
+_bootstrap_db()
 
 limiter = Limiter(key_func=get_remote_address)
 
