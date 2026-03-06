@@ -36,6 +36,7 @@ if not is_sqlite:
     })
 
     # Retry connection creation on transient errors (DNS failures, connection refused)
+    # Falls back to external DB URL if internal DNS keeps failing.
     if "postgresql" in settings.DATABASE_URL:
         import psycopg2 as _psycopg2
 
@@ -43,6 +44,13 @@ if not is_sqlite:
         _raw_dsn = _re.sub(
             r"^postgres(ql)?(\+psycopg2)?://", "postgresql://", settings.DATABASE_URL
         )
+        _raw_dsn_ext = ""
+        if settings.DATABASE_URL_EXTERNAL:
+            _raw_dsn_ext = _re.sub(
+                r"^postgres(ql)?(\+psycopg2)?://", "postgresql://",
+                settings.DATABASE_URL_EXTERNAL,
+            )
+
         _MAX_CONNECT_RETRIES = 6
         _CONNECT_RETRY_DELAYS = [1, 2, 3, 4, 5]  # exponential-ish: total ~15s
 
@@ -60,6 +68,15 @@ if not is_sqlite:
                             _attempt + 1, _MAX_CONNECT_RETRIES, exc, delay,
                         )
                         _time.sleep(delay)
+
+            # All internal retries exhausted — try external URL once as fallback
+            if _raw_dsn_ext:
+                try:
+                    _logger.warning("Internal DB DNS failed %d times, falling back to external URL",
+                                    _MAX_CONNECT_RETRIES)
+                    return _psycopg2.connect(_raw_dsn_ext, **_connect_args)
+                except _psycopg2.OperationalError:
+                    pass  # fall through to raise original error
             raise last_err
 
         engine_kwargs["creator"] = _connect_with_retry
