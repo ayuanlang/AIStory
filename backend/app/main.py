@@ -136,6 +136,43 @@ app.add_middleware(
 )
 
 
+class _PrivateNetworkAccessMiddleware:
+    """Wrap CORSMiddleware to handle Chrome Private Network Access (PNA) preflights.
+
+    Chrome sends `Access-Control-Request-Private-Network: true` on cross-origin
+    requests to IP spaces it considers private/unknown (Render falls into this).
+    The server must echo `Access-Control-Allow-Private-Network: true` or Chrome
+    blocks the request with ERR_FAILED / ERR_HTTP2_PROTOCOL_ERROR.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        headers = dict(scope.get("headers") or [])
+        pna_requested = (headers.get(b"access-control-request-private-network", b"") == b"true")
+
+        if not pna_requested:
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_pna(message):
+            if message["type"] == "http.response.start":
+                raw_headers = list(message.get("headers") or [])
+                raw_headers.append((b"access-control-allow-private-network", b"true"))
+                message = {**message, "headers": raw_headers}
+            await send(message)
+
+        await self.app(scope, receive, send_with_pna)
+
+
+app.add_middleware(_PrivateNetworkAccessMiddleware)
+
+
 def _origin_is_cors_allowed(origin: str) -> bool:
     candidate = str(origin or "").strip()
     if not candidate:
@@ -162,6 +199,9 @@ def _apply_cors_headers_to_response(request: Request, response: Response) -> Res
         response.headers["Access-Control-Allow-Headers"] = requested_headers
     else:
         response.headers["Access-Control-Allow-Headers"] = "*"
+
+    if request.headers.get("access-control-request-private-network"):
+        response.headers["Access-Control-Allow-Private-Network"] = "true"
 
     return response
 
