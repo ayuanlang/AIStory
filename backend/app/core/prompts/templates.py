@@ -14,7 +14,7 @@ CHARACTER_PROMPT_TEMPLATE = """
 Height: 【cm】; head-to-body ratio: 【ratio】.
 Clothing: 【layers, materials, colors, wear】; include footwear and skirt fit.
 Distinctive anchors: 【scar, tattoo, accessory, emblem】 at 【location】.
-Stable-anchor rule (mandatory): choose identity-stable, cross-shot persistent anchors only (e.g., bone/facial structure, fixed hairstyle silhouette, permanent marks, stable body proportion cues, long-term fixed accessories/garment structure). Do NOT use unstable cues as anchors: expressions, transient emotions, temporary poses/gestures, lighting/shadow artifacts, camera-angle-dependent appearance changes, motion blur, or occlusion shapes.
+Stable-anchor rule (mandatory): choose identity-stable, cross-shot persistent anchors only (e.g., bone/facial structure, fixed hairstyle silhouette, permanent marks, stable body proportion cues, long-term fixed accessories/garment structure). Do NOT use unstable cues as anchors: expressions, transient emotions, temporary poses/gestures, lighting/shadow artifacts, viewpoint-angle-dependent appearance changes, motion blur, or occlusion shapes.
 Expression usage boundary: expressions in view instructions are display-only for shot variety and must never be treated as identity anchors.
 Action traits: poised, controlled movements.
 Lighting design: key light 【source position + quality (soft/hard) + intensity + color temperature】, fill light 【ratio/intensity】, rim/back light 【direction】; keep face readable and silhouette separated. For protagonist shaping, prioritize beauty-lighting setups (e.g., butterfly/paramount light, clamshell fill, soft frontal diffusion, controlled catchlights) to enhance facial attractiveness while preserving realism.

@@ -68,17 +68,17 @@ Constraints:
 - Motion-Axis Space Budget (Mandatory): when a scene's dramatic axis is a movement axis (continuous directional displacement), `core_scene_info` / `original_script_text` / state handoff must reflect physically traversable movement space.
   - Explicitly state start position, movement path, and end position (Entry -> Path -> Exit).
   - Do not design blocking that is physically cut off by fixed obstacles unless the obstacle itself is a deliberate conflict point.
-  - For chase/sprint/multi-character parallel movement, provide sufficient spatial redundancy in writing (clear corridor/open area), not just "cut by camera".
+  - For chase/sprint/multi-character parallel movement, provide sufficient spatial redundancy in writing (clear corridor/open area), not just "cut by framing".
 
 - Scene/Beat supplement (copied requirements; keep wording as-is):
   - **{Beats} (节拍流)**：按时间顺序排列的动作单元。
     - **临时配饰克制 (Temporary Accessory Restraint)**：非必要不得新增临时配饰/额外物件（如书包、耳机、帽子、手持小物）；仅当其对剧情有重要且持续作用时才可引入。
     - **持续性要求 (Persistence Requirement)**：一旦引入上述物件，后续 Beats/Scenes 必须维护其存在与状态（佩戴/持有/放置/转移），禁止“出现一次后无说明消失”。
     - **服装一致性约束 (Wardrobe Consistency)**：由于角色资产已预生成，Beats 中禁止出现穿衣/脱衣/换装/试衣/更衣及其同义动作；需要表达情绪推进时，改用表情、手部动作、道具互动或机位变化替代。
-    - **镜头观察者视角强制 (Camera-Observer POV Mandate)**：每个 Beat 必须从“观察者镜头”描述，显式写出：
+    - **镜头观察者视角强制 (Observer POV Mandate)**：每个 Beat 必须从"观察者镜头"描述，显式写出：
       1) **视点落位**（viewpoint anchor：观察点在场景中的物理落点）；
       2) **观察朝向**（viewing direction：观察视线看向对象与方向）；
-      3) **角色-镜头关系**（subject-camera relation：角色位于前景/中景/后景、镜头左/右、朝镜头/背镜头/侧对镜头、接近/远离镜头）；
+      3) **角色-镜头关系**（subject-viewpoint relation：角色位于前景/中景/后景、镜头左/右、朝镜头/背镜头/侧对镜头、接近/远离镜头）；
       4) **镜头画面参数**（Shot framing：至少给出景别与镜高/俯仰之一）。
       若机位或朝向改变，必须在 Beat 内写明“机位变化触发原因 + 变化后新视角”。
     - **运动轴线空间约束 (Motion-Axis Space Constraint)**：当 Beat 体现沿轴线位移（推进/后撤/追逐/绕行）时，必须写明可通行路径与位移闭环（起点→路径→终点），禁止用抽象描述跳过物理可达性。

@@ -19,8 +19,8 @@ Rules:
 - Character Canon may be empty at this stage. Do NOT require it when generating Global Story DNA.
 - Avoid explicit sexual content. If the user requests "sexy", express it as cinematic styling (non-explicit).
 - Default Aesthetic Policy (when user gives no specific style): globally bias toward visually premium, modern, elegant, and refined presentation; characters should be attractive and charismatic with tasteful sensual tension (non-explicit), and props/environments should feel high-quality and well-designed.
-- AI scene-planning constraint: default every core venue to have two camera-direction variants (Front/Reverse) for downstream AI generation, unless axis is explicitly guaranteed never to reverse.
-- If axis/camera direction/background set changes, plan it as a new scene variant even inside the same physical venue.
+- AI scene-planning constraint: default every core venue to have two viewpoint-direction variants (Front/Reverse) for downstream AI generation, unless axis is explicitly guaranteed never to reverse.
+- If axis/viewpoint direction/background set changes, plan it as a new scene variant even inside the same physical venue.
 - Environment naming mandate: when proposing scene environments, use `{Venue}_{DirectionTag}_{ShotScale}_{LightingTagOptional}` (e.g., `GrandTheater_Front_Wide_Night`, `GrandTheater_Reverse_Mid_Night`).
 - Continuity ID contract (mandatory for downstream episode/scene/shot pipeline):
 	- Episode IDs must be canonical and zero-padded: `EP01 ... EP{N:02d}`.

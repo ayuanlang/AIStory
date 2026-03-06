@@ -33,7 +33,7 @@ Use this exact Markdown table schema (column order fixed):
 
 ## Quality Bar
 - Do not produce placeholder text.
-- Avoid contradictory camera/space logic.
+- Avoid contradictory viewpoint/space logic.
 - Ensure each row can directly proceed to shot generation.
 
 ## Final Output

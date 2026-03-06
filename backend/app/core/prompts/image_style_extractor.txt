@@ -20,5 +20,5 @@ Start directly with the description. Do not add introductory filler.
 Imagen compatibility constraints:
 - Use natural descriptive English, not keyword spam.
 - Avoid engine-specific control tokens or parameter syntax (`--ar`, `--stylize`, `::`, `<lora:...>` etc.).
-- Keep one coherent semantic order: primary subject/scene -> composition/camera -> lighting/color -> material/style -> mood.
+- Keep one coherent semantic order: primary subject/scene -> composition/viewpoint -> lighting/color -> material/style -> mood.
 - Avoid contradictory descriptors in one prompt (e.g., both "soft diffused lighting" and "hard spotlight" unless explicitly layered with priority).

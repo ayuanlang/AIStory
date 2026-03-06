@@ -54,7 +54,7 @@
 ### 1.1) Base + Delta 执行增强（观察方向切换）
 - 环境构图必须显式按前景（FG）/中景（MG）/后景（BG）描述，三层均需给出可见元素与空间关系。
 - 必须明确当前画面主体（Primary Subject）与次级支撑主体（Secondary Subject），并与景别/机位一致。
-- 先写继承声明，再写 Delta：`Use ENV:[BaseName] as visual base; keep architecture/material anchors unchanged; camera/viewpoint changes are listed in Delta only.`
+- 先写继承声明，再写 Delta：`Use ENV:[BaseName] as visual base; keep architecture/material anchors unchanged; viewpoint changes are listed in Delta only.`
 - 参考图作用域锁定：参考图仅用于结构/材质/光照风格锚点，禁止继承原构图与原背景主次。
 - Delta 覆盖优先级：`Visible Set` / `Excluded Set` / `Depth Role Reassignment` 高于参考图；冲突时以 Delta 为准。
 - Delta 固定顺序：`CPD -> AS -> BG -> LD -> FR -> DP`。
@@ -75,7 +75,7 @@
 - 推荐写法：
   `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint moved to opposite axis side behind ENV:[AudienceArea], now facing ENV:[MainStage] entrance; Axis Side: left -> right; Background Set Change: Visible Set = [stage portal, curtain rail, front seats], Excluded Set = [backstage corridor, rear exit door]; Lighting Direction Change: key light now front-right motivated by stage practicals; Framing Change: wide-to-mid with stage portal centered; Dynamic Parts State: None}`。
 - Few-shot A（门内看外 -> 门外看内）：
-  `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint moved from inside doorway threshold to exterior corridor side, now facing inward to ENV:[RoomEntrance]; Axis Side: right -> left; Background Set Change: Visible Set = [door frame interior edge, corridor wall lamps, entry mat], Excluded Set = [window-side bookshelf, bed corner, inner desk area]; Lighting Direction Change: key light switches to corridor practicals from camera-left; Framing Change: medium-wide with doorway centered and room depth behind; Dynamic Parts State: PROP:[Door](Open -> Half-Open, reason: CHAR:[@Guard] pushes it and pauses to listen)}`。
+  `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint moved from inside doorway threshold to exterior corridor side, now facing inward to ENV:[RoomEntrance]; Axis Side: right -> left; Background Set Change: Visible Set = [door frame interior edge, corridor wall lamps, entry mat], Excluded Set = [window-side bookshelf, bed corner, inner desk area]; Lighting Direction Change: key light switches to corridor practicals from viewer-left; Framing Change: medium-wide with doorway centered and room depth behind; Dynamic Parts State: PROP:[Door](Open -> Half-Open, reason: CHAR:[@Guard] pushes it and pauses to listen)}`。
 - Few-shot B（街道正向 -> 街道反向）：
   `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint relocated to opposite sidewalk across traffic lane, now facing reverse toward ENV:[CrosswalkJunction]; Axis Side: left -> right; Background Set Change: Visible Set = [crosswalk signal pole, storefront neon, bus-stop shelter], Excluded Set = [alley dumpster row, rear parking gate, service entrance shutter]; Lighting Direction Change: key light becomes back-right from street signage and vehicle headlights; Framing Change: wide shot with crosswalk signal as new composition anchor; Dynamic Parts State: None}`。
 

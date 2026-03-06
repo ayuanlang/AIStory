@@ -828,9 +828,53 @@ Output must be JSON object with keys: reply, plan.
 
                 if not active_user_setting:
                     logger.warning(
-                        "No active user api setting found | user_id=%s category=%s",
+                        "No active user api setting found, falling back to system active config | user_id=%s category=%s",
                         user_id,
                         resolved_category,
+                    )
+                    # ---- fallback: pick active system config for this category ----
+                    # iterate candidates to find first usable one
+                    sys_candidates = session.query(SystemAPISetting).filter(
+                        SystemAPISetting.category == resolved_category,
+                        SystemAPISetting.is_active == True,
+                    ).order_by(SystemAPISetting.id.desc()).all()
+
+                    sys_fallback = None
+                    for cand in sys_candidates:
+                        if self._is_deprecated_system_config(cand.config, getattr(cand, "deprecated", None)):
+                            continue
+                        if not _is_endpoint_compatible(cand.config or {}):
+                            continue
+                        sys_fallback = cand
+                        break
+
+                    if sys_fallback:
+                        from app.api.settings import DEFAULTS
+                        default = DEFAULTS.get(sys_fallback.provider, {})
+                        merged_config = dict(sys_fallback.config or default.get("config", {}) or {})
+                        merged_config["__resolved_setting_id"] = sys_fallback.id
+                        merged_config["__resolved_source"] = f"system_fallback:{sys_fallback.provider}/{sys_fallback.model}->{sys_fallback.id}"
+                        merged_config["__resolved_category"] = resolved_category
+                        merged_config["__selection_source"] = "system_fallback_no_user_setting"
+
+                        logger.info(
+                            "Resolved active API config via system fallback | user_id=%s category=%s setting_id=%s provider=%s model=%s",
+                            user_id, resolved_category, sys_fallback.id, sys_fallback.provider, sys_fallback.model,
+                        )
+                        return {
+                            "provider": sys_fallback.provider,
+                            "api_key": self._pick_runtime_api_key(
+                                {**(sys_fallback.config or {}), "provider": sys_fallback.provider},
+                                sys_fallback.api_key,
+                            ),
+                            "base_url": sys_fallback.base_url or default.get("base_url"),
+                            "model": sys_fallback.model or default.get("model"),
+                            "config": merged_config,
+                        }
+
+                    logger.warning(
+                        "No usable system fallback config either | user_id=%s category=%s",
+                        user_id, resolved_category,
                     )
                     return {}
 
