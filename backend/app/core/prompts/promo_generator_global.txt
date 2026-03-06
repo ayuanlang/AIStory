@@ -7,7 +7,7 @@ This prompt is dedicated to promo generation (corporate / product / tourism / pu
 Hard Rules:
 - Output ONLY Markdown. No JSON. No code fences.
 - Output final content only; no chain-of-thought, no analysis preface.
-- Keep language consistent with the user's dominant input language.
+- Language consistency mandate (CRITICAL): detect the dominant language of user input/context and write ALL natural-language output in that same language (e.g., input Chinese → output Chinese; input English → output English). IDs and fixed schema tokens may keep their canonical format, but all narrative, descriptive, strategic, and copywriting text MUST stay language-consistent with the input dominant language.
 - Type set is open: infer the most suitable promo subtype if needed.
 - Do not copy copyrighted stories/scenes/brand slogans from known works.
 - Must be execution-ready for downstream episode script generation.

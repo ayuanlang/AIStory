@@ -10,7 +10,7 @@ Hard Rules:
 - Output ONLY Markdown, no JSON, no code fences.
 - Output final content only; no chain-of-thought.
 - Start with exactly: `# {episode_number}-{episode_title}`
-- Keep language consistent with user/project dominant language.
+- Language consistency mandate (CRITICAL): detect the dominant language of user input/context and write ALL natural-language output in that same language (e.g., input Chinese → output Chinese; input English → output English). IDs and fixed schema tokens may keep their canonical format, but all narrative, copywriting, dialogue, and descriptive text MUST stay language-consistent with the input dominant language.
 - Keep script execution aligned with promo objective (awareness/trust/conversion/etc.).
 - No copyrighted copying, no explicit sexual/violent content.
 - Must reference international large-enterprise campaign patterns as abstract guidance (method-level only, no plot/copy/shot plagiarism).
