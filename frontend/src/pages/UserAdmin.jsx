@@ -615,6 +615,12 @@ const UserAdmin = () => {
         });
     }, [systemApiRows, systemApiFilterCategory, systemApiFilterProvider]);
 
+    const isSystemApiDeprecated = (row) => {
+        if (typeof row?.deprecated === 'boolean') return row.deprecated;
+        const cfg = getSystemApiConfig(row);
+        return !!(cfg?.deprecated || cfg?.is_deprecated || cfg?.disable_api);
+    };
+
     const visibleSystemApiRows = React.useMemo(() => {
         let rows = [...filteredSystemApiRows];
         if (systemApiHideDeprecated) {
@@ -656,12 +662,6 @@ const UserAdmin = () => {
             return `${pricing.unit_type} | in:${pricing.cost_input} out:${pricing.cost_output}`;
         }
         return `${pricing.unit_type} | ${pricing.cost}`;
-    };
-
-    const isSystemApiDeprecated = (row) => {
-        if (typeof row?.deprecated === 'boolean') return row.deprecated;
-        const cfg = getSystemApiConfig(row);
-        return !!(cfg?.deprecated || cfg?.is_deprecated || cfg?.disable_api);
     };
 
     useEffect(() => {
