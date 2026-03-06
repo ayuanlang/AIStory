@@ -13410,6 +13410,8 @@ def stop_all_generation_jobs(
     if safe_kind in {"all", "episode-scenes", "scene-ai-shots-batch", "shot-media-batch"}:
         episodes = db.query(Episode).all()
         for episode in episodes:
+            if not episode.project_id:
+                continue
             if not _can_access_project(int(episode.project_id)):
                 continue
             info = dict(episode.episode_info or {})
