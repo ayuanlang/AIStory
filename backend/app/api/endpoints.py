@@ -1676,41 +1676,9 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             {"role": "user", "content": user_content}
         ]
 
-        # Use the LLM service directly
-        # If llm_config in request, use it, otherwise try to fetch from user/project logic if needed.
-        # Here we assume frontend sends the active LLM config or we rely on a default.
-        # Ideally, we should fetch the user's preferred LLM settings from DB.
-        
-        config = request.llm_config
-        # If config is missing/empty, fetch from DB Settings (Core LLM Configuration)
-        if not config:
-            api_setting = get_effective_api_setting(db, current_user, category="LLM")
-            if api_setting:
-                # Merge with defaults so base_url/model are never missing.
-                from app.api.settings import DEFAULTS
-                default = DEFAULTS.get(api_setting.provider, {})
-                config = {
-                    "provider": api_setting.provider,
-                    "api_key": api_setting.api_key,
-                    "base_url": api_setting.base_url or default.get("base_url"),
-                    "model": api_setting.model or default.get("model"),
-                    "config": api_setting.config or default.get("config", {})
-                }
-
-        # If frontend passed a partial config, backfill provider/model from Core LLM settings.
-        if config and (not config.get("provider") or not config.get("model")):
-            api_setting = get_effective_api_setting(db, current_user, category="LLM")
-            if api_setting:
-                from app.api.settings import DEFAULTS
-                default = DEFAULTS.get(api_setting.provider, {})
-                config.setdefault("provider", api_setting.provider)
-                config.setdefault("model", api_setting.model or default.get("model"))
-                if not config.get("base_url"):
-                    config["base_url"] = api_setting.base_url or default.get("base_url")
-                if "config" not in config:
-                    config["config"] = api_setting.config or default.get("config", {})
-        
-        if not config:
+        # Resolve LLM config from user's active setting (api_key/base_url always from system_api_settings).
+        config = agent_service.get_active_llm_config(current_user.id, category="LLM")
+        if not config or not config.get("api_key"):
              raise HTTPException(status_code=400, detail="LLM Configuration missing. Please check your settings.")
 
         # --- Debug / Truncation tracing ---
@@ -2412,15 +2380,15 @@ async def process_agent_command(
     if project_id:
         _require_project_access(db, int(project_id), current_user)
 
-    resolved_llm_config = agent_service.get_system_default_llm_config(current_user.id, category="LLM")
+    resolved_llm_config = agent_service.get_active_llm_config(current_user.id, category="LLM")
     if not resolved_llm_config or not resolved_llm_config.get("api_key"):
-        raise HTTPException(status_code=400, detail="No active system default LLM API config found in Settings (System API / category=LLM).")
+        raise HTTPException(status_code=400, detail="No active LLM API config found. Please check your LLM settings.")
 
     provider = resolved_llm_config.get("provider")
     model = resolved_llm_config.get("model")
     resolved_cfg_meta = resolved_llm_config.get("config") if isinstance(resolved_llm_config.get("config"), dict) else {}
     logger.info(
-        "[agent.command] resolved_system_llm | user_id=%s provider=%s model=%s setting_id=%s source=%s category=%s",
+        "[agent.command] resolved_user_active_llm | user_id=%s provider=%s model=%s setting_id=%s source=%s category=%s",
         current_user.id,
         provider,
         model,
@@ -5710,28 +5678,13 @@ def stop_project_episode_scripts_generation(
     now_iso = datetime.utcnow().isoformat()
 
     if not isinstance(status_payload, dict):
-        return {
-            "success": True,
+        status_payload = {
             "project_id": project_id,
             "running": False,
             "stop_requested": False,
-            "message": "No generation run status found",
         }
 
-    if not status_payload.get("running"):
-        status_payload["stop_requested"] = False
-        status_payload["updated_at"] = now_iso
-        gi[status_key] = status_payload
-        project.global_info = gi
-        db.add(project)
-        db.commit()
-        return {
-            "success": True,
-            "project_id": project_id,
-            **status_payload,
-            "message": "No running generation task",
-        }
-
+    # Always force-reset -- handles stuck tasks, already-stopped states, etc.
     status_payload["stop_requested"] = True
     if not status_payload.get("stop_requested_at"):
         status_payload["stop_requested_at"] = now_iso
@@ -13144,6 +13097,7 @@ def repair_generation_job_history(
 def stop_generation_job(
     kind: str,
     job_id: str,
+    force: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -13286,7 +13240,7 @@ def stop_generation_job(
         raise HTTPException(status_code=403, detail="Not authorized")
 
     status = str(job.get("status") or "").lower()
-    if status in {"succeeded", "failed", "canceled", "cancelled", "error"}:
+    if not force and status in {"succeeded", "failed", "canceled", "cancelled", "error"}:
         return {
             "ok": True,
             "kind": safe_kind,
@@ -13299,7 +13253,7 @@ def stop_generation_job(
         job_id,
         status="canceled",
         finished_at=datetime.utcnow().isoformat(),
-        error="Cancelled by user",
+        error="Force stopped by user" if force else "Cancelled by user",
     )
 
     if task_ref:
@@ -13308,12 +13262,22 @@ def stop_generation_job(
         except Exception:
             pass
 
+    # Force: also remove task ref from store to prevent further polling
+    if force:
+        try:
+            with lock:
+                task_stores_ref = task_store
+                if job_id in task_stores_ref:
+                    del task_stores_ref[job_id]
+        except Exception:
+            pass
+
     return {
         "ok": True,
         "kind": safe_kind,
         "job_id": job_id,
         "status": "canceled",
-        "message": "Stop requested",
+        "message": "Force stopped" if force else "Stop requested",
     }
 
 

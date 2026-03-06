@@ -41,6 +41,28 @@ if not _llm_call_logger.handlers:
 # Default timeout set to 300s, with env override support.
 DEFAULT_LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "300"))
 
+_BASE64_PATTERN = re.compile(r'(data:[\w/+.-]+;base64,)[A-Za-z0-9+/=]{64,}')
+
+def _strip_base64_from_log(obj):
+    """Recursively strip base64 content from data structures before logging."""
+    if isinstance(obj, str):
+        if obj.startswith("data:") and ";base64," in obj[:64]:
+            prefix = obj[:obj.index(";base64,") + 8]
+            return f"{prefix}<BASE64_STRIPPED len={len(obj)}>"
+        if len(obj) > 500 and _BASE64_PATTERN.search(obj[:500]):
+            return _BASE64_PATTERN.sub(r'\1<BASE64_STRIPPED>', obj)
+        return obj
+    if isinstance(obj, dict):
+        return {k: _strip_base64_from_log(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_strip_base64_from_log(item) for item in obj]
+    return obj
+
+def _debug_log(msg, level="info"):
+    """Print to console and write to logger."""
+    print(msg)
+    getattr(logger, level, logger.info)(msg)
+
 _DEFAULT_AGENT_SYSTEM_PROMPT = """
 You are an AI assistant for a Storyboard Editor application.
 Your goal is to help the user edit, create, and manage storyboard projects.
@@ -131,7 +153,8 @@ class LLMService:
 
     def _safe_log_json(self, tag: str, payload: Dict[str, Any]) -> None:
         try:
-            _llm_call_logger.info("%s %s", tag, json.dumps(payload, ensure_ascii=False, default=str))
+            cleaned = _strip_base64_from_log(payload)
+            _llm_call_logger.info("%s %s", tag, json.dumps(cleaned, ensure_ascii=False, default=str))
         except Exception as e:
             logger.warning(f"Failed to write llm call audit log ({tag}): {e}")
 
@@ -268,21 +291,14 @@ class LLMService:
         return str(value)
 
     async def _raw_kie_llm_request_full(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> Dict[str, Any]:
+        """KIE LLM — OpenAI-compatible chat/completions with model in URL path."""
         cfg = dict(extra_config or {})
-        endpoint = str(cfg.get("endpoint") or "").strip()
-        query_endpoint = str(cfg.get("query_endpoint") or "").strip()
 
         root = (base_url or "https://api.kie.ai").strip().rstrip("/")
-        if "/api/v1/jobs" in root:
-            root = root.split("/api/v1/jobs")[0]
-
-        submit_url = endpoint if endpoint else f"{root}/api/v1/jobs/createTask"
-        poll_url = query_endpoint if query_endpoint else f"{root}/api/v1/jobs/recordInfo"
-
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
+        # Strip legacy task-based path fragments if present in saved config
+        for suffix in ("/api/v1/jobs", "/v1/chat/completions", "/v1"):
+            if root.endswith(suffix):
+                root = root[: -len(suffix)].rstrip("/")
 
         # KIE uses hyphens in version numbers, not dots (e.g. claude-opus-4-5, not claude-opus-4.5)
         kie_llm_alias = {
@@ -293,75 +309,50 @@ class LLMService:
         if resolved_model != model:
             logger.info("KIE LLM model remapped | from=%s to=%s", model, resolved_model)
 
-        prompt_text = self._extract_text_from_content(messages)
-        payload = {
-            "model": resolved_model,
-            "input": {
-                "messages": messages,
-                "prompt": prompt_text,
-            },
+        url = f"{root}/{resolved_model}/v1/chat/completions"
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
         }
 
-        def _post_submit():
-            return requests.post(submit_url, json=payload, headers=headers, timeout=90)
+        payload: Dict[str, Any] = {
+            "model": resolved_model,
+            "messages": messages,
+            "stream": False,
+        }
 
-        response = await asyncio.to_thread(_post_submit)
-        if response.status_code != 200:
-            raise Exception(f"KIE createTask failed {response.status_code}: {response.text}")
+        # Forward extra config keys (temperature, max_tokens, tools, etc.)
+        if cfg:
+            for k, v in cfg.items():
+                if k not in ("model", "messages", "stream") and not str(k).startswith("__"):
+                    payload[k] = v
 
-        data = response.json()
-        code = data.get("code")
-        if code not in (None, 200, "200"):
-            raise Exception(f"KIE createTask failed code={code}: {data.get('msg') or data.get('message') or data}")
+        prompt_chars = sum(len(str(m.get("content", ""))) for m in (messages or []))
+        _debug_log(f"[DEBUG][LLM][KIE] Request | provider=kie model={resolved_model} url={url} messages={len(messages or [])} prompt_chars={prompt_chars}")
 
-        data_block = data.get("data") or {}
-        task_id = data_block.get("taskId") or data_block.get("task_id") or data_block.get("id") or data.get("taskId")
-        if not task_id:
-            raise Exception("KIE createTask missing taskId")
+        timeout = max(90, DEFAULT_LLM_TIMEOUT_SECONDS)
 
-        def _poll_status():
-            return requests.get(poll_url, params={"taskId": task_id}, headers=headers, timeout=45)
+        def _do_post():
+            return requests.post(url, json=payload, headers=headers, timeout=timeout)
 
-        deadline = time.time() + max(60, DEFAULT_LLM_TIMEOUT_SECONDS)
-        last_payload = None
-        while time.time() < deadline:
-            await asyncio.sleep(2)
-            p_resp = await asyncio.to_thread(_poll_status)
-            if p_resp.status_code != 200:
-                continue
-            try:
-                p_data = p_resp.json()
-            except Exception:
-                continue
-            last_payload = p_data
+        resp = await asyncio.to_thread(_do_post)
+        _debug_log(f"[DEBUG][LLM][KIE] Response | status={resp.status_code} body={_strip_base64_from_log(resp.text[:800])}")
 
-            p_code = p_data.get("code")
-            if p_code not in (None, 200, "200"):
-                continue
+        if resp.status_code != 200:
+            raise Exception(f"KIE chat/completions failed {resp.status_code}: {resp.text[:500]}")
 
-            record = p_data.get("data") or {}
-            state = str(record.get("state") or record.get("status") or "").strip().lower()
-            if state in {"waiting", "queued", "queuing", "processing", "running", "generating", "pending"}:
-                continue
-            if state in {"fail", "failed", "error", "canceled", "cancelled"}:
-                raise Exception(record.get("failMsg") or record.get("message") or "KIE task failed")
+        data = resp.json()
 
-            if state in {"success", "succeeded", "completed", "done"}:
-                text = self._extract_text_from_kie_result(record.get("resultJson"))
-                if not text:
-                    text = self._extract_text_from_kie_result(record)
-                return {
-                    "choices": [
-                        {
-                            "message": {"content": text or ""},
-                            "finish_reason": "stop",
-                        }
-                    ],
-                    "usage": {},
-                    "_token_limit_hints": [],
-                }
+        # KIE may return HTTP 200 with an error payload like {"code":500,"msg":"..."}
+        kie_code = data.get("code")
+        if kie_code is not None and str(kie_code) != "200" and "choices" not in data:
+            err_msg = data.get("msg") or data.get("message") or data.get("error") or str(data)
+            raise Exception(f"KIE chat/completions error code={kie_code}: {err_msg}")
 
-        raise Exception(f"KIE task polling timeout: {last_payload}")
+        # Standard OpenAI-compatible response — return as-is
+        _debug_log(f"[DEBUG][LLM][KIE] Done | model={resolved_model} usage={data.get('usage', {})}")
+        return data
 
     def _extract_finish_reason_from_response(self, full_response: Dict[str, Any]) -> Any:
         choices = full_response.get("choices") or []
@@ -643,13 +634,14 @@ class LLMService:
             ]
         }
         
-        logger.info(f"Calling Doubao Multimodal: {url} model={model}")
+        _debug_log(f"[DEBUG][LLM][Doubao] Request | provider=doubao model={model} url={url} prompt_len={len(prompt)} has_image={bool(image_url)}")
 
         def _request():
             return requests.post(url, headers=headers, json=payload, timeout=DEFAULT_LLM_TIMEOUT_SECONDS)
 
         try:
             response = await asyncio.to_thread(_request)
+            _debug_log(f"[DEBUG][LLM][Doubao] Response | status={response.status_code} body={_strip_base64_from_log(response.text[:500])}")
             
             if response.status_code != 200:
                  # Try fallback to standard OpenAI format if 404/400, in case it's a standard model
@@ -1057,6 +1049,7 @@ class LLMService:
         if effective_max_tokens is None:
             effective_max_tokens = payload.get("max_output_tokens")
 
+        _debug_log(f"[DEBUG][LLM][{provider}] Request | provider={provider} category={resolved_category} model={model} url={url} (source={url_source}) messages={len(messages or [])} prompt_chars={prompt_chars} max_tokens={effective_max_tokens}")
         logger.info(
             "Calling LLM: category=%s url=%s (source=%s) model=%s messages=%s roles=%s prompt_chars=%s max_tokens=%s",
             resolved_category,
@@ -1103,16 +1096,20 @@ class LLMService:
         try:
             response = await asyncio.to_thread(_request, False)
         except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            _debug_log(f"[DEBUG][LLM][{provider}] Connection failed ({str(e)[:120]}), retrying without proxy...", "warning")
             logger.warning(f"Connection failed ({str(e)}). Retrying without proxy (connect_timeout=15s)...")
             try:
                 response = await asyncio.to_thread(_request, True, 15)
             except requests.exceptions.Timeout as e2:
+                _debug_log(f"[DEBUG][LLM][{provider}] No-proxy retry also timed out: {e2}", "error")
                 logger.error(f"No-proxy retry also timed out: {e2}")
                 raise Exception(self._vendor_failed_message(provider, f"Upstream timeout (proxy failed, direct also timed out): {e2}"))
             except Exception as e2:
                 logger.error(f"No-proxy retry also failed: {e2}")
                 raise Exception(self._vendor_failed_message(provider, e2))
         
+        _debug_log(f"[DEBUG][LLM][{provider}] Response | status={response.status_code} model={model} url={url} body={_strip_base64_from_log(response.text[:500])}")
+
         if response.status_code != 200:
             provider = (extra_config or {}).get("__provider") or (extra_config or {}).get("provider") or self._infer_provider(base_url, model)
             resolved_setting_id = (extra_config or {}).get("__resolved_setting_id")

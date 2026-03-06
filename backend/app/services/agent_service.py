@@ -1478,8 +1478,8 @@ Output must be JSON object with keys: reply, plan.
         user_id = user.id
         project_id = request.project_id or request.context.get("project_id") or request.context.get("projectId")
         
-        # Resolve LLM Config from system default/active configuration only (category=LLM).
-        llm_config = self.get_system_default_llm_config(user_id=user_id, category="LLM")
+        # Resolve LLM Config from user's active setting (falls back to system default).
+        llm_config = self.get_active_llm_config(user_id=user_id, category="LLM")
 
         if request.context.get("is_refinement"):
             llm_result = {

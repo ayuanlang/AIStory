@@ -33,6 +33,28 @@ logger = logging.getLogger("media_service")
 
 DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS = min(600, max(300, int(os.getenv("VIDEO_POLL_TIMEOUT_SECONDS", "600"))))
 
+_BASE64_PATTERN = re.compile(r'(data:[\w/+.-]+;base64,)[A-Za-z0-9+/=]{64,}')
+
+def _strip_base64_from_log(obj):
+    """Recursively strip base64 content from data structures before logging."""
+    if isinstance(obj, str):
+        if obj.startswith("data:") and ";base64," in obj[:64]:
+            prefix = obj[:obj.index(";base64,") + 8]
+            return f"{prefix}<BASE64_STRIPPED len={len(obj)}>"
+        if len(obj) > 500 and _BASE64_PATTERN.search(obj[:500]):
+            return _BASE64_PATTERN.sub(r'\1<BASE64_STRIPPED>', obj)
+        return obj
+    if isinstance(obj, dict):
+        return {k: _strip_base64_from_log(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_strip_base64_from_log(item) for item in obj]
+    return obj
+
+def _debug_log(msg, level="info"):
+    """Print to console and write to logger."""
+    print(msg)
+    getattr(logger, level, logger.info)(msg)
+
 class MediaGenerationService:
 # ...
     DOUBAO_MIN_IMAGE_PIXELS = 3_686_400
@@ -677,7 +699,7 @@ class MediaGenerationService:
                 if provider in ["stability", "stable diffusion"]:
                     return await self._handle_stability_generation("image", prompt, active_config, reference_image_url, negative_prompt=negative_prompt)
 
-                print(f"Unsupported Image provider: {provider}")
+                _debug_log(f"Unsupported Image provider: {provider}", "warning")
                 return {
                     "error": f"Unsupported image provider: {provider}",
                     "submit_failed": True,
@@ -711,7 +733,7 @@ class MediaGenerationService:
                 if provider == "vidu":
                     return await self._handle_vidu_generation("video", prompt, active_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio, keyframes=keyframes, negative_prompt=negative_prompt)
 
-                print(f"Unsupported Video provider: {provider}")
+                _debug_log(f"Unsupported Video provider: {provider}", "warning")
                 return {
                     "error": f"Unsupported video provider: {provider}",
                     "submit_failed": True,
@@ -1280,7 +1302,7 @@ class MediaGenerationService:
                     target_model,
                 )
         except Exception as e:
-            print(f"Error fetching settings for {provider}: {e}")
+            _debug_log(f"Error fetching settings for {provider}: {e}", "error")
 
         return {}
 
@@ -1298,7 +1320,7 @@ class MediaGenerationService:
                     if active_setting and active_setting.provider:
                         provider = self._normalize_provider_name(active_setting.provider, "Image")
             except Exception as e:
-                print(f"Error finding active provider: {e}")
+                _debug_log(f"Error finding active provider: {e}", "error")
 
         if not provider:
             provider = "grsai"
@@ -1333,7 +1355,7 @@ class MediaGenerationService:
             ((api_config or {}).get("config") or {}).get("__resolved_source"),
         )
 
-        print(f"[MediaService] Generating Image. Provider: {provider}, Refs Type: {type(reference_image_url)}, Refs: {reference_image_url}, W: {width}, H: {height}, image_size: {image_size}, AR: {aspect_ratio}")
+        _debug_log(f"[MediaService] Generating Image. Provider: {provider}, Refs Type: {type(reference_image_url)}, Refs: {_strip_base64_from_log(reference_image_url)}, W: {width}, H: {height}, image_size: {image_size}, AR: {aspect_ratio}")
 
         result = await self._generate_with_smart_routing(
             category="Image",
@@ -1380,7 +1402,7 @@ class MediaGenerationService:
                     if active_setting and active_setting.provider:
                         provider = self._normalize_provider_name(active_setting.provider, "Video")
             except Exception as e:
-                print(f"Error finding active provider: {e}")
+                _debug_log(f"Error finding active provider: {e}", "error")
 
         if not provider:
             provider = "grsai"
@@ -1431,7 +1453,7 @@ class MediaGenerationService:
                 provider,
             )
 
-        print(f"[MediaService] Generating Video. Provider: {provider}, Model: {(api_config or {}).get('model') or (llm_config or {}).get('model')}, Refs: {reference_image_url}, LastFrame: {last_frame_url}, Ratio: {aspect_ratio}, Keyframes: {len(keyframes) if keyframes else 0}")
+        _debug_log(f"[MediaService] Generating Video. Provider: {provider}, Model: {(api_config or {}).get('model') or (llm_config or {}).get('model')}, Refs: {_strip_base64_from_log(reference_image_url)}, LastFrame: {_strip_base64_from_log(last_frame_url)}, Ratio: {aspect_ratio}, Keyframes: {len(keyframes) if keyframes else 0}")
 
         result = await self._generate_with_smart_routing(
             category="Video",
@@ -1479,7 +1501,7 @@ class MediaGenerationService:
         if gen_type == "image":
             # Multi-Reference handling (if ref_image provided)
             if ref_image:
-                print(f"DEBUG: Doubao Multi-Reference Gen refs: {ref_image}")
+                _debug_log(f"DEBUG: Doubao Multi-Reference Gen refs: {_strip_base64_from_log(ref_image)}")
                 raw_endpoint = tool_conf.get("endpoint") or "https://ark.cn-beijing.volces.com/api/v3"
                 endpoint = raw_endpoint.strip()
                 
@@ -1686,7 +1708,7 @@ class MediaGenerationService:
         
         # If multi-frame, we use different payload structure
         if is_multiframe:
-            print("[Vidu] Using Multi-Frame (Keyframes) Mode")
+            _debug_log("[Vidu] Using Multi-Frame (Keyframes) Mode")
             # Required: model, start_image, image_settings
             # Typically model is viduq2-turbo or viduq2-pro for this mode (as per user snippet)
             # Default to viduq2-turbo if current model is not appropriate? 
@@ -1736,7 +1758,7 @@ class MediaGenerationService:
             
             # Validation: Min 2 keyframes
             if len(settings_arr) < 2:
-                  print("[Vidu] Warning: Multi-frame expects min 2 keyframes. Current: " + str(len(settings_arr)))
+                  _debug_log("[Vidu] Warning: Multi-frame expects min 2 keyframes. Current: " + str(len(settings_arr)), "warning")
                   # If only 1 keyframe, maybe duplication works? Or fall back?
                   if len(settings_arr) == 1:
                        settings_arr.append(settings_arr[0]) # Duplicate to meet min requirements
@@ -1786,7 +1808,7 @@ class MediaGenerationService:
              if cf.get("is_rec") is not None: payload["is_rec"] = bool(cf.get("is_rec"))
              if cf.get("resolution"): payload["resolution"] = cf.get("resolution")
 
-        print(f"[Vidu] Job Submission: Model={model}, Dur={payload.get('duration')}, Res={payload.get('resolution')}, MultiFrame={is_multiframe}")
+        _debug_log(f"[Vidu] Job Submission: Model={model}, Dur={payload.get('duration')}, Res={payload.get('resolution')}, MultiFrame={is_multiframe}")
         
         headers = {
             "Content-Type": "application/json",
@@ -1795,7 +1817,7 @@ class MediaGenerationService:
         
         try:
              # Submit
-             resp = requests.post(endpoint, json=payload, headers=headers, timeout=60)
+             resp = requests.post(endpoint, json=payload, headers=headers, timeout=(15, 120))
              if resp.status_code not in [200, 201]:
                   return {"error": f"Vidu Error {resp.status_code}", "details": resp.text}
              
@@ -1830,7 +1852,7 @@ class MediaGenerationService:
         api_key = config.get("api_key")
         model = config.get("model") or "unknown_model"
         trace_id = f"grsai-{uuid.uuid4().hex[:10]}"
-        print(f"[Grsai] Starting Generation. Type={gen_type}, Model={model}, PromptLen={len(prompt) if prompt else 0}")
+        _debug_log(f"[Grsai] Starting Generation. Type={gen_type}, Model={model}, PromptLen={len(prompt) if prompt else 0}")
         logger.info(
             "[GrsaiTrace][%s] start | type=%s model=%s prompt_len=%s render_service=%s render_instance=%s",
             trace_id,
@@ -1869,15 +1891,15 @@ class MediaGenerationService:
             if ref_image:
                 ref_list = [ref_image] if isinstance(ref_image, str) else ref_image
                 resolved_refs = []
-                print(f"[Grsai] Processing {len(ref_list)} reference images...")
+                _debug_log(f"[Grsai] Processing {len(ref_list)} reference images...")
                 for i, r in enumerate(ref_list):
                     resolved = self._resolve_ref_for_api(r, force_data_uri_for_local=True)
                     if resolved:
                         resolved_refs.append(resolved)
                     else:
-                        print(f"[Grsai] Error: Failed to resolve ref image {i} ({r}). Dropping.")
+                        _debug_log(f"[Grsai] Error: Failed to resolve ref image {i} ({r}). Dropping.", "warning")
                 
-                print(f"[Grsai] Final Refs Count: {len(resolved_refs)}")
+                _debug_log(f"[Grsai] Final Refs Count: {len(resolved_refs)}")
                 payload["urls"] = resolved_refs
             
             # Resolution Logic
@@ -1912,14 +1934,12 @@ class MediaGenerationService:
                 payload["size"] = res_str
             
             # Create a log-friendly copy of the payload to hide base64 content
-            log_payload = payload.copy()
-            if "urls" in log_payload:
-                 log_payload["urls"] = [f"<Base64 Data (len={len(u)})>" for u in log_payload["urls"]]
+            log_payload = _strip_base64_from_log(payload)
 
             result_base = endpoint.split("/v1/")[0] if "/v1/" in endpoint else base_url
             result_url = f"{result_base}/v1/draw/result"
 
-            print(f"[Grsai] Submitting Payload: {json.dumps(log_payload, ensure_ascii=False)}")
+            _debug_log(f"[Grsai] Submitting Payload: {json.dumps(log_payload, ensure_ascii=False)}")
             logger.info(
                 "[GrsaiTrace][%s] image submit prepared | endpoint=%s result_url=%s has_refs=%s refs_count=%s payload_keys=%s",
                 trace_id,
@@ -1982,7 +2002,7 @@ class MediaGenerationService:
                 result_base = endpoint.split("/v1/")[0]
             
             result_url = f"{result_base}/v1/draw/result"
-            print(f"[Grsai] Computed Result Poll URL: {result_url}")
+            _debug_log(f"[Grsai] Computed Result Poll URL: {result_url}")
 
             final_model = model or ("veo3.1-fast" if is_veo else "sora-2")
             
@@ -2038,7 +2058,7 @@ class MediaGenerationService:
                 # If we have neither, we can omit both.
                 # Logic: Only force black frame if we have lastFrameUrl but no firstFrameUrl.
                 if last_frame_url:
-                     print("[Grsai] Auto-generating Black Start Frame for Veo (Required by Last Frame)...")
+                     _debug_log("[Grsai] Auto-generating Black Start Frame for Veo (Required by Last Frame)...")
                      try:
                         # Generate black image
                         img = Image.new('RGB', (1024, 576), (0, 0, 0))
@@ -2047,7 +2067,7 @@ class MediaGenerationService:
                         b64_str = base64.b64encode(buf.getvalue()).decode('utf-8')
                         payload["firstFrameUrl"] = f"data:image/png;base64,{b64_str}"
                      except Exception as e:
-                        print(f"[Grsai] Failed to gen black frame: {e}") 
+                        _debug_log(f"[Grsai] Failed to gen black frame: {e}", "warning") 
             
             if last_frame_url:
                 if is_veo:
@@ -2083,22 +2103,11 @@ class MediaGenerationService:
                  payload["webHook"] = "-1" 
 
             # Debug log (sanitized)
-            valid_payload_log = json.dumps(payload, ensure_ascii=False)
-            if "urls" in payload and payload["urls"]:
-                 # Simple hack to avoid dumping massive base64 in logs if present
-                 pass 
-            # If payload has direct base64 fields (firstFrameUrl often is one), we truncate for logs
-            debug_p = payload.copy()
-            for key in ["firstFrameUrl", "lastFrameUrl", "image", "urls"]:
-                if key in debug_p and debug_p[key]:
-                    if isinstance(debug_p[key], str) and len(debug_p[key]) > 200:
-                         debug_p[key] = debug_p[key][:50] + "...<Base64>..."
-                    elif isinstance(debug_p[key], list):
-                         debug_p[key] = [ (s[:50] + "...<Base64>...") if isinstance(s, str) and len(s) > 200 else s for s in debug_p[key] ]
+            debug_p = _strip_base64_from_log(payload)
 
-            print(f"[Grsai] Video Payload: {json.dumps(debug_p, ensure_ascii=False)}")
+            _debug_log(f"[Grsai] Video Payload: {json.dumps(debug_p, ensure_ascii=False)}")
             if is_veo:
-                print(f"[Grsai][Veo] Submit Duration={payload.get('duration')} Model={final_model} Aspect={payload.get('aspectRatio')}")
+                _debug_log(f"[Grsai][Veo] Submit Duration={payload.get('duration')} Model={final_model} Aspect={payload.get('aspectRatio')}")
             logger.info(
                 "[GrsaiTrace][%s] video submit prepared | endpoint=%s result_url=%s is_veo=%s payload_keys=%s",
                 trace_id,
@@ -2115,11 +2124,11 @@ class MediaGenerationService:
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         
         # Increased timeout to 300s
-        def _post(): return requests.post(url, json=payload, headers=headers, timeout=300, verify=False)
+        def _post(): return requests.post(url, json=payload, headers=headers, timeout=(30, 300), verify=False)
         
         try:
             resp = await asyncio.to_thread(_post)
-            print(f"[Grsai Legacy] API Returned: {resp.text[:1000]}") # DEBUG USER REQUEST
+            _debug_log(f"[Grsai Legacy] API Returned: {_strip_base64_from_log(resp.text[:1000])}") # DEBUG USER REQUEST
             if resp.status_code != 200: return {"error": f"Submission Failed {resp.status_code}", "details": resp.text}
             
             data = resp.json()
@@ -2222,7 +2231,7 @@ class MediaGenerationService:
             }
             
             def _post():
-                return requests.post(f"https://{host}", data=payload_json, headers=req_headers, timeout=60, verify=False)
+                return requests.post(f"https://{host}", data=payload_json, headers=req_headers, timeout=(15, 120), verify=False)
             
             return await asyncio.to_thread(_post)
 
@@ -2237,7 +2246,7 @@ class MediaGenerationService:
             is_sync = True
             ref_value = self._resolve_ref_for_api(ref_image, force_data_uri_for_local=False)
             if not ref_value:
-                print("Failed to load reference image for Tencent I2I")
+                _debug_log("Failed to load reference image for Tencent I2I", "error")
                 return {"error": "Failed to load reference image for Tencent I2I"}
             payload["InputImage"] = ref_value
             payload["RspImgType"] = "url"
@@ -2247,12 +2256,12 @@ class MediaGenerationService:
 
         resp = await call_tencent_api(submit_action, payload)
         if resp.status_code != 200: 
-            print(f"[MediaService] Tencent Request Failed {resp.status_code}: {resp.text}")
+            _debug_log(f"[MediaService] Tencent Request Failed {resp.status_code}: {resp.text}", "error")
             return {"error": f"Tencent Request Failed {resp.status_code}", "details": resp.text}
         
         data = resp.json()
         if "Response" in data and "Error" in data["Response"]:
-             print(f"[MediaService] Tencent API Error: {data['Response']['Error']}")
+             _debug_log(f"[MediaService] Tencent API Error: {data['Response']['Error']}", "error")
              return {"error": f"Tencent API Error", "details": data["Response"]["Error"]}
 
         if is_sync:
@@ -2309,7 +2318,7 @@ class MediaGenerationService:
         # Auto-correction for KF2V with single image to avoid "video frames must be set" error
         # KF2V likely requires multiple frames or specific array input, while I2V handles single image.
         if "kf2v" in model and ref_image and not last_frame_url:
-             print(f"[Wanxiang] Model {model} requested but only 1 ref image provided. Switching to wanx2.1-i2v-plus.")
+             _debug_log(f"[Wanxiang] Model {model} requested but only 1 ref image provided. Switching to wanx2.1-i2v-plus.", "warning")
              model = "wanx2.1-i2v-plus"
 
         base_metadata = {"provider": "wanxiang", "model": model, "prompt": prompt}
@@ -2384,15 +2393,15 @@ class MediaGenerationService:
         
         headers = {"X-DashScope-Async": "enable", "Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         
-        print(f"[Wanxiang] POSTING to {endpoint} with Model {model}")
+        _debug_log(f"[Wanxiang] POSTING to {endpoint} with Model {model}")
         
-        def _post(): return requests.post(endpoint, json=payload, headers=headers, timeout=60, verify=False)
+        def _post(): return requests.post(endpoint, json=payload, headers=headers, timeout=(15, 120), verify=False)
         
         try:
             resp = await asyncio.to_thread(_post)
             
             if resp.status_code != 200: 
-                print(f"[Wanxiang] HTTP {resp.status_code} Error Body: {resp.text}")
+                _debug_log(f"[Wanxiang] HTTP {resp.status_code} Error Body: {resp.text}", "error")
                 # Try to parse error code if json
                 try: 
                     err_body = resp.json()
@@ -2401,9 +2410,9 @@ class MediaGenerationService:
                     return {"error": f"Submission Failed {resp.status_code}", "details": resp.text}
             
             data = resp.json()
-            print(f"[Wanxiang] Submission Success: {data}")
+            _debug_log(f"[Wanxiang] Submission Success: {_strip_base64_from_log(data)}")
         except Exception as e:
-            print(f"[Wanxiang] Exception: {e}")
+            _debug_log(f"[Wanxiang] Exception: {e}", "error")
             import traceback
             traceback.print_exc()
             return {"error": f"Wanxiang Request Exception: {e}"}
@@ -2427,7 +2436,7 @@ class MediaGenerationService:
                      return {"url": p_data.get("output", {}).get("video_url"), "metadata": meta}
                 elif status in ["FAILED", "CANCELED"]:
                      err_msg = p_data.get("output", {}).get("message")
-                     print(f"[Wanxiang] Task Failed: {err_msg}")
+                     _debug_log(f"[Wanxiang] Task Failed: {err_msg}", "error")
                      return {"error": "Generation Failed", "details": err_msg}
         return {"error": "Timeout"}
 
@@ -2468,7 +2477,7 @@ class MediaGenerationService:
                      data["text_prompts[1][text]"] = str(negative_prompt).strip()
                      data["text_prompts[1][weight]"] = -1
                  
-                 def _post_i2i(): return requests.post(url, headers=headers, files=files, data=data, timeout=60, verify=False)
+                 def _post_i2i(): return requests.post(url, headers=headers, files=files, data=data, timeout=(15, 120), verify=False)
                  resp = await asyncio.to_thread(_post_i2i)
              else:
                  return {"error": "Could not load reference image"}
@@ -2480,7 +2489,7 @@ class MediaGenerationService:
              body = {"text_prompts": [{"text": prompt}], "cfg_scale": 7, "height": 1024, "width": 1024, "samples": 1}
              if str(negative_prompt or "").strip():
                  body["text_prompts"].append({"text": str(negative_prompt).strip(), "weight": -1})
-             def _post_t2i(): return requests.post(url, headers=headers, json=body, timeout=60, verify=False)
+             def _post_t2i(): return requests.post(url, headers=headers, json=body, timeout=(15, 120), verify=False)
              resp = await asyncio.to_thread(_post_t2i)
         
         if resp.status_code != 200: return {"error": f"Stability Error {resp.status_code}", "details": resp.text}
@@ -2535,16 +2544,16 @@ class MediaGenerationService:
                 resp = await asyncio.to_thread(_post, True)
             except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
                 # Retry without proxy if connection fails (common for domestic APIs vs Global Proxy)
-                print(f"[{log_tag}] Connection Failed with Proxy ({str(e)[:50]}...). Retrying without proxy (connect_timeout=15s)...")
+                _debug_log(f"[{log_tag}] Connection Failed with Proxy ({str(e)[:50]}...). Retrying without proxy (connect_timeout=15s)...", "warning")
                 try:
                     resp = await asyncio.to_thread(_post, False, 15)
                 except Exception as e2:
-                    print(f"[{log_tag}] No-proxy retry also failed: {str(e2)[:120]}")
+                    _debug_log(f"[{log_tag}] No-proxy retry also failed: {str(e2)[:120]}", "error")
                     raise
 
             if resp.status_code == 200:
                 data = resp.json()
-                print(f"[{log_tag}] API Response: {data}") # DEBUG USER REQUEST
+                _debug_log(f"[{log_tag}] API Response: {_strip_base64_from_log(data)}") # DEBUG USER REQUEST
                 metadata = {"raw": data}
                 if extra_metadata:
                     metadata.update(extra_metadata)
@@ -2553,22 +2562,22 @@ class MediaGenerationService:
                     return {"url": data["data"][0]["url"], "metadata": metadata}
                 return {"url": data.get("url"), "metadata": metadata}
             else:
-                print(f"[{log_tag}] Error {resp.status_code}: {resp.text}")
+                _debug_log(f"[{log_tag}] Error {resp.status_code}: {resp.text}", "error")
                 return {"error": f"API Error {resp.status_code}", "details": resp.text, "submit_failed": True}
         except requests.exceptions.Timeout as e:
-            print(f"[{log_tag}] Timeout: {e}")
+            _debug_log(f"[{log_tag}] Timeout: {e}", "error")
             return {"error": "Upstream request timeout", "details": str(e), "submit_failed": True}
         except requests.exceptions.RequestException as e:
-            print(f"[{log_tag}] RequestException: {e}")
+            _debug_log(f"[{log_tag}] RequestException: {e}", "error")
             return {"error": "Upstream request failed", "details": str(e), "submit_failed": True}
         except Exception as e:
-            print(f"[{log_tag}] Exception: {e}")
+            _debug_log(f"[{log_tag}] Exception: {e}", "error")
             return {"error": str(e), "submit_failed": True}
 
     async def _submit_and_poll_video(self, url, payload, api_key, log_tag, extra_metadata=None, poll_timeout_seconds: int = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS, poll_interval_seconds: int = 2):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         
-        print(f"[{log_tag}] Submitting to URL: {url} | Payload: {payload}")
+        _debug_log(f"[{log_tag}] Submitting to URL: {url} | Payload: {_strip_base64_from_log(payload)}")
         
         def _post(use_proxy=True, connection_close: bool = False, connect_timeout=None):
             request_headers = dict(headers)
@@ -2590,11 +2599,11 @@ class MediaGenerationService:
             try:
                 resp = await asyncio.to_thread(_post, True)
             except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
-                print(f"[{log_tag}] Submit failed with proxy ({str(e)[:120]}), retrying without proxy (connect_timeout=15s)...")
+                _debug_log(f"[{log_tag}] Submit failed with proxy ({str(e)[:120]}), retrying without proxy (connect_timeout=15s)...", "warning")
                 try:
                     resp = await asyncio.to_thread(_post, False, False, 15)
                 except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e2:
-                    print(f"[{log_tag}] Submit retry without proxy failed ({str(e2)[:120]}), retrying with connection close...")
+                    _debug_log(f"[{log_tag}] Submit retry without proxy failed ({str(e2)[:120]}), retrying with connection close...", "warning")
                     resp = await asyncio.to_thread(_post, False, True, 15)
             if resp.status_code not in [200, 201]: 
                 return {"error": f"Submission Failed {resp.status_code}", "details": resp.text, "submit_failed": True}
@@ -3551,21 +3560,11 @@ class MediaGenerationService:
             return patched
 
         def _post_submit(submit_payload: Dict[str, Any]):
-            log_payload = dict(submit_payload)
-            if "input" in log_payload and "image_urls" in log_payload["input"]:
-                log_payload["input"] = dict(log_payload["input"])
-                log_payload["input"]["image_urls"] = ["<base64...>" for _ in log_payload["input"]["image_urls"]]
-            if "imageUrls" in log_payload:
-                log_payload["imageUrls"] = ["<base64...>" for _ in log_payload["imageUrls"]]
-            if "images" in log_payload:
-                 log_payload["images"] = [
-                     "<base64...>" if isinstance(img, str) and img.startswith("data:image/") else img 
-                     for img in log_payload["images"]
-                 ]
-            print(f"[KIE_video] Submitting to URL: {submit_url} | Model: {submit_payload.get('model')} | Payload: {log_payload}")
+            log_payload = _strip_base64_from_log(submit_payload)
+            _debug_log(f"[KIE_video] Submitting to URL: {submit_url} | Model: {submit_payload.get('model')} | Payload: {log_payload}")
             
             logger.info("KIE performing HTTP Request | Method: POST | URL: %s | Payload_model: %s", submit_url, submit_payload.get('model'))
-            return requests.post(submit_url, json=submit_payload, headers=headers, timeout=90, verify=False)
+            return requests.post(submit_url, json=submit_payload, headers=headers, timeout=(30, 300), verify=False)
 
         def _kie_response_details(response: requests.Response) -> Dict[str, Any]:
             raw_text = ""
@@ -3658,7 +3657,12 @@ class MediaGenerationService:
                     os.environ["KIE_VEO_IMAGE_MAX_BYTES"] = original_env
 
         try:
-            resp = await asyncio.to_thread(_post_submit, submit_payload)
+            try:
+                resp = await asyncio.to_thread(_post_submit, submit_payload)
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as first_err:
+                _debug_log(f"[KIE] Submit connection/timeout error, retrying once: {str(first_err)[:150]}", "warning")
+                await asyncio.sleep(2)
+                resp = await asyncio.to_thread(_post_submit, submit_payload)
         except requests.exceptions.RequestException as e:
             return {"error": "KIE request failed", "details": str(e), "submit_failed": True}
         except Exception as e:
@@ -4047,7 +4051,7 @@ class MediaGenerationService:
                     return f"{base}{relative_path}"
                 return relative_path
         except Exception as e:
-            print(f"Download failed: {e}")
+            _debug_log(f"Download failed: {e}", "error")
         return url
         
     def _process_veo_image(self, url_or_path, aspect_ratio):
@@ -4127,12 +4131,12 @@ class MediaGenerationService:
             if not best_data:
                 return ""
 
-            print(f"[Veo] Ref processed size={len(best_data)} bytes target<={max_bytes} ratio={aspect_ratio}")
+            _debug_log(f"[Veo] Ref processed size={len(best_data)} bytes target<={max_bytes} ratio={aspect_ratio}")
             b64_final = base64.b64encode(best_data).decode('utf-8')
             return f"data:image/jpeg;base64,{b64_final}"
             
         except Exception as e:
-            print(f"[Veo] Image Process Error: {e}")
+            _debug_log(f"[Veo] Image Process Error: {e}", "error")
             import traceback
             traceback.print_exc()
             return ""
@@ -4228,7 +4232,7 @@ class MediaGenerationService:
         }
 
         try:
-            resp = requests.post(endpoint, json=payload, headers=headers, timeout=90, verify=False)
+            resp = requests.post(endpoint, json=payload, headers=headers, timeout=(15, 120), verify=False)
             if resp.status_code != 200:
                 logger.warning("KIE file upload failed | status=%s body=%s", resp.status_code, (resp.text or "")[:500])
                 return None
@@ -4290,7 +4294,7 @@ class MediaGenerationService:
                 if best_bytes:
                     return best_bytes, "image/jpeg"
         except Exception as e:
-            print(f"[MediaService] Image optimize skipped: {e}")
+            _debug_log(f"[MediaService] Image optimize skipped: {e}", "warning")
 
         return data, mime
 
@@ -4312,7 +4316,7 @@ class MediaGenerationService:
              url_or_path = url_or_path[0]
 
         try:
-            print(f"[MediaService] Conversion: Processing ref image: {str(url_or_path)[:100]}")
+            _debug_log(f"[MediaService] Conversion: Processing ref image: {str(url_or_path)[:100]}")
             data = None
             mime = "image/png"
             if "/uploads/" in url_or_path:
@@ -4331,7 +4335,7 @@ class MediaGenerationService:
                      with open(path, "rb") as f: data = f.read()
                      if path.endswith(".jpg"): mime = "image/jpeg"
                  else:
-                     print(f"[MediaService] Error: Local File Not Found: {path}")
+                     _debug_log(f"[MediaService] Error: Local File Not Found: {path}", "error")
             elif url_or_path.startswith("http"):
                  r = requests.get(url_or_path, timeout=30)
                  if r.status_code == 200: 
@@ -4339,7 +4343,7 @@ class MediaGenerationService:
                      ct = r.headers.get("Content-Type", "")
                      if "jpeg" in ct: mime = "image/jpeg"
                  else:
-                     print(f"[MediaService] Error: HTTP Download Failed {r.status_code}: {url_or_path}")
+                     _debug_log(f"[MediaService] Error: HTTP Download Failed {r.status_code}: {url_or_path}", "error")
             
             if data:
                 if force_data_uri:
@@ -4347,14 +4351,14 @@ class MediaGenerationService:
                     data, mime = self._optimize_image_bytes_for_data_uri(data, mime)
                     after_size = len(data)
                     if after_size < before_size:
-                        print(f"[MediaService] Ref optimized for data URI: {before_size} -> {after_size} bytes ({mime})")
+                        _debug_log(f"[MediaService] Ref optimized for data URI: {before_size} -> {after_size} bytes ({mime})")
                 b64 = base64.b64encode(data).decode("utf-8")
                 if force_data_uri: return f"data:{mime};base64,{b64}"
                 return b64
             else:
-                print(f"[MediaService] Error: No Data retrieved for {url_or_path}")
+                _debug_log(f"[MediaService] Error: No Data retrieved for {url_or_path}", "error")
         except Exception as e:
-            print(f"[MediaService] Exception in Base64 Conversion: {e}")
+            _debug_log(f"[MediaService] Exception in Base64 Conversion: {e}", "error")
         
         return url_or_path # Return original if fail
 

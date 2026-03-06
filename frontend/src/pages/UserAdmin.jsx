@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getSystemSettingsManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, exportSystemSettingsManage, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, getAdminLlmLogFiles, getAdminLlmLogView, getAdminStorageUsage, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt } from '../services/api';
+import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getSystemSettingsManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, getAdminLlmLogFiles, getAdminLlmLogView, getAdminStorageUsage, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt } from '../services/api';
 import Footer from '../components/Footer';
 import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive } from 'lucide-react';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
@@ -2484,6 +2484,22 @@ const UserAdmin = () => {
                                         className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded flex items-center gap-2 disabled:opacity-50"
                                     >
                                         <Download size={16} /> {isSystemApiExporting ? t('导出中...', 'Exporting...') : t('导出', 'Export')}
+                                    </button>
+                                    <button
+                                        onClick={async () => {
+                                            if (!await confirmUiMessage(t('将当前 System API 配置导出到服务器种子文件\uff08下次部署时自动同步\uff09\uff0c确认\uff1f', 'Export current System API config to server seed file (auto-sync on next deploy). Confirm?'))) return;
+                                            try {
+                                                const res = await exportSystemSettingsToSeed();
+                                                alert(t(`已导出 ${res.count} 条配置到种子文件`, `Exported ${res.count} settings to seed file`));
+                                            } catch (e) {
+                                                alert(e?.response?.data?.detail || e.message || 'Failed to export seed');
+                                            }
+                                        }}
+                                        disabled={isSystemApiLoading}
+                                        className="bg-sky-700 hover:bg-sky-600 text-white px-3 py-1 rounded flex items-center gap-2 disabled:opacity-50"
+                                        title={t('导出到服务器种子文件\uff0c部署时自动同步', 'Export to server seed file for auto-sync on deploy')}
+                                    >
+                                        <Download size={16} /> {t('导出 Seed', 'Export Seed')}
                                     </button>
                                     <button
                                         onClick={handleOpenImportSystemProviderBundle}

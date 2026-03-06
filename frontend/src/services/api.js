@@ -888,16 +888,17 @@ const buildGenerationCallbackUrl = (ticket) => {
 
 const pollGenerationCallbackUntilDone = async (
     ticket,
-    { timeoutMs = 10 * 60 * 1000, pollIntervalMs = 3000, kind = 'generation' } = {}
+    { timeoutMs = 10 * 60 * 1000, pollIntervalMs = 2000, kind = 'generation', cancelledRef } = {}
 ) => {
     const stableTicket = String(ticket || '').trim();
     if (!stableTicket) throw new Error('Missing callback ticket');
 
     const start = Date.now();
-    let intervalMs = Math.max(1200, Number(pollIntervalMs || 3000));
-    const maxIntervalMs = 10000;
+    let intervalMs = Math.max(1500, Number(pollIntervalMs || 2000));
+    const maxIntervalMs = 3500;
 
     while (Date.now() - start < timeoutMs) {
+        if (cancelledRef?.current) throw new Error(`${kind} callback polling cancelled`);
         try {
             const response = await api.get(`/generate/callback/${encodeURIComponent(stableTicket)}`);
             const data = response?.data || {};
@@ -916,24 +917,26 @@ const pollGenerationCallbackUntilDone = async (
             }
 
             await sleep(intervalMs);
-            intervalMs = Math.min(maxIntervalMs, Math.round(intervalMs * 1.25));
+            intervalMs = Math.min(maxIntervalMs, Math.round(intervalMs * 1.1));
         } catch (error) {
+            if (cancelledRef?.current) throw new Error(`${kind} callback polling cancelled`);
             if (!isTransientPollingError(error)) {
                 throw error;
             }
-            await sleep(Math.min(maxIntervalMs, Math.round(intervalMs * 1.5)));
-            intervalMs = Math.min(maxIntervalMs, Math.round(intervalMs * 1.5));
+            await sleep(Math.min(maxIntervalMs, Math.round(intervalMs * 1.3)));
+            intervalMs = Math.min(maxIntervalMs, Math.round(intervalMs * 1.3));
         }
     }
 
     throw new Error(`${kind} generation timed out while waiting callback result`);
 };
 
-const pollImageJobUntilDone = async (jobId, { timeoutMs = 10 * 60 * 1000, pollIntervalMs = 3000 } = {}) => {
+const pollImageJobUntilDone = async (jobId, { timeoutMs = 10 * 60 * 1000, pollIntervalMs = 2000, cancelledRef } = {}) => {
     const start = Date.now();
-    let intervalMs = Math.max(2000, Number(pollIntervalMs || 3000));
-    const maxIntervalMs = 12000;
+    let intervalMs = Math.max(1500, Number(pollIntervalMs || 2000));
+    const maxIntervalMs = 3000;
     while (Date.now() - start < timeoutMs) {
+        if (cancelledRef?.current) throw new Error('Image job polling cancelled');
         try {
             const response = await api.get(`/generate/image/jobs/${jobId}`);
             const data = response?.data || {};
@@ -947,24 +950,26 @@ const pollImageJobUntilDone = async (jobId, { timeoutMs = 10 * 60 * 1000, pollIn
             }
 
             await sleep(intervalMs);
-            intervalMs = Math.min(maxIntervalMs, Math.round(intervalMs * 1.25));
+            intervalMs = Math.min(maxIntervalMs, Math.round(intervalMs * 1.1));
         } catch (error) {
+            if (cancelledRef?.current) throw new Error('Image job polling cancelled');
             if (!isTransientPollingError(error)) {
                 throw error;
             }
-            await sleep(Math.min(maxIntervalMs, Math.round(intervalMs * 1.5)));
-            intervalMs = Math.min(maxIntervalMs, Math.round(intervalMs * 1.5));
+            await sleep(Math.min(maxIntervalMs, Math.round(intervalMs * 1.3)));
+            intervalMs = Math.min(maxIntervalMs, Math.round(intervalMs * 1.3));
         }
     }
 
     throw new Error('Image generation timed out while polling job status');
 };
 
-const pollVideoJobUntilDone = async (jobId, { timeoutMs = VIDEO_JOB_TIMEOUT_MS_DEFAULT, pollIntervalMs = 3000 } = {}) => {
+const pollVideoJobUntilDone = async (jobId, { timeoutMs = VIDEO_JOB_TIMEOUT_MS_DEFAULT, pollIntervalMs = 2500, cancelledRef } = {}) => {
     const start = Date.now();
-    let intervalMs = Math.max(2000, Number(pollIntervalMs || 3000));
-    const maxIntervalMs = 12000;
+    let intervalMs = Math.max(2000, Number(pollIntervalMs || 2500));
+    const maxIntervalMs = 5000;
     while (Date.now() - start < timeoutMs) {
+        if (cancelledRef?.current) throw new Error('Video job polling cancelled');
         try {
             const data = await fetchVideoJobStatusLimited(jobId);
             const status = String(data.status || '').toLowerCase();
@@ -977,13 +982,14 @@ const pollVideoJobUntilDone = async (jobId, { timeoutMs = VIDEO_JOB_TIMEOUT_MS_D
             }
 
             await sleep(intervalMs);
-            intervalMs = Math.min(maxIntervalMs, Math.round(intervalMs * 1.25));
+            intervalMs = Math.min(maxIntervalMs, Math.round(intervalMs * 1.1));
         } catch (error) {
+            if (cancelledRef?.current) throw new Error('Video job polling cancelled');
             if (!isTransientPollingError(error)) {
                 throw error;
             }
-            await sleep(Math.min(maxIntervalMs, Math.round(intervalMs * 1.5)));
-            intervalMs = Math.min(maxIntervalMs, Math.round(intervalMs * 1.5));
+            await sleep(Math.min(maxIntervalMs, Math.round(intervalMs * 1.3)));
+            intervalMs = Math.min(maxIntervalMs, Math.round(intervalMs * 1.3));
         }
     }
 
@@ -999,8 +1005,10 @@ export const getGenerationJobPool = async (params = {}) => {
     return response?.data || {};
 };
 
-export const stopGenerationJob = async (kind, jobId) => {
-    const response = await api.post(`/generate/jobs/${kind}/${jobId}/stop`);
+export const stopGenerationJob = async (kind, jobId, { force = false } = {}) => {
+    const response = await api.post(`/generate/jobs/${kind}/${jobId}/stop`, null, {
+        params: force ? { force: true } : undefined,
+    });
     return response?.data || {};
 };
 
@@ -1073,23 +1081,35 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
 
     let result;
     if (callbackUrl && callbackTicket) {
+        const cancelledRef = { current: false };
+        const effectiveTimeoutMs = Number(job_timeout_ms || 10 * 60 * 1000);
+        const effectivePollMs = Number(job_poll_interval_ms || 2000);
+        const wrap = (p) => p.catch(err => {
+            if (cancelledRef.current) throw err;
+            throw err;
+        }).finally(() => { cancelledRef.current = true; });
         try {
-            result = await pollGenerationCallbackUntilDone(callbackTicket, {
-                timeoutMs: Number(job_timeout_ms || 10 * 60 * 1000),
-                pollIntervalMs: Number(job_poll_interval_ms || 3000),
-                kind: 'image',
-            });
-        } catch (callbackErr) {
-            console.warn('[generateImage] callback path failed, fallback to job polling:', callbackErr);
-            result = await pollImageJobUntilDone(jobId, {
-                timeoutMs: Number(job_timeout_ms || 10 * 60 * 1000),
-                pollIntervalMs: Number(job_poll_interval_ms || 3000),
-            });
+            result = await Promise.any([
+                wrap(pollGenerationCallbackUntilDone(callbackTicket, {
+                    timeoutMs: effectiveTimeoutMs,
+                    pollIntervalMs: effectivePollMs,
+                    kind: 'image',
+                    cancelledRef,
+                })),
+                wrap(pollImageJobUntilDone(jobId, {
+                    timeoutMs: effectiveTimeoutMs,
+                    pollIntervalMs: effectivePollMs,
+                    cancelledRef,
+                })),
+            ]);
+        } catch (anyErr) {
+            const real = anyErr?.errors?.find(e => !/polling cancelled/i.test(e?.message));
+            throw real || anyErr;
         }
     } else {
         result = await pollImageJobUntilDone(jobId, {
             timeoutMs: Number(job_timeout_ms || 10 * 60 * 1000),
-            pollIntervalMs: Number(job_poll_interval_ms || 3000),
+            pollIntervalMs: Number(job_poll_interval_ms || 2000),
         });
     }
 
@@ -1170,23 +1190,35 @@ export const generateVideo = async (prompt, provider = null, ref_image_url = nul
 
     let result;
     if (callbackUrl && callbackTicket) {
+        const cancelledRef = { current: false };
+        const effectiveTimeoutMs = normalizeVideoJobTimeoutMs(job_timeout_ms);
+        const effectivePollMs = Number(job_poll_interval_ms || 2500);
+        const wrap = (p) => p.catch(err => {
+            if (cancelledRef.current) throw err;
+            throw err;
+        }).finally(() => { cancelledRef.current = true; });
         try {
-            result = await pollGenerationCallbackUntilDone(callbackTicket, {
-                timeoutMs: normalizeVideoJobTimeoutMs(job_timeout_ms),
-                pollIntervalMs: Number(job_poll_interval_ms || 3000),
-                kind: 'video',
-            });
-        } catch (callbackErr) {
-            console.warn('[generateVideo] callback path failed, fallback to job polling:', callbackErr);
-            result = await pollVideoJobUntilDone(jobId, {
-                timeoutMs: normalizeVideoJobTimeoutMs(job_timeout_ms),
-                pollIntervalMs: Number(job_poll_interval_ms || 3000),
-            });
+            result = await Promise.any([
+                wrap(pollGenerationCallbackUntilDone(callbackTicket, {
+                    timeoutMs: effectiveTimeoutMs,
+                    pollIntervalMs: effectivePollMs,
+                    kind: 'video',
+                    cancelledRef,
+                })),
+                wrap(pollVideoJobUntilDone(jobId, {
+                    timeoutMs: effectiveTimeoutMs,
+                    pollIntervalMs: effectivePollMs,
+                    cancelledRef,
+                })),
+            ]);
+        } catch (anyErr) {
+            const real = anyErr?.errors?.find(e => !/polling cancelled/i.test(e?.message));
+            throw real || anyErr;
         }
     } else {
         result = await pollVideoJobUntilDone(jobId, {
             timeoutMs: normalizeVideoJobTimeoutMs(job_timeout_ms),
-            pollIntervalMs: Number(job_poll_interval_ms || 3000),
+            pollIntervalMs: Number(job_poll_interval_ms || 2500),
         });
     }
 
@@ -1351,6 +1383,11 @@ export const deleteSystemSettingManage = async (settingId) => {
 
 export const exportSystemSettingsManage = async () => {
     const response = await api.get('/settings/system/manage/export');
+    return response.data;
+}
+
+export const exportSystemSettingsToSeed = async () => {
+    const response = await api.post('/settings/system/manage/export-seed');
     return response.data;
 }
 

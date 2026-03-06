@@ -3,9 +3,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy import cast, String, func
 import logging
 import json
+import os
 import ast
 import random
-from datetime import datetime
+from datetime import datetime, timezone
 import math
 from app.db.session import get_db
 from app.models.all_models import APISetting, User, PricingRule, SystemAPISetting
@@ -2188,6 +2189,57 @@ def export_system_settings_for_manage(
             for row in rows
         ],
     }
+
+
+@router.post("/settings/system/manage/export-seed")
+def export_system_settings_to_seed_file(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Write current system_api_settings to the seed JSON file (for deploy sync)."""
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+
+    _ensure_builtin_system_settings(db)
+    db.commit()
+
+    rows = db.query(SystemAPISetting).filter(
+        SystemAPISetting.category != "System_Payment",
+    ).order_by(
+        SystemAPISetting.category.asc(),
+        SystemAPISetting.provider.asc(),
+        SystemAPISetting.model.asc(),
+        SystemAPISetting.id.asc(),
+    ).all()
+
+    items = []
+    for row in rows:
+        config = dict(row.config or {})
+        config.pop("provider_api_keys", None)
+        config.pop("provider_api_key_weights", None)
+        items.append({
+            "name": row.name,
+            "category": row.category,
+            "provider": row.provider,
+            "base_url": row.base_url,
+            "model": row.model,
+            "modality": row.modality,
+            "config": config,
+            "deprecated": bool(row.deprecated),
+            "is_active": bool(row.is_active),
+        })
+
+    seed_path = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "data", "system_api_seed.json"))
+    os.makedirs(os.path.dirname(seed_path), exist_ok=True)
+    with open(seed_path, "w", encoding="utf-8") as f:
+        json.dump({
+            "version": 1,
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "count": len(items),
+            "items": items,
+        }, f, ensure_ascii=False, indent=2)
+
+    return {"ok": True, "count": len(items), "path": seed_path}
 
 
 @router.get("/settings/system/manage/provider-bundle/export")
