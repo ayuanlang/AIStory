@@ -284,9 +284,18 @@ class LLMService:
             "Content-Type": "application/json",
         }
 
+        # KIE uses hyphens in version numbers, not dots (e.g. claude-opus-4-5, not claude-opus-4.5)
+        kie_llm_alias = {
+            "claude-opus-4.5": "claude-opus-4-5",
+            "claude-sonnet-4.5": "claude-sonnet-4-5",
+        }
+        resolved_model = kie_llm_alias.get(model, model)
+        if resolved_model != model:
+            logger.info("KIE LLM model remapped | from=%s to=%s", model, resolved_model)
+
         prompt_text = self._extract_text_from_content(messages)
         payload = {
-            "model": model,
+            "model": resolved_model,
             "input": {
                 "messages": messages,
                 "prompt": prompt_text,

@@ -856,8 +856,8 @@ def init_system_api_settings(db):
         _kie_item("Kie Gemini 2.5 Pro", "LLM", "gemini-2.5-pro"),
         _kie_item("Kie Gemini 3 Pro", "LLM", "gemini-3-pro"),
         _kie_item("Kie GPT-5-2", "LLM", "gpt-5-2"),
-        _kie_item("Kie Claude Sonnet 4.5", "LLM", "claude-sonnet-4.5"),
-        _kie_item("Kie Claude Opus 4.5", "LLM", "claude-opus-4.5"),
+        _kie_item("Kie Claude Sonnet 4.5", "LLM", "claude-sonnet-4-5"),
+        _kie_item("Kie Claude Opus 4.5", "LLM", "claude-opus-4-5"),
     ]
 
     existing_kie_rows = db.query(SystemAPISetting).filter(
