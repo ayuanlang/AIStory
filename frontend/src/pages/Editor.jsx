@@ -15257,7 +15257,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 </button>
                                             </div>
                                         </div>
-                                        <div className="aspect-video bg-black/40 rounded border border-white/10 relative group overflow-hidden cursor-pointer" onClick={() => openAssetDetailModal('start')}>
+                                        <div className="aspect-video bg-black rounded border border-white/10 relative group overflow-hidden cursor-pointer flex items-center justify-center" onClick={() => openAssetDetailModal('start')}>
                                             {currentGeneratingState.start && (
                                                 <div className="absolute inset-0 bg-black/60 z-10 flex items-center justify-center flex-col gap-2">
                                                     <Loader2 className="w-6 h-6 animate-spin text-primary"/>
@@ -15268,7 +15268,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 <>
                                                     <img 
                                                         src={getFullUrl(editingShot.image_url)} 
-                                                        className="w-full h-full object-cover cursor-pointer hover:opacity-90 transition-opacity" 
+                                                        className="max-w-full max-h-full object-contain cursor-pointer hover:opacity-90 transition-opacity" 
                                                         onClick={(e) => {
                                                             e.stopPropagation();
                                                             openAssetDetailModal('start');
@@ -15394,7 +15394,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 </button>
                                             </div>
                                         </div>
-                                        <div className="aspect-video bg-black/40 rounded border border-white/10 relative group overflow-hidden cursor-pointer" onClick={() => openAssetDetailModal('end')}>
+                                        <div className="aspect-video bg-black rounded border border-white/10 relative group overflow-hidden cursor-pointer flex items-center justify-center" onClick={() => openAssetDetailModal('end')}>
                                             {currentGeneratingState.end && (
                                                 <div className="absolute inset-0 bg-black/60 z-10 flex items-center justify-center flex-col gap-2">
                                                     <Loader2 className="w-6 h-6 animate-spin text-primary"/>
@@ -15415,7 +15415,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                         <div className="relative w-full h-full group/mirror">
                                                             <img 
                                                                 src={getFullUrl(editingShot.image_url)} 
-                                                                className="w-full h-full object-cover opacity-60 group-hover/mirror:opacity-100 transition-opacity cursor-pointer"
+                                                                className="max-w-full max-h-full object-contain opacity-60 group-hover/mirror:opacity-100 transition-opacity cursor-pointer"
                                                                 title={t('与起始帧相同（提示词少于 5 个词）', 'Same as Start Frame (Prompt < 5 words)')}
                                                                 onClick={(e) => {
                                                                     e.stopPropagation();
@@ -15434,7 +15434,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                         <>
                                                             <img 
                                                                 src={getFullUrl(endUrl)} 
-                                                                className="w-full h-full object-cover cursor-pointer hover:opacity-90 transition-opacity"
+                                                                className="max-w-full max-h-full object-contain cursor-pointer hover:opacity-90 transition-opacity"
                                                                 onClick={(e) => {
                                                                     e.stopPropagation();
                                                                     openAssetDetailModal('end');
@@ -15566,7 +15566,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                         </div>
                                         
                                         <div 
-                                            className="aspect-video bg-black/40 rounded border border-white/10 relative group overflow-hidden cursor-pointer"
+                                            className="aspect-video bg-black rounded border border-white/10 relative group overflow-hidden cursor-pointer flex items-center justify-center"
                                             onClick={() => openAssetDetailModal('video')}
                                         >
                                             {currentGeneratingState.video && (
@@ -15579,7 +15579,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 <video 
                                                     key={editingShot.video_url}
                                                     src={getFullUrl(editingShot.video_url)} 
-                                                    className="w-full h-full object-cover" 
+                                                    className="max-w-full max-h-full object-contain" 
                                                     onClick={(e) => e.preventDefault()} 
                                                     controls
                                                 />
@@ -15700,12 +15700,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 </div>
 
                                                 {/* Image Area */}
-                                                <div className="aspect-video bg-black/40 rounded border border-white/10 relative overflow-hidden group/image cursor-pointer" onClick={() => openAssetDetailModal('keyframe', idx)}>
+                                                <div className="aspect-video bg-black rounded border border-white/10 relative overflow-hidden group/image cursor-pointer flex items-center justify-center" onClick={() => openAssetDetailModal('keyframe', idx)}>
                                                     {kf.url ? (
                                                         <>
                                                             <img 
                                                                 src={getFullUrl(kf.url)} 
-                                                                className="w-full h-full object-cover cursor-pointer hover:opacity-90"
+                                                                className="max-w-full max-h-full object-contain cursor-pointer hover:opacity-90"
                                                                 onClick={(e) => {
                                                                     e.stopPropagation();
                                                                     openAssetDetailModal('keyframe', idx);
@@ -16021,7 +16021,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                             <span className="text-xs text-white/80">{t('正在生成起始帧...', 'Generating Start Frame...')}</span>
                                                                         </div>
                                                                     )}
-                                                                    {editingShot.image_url ? <img src={getFullUrl(editingShot.image_url)} className="w-full h-full object-cover"/> : <ImageIcon className="w-8 h-8 opacity-30" />}
+                                                                    {editingShot.image_url ? <img src={getFullUrl(editingShot.image_url)} className="max-w-full max-h-full object-contain"/> : <ImageIcon className="w-8 h-8 opacity-30" />}
                                                                 </div>
                                                                 <div className="text-xs text-muted-foreground break-all">{t('图片 URL', 'Image URL')}: {editingShot.image_url || '-'}</div>
                                                                 <div className="text-xs text-muted-foreground">{t('参考图数量', 'Ref Count')}: {(Array.isArray(tech.ref_image_urls) ? tech.ref_image_urls.length : 0)}</div>
@@ -16084,7 +16084,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                             <span className="text-xs text-white/80">{t('正在生成结束帧...', 'Generating End Frame...')}</span>
                                                                         </div>
                                                                     )}
-                                                                    {endFrameUrl ? <img src={getFullUrl(endFrameUrl)} className="w-full h-full object-cover"/> : <ImageIcon className="w-8 h-8 opacity-30" />}
+                                                                    {endFrameUrl ? <img src={getFullUrl(endFrameUrl)} className="max-w-full max-h-full object-contain"/> : <ImageIcon className="w-8 h-8 opacity-30" />}
                                                                 </div>
                                                                 <div className="text-xs text-muted-foreground break-all">{t('结束帧 URL', 'End Frame URL')}: {endFrameUrl || '-'}</div>
                                                                 <div className="text-xs text-muted-foreground">{t('参考图数量', 'Ref Count')}: {(Array.isArray(tech.end_ref_image_urls) ? tech.end_ref_image_urls.length : 0)}</div>
@@ -16158,7 +16158,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                             <span className="text-xs text-white/80">{t('正在生成视频...', 'Generating Video...')}</span>
                                                                         </div>
                                                                     )}
-                                                                    {editingShot.video_url ? <video src={getFullUrl(editingShot.video_url)} controls className="w-full h-full object-cover" /> : <Video className="w-8 h-8 opacity-30" />}
+                                                                    {editingShot.video_url ? <video src={getFullUrl(editingShot.video_url)} controls className="max-w-full max-h-full object-contain" /> : <Video className="w-8 h-8 opacity-30" />}
                                                                 </div>
                                                                 <div className="text-xs text-muted-foreground break-all">{t('视频 URL', 'Video URL')}: {editingShot.video_url || '-'}</div>
                                                                 <div className="text-xs text-muted-foreground">{t('时长', 'Duration')}: {editingShot.duration || '5'}</div>
@@ -16238,7 +16238,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                     <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_1fr] gap-4">
                                                         <div className="space-y-3">
                                                             <div className="h-[46vh] xl:h-[58vh] bg-black/40 rounded border border-white/10 overflow-hidden flex items-center justify-center">
-                                                                {keyframe?.url ? <img src={getFullUrl(keyframe.url)} className="w-full h-full object-cover"/> : <ImageIcon className="w-8 h-8 opacity-30" />}
+                                                                {keyframe?.url ? <img src={getFullUrl(keyframe.url)} className="max-w-full max-h-full object-contain"/> : <ImageIcon className="w-8 h-8 opacity-30" />}
                                                             </div>
                                                             <div className="text-xs text-muted-foreground break-all">{t('关键帧 URL', 'Keyframe URL')}: {keyframe?.url || '-'}</div>
                                                             {renderAssetMetaPanel()}
