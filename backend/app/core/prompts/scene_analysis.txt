@@ -61,7 +61,7 @@
 #### Base + Delta 规则
 - 每个场地先定一个 Base Environment Reference（通常首个 `NEW`）。
 - `VARIANT_OF/REUSE` 必须继承 Base；`generation_prompt_en` 先写继承，再写 Delta。
-- 继承句首必须显式写“参考关系 + 机位关系”：`Use ENV:[BaseName] as visual base; keep architecture/material anchors unchanged; camera/viewpoint changes are listed in Delta only.`
+- 继承句首必须显式写"参考关系 + 机位关系"：`Use ENV:[BaseName] as visual base; keep architecture/material anchors unchanged; viewpoint changes are listed in Delta only.`
 - 参考图作用域锁定（Reference Scope Lock, Mandatory）：参考图仅用于继承“空间结构/材质/光照风格锚点”，禁止继承原构图与原背景主次。
 - Delta 覆盖优先级（Delta Override Priority, Mandatory）：`Visible Set` / `Excluded Set` / `Depth Role Reassignment` 的约束优先级高于参考图；冲突时必须以 Delta 为准。
 - Delta 至少覆盖：
@@ -94,7 +94,7 @@
 - 层级重排示例（Base 前景后移为当前背景）：
   `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint moved behind ENV:[DeskZone], now facing ENV:[EntranceCorridor]; Axis Side: left -> right; Background Set Change: Visible Set = [entrance door, corridor wall lamps, visitor chairs], Excluded Set = [window wall panorama, skyline glass reflection as dominant backdrop]; Lighting Direction Change: key shifts to back-right from window spill; Framing Change: medium shot with ENV:[EntranceDoor] and visitor chairs as MG anchor, desk edge no longer dominant; Depth Role Reassignment: Base FG/MG:[DeskEdge, DeskFrontPlane] -> Current BG:[DeskEdge, DeskFrontPlane]; Base BG:[EntranceDoor, CorridorWall] -> Current MG:[EntranceDoor, VisitorChairs]; Dynamic Parts State: None}`。
 - 方向切换 Few-shot A（门内看外 -> 门外看内）：
-  `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint moved from inside doorway threshold to exterior corridor side, now facing inward to ENV:[RoomEntrance]; Axis Side: right -> left; Background Set Change: Visible Set = [door frame interior edge, corridor wall lamps, entry mat], Excluded Set = [window-side bookshelf, bed corner, inner desk area]; Lighting Direction Change: key light switches to corridor practicals from camera-left; Framing Change: medium-wide with doorway centered and room depth behind; Dynamic Parts State: PROP:[Door](Open -> Half-Open, reason: CHAR:[@Guard] pushes it and pauses to listen)}`。
+  `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint moved from inside doorway threshold to exterior corridor side, now facing inward to ENV:[RoomEntrance]; Axis Side: right -> left; Background Set Change: Visible Set = [door frame interior edge, corridor wall lamps, entry mat], Excluded Set = [window-side bookshelf, bed corner, inner desk area]; Lighting Direction Change: key light switches to corridor practicals from viewer-left; Framing Change: medium-wide with doorway centered and room depth behind; Dynamic Parts State: PROP:[Door](Open -> Half-Open, reason: CHAR:[@Guard] pushes it and pauses to listen)}`。
 - 方向切换 Few-shot B（街道正向 -> 街道反向）：
   `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint relocated to opposite sidewalk across traffic lane, now facing reverse toward ENV:[CrosswalkJunction]; Axis Side: left -> right; Background Set Change: Visible Set = [crosswalk signal pole, storefront neon, bus-stop shelter], Excluded Set = [alley dumpster row, rear parking gate, service entrance shutter]; Lighting Direction Change: key light becomes back-right from street signage and vehicle headlights; Framing Change: wide shot with crosswalk signal as new composition anchor; Dynamic Parts State: None}`。
 - `Dynamic Parts State` 非 `None` 时必须写 `Before -> After + reason`。

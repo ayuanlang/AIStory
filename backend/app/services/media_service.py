@@ -3012,11 +3012,10 @@ class MediaGenerationService:
             payload_input["aspect_ratio"] = normalized_ar
 
         if gen_type == "image":
-            normalized_image_size = self._normalize_image_size_value(
-                image_size or tool_conf.get("image_size") or tool_conf.get("imageSize")
-            )
-            if normalized_image_size:
-                payload_input["image_size"] = normalized_image_size
+            # KIE Market API expects image_size as aspect ratio enum
+            # (e.g. "16:9", "1:1", "9:16", "auto"), NOT resolution like "1K"/"2K"/"4K".
+            kie_image_size = normalized_ar or "auto"
+            payload_input["image_size"] = kie_image_size
         else:
             duration_value = 5
             try:
