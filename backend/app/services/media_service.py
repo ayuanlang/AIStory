@@ -2957,6 +2957,59 @@ class MediaGenerationService:
                     remapped_model,
                 )
                 model = remapped_model
+
+        # ── Modality-aware model switching for KIE video ──
+        # When a reference image is provided, auto-switch text-to-video models to
+        # their image-to-video counterpart so the image is actually used as input.
+        if gen_type == "video" and ref_image:
+            has_ref = bool(ref_image if not isinstance(ref_image, list) else any(ref_image))
+            if has_ref:
+                _t2v_to_i2v_map = {
+                    "sora-2-text-to-video":                  "sora-2-image-to-video",
+                    "sora-2-pro-text-to-video":              "sora-2-pro-image-to-video",
+                    "bytedance/v1-pro-text-to-video":        "bytedance/v1-pro-image-to-video",
+                    "bytedance/v1-lite-text-to-video":       "bytedance/v1-lite-image-to-video",
+                    "hailuo/02-text-to-video-pro":           "hailuo/02-image-to-video-pro",
+                    "hailuo/02-text-to-video-standard":      "hailuo/02-image-to-video-standard",
+                    "wan/2-6-text-to-video":                 "wan/2-6-image-to-video",
+                    "wan/2-2-a14b-text-to-video-turbo":      "wan/2-2-a14b-image-to-video-turbo",
+                    "kling-2.6/text-to-video":               "kling-2.6/image-to-video",
+                    "kling/v2-5-turbo-text-to-video-pro":    "kling/v2-5-turbo-image-to-video-pro",
+                    "kling/v2-1-master-text-to-video":       "kling/v2-1-master-image-to-video",
+                    "grok-imagine/text-to-video":            "grok-imagine/image-to-video",
+                }
+                i2v_model = _t2v_to_i2v_map.get(str(model or "").strip().lower())
+                if i2v_model:
+                    logger.info(
+                        "KIE modality switch t2v→i2v | from=%s to=%s reason=reference_image_provided",
+                        model,
+                        i2v_model,
+                    )
+                    model = i2v_model
+
+        # ── Modality-aware model switching for KIE image ──
+        # When a reference image is provided, auto-switch text-to-image models to
+        # their image-to-image counterpart.
+        if gen_type == "image" and ref_image:
+            has_ref = bool(ref_image if not isinstance(ref_image, list) else any(ref_image))
+            if has_ref:
+                _t2i_to_i2i_map = {
+                    "grok-imagine/text-to-image":     "grok-imagine/image-to-image",
+                    "qwen/text-to-image":             "qwen/image-to-image",
+                    "seedream/4.5-text-to-image":     "seedream/4.5-edit",
+                    "flux-2/pro-text-to-image":       "flux-2/pro-image-to-image",
+                    "flux-2/flex-text-to-image":      "flux-2/flex-image-to-image",
+                    "gpt-image/1.5-text-to-image":    "gpt-image/1.5-image-to-image",
+                }
+                i2i_model = _t2i_to_i2i_map.get(str(model or "").strip().lower())
+                if i2i_model:
+                    logger.info(
+                        "KIE modality switch t2i→i2i | from=%s to=%s reason=reference_image_provided",
+                        model,
+                        i2i_model,
+                    )
+                    model = i2i_model
+
         tool_conf = config.get("config", {}) or {}
 
         model_lower = str(model or "").strip().lower()
