@@ -621,6 +621,13 @@ const UserAdmin = () => {
         return !!(cfg?.deprecated || cfg?.is_deprecated || cfg?.disable_api);
     };
 
+    const getSmartPriority = (row) => {
+        const cfg = getSystemApiConfig(row);
+        const raw = cfg?.smart_priority ?? cfg?.priority ?? 100;
+        const parsed = Number(raw);
+        return Number.isFinite(parsed) ? parsed : 100;
+    };
+
     const visibleSystemApiRows = React.useMemo(() => {
         let rows = [...filteredSystemApiRows];
         if (systemApiHideDeprecated) {
@@ -636,13 +643,6 @@ const UserAdmin = () => {
         }
         return rows;
     }, [filteredSystemApiRows, systemApiSortMode, systemApiHideDeprecated]);
-
-    const getSmartPriority = (row) => {
-        const cfg = getSystemApiConfig(row);
-        const raw = cfg?.smart_priority ?? cfg?.priority ?? 100;
-        const parsed = Number(raw);
-        return Number.isFinite(parsed) ? parsed : 100;
-    };
 
     const getSmartRetryLimit = (row) => {
         const cfg = getSystemApiConfig(row);
