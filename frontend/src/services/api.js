@@ -5,7 +5,7 @@ import { normalizeEntityToken } from '../lib/entityToken';
 // Use API_URL from config which supports production env vars
 export const api = axios.create({
   baseURL: API_URL,
-  timeout: 300000, // 5 minutes timeout for long generation tasks
+  timeout: 600000, // 10 minutes timeout for long LLM generation tasks
 });
 
 const shouldRetryWithFallback = (error) => {

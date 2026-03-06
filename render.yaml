@@ -47,9 +47,9 @@ services:
       - key: WEB_CONCURRENCY
         value: "2"
       - key: GUNICORN_TIMEOUT
-        value: "180"
+        value: "600"
       - key: GUNICORN_GRACEFUL_TIMEOUT
-        value: "420"
+        value: "660"
       - key: GUNICORN_KEEPALIVE
         value: "15"
       - key: GUNICORN_MAX_REQUESTS
