@@ -856,6 +856,7 @@ Output must be JSON object with keys: reply, plan.
                         merged_config["__resolved_source"] = f"system_fallback:{sys_fallback.provider}/{sys_fallback.model}->{sys_fallback.id}"
                         merged_config["__resolved_category"] = resolved_category
                         merged_config["__selection_source"] = "system_fallback_no_user_setting"
+                        merged_config["__resolved_user_id"] = user_id
 
                         logger.info(
                             "Resolved active API config via system fallback | user_id=%s category=%s setting_id=%s provider=%s model=%s",
@@ -934,6 +935,7 @@ Output must be JSON object with keys: reply, plan.
                     merged_config["__resolved_source"] = selected_source
                     merged_config["__resolved_category"] = getattr(selected, "category", resolved_category)
                     merged_config["__selection_source"] = "system_only"
+                    merged_config["__resolved_user_id"] = user_id
                     if active_user_setting:
                         merged_config["__resolved_user_setting_id"] = active_user_setting.id
 
@@ -1055,6 +1057,83 @@ Output must be JSON object with keys: reply, plan.
         except Exception as e:
             logger.error("Error fetching default system LLM config: %s", e)
         return {}
+
+    def get_fallback_configs(
+        self,
+        user_id: int,
+        category: str = "LLM",
+        exclude_setting_id: Optional[int] = None,
+        modality: Optional[str] = None,
+        limit: int = 3,
+    ) -> List[Dict[str, Any]]:
+        """Return up to *limit* alternative configs from the same category.
+
+        * Skips the currently-active config (identified by *exclude_setting_id*).
+        * Filters by *modality* — a SystemAPISetting with modality=NULL/empty
+          is considered compatible with ANY requested modality.
+        * Only returns active, non-deprecated rows that have a usable API key.
+        """
+        results: List[Dict[str, Any]] = []
+        try:
+            with SessionLocal() as session:
+                rows = session.query(SystemAPISetting).filter(
+                    SystemAPISetting.category == category,
+                    SystemAPISetting.is_active == True,
+                ).order_by(SystemAPISetting.id.desc()).all()
+
+                from app.api.settings import DEFAULTS
+
+                for row in rows:
+                    if len(results) >= limit:
+                        break
+
+                    if exclude_setting_id and row.id == exclude_setting_id:
+                        continue
+
+                    if self._is_deprecated_system_config(row.config, getattr(row, "deprecated", None)):
+                        continue
+
+                    # ── modality check ──
+                    row_modality = (getattr(row, "modality", None) or "").strip()
+                    if modality and row_modality and row_modality.lower() != modality.lower():
+                        continue
+
+                    # ── endpoint compatibility (LLM) ──
+                    endpoint = str((row.config or {}).get("endpoint") or "").strip().lower()
+                    if category == "LLM" and endpoint:
+                        media_tokens = ["/draw", "/video", "image2video", "video-synthesis", "generations/tasks"]
+                        if any(tok in endpoint for tok in media_tokens):
+                            continue
+
+                    api_key = self._pick_runtime_api_key(
+                        {**(row.config or {}), "provider": row.provider},
+                        row.api_key,
+                    )
+                    if not api_key:
+                        continue
+
+                    default = DEFAULTS.get(row.provider, {})
+                    merged_config = dict(row.config or default.get("config", {}) or {})
+                    merged_config["__resolved_setting_id"] = row.id
+                    merged_config["__resolved_source"] = f"fallback:{row.provider}/{row.model}->{row.id}"
+                    merged_config["__resolved_category"] = category
+                    merged_config["__selection_source"] = "fallback_candidate"
+
+                    results.append({
+                        "provider": row.provider,
+                        "api_key": api_key,
+                        "base_url": row.base_url or default.get("base_url"),
+                        "model": row.model or default.get("model"),
+                        "config": merged_config,
+                    })
+
+                logger.info(
+                    "[fallback_configs] category=%s exclude_id=%s modality=%s found=%d limit=%d",
+                    category, exclude_setting_id, modality, len(results), limit,
+                )
+        except Exception as e:
+            logger.error("Error fetching fallback configs: %s", e)
+        return results
 
     def _has_project_access(self, db: Session, user_id: int, project_id: int) -> bool:
         owned = db.query(Project.id).filter(Project.id == project_id, Project.owner_id == user_id).first()

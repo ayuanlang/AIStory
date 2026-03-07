@@ -1245,6 +1245,111 @@ class LLMService:
         else:
              raise Exception(self._vendor_failed_message(provider, f"Invalid API Response: {data}"))
 
+    # ── Retry-with-fallback wrappers ──────────────────────────────────────
+
+    async def generate_content_with_fallback(
+        self,
+        user_prompt: str,
+        system_prompt: str,
+        config: Dict[str, Any],
+        image_urls: List[str] = None,
+        video_urls: List[str] = None,
+        *,
+        user_id: int = None,
+        category: str = "LLM",
+        modality: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """generate_content with active-config×2 retry + 3 fallback candidates."""
+        from app.services.agent_service import agent_service
+
+        active_setting_id = (config.get("config") or {}).get("__resolved_setting_id")
+        if user_id is None:
+            user_id = (config.get("config") or {}).get("__resolved_user_id") or 1
+        last_err = ""
+
+        # ── active config: 2 attempts ──
+        for attempt in range(1, 3):
+            result = await self.generate_content(user_prompt, system_prompt, config, image_urls, video_urls)
+            content = str(result.get("content") or "")
+            if not content.startswith("Error:"):
+                return result
+            last_err = content
+            logger.warning(
+                "[llm_fallback] active attempt %d/2 failed | provider=%s model=%s err=%s",
+                attempt, config.get("provider"), config.get("model"), content[:200],
+            )
+
+        # ── fallback candidates: up to 3 ──
+        fallbacks = agent_service.get_fallback_configs(
+            user_id, category=category, exclude_setting_id=active_setting_id,
+            modality=modality, limit=3,
+        )
+        for idx, fb_cfg in enumerate(fallbacks, 1):
+            logger.info(
+                "[llm_fallback] trying fallback %d/%d | provider=%s model=%s",
+                idx, len(fallbacks), fb_cfg.get("provider"), fb_cfg.get("model"),
+            )
+            result = await self.generate_content(user_prompt, system_prompt, fb_cfg, image_urls, video_urls)
+            content = str(result.get("content") or "")
+            if not content.startswith("Error:"):
+                return result
+            last_err = content
+            logger.warning(
+                "[llm_fallback] fallback %d/%d failed | provider=%s model=%s err=%s",
+                idx, len(fallbacks), fb_cfg.get("provider"), fb_cfg.get("model"), content[:200],
+            )
+
+        return {"content": last_err, "usage": {}, "finish_reason": None}
+
+    async def chat_completion_with_fallback(
+        self,
+        messages: List[Dict],
+        config: Dict[str, Any],
+        *,
+        user_id: int = None,
+        category: str = "LLM",
+        modality: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """chat_completion with active-config×2 retry + 3 fallback candidates."""
+        from app.services.agent_service import agent_service
+
+        active_setting_id = (config.get("config") or {}).get("__resolved_setting_id")
+        if user_id is None:
+            user_id = (config.get("config") or {}).get("__resolved_user_id") or 1
+        last_exc: Optional[Exception] = None
+
+        # ── active config: 2 attempts ──
+        for attempt in range(1, 3):
+            try:
+                return await self.chat_completion(messages, config)
+            except Exception as e:
+                last_exc = e
+                logger.warning(
+                    "[llm_fallback] chat_completion active attempt %d/2 failed | provider=%s model=%s err=%s",
+                    attempt, config.get("provider"), config.get("model"), str(e)[:200],
+                )
+
+        # ── fallback candidates: up to 3 ──
+        fallbacks = agent_service.get_fallback_configs(
+            user_id, category=category, exclude_setting_id=active_setting_id,
+            modality=modality, limit=3,
+        )
+        for idx, fb_cfg in enumerate(fallbacks, 1):
+            try:
+                logger.info(
+                    "[llm_fallback] chat_completion fallback %d/%d | provider=%s model=%s",
+                    idx, len(fallbacks), fb_cfg.get("provider"), fb_cfg.get("model"),
+                )
+                return await self.chat_completion(messages, fb_cfg)
+            except Exception as e:
+                last_exc = e
+                logger.warning(
+                    "[llm_fallback] chat_completion fallback %d/%d failed | provider=%s model=%s err=%s",
+                    idx, len(fallbacks), fb_cfg.get("provider"), fb_cfg.get("model"), str(e)[:200],
+                )
+
+        raise last_exc or Exception("All LLM attempts exhausted")
+
     def _mock_fallback(self, query: str) -> Dict[str, Any]:
         if "analyze" in query.lower():
             return {

@@ -548,7 +548,7 @@ class MediaGenerationService:
 
         return True
 
-    def _get_system_candidates(self, session, category: str) -> List[Dict[str, Any]]:
+    def _get_system_candidates(self, session, category: str, modality: str = None) -> List[Dict[str, Any]]:
         defaults = {
             "openai": {"base_url": "https://api.openai.com/v1", "model": "gpt-4-turbo-preview"},
             "anthropic": {"base_url": "https://api.anthropic.com", "model": "claude-3-opus-20240229"},
@@ -575,6 +575,15 @@ class MediaGenerationService:
                 continue
             if self._is_deprecated_system_config(row.config, getattr(row, "deprecated", None)):
                 continue
+            # Modality filtering: if a modality is requested, skip rows whose
+            # modality is non-empty and does not contain the requested value.
+            # Empty/null modality on the row means "compatible with all".
+            if modality:
+                row_modality = (getattr(row, "modality", None) or "").strip()
+                if row_modality:
+                    modality_tokens = {t.strip().lower() for t in row_modality.split(",") if t.strip()}
+                    if modality.strip().lower() not in modality_tokens:
+                        continue
             cfg = self._safe_json_dict(row.config)
 
             if provider not in provider_bundle_cache:
@@ -794,11 +803,12 @@ class MediaGenerationService:
         requested_model: Optional[str] = None,
         explicit_selection: bool = False,
         allow_priority_fallback_when_explicit: bool = False,
-        fallback_candidate_limit: int = 1,
+        fallback_candidate_limit: int = 3,
+        modality: str = None,
     ) -> Dict[str, Any]:
         with SessionLocal() as session:
             smart_enabled = self._is_smart_routing_enabled(session, user_id)
-            candidates = self._get_system_candidates(session, category)
+            candidates = self._get_system_candidates(session, category, modality=modality)
 
         if allow_priority_fallback_when_explicit:
             smart_enabled = True
@@ -841,7 +851,7 @@ class MediaGenerationService:
         if fallback_candidate_limit and fallback_candidate_limit > 0:
             fallback_candidates = fallback_candidates[: int(fallback_candidate_limit)]
 
-        retry_limit = 1
+        retry_limit = 2
         for c in candidates:
             if c.get("provider") == effective_provider and c.get("retry_limit") is not None:
                 retry_limit = max(1, int(c.get("retry_limit")))
@@ -1372,7 +1382,8 @@ class MediaGenerationService:
             requested_model=(llm_config or {}).get("model"),
             explicit_selection=bool((llm_config or {}).get("provider") or (llm_config or {}).get("model")),
             allow_priority_fallback_when_explicit=str(asset_type or "").strip().lower() in {"subject", "entity", "character", "prop", "environment"},
-            fallback_candidate_limit=1,
+            fallback_candidate_limit=3,
+            modality="image-to-image" if reference_image_url else "text-to-image",
         )
 
         # Download 
@@ -1469,6 +1480,7 @@ class MediaGenerationService:
             keyframes=keyframes,
             requested_model=(llm_config or {}).get("model"),
             explicit_selection=explicit_selection_for_video,
+            modality="image-to-video" if reference_image_url else "text-to-video",
         )
 
         # Download 

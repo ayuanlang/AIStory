@@ -1817,7 +1817,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         except Exception:
             system_only_messages = []
         for seg_idx in range(1, max_segments + 1):
-            llm_resp = await llm_service.chat_completion(current_messages, config)
+            llm_resp = await llm_service.chat_completion_with_fallback(current_messages, config)
             raw_part = llm_resp.get("raw_content")
             if not isinstance(raw_part, str):
                 raw_part = llm_resp.get("content", "") or ""
@@ -2171,7 +2171,7 @@ async def translate_text(
     )
     
     try:
-        llm_resp = await llm_service.generate_content(user_prompt, system_prompt, llm_config)
+        llm_resp = await llm_service.generate_content_with_fallback(user_prompt, system_prompt, llm_config)
         dst = llm_service.sanitize_text_output(str(llm_resp.get("content") or "").strip())
         usage = llm_resp.get("usage") or {}
 
@@ -2913,7 +2913,7 @@ async def generate_markdown_with_retry(
         )
 
     async def _call_once(tag: str, up: str, sp: str) -> Tuple[str, str, Dict[str, Any]]:
-        resp = await llm_service.generate_content(up, sp, llm_config)
+        resp = await llm_service.generate_content_with_fallback(up, sp, llm_config)
         raw = str(resp.get("content") or "")
         cleaned = sanitize_llm_markdown_output(raw)
         finish_reason = str(resp.get("finish_reason") or "")
@@ -3647,7 +3647,7 @@ async def analyze_project_novel_to_story_generator_fields(
     except Exception:
         sys_prompt = sys_prompt_template
 
-    resp = await llm_service.generate_content(user_prompt, sys_prompt, llm_config)
+    resp = await llm_service.generate_content_with_fallback(user_prompt, sys_prompt, llm_config)
     raw = (resp.get("content") or "").strip()
     if not raw:
         raise HTTPException(status_code=500, detail="LLM returned empty content")
@@ -4253,7 +4253,7 @@ async def generate_project_character_profile(
     model = llm_config.get("model") if llm_config else None
     billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
 
-    resp = await llm_service.generate_content(user_prompt, sys_prompt, llm_config)
+    resp = await llm_service.generate_content_with_fallback(user_prompt, sys_prompt, llm_config)
     description_md = (resp.get("content") or "").strip()
     if not description_md:
         raise HTTPException(status_code=500, detail="LLM returned empty content")
@@ -4593,7 +4593,7 @@ async def generate_episode_character_profile(
     model = llm_config.get("model") if llm_config else None
     billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
 
-    resp = await llm_service.generate_content(user_prompt, sys_prompt, llm_config)
+    resp = await llm_service.generate_content_with_fallback(user_prompt, sys_prompt, llm_config)
     description_md = (resp.get("content") or "").strip()
     if not description_md:
         raise HTTPException(status_code=500, detail="LLM returned empty content")
@@ -4877,7 +4877,7 @@ async def generate_episode_scenes_from_story(
     model = llm_config.get("model") if llm_config else None
     billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
 
-    resp = await llm_service.generate_content(user_prompt, sys_prompt, llm_config)
+    resp = await llm_service.generate_content_with_fallback(user_prompt, sys_prompt, llm_config)
     raw = (resp.get("content") or "").strip()
     if not raw:
         raise HTTPException(status_code=500, detail="LLM returned empty content")
@@ -6118,7 +6118,7 @@ async def regenerate_scene(
     model = llm_config.get("model") if llm_config else None
     billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
 
-    resp = await llm_service.generate_content(user_prompt, system_instruction, llm_config)
+    resp = await llm_service.generate_content_with_fallback(user_prompt, system_instruction, llm_config)
     raw = str((resp or {}).get("content") or "").strip()
     if not raw:
         raise HTTPException(status_code=502, detail="LLM returned empty content")
@@ -7155,7 +7155,7 @@ async def ai_generate_shots(
             # Ensure we have at least a default task type if provider is missing (though check_balance handles None)
             billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
 
-        response_dict = await llm_service.generate_content(user_input, system_prompt, llm_config)
+        response_dict = await llm_service.generate_content_with_fallback(user_input, system_prompt, llm_config)
         response_content_raw = response_dict.get("content", "")
         usage = response_dict.get("usage", {})
 
@@ -8053,7 +8053,7 @@ async def generate_sora_character(
     # Let's assume we call `generate_content` but with a special system prompt that triggers the provider's logic.
     
     try:
-        response = await llm_service.generate_content(
+        response = await llm_service.generate_content_with_fallback(
             user_prompt=prompt,
             system_prompt="sora-create-character", # Special flag for the service to recognize?
             config=llm_config,
@@ -14955,7 +14955,7 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
                 reserve_details,
             )
 
-        llm_response = await llm_service.chat_completion(messages, llm_config)
+        llm_response = await llm_service.chat_completion_with_fallback(messages, llm_config)
         
         result_content = llm_response.get("content", "")
         usage = llm_response.get("usage", {})
@@ -15005,7 +15005,7 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
             )
 
             try:
-                repair_response = await llm_service.chat_completion(
+                repair_response = await llm_service.chat_completion_with_fallback(
                     [
                         {"role": "system", "content": repair_system},
                         {"role": "user", "content": repair_user},
