@@ -16,6 +16,7 @@ from app.models.all_models import (
     SystemAPISetting,
     ProviderKeyPool,
     SystemAPIBillingRule,
+    TransactionAction,
     SMTPSystemConfig,
     WechatPayConfig,
 )
@@ -4213,12 +4214,47 @@ _SYNC_BILLING_RULE_FIELDS = [
 ]
 
 
+def _clear_non_system_settings_for_replace_all(db: Session) -> None:
+    # Delete non-System API settings in FK-safe order.
+    target_ids = [
+        int(row_id)
+        for row_id, in db.query(SystemAPISetting.id).filter(
+            ~SystemAPISetting.category.like("System_%"),
+        ).all()
+    ]
+    if not target_ids:
+        return
+
+    rule_ids = [
+        int(rule_id)
+        for rule_id, in db.query(SystemAPIBillingRule.id).filter(
+            SystemAPIBillingRule.system_api_id.in_(target_ids),
+        ).all()
+    ]
+
+    db.query(TransactionAction).filter(
+        TransactionAction.system_api_id.in_(target_ids),
+    ).update({"system_api_id": None}, synchronize_session=False)
+
+    if rule_ids:
+        db.query(TransactionAction).filter(
+            TransactionAction.matched_rule_id.in_(rule_ids),
+        ).update({"matched_rule_id": None}, synchronize_session=False)
+
+    db.query(SystemAPIBillingRule).filter(
+        SystemAPIBillingRule.system_api_id.in_(target_ids),
+    ).delete(synchronize_session=False)
+
+    db.query(SystemAPISetting).filter(
+        SystemAPISetting.id.in_(target_ids),
+    ).delete(synchronize_session=False)
+
+    db.flush()
+
+
 def _import_provider_bundle_no_commit(db: Session, providers: List[Any], replace_all: bool) -> Dict[str, int]:
     if replace_all:
-        db.query(SystemAPISetting).filter(
-            ~SystemAPISetting.category.like("System_%"),
-        ).delete(synchronize_session=False)
-        db.flush()
+        _clear_non_system_settings_for_replace_all(db)
 
     created = 0
     updated = 0
@@ -4460,6 +4496,9 @@ def import_system_config_sync_bundle_for_manage(
         provider_result = _import_provider_bundle_no_commit(db, provider_req.providers or [], provider_req.replace_all)
 
         if replace_all:
+            db.query(TransactionAction).filter(
+                TransactionAction.matched_rule_id.isnot(None),
+            ).update({"matched_rule_id": None}, synchronize_session=False)
             db.query(SystemAPIBillingRule).delete(synchronize_session=False)
 
         system_rows = db.query(SystemAPISetting).filter(
@@ -4627,10 +4666,7 @@ def import_system_settings_for_manage(
         return {"ok": True, "created": 0, "updated": 0, "total": 0}
 
     if payload.replace_all:
-        db.query(SystemAPISetting).filter(
-            ~SystemAPISetting.category.like("System_%"),
-        ).delete(synchronize_session=False)
-        db.flush()
+        _clear_non_system_settings_for_replace_all(db)
 
     created = 0
     updated = 0
