@@ -3,9 +3,19 @@ import logging
 import bcrypt
 import os
 import json
+from datetime import datetime
 from sqlalchemy import text, inspect
 from app.db.session import engine, SessionLocal
-from app.models.all_models import PricingRule, APISetting, User, SystemAPISetting
+from app.models.all_models import (
+    APISetting,
+    User,
+    SystemAPISetting,
+    ProviderKeyPool,
+    SystemAPIBillingRule,
+    TransactionAction,
+    SMTPSystemConfig,
+    WechatPayConfig,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,17 +85,115 @@ def check_and_migrate_tables():
         except Exception as e:
             logger.error(f"Failed to ensure system_api_settings table: {e}")
 
+        # Ensure provider_key_pool table exists
+        try:
+            if not inspector.has_table("provider_key_pool"):
+                ProviderKeyPool.__table__.create(bind=engine, checkfirst=True)
+                logger.info("Created provider_key_pool table")
+        except Exception as e:
+            logger.error(f"Failed to ensure provider_key_pool table: {e}")
+
+        # Ensure system_api_billing_rules table exists
+        try:
+            if not inspector.has_table("system_api_billing_rules"):
+                SystemAPIBillingRule.__table__.create(bind=engine, checkfirst=True)
+                logger.info("Created system_api_billing_rules table")
+        except Exception as e:
+            logger.error(f"Failed to ensure system_api_billing_rules table: {e}")
+
+        # Ensure dedicated smtp_system_configs table exists
+        try:
+            if not inspector.has_table("smtp_system_configs"):
+                SMTPSystemConfig.__table__.create(bind=engine, checkfirst=True)
+                logger.info("Created smtp_system_configs table")
+        except Exception as e:
+            logger.error(f"Failed to ensure smtp_system_configs table: {e}")
+
+        # Ensure dedicated wechat_pay_configs table exists
+        try:
+            if not inspector.has_table("wechat_pay_configs"):
+                WechatPayConfig.__table__.create(bind=engine, checkfirst=True)
+                logger.info("Created wechat_pay_configs table")
+        except Exception as e:
+            logger.error(f"Failed to ensure wechat_pay_configs table: {e}")
+
+        # Ensure legacy system_api_billing_rules schema can support charge multiplier.
+        try:
+            inspector = inspect(engine)
+            existing_rule_cols = {c['name'] for c in inspector.get_columns('system_api_billing_rules')} if inspector.has_table('system_api_billing_rules') else set()
+            with engine.begin() as conn:
+                if 'charge_multiplier' not in existing_rule_cols:
+                    if is_postgres:
+                        conn.execute(text("ALTER TABLE system_api_billing_rules ADD COLUMN IF NOT EXISTS charge_multiplier DOUBLE PRECISION DEFAULT 2.0"))
+                    else:
+                        conn.execute(text("ALTER TABLE system_api_billing_rules ADD COLUMN charge_multiplier FLOAT DEFAULT 2.0"))
+                    logger.info("Ensured system_api_billing_rules.charge_multiplier column")
+                try:
+                    conn.execute(text("UPDATE system_api_billing_rules SET charge_multiplier = 2.0 WHERE charge_multiplier IS NULL OR charge_multiplier < 0"))
+                except Exception as e:
+                    logger.warning(f"Failed to backfill system_api_billing_rules.charge_multiplier: {e}")
+        except Exception as e:
+            logger.error(f"Failed to migrate system_api_billing_rules schema: {e}")
+
+        # Ensure transaction_action table exists
+        try:
+            if not inspector.has_table("transaction_action"):
+                TransactionAction.__table__.create(bind=engine, checkfirst=True)
+                logger.info("Created transaction_action table")
+        except Exception as e:
+            logger.error(f"Failed to ensure transaction_action table: {e}")
+
+        # Cleanup legacy duplicate table: transaction_actions (plural).
+        # Keep this guard conservative: only drop when table exists and is empty.
+        try:
+            inspector = inspect(engine)
+            if inspector.has_table("transaction_actions"):
+                with engine.begin() as conn:
+                    count_result = conn.execute(text("SELECT COUNT(1) FROM transaction_actions"))
+                    row_count = int((count_result.scalar() or 0))
+                    if row_count == 0:
+                        if is_postgres:
+                            conn.execute(text("DROP TABLE IF EXISTS transaction_actions CASCADE"))
+                        else:
+                            conn.execute(text("DROP TABLE IF EXISTS transaction_actions"))
+                        logger.info("Dropped legacy empty table transaction_actions")
+                    else:
+                        logger.warning(
+                            "Skipped dropping transaction_actions because it is not empty (rows=%s)",
+                            row_count,
+                        )
+        except Exception as e:
+            logger.error(f"Failed to cleanup legacy table transaction_actions: {e}")
+
         # Ensure legacy system_api_settings schema is compatible with current model.
         # Render DB may have an older table shape missing columns like deprecated/config/is_active.
         try:
             inspector = inspect(engine)
             existing_system_cols = {c['name'] for c in inspector.get_columns('system_api_settings')}
+
+            # Detect if modality is still VARCHAR and needs migration to JSON
+            modality_col_info = None
+            for col in inspector.get_columns('system_api_settings'):
+                if col['name'] == 'modality':
+                    modality_col_info = col
+                    break
+            need_modality_type_migration = False
+            if modality_col_info:
+                col_type_str = str(modality_col_info.get('type', '')).upper()
+                if 'VARCHAR' in col_type_str or 'TEXT' in col_type_str or 'CHAR' in col_type_str:
+                    need_modality_type_migration = True
+
             system_columns_to_check = [
                 ("deprecated", "BOOLEAN DEFAULT FALSE"),
                 ("config", "JSON"),
                 ("is_active", "BOOLEAN DEFAULT FALSE"),
-                ("modality", "VARCHAR"),
+                ("base_model", "VARCHAR"),
+                ("tags", "JSON"),
+                ("supplier_info", "JSON"),
             ]
+            # Only add modality column if it doesn't exist yet (new installs)
+            if 'modality' not in existing_system_cols:
+                system_columns_to_check.append(("modality", "JSON"))
 
             with engine.begin() as conn:
                 for col_name, col_type in system_columns_to_check:
@@ -96,6 +204,32 @@ def check_and_migrate_tables():
                             conn.execute(text(f"ALTER TABLE system_api_settings ADD COLUMN {col_name} {col_type}"))
                     except Exception as e:
                         logger.error(f"Failed to ensure system_api_settings.{col_name}: {e}")
+
+                # Migrate modality column from VARCHAR to JSON if needed
+                if need_modality_type_migration:
+                    try:
+                        if is_postgres:
+                            # Step 1: rename old column
+                            conn.execute(text("ALTER TABLE system_api_settings RENAME COLUMN modality TO modality_legacy"))
+                            # Step 2: add new JSON column
+                            conn.execute(text("ALTER TABLE system_api_settings ADD COLUMN modality JSON"))
+                            # Step 3: migrate data - convert old string values to JSON
+                            conn.execute(text("""
+                                UPDATE system_api_settings
+                                SET modality = NULL
+                                WHERE modality_legacy IS NULL OR TRIM(modality_legacy) = ''
+                            """))
+                            # For non-null values, we'll do a Python-based migration below
+                            conn.execute(text("ALTER TABLE system_api_settings DROP COLUMN modality_legacy"))
+                            logger.info("Migrated system_api_settings.modality from VARCHAR to JSON (PostgreSQL)")
+                        else:
+                            # SQLite: recreate approach via rename + new column
+                            conn.execute(text("ALTER TABLE system_api_settings RENAME COLUMN modality TO modality_legacy"))
+                            conn.execute(text("ALTER TABLE system_api_settings ADD COLUMN modality JSON"))
+                            conn.execute(text("ALTER TABLE system_api_settings DROP COLUMN modality_legacy"))
+                            logger.info("Migrated system_api_settings.modality from VARCHAR to JSON (SQLite)")
+                    except Exception as e:
+                        logger.error(f"Failed to migrate system_api_settings.modality to JSON: {e}")
 
                 try:
                     conn.execute(text("UPDATE system_api_settings SET deprecated = FALSE WHERE deprecated IS NULL"))
@@ -114,8 +248,236 @@ def check_and_migrate_tables():
                         conn.execute(text("UPDATE system_api_settings SET config = '{}' WHERE config IS NULL"))
                 except Exception as e:
                     logger.warning(f"Failed to backfill system_api_settings.config: {e}")
+
+
+                # Hard-drop deprecated legacy structures (no backward compatibility mode).
+                try:
+                    conn.execute(text("DROP TABLE IF EXISTS pricing_rules"))
+                except Exception as e:
+                    logger.warning(f"Failed to drop legacy table pricing_rules: {e}")
+
+                for legacy_col in [
+                    "billing_unit_type",
+                    "billing_cost",
+                    "billing_cost_input",
+                    "billing_cost_output",
+                    "has_granular_billing_rules",
+                ]:
+                    try:
+                        if is_postgres:
+                            conn.execute(text(f"ALTER TABLE system_api_settings DROP COLUMN IF EXISTS {legacy_col}"))
+                        else:
+                            conn.execute(text(f"ALTER TABLE system_api_settings DROP COLUMN {legacy_col}"))
+                    except Exception as e:
+                        logger.warning(f"Failed to drop legacy column system_api_settings.{legacy_col}: {e}")
         except Exception as e:
             logger.error(f"Failed to migrate system_api_settings schema: {e}")
+
+        # --- Migrate provider key pool data from config JSON to dedicated table ---
+        try:
+            with SessionLocal() as session:
+                existing_pool_count = session.query(ProviderKeyPool).count()
+                if existing_pool_count == 0:
+                    # First run: extract key pool data from system_api_settings.config
+                    all_rows = session.query(SystemAPISetting).order_by(SystemAPISetting.id.asc()).all()
+                    provider_pools: dict = {}  # provider -> {keys, strategy, weights}
+                    for row in all_rows:
+                        cfg = row.config if isinstance(row.config, dict) else {}
+                        provider_name = str(row.provider or "").strip().lower()
+                        if not provider_name:
+                            continue
+                        raw_keys = cfg.get("provider_api_keys")
+                        if not raw_keys:
+                            continue
+                        keys_list = raw_keys if isinstance(raw_keys, list) else [raw_keys]
+                        keys_list = [str(k).strip() for k in keys_list if str(k).strip()]
+                        if not keys_list:
+                            continue
+                        if provider_name not in provider_pools:
+                            strategy = str(cfg.get("provider_api_key_strategy") or "random").strip().lower()
+                            if strategy not in ("random", "round_robin", "weighted"):
+                                strategy = "random"
+                            raw_weights = cfg.get("provider_api_key_weights")
+                            weights = raw_weights if isinstance(raw_weights, list) else []
+                            provider_pools[provider_name] = {
+                                "keys": list(dict.fromkeys(keys_list)),  # dedup preserving order
+                                "strategy": strategy,
+                                "weights": weights,
+                            }
+                        else:
+                            existing = provider_pools[provider_name]["keys"]
+                            seen = set(existing)
+                            for k in keys_list:
+                                if k not in seen:
+                                    seen.add(k)
+                                    existing.append(k)
+                    migrated = 0
+                    for prov, data in provider_pools.items():
+                        session.add(ProviderKeyPool(
+                            provider=prov,
+                            api_keys=data["keys"],
+                            strategy=data["strategy"],
+                            weights=data["weights"],
+                        ))
+                        migrated += 1
+                    if migrated:
+                        session.commit()
+                        logger.info("Migrated %s provider key pools from config JSON to provider_key_pool table", migrated)
+        except Exception as e:
+            logger.error(f"Failed to migrate provider key pool data: {e}")
+
+        # --- Migrate legacy SMTP config from system_api_settings to smtp_system_configs ---
+        try:
+            with SessionLocal() as session:
+                existing_smtp = session.query(SMTPSystemConfig).filter(SMTPSystemConfig.is_active == True).first()
+                if not existing_smtp:
+                    legacy_smtp = session.query(SystemAPISetting).filter(
+                        SystemAPISetting.category == "System_Email",
+                        SystemAPISetting.provider == "smtp",
+                    ).order_by(SystemAPISetting.id.desc()).first()
+                    if legacy_smtp:
+                        cfg = legacy_smtp.config if isinstance(legacy_smtp.config, dict) else {}
+                        session.add(SMTPSystemConfig(
+                            host=str(cfg.get("host", "") or "").strip(),
+                            port=int(cfg.get("port") or 587),
+                            username=str(cfg.get("username", "") or "").strip(),
+                            password=str(legacy_smtp.api_key or "").strip(),
+                            use_ssl=bool(cfg.get("use_ssl", False)),
+                            use_tls=bool(cfg.get("use_tls", True)),
+                            from_email=str(cfg.get("from_email", "") or "").strip(),
+                            frontend_base_url=str(cfg.get("frontend_base_url", "") or "").strip(),
+                            is_active=True,
+                            created_at=datetime.utcnow().isoformat(),
+                            updated_at=datetime.utcnow().isoformat(),
+                        ))
+                        session.commit()
+                        logger.info("Migrated legacy SMTP config into smtp_system_configs")
+        except Exception as e:
+            logger.error(f"Failed to migrate legacy SMTP config: {e}")
+
+        # --- Migrate legacy WeChat config from system_api_settings to wechat_pay_configs ---
+        try:
+            with SessionLocal() as session:
+                existing_wechat = session.query(WechatPayConfig).filter(WechatPayConfig.is_active == True).first()
+                if not existing_wechat:
+                    legacy_wechat = session.query(SystemAPISetting).filter(
+                        SystemAPISetting.category == "System_Payment",
+                        SystemAPISetting.provider == "wechat_pay",
+                    ).order_by(SystemAPISetting.id.desc()).first()
+                    if legacy_wechat:
+                        cfg = legacy_wechat.config if isinstance(legacy_wechat.config, dict) else {}
+                        session.add(WechatPayConfig(
+                            mchid=str(cfg.get("mchid", "") or "").strip(),
+                            appid=str(cfg.get("appid", "") or "").strip(),
+                            api_v3_key=str(legacy_wechat.api_key or "").strip(),
+                            cert_serial_no=str(cfg.get("cert_serial_no", "") or "").strip(),
+                            private_key=str(cfg.get("private_key", "") or ""),
+                            notify_url=str(cfg.get("notify_url", "") or "").strip(),
+                            use_mock=bool(cfg.get("use_mock", True)),
+                            is_active=True,
+                            created_at=datetime.utcnow().isoformat(),
+                            updated_at=datetime.utcnow().isoformat(),
+                        ))
+                        session.commit()
+                        logger.info("Migrated legacy WeChat config into wechat_pay_configs")
+        except Exception as e:
+            logger.error(f"Failed to migrate legacy WeChat config: {e}")
+
+        # --- Migrate legacy pricing source to system_api_billing_rules base rows ---
+        try:
+            with SessionLocal() as session:
+                def _normalize_unit_type(raw):
+                    text = str(raw or "per_call").strip() or "per_call"
+                    allowed = {"per_call", "per_second", "per_minute", "per_token", "per_1k_tokens", "per_million_tokens"}
+                    return text if text in allowed else "per_call"
+
+                def _nni(value):
+                    try:
+                        parsed = int(float(value))
+                        return parsed if parsed >= 0 else 0
+                    except Exception:
+                        return 0
+
+                def _safe_json_dict(value):
+                    if isinstance(value, dict):
+                        return dict(value)
+                    if isinstance(value, str):
+                        raw = value.strip()
+                        if not raw:
+                            return {}
+                        try:
+                            parsed = json.loads(raw)
+                            return parsed if isinstance(parsed, dict) else {}
+                        except Exception:
+                            return {}
+                    return {}
+
+                def _mode_flags(category):
+                    normalized = str(category or "").strip().lower()
+                    if normalized == "image":
+                        return (False, True, False)
+                    if normalized == "video":
+                        return (False, False, True)
+                    return (True, False, False)
+
+                def _has_base_rule(system_api_id):
+                    rules = session.query(SystemAPIBillingRule).filter(
+                        SystemAPIBillingRule.system_api_id == system_api_id,
+                    ).all()
+                    for rule in rules:
+                        extra = _safe_json_dict(getattr(rule, "extra_conditions", {}))
+                        if str(extra.get("rule_kind", "")).strip().lower() == "base_pricing":
+                            return True
+                    return False
+
+                rows = session.query(SystemAPISetting).filter(SystemAPISetting.category != "System_Payment").all()
+                migrated = 0
+                for row in rows:
+                    if _has_base_rule(int(row.id)):
+                        continue
+
+                    cfg = _safe_json_dict(row.config)
+                    ap = cfg.get("api_pricing") if isinstance(cfg.get("api_pricing"), dict) else {}
+                    unit_type = _normalize_unit_type(ap.get("unit_type", cfg.get("billing_unit_type", "per_call")))
+                    cost = _nni(ap.get("cost", cfg.get("billing_cost", 0)))
+                    cost_input = _nni(ap.get("cost_input", cfg.get("billing_cost_input", 0)))
+                    cost_output = _nni(ap.get("cost_output", cfg.get("billing_cost_output", 0)))
+                    if cost <= 0 and cost_input <= 0 and cost_output <= 0:
+                        continue
+
+                    applies_to_text, applies_to_image, applies_to_video = _mode_flags(row.category)
+                    now_iso = datetime.utcnow().isoformat()
+                    session.add(SystemAPIBillingRule(
+                        system_api_id=int(row.id),
+                        name="Base Pricing",
+                        description="Base pricing rule migrated from system_api_settings.",
+                        is_active=True,
+                        priority=-100000,
+                        applies_to_text=applies_to_text,
+                        applies_to_image=applies_to_image,
+                        applies_to_video=applies_to_video,
+                        billing_unit_type=unit_type,
+                        billing_cost=cost,
+                        billing_cost_input=cost_input,
+                        billing_cost_output=cost_output,
+                        charge_multiplier=2.0,
+                        extra_conditions={"rule_kind": "base_pricing"},
+                        created_at=now_iso,
+                        updated_at=now_iso,
+                    ))
+
+                    if isinstance(cfg, dict):
+                        for key in ("api_pricing", "billing_unit_type", "billing_cost", "billing_cost_input", "billing_cost_output"):
+                            cfg.pop(key, None)
+                        row.config = cfg
+
+                    migrated += 1
+
+                if migrated:
+                    session.commit()
+                    logger.info("Migrated %s system_api_settings pricing rows into base billing rules", migrated)
+        except Exception as e:
+            logger.error(f"Failed to migrate system_api pricing into base rules: {e}")
 
         # Migrate legacy system-owned rows from api_settings into system_api_settings (opt-in only).
         if _should_manage_api_settings_on_init():
@@ -334,99 +696,6 @@ def check_and_migrate_tables():
         
     except Exception as e:
         logger.critical(f"Migration CRITICAL FAILURE: {e}")
-
-def init_pricing_rules(db):
-    # 1. Ensure Generic Fallback Rules Exist (Provider=None, Model=None)
-    # These are critical to prevent "No pricing rule found" errors when usage doesn't match specific providers.
-    generic_defaults = [
-        {"task_type": "image_gen", "cost": 10, "unit_type": "per_call", "description": "Default Image Gen Cost"},
-        {"task_type": "video_gen", "cost": 50, "unit_type": "per_call", "description": "Default Video Gen Cost"},
-        {"task_type": "llm_chat", "cost": 1, "unit_type": "per_call", "description": "Default LLM Chat Cost"},
-        {"task_type": "analysis", "cost": 1, "unit_type": "per_call", "description": "Default Analysis Cost"},
-    ]
-
-    for rule_def in generic_defaults:
-        exists = db.query(PricingRule).filter(
-            PricingRule.task_type == rule_def["task_type"],
-            PricingRule.provider == None,
-            PricingRule.model == None
-        ).first()
-        
-        if not exists:
-            logger.info(f"Adding missing generic pricing rule for {rule_def['task_type']}")
-            new_rule = PricingRule(
-                task_type=rule_def["task_type"],
-                provider=None,
-                model=None,
-                cost=rule_def["cost"],
-                unit_type=rule_def["unit_type"],
-                description=rule_def["description"],
-                ref_markup=1.0,
-                ref_exchange_rate=1.0,
-                is_active=True
-            )
-            db.add(new_rule)
-    
-    db.commit()
-
-    # 2. Add sample specific rules ONLY if table was completely empty (legacy behavior preservation)
-    # We check if there are any PROVIDER-specific rules to determine "fresh install" vs "update"
-    has_specific_rules = db.query(PricingRule).filter(PricingRule.provider != None).first()
-    
-    if has_specific_rules:
-        return
-
-    logger.info("Initializing default specific pricing rules...")
-    
-    rules = [
-        PricingRule(
-            provider='doubao', model='doubao-pro-32k', task_type='llm_chat',        
-            cost=1, cost_input=200, cost_output=250,
-            unit_type='per_million_tokens',
-            ref_markup=1.5, ref_exchange_rate=10.0,
-            description='None'
-        ),
-        PricingRule(
-            provider='Grsai-Video', model='veo3.1-fast', task_type='video_gen',     
-            cost=100, cost_input=0, cost_output=0,
-            unit_type='per_call',
-            ref_markup=1.5, ref_exchange_rate=10.0,
-            description='Auto-synced from Grsai Video (Sora)'
-        ),
-        PricingRule(
-            provider='Grsai-Image', model='nano-banana-fast', task_type='image_gen',
-            cost=10, cost_input=0, cost_output=0,
-            unit_type='per_call',
-            ref_markup=1.5, ref_exchange_rate=10.0,
-            description='Auto-synced from Grsai (Dakka)'
-        ),
-        PricingRule(
-            provider='baidu_translate', model='None', task_type='llm_chat',
-            cost=1, cost_input=0, cost_output=0,
-            unit_type='per_call',
-            ref_markup=1.5, ref_exchange_rate=10.0,
-            description='Auto-synced from baidu_translate'
-        ),
-        PricingRule(
-            provider='doubao', model='glm-4-7-251222', task_type='llm_chat',        
-            cost=1, cost_input=200, cost_output=200,
-            unit_type='per_call',
-            ref_markup=1.5, ref_exchange_rate=10.0,
-            description='Auto-synced from doubao'
-        ),
-        PricingRule(
-            provider='grsai', model='gemini-3-pro', task_type='llm_chat',
-            cost=1, cost_input=200, cost_output=1200,
-            unit_type='per_million_tokens',
-            ref_markup=1.5, ref_exchange_rate=10.0,
-            description='Auto-synced from Grsai (Sora)'
-        ),
-    ]
-    
-    for r in rules:
-        db.add(r)
-    db.commit()
-    logger.info("Default specific pricing rules created.")
 
 def init_api_settings(db):
     # Check if system user has settings
@@ -754,14 +1023,17 @@ def init_system_api_settings(db):
     kie_provider = "kie"
     kie_base_url = "https://api.kie.ai"
 
-    def _kie_item(name: str, category: str, model: str, modality: str = None) -> dict:
+    def _kie_item(name: str, category: str, model: str, modality: str = None, tags: list = None) -> dict:
+        from app.services.modality_utils import migrate_legacy_modality_string
         d = {
             "name": name,
             "category": category,
             "model": model,
         }
         if modality is not None:
-            d["modality"] = modality
+            d["modality"] = migrate_legacy_modality_string(modality)
+        if tags is not None:
+            d["tags"] = tags
         return d
 
     kie_models = [
@@ -772,7 +1044,8 @@ def init_system_api_settings(db):
         _kie_item("Kie Google Imagen4", "Image", "google/imagen4", "text-to-image"),
         _kie_item("Kie Google Nano Banana", "Image", "google/nano-banana", "text-to-image"),
         _kie_item("Kie Google Nano Banana Edit", "Image", "google/nano-banana-edit", "image-to-image"),
-        # google/nanobanana2 and google/pro-image-to-image retired by KIE
+        _kie_item("Kie Google Nano Banana 2", "Image", "google/nanobanana2", "text-to-image"),
+        _kie_item("Kie Google Pro Image-to-Image", "Image", "google/pro-image-to-image", "image-to-image"),
         _kie_item("Kie Grok Imagine T2I (Canonical)", "Image", "grok-imagine/text-to-image", "text-to-image"),
         _kie_item("Kie Grok Imagine I2I (Canonical)", "Image", "grok-imagine/image-to-image", "image-to-image"),
         _kie_item("Kie Grok Imagine Upscale (Canonical)", "Image", "grok-imagine/upscale", "image-to-image"),
@@ -783,8 +1056,8 @@ def init_system_api_settings(db):
         _kie_item("Kie Flux2 Pro I2I (Canonical)", "Image", "flux-2/pro-image-to-image", "image-to-image"),
         _kie_item("Kie Flux2 Flex T2I (Canonical)", "Image", "flux-2/flex-text-to-image", "text-to-image"),
         _kie_item("Kie Flux2 Flex I2I (Canonical)", "Image", "flux-2/flex-image-to-image", "image-to-image"),
-        _kie_item("Kie GPT Image 1.5 T2I", "Image", "gpt-image/1.5-text-to-image", "text-to-image"),
-        _kie_item("Kie GPT Image 1.5 I2I", "Image", "gpt-image/1.5-image-to-image", "image-to-image"),
+        _kie_item("Kie GPT Image 1.5 T2I", "Image", "gpt-image/1-5-text-to-image", "text-to-image"),
+        _kie_item("Kie GPT Image 1.5 I2I", "Image", "gpt-image/1-5-image-to-image", "image-to-image"),
         _kie_item("Kie Topaz Image Upscale", "Image", "topaz/image-upscale", "image-to-image"),
         _kie_item("Kie Recraft Remove BG", "Image", "recraft/remove-background", "image-to-image"),
         _kie_item("Kie Recraft Crisp Upscale", "Image", "recraft/crisp-upscale", "image-to-image"),
@@ -964,22 +1237,31 @@ def sync_system_api_from_seed(db):
         config = item.get("config") or {}
         deprecated = bool(item.get("deprecated", False))
         is_active = bool(item.get("is_active", False))
-        modality = item.get("modality")
+
+        # Handle modality: accept both legacy string and new JSON format
+        raw_modality = item.get("modality")
+        if isinstance(raw_modality, str):
+            from app.services.modality_utils import migrate_legacy_modality_string
+            modality = migrate_legacy_modality_string(raw_modality)
+        elif isinstance(raw_modality, dict):
+            modality = raw_modality
+        else:
+            modality = None
+
+        tags = item.get("tags")
+        if not isinstance(tags, list):
+            tags = None
 
         if target:
             target.name = name
             target.base_url = base_url
             target.model = model  # preserve original casing
-            # Merge config: preserve server-side key pools
-            merged_config = dict(config)
-            existing_cfg = target.config or {}
-            for keep_key in ("provider_api_keys", "provider_api_key_weights"):
-                if keep_key in existing_cfg:
-                    merged_config[keep_key] = existing_cfg[keep_key]
-            target.config = merged_config
+            # Key pools are now stored in provider_key_pool table; no need to preserve in config
+            target.config = dict(config)
             target.deprecated = deprecated
             # is_active is NOT overwritten — activation state is managed on the server
             target.modality = modality
+            target.tags = tags
             # api_key is never overwritten — keys are managed on the server
             updated += 1
             lookup[key] = target
@@ -999,6 +1281,7 @@ def sync_system_api_from_seed(db):
                 base_url=base_url,
                 model=model,
                 modality=modality,
+                tags=tags,
                 config=config,
                 deprecated=deprecated,
                 is_active=is_active,
@@ -1014,7 +1297,6 @@ def sync_system_api_from_seed(db):
 def init_initial_data():
     db = SessionLocal()
     try:
-        init_pricing_rules(db)
         if _should_manage_api_settings_on_init():
             init_api_settings(db)
             cleanup_api_settings_active_conflicts(db)

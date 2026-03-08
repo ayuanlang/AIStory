@@ -23,6 +23,23 @@ const PrivateRoute = ({ children }) => {
   return token ? children : <Navigate to="/auth" replace />;
 };
 
+const SuperuserRoute = ({ children }) => {
+  const token = localStorage.getItem('token');
+  if (!token) return <Navigate to="/auth" replace />;
+
+  try {
+    const parts = String(token).split('.');
+    if (parts.length < 2) return <Navigate to="/projects" replace />;
+    const base64Url = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64Url.padEnd(Math.ceil(base64Url.length / 4) * 4, '=');
+    const payload = JSON.parse(atob(padded));
+    const isSuperuser = !!(payload?.is_superuser || payload?.superuser);
+    return isSuperuser ? children : <Navigate to="/projects" replace />;
+  } catch {
+    return <Navigate to="/projects" replace />;
+  }
+};
+
 // Helper component to redirect authenticated users away from public routes (like Login or Home)
 const PublicRoute = ({ children, bypassRedirect = false }) => {
   if (bypassRedirect) return children;
@@ -184,8 +201,8 @@ function App() {
               <Route path="/settings" element={<PrivateRoute><ProjectList initialTab="settings" /></PrivateRoute>} />
               <Route path="/editor/:id" element={<PrivateRoute><Editor /></PrivateRoute>} />
               <Route path="/editor/:id/analysis" element={<PrivateRoute><AdvancedAnalysisResult /></PrivateRoute>} />
-              <Route path="/admin/users" element={<PrivateRoute><UserAdmin /></PrivateRoute>} />
-              <Route path="/admin/logs" element={<PrivateRoute><SystemLogs /></PrivateRoute>} />
+              <Route path="/admin/users" element={<SuperuserRoute><UserAdmin /></SuperuserRoute>} />
+              <Route path="/admin/logs" element={<SuperuserRoute><SystemLogs /></SuperuserRoute>} />
             </Routes>
           </Suspense>
           <ErrorBoundary

@@ -93,8 +93,7 @@ FUNCTION_MAP = [
     (r"POST /api/v1/billing/recharge/mock_pay/.*", "Mock Payment Execution"),
     (r"GET /api/v1/billing/recharge/plans", "View Recharge Plans"),
     (r"GET /api/v1/billing/transactions", "View Transaction History"),
-    (r"GET /api/v1/billing/rules", "View Pricing Rules"),
-    
+
     # System
     (r"GET /api/v1/system/logs", "Admin: View System Logs"),
     (r"GET /admin/payment-config", "Admin: View Payment Config"),
@@ -235,10 +234,13 @@ class LoggingMiddleware:
 
             async def replay_receive():
                 nonlocal sent, buffered_body
-                if sent:
-                    return {"type": "http.request", "body": b"", "more_body": False}
-                sent = True
-                return {"type": "http.request", "body": buffered_body, "more_body": False}
+                if not sent:
+                    sent = True
+                    return {"type": "http.request", "body": buffered_body, "more_body": False}
+                # After body is replayed, delegate to the original receive so
+                # Starlette's StreamingResponse disconnect-listener blocks
+                # properly instead of busy-looping.
+                return await receive()
 
             receive_for_app = replay_receive
 

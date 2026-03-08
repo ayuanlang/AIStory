@@ -20,7 +20,7 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional, Union
 
 from app.db.session import SessionLocal
-from app.models.all_models import APISetting, SystemAPISetting
+from app.models.all_models import APISetting, SystemAPISetting, ProviderKeyPool
 from app.core.config import settings
 from sqlalchemy import cast, String, func
 
@@ -263,7 +263,35 @@ class MediaGenerationService:
             result.append(key)
         return result
 
-    def _pick_runtime_api_key(self, config_value: Any, fallback_key: Any = None) -> str:
+    def _pick_runtime_api_key(self, config_value: Any, fallback_key: Any = None, session=None, provider_name: str = None) -> str:
+        # New path: read from provider_key_pool table
+        if session and provider_name:
+            prov = str(provider_name or "").strip().lower()
+            if prov:
+                record = session.query(ProviderKeyPool).filter(ProviderKeyPool.provider == prov).first()
+                if record and record.api_keys:
+                    pooled = self._normalize_api_keys(record.api_keys)
+                    if pooled:
+                        strategy = str(record.strategy or "random").strip().lower()
+                        if strategy == "round_robin":
+                            cursor = int(self._provider_key_cursors.get(prov, 0))
+                            selected = pooled[cursor % len(pooled)]
+                            self._provider_key_cursors[prov] = cursor + 1
+                            return selected
+                        if strategy == "weighted":
+                            raw_weights = record.weights
+                            if isinstance(raw_weights, list) and raw_weights:
+                                weights = []
+                                for i in range(len(pooled)):
+                                    try:
+                                        w = float(raw_weights[i]) if i < len(raw_weights) else 1.0
+                                    except Exception:
+                                        w = 1.0
+                                    weights.append(w if w > 0 else 1.0)
+                                return random.choices(pooled, weights=weights, k=1)[0]
+                        return random.choice(pooled)
+
+        # Legacy fallback: read from config dict
         cfg = self._safe_json_dict(config_value)
         pooled = self._normalize_api_keys(cfg.get("provider_api_keys"))
         strategy = str(cfg.get("provider_api_key_strategy") or "random").strip().lower()
@@ -299,47 +327,22 @@ class MediaGenerationService:
         return str(fallback_key or "").strip()
 
     def _collect_provider_key_pool_bundle(self, session, category: str, provider: str) -> Dict[str, Any]:
-        rows = session.query(SystemAPISetting).filter(
-            SystemAPISetting.category == category,
-            self._provider_ci_filter(provider),
-        ).order_by(SystemAPISetting.id.desc()).all()
-
-        merged_keys: List[str] = []
-        seen = set()
-        selected_strategy = "random"
-        selected_weights: List[float] = []
-
-        for row in rows:
-            cfg = self._safe_json_dict(getattr(row, "config", None))
-            row_keys = self._normalize_api_keys(cfg.get("provider_api_keys"))
-            for key in row_keys:
-                if key in seen:
-                    continue
-                seen.add(key)
-                merged_keys.append(key)
-
-            if selected_strategy == "random":
-                candidate_strategy = str(cfg.get("provider_api_key_strategy") or "").strip().lower()
-                if candidate_strategy in {"random", "round_robin", "weighted"}:
-                    selected_strategy = candidate_strategy
-
-            if not selected_weights:
-                raw_weights = cfg.get("provider_api_key_weights")
-                if isinstance(raw_weights, list) and raw_weights:
-                    normalized_weights: List[float] = []
-                    for item in raw_weights:
-                        try:
-                            val = float(item)
-                        except Exception:
-                            val = 1.0
-                        normalized_weights.append(val if val > 0 else 1.0)
-                    selected_weights = normalized_weights
-
-        return {
-            "provider_api_keys": merged_keys,
-            "provider_api_key_strategy": selected_strategy,
-            "provider_api_key_weights": selected_weights,
-        }
+        prov = str(provider or "").strip().lower()
+        if not prov:
+            return {"provider_api_keys": [], "provider_api_key_strategy": "random", "provider_api_key_weights": []}
+        record = session.query(ProviderKeyPool).filter(ProviderKeyPool.provider == prov).first()
+        if record and record.api_keys:
+            keys = self._normalize_api_keys(record.api_keys)
+            strategy = str(record.strategy or "random").strip().lower()
+            if strategy not in ("random", "round_robin", "weighted"):
+                strategy = "random"
+            weights = record.weights if isinstance(record.weights, list) else []
+            return {
+                "provider_api_keys": keys,
+                "provider_api_key_strategy": strategy,
+                "provider_api_key_weights": weights,
+            }
+        return {"provider_api_keys": [], "provider_api_key_strategy": "random", "provider_api_key_weights": []}
 
     def _infer_image_size_from_dimensions(self, width: Any, height: Any) -> str:
         try:
@@ -579,11 +582,9 @@ class MediaGenerationService:
             # modality is non-empty and does not contain the requested value.
             # Empty/null modality on the row means "compatible with all".
             if modality:
-                row_modality = (getattr(row, "modality", None) or "").strip()
-                if row_modality:
-                    modality_tokens = {t.strip().lower() for t in row_modality.split(",") if t.strip()}
-                    if modality.strip().lower() not in modality_tokens:
-                        continue
+                from app.services.modality_utils import modality_matches
+                if not modality_matches(getattr(row, "modality", None), modality):
+                    continue
             cfg = self._safe_json_dict(row.config)
 
             if provider not in provider_bundle_cache:
@@ -619,7 +620,11 @@ class MediaGenerationService:
                 "is_multi_ref_default": bool(cfg.get("smart_multi_ref_default")),
                 "config": {
                     **self._setting_to_config(row, provider, defaults),
-                    "config": merged_config,
+                    "config": {
+                        **merged_config,
+                        "__resolved_source": f"smart_candidate:{provider}/{row.model}",
+                        "__resolved_setting_id": row.id,
+                    },
                 },
             })
 
@@ -958,6 +963,8 @@ class MediaGenerationService:
             if result and not result.get("error"):
                 metadata = result.get("metadata") or {}
                 fallback_used = bool(fallback_unlocked) or attempt.get("tag") == "priority_fallback"
+                resolved_setting_id = (selected_config.get("config") or {}).get("__resolved_setting_id")
+                resolved_model = str(selected_config.get("model") or metadata.get("model") or "").strip()
                 logger.info(
                     "Smart routing success | category=%s user_id=%s attempt=%s/%s provider=%s model=%s tag=%s fallback_used=%s initial_provider=%s initial_model=%s",
                     category,
@@ -976,7 +983,17 @@ class MediaGenerationService:
                     "attempt": index,
                     "attempt_tag": attempt.get("tag"),
                     "provider": selected_provider,
+                    "model": resolved_model,
+                    "fallback_used": bool(fallback_used),
+                    "system_api_id": int(resolved_setting_id) if resolved_setting_id is not None else None,
+                    "initial_provider": effective_provider,
+                    "initial_model": str(baseline_config.get("model") or "").strip(),
                 }
+                metadata["provider"] = selected_provider
+                if resolved_model:
+                    metadata["model"] = resolved_model
+                if resolved_setting_id is not None:
+                    metadata["system_api_id"] = int(resolved_setting_id)
                 result["metadata"] = metadata
                 return result
 
@@ -1657,9 +1674,8 @@ class MediaGenerationService:
                 "watermark": False
             }
 
-            # Apply Draft Mode (Sample Mode) if configured and supported (1.5 Pro only)
-            if model and "1-5-pro" in model:
-                 # Default to False (Normal Mode) unless explicitly enabled
+            # Apply Draft Mode (Sample Mode) if configured and supported (seedance models)
+            if model and ("1-5-pro" in model or "seedance" in model):
                  payload["draft"] = bool(tool_conf.get("draft", False))
             
             # For Doubao (Ark), if image is provided, ratio should typically be omitted 
@@ -1669,9 +1685,13 @@ class MediaGenerationService:
                  payload["ratio"] = final_ratio
 
 
-            # Only enable generate_audio for 1.5 Pro models which support it
+            # Enable generate_audio for 1.5 Pro models which support it.
+            # Respect explicit config override (generate_audio: false for silent variants).
             if payload["model"] and "1-5-pro" in payload["model"]:
-                payload["generate_audio"] = True
+                if "generate_audio" in tool_conf:
+                    payload["generate_audio"] = bool(tool_conf["generate_audio"])
+                else:
+                    payload["generate_audio"] = True
 
             poll_timeout_seconds = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS
             poll_interval_seconds = 2
@@ -2938,10 +2958,10 @@ class MediaGenerationService:
             "flux2-pro-i2i": "flux-2/pro-image-to-image",
             "flux2-flex": "flux-2/flex-text-to-image",
             "flux2-flex-i2i": "flux-2/flex-image-to-image",
-            "gpt-image-1.5": "gpt-image/1.5-text-to-image",
-            "gpt-image-1.5-i2i": "gpt-image/1.5-image-to-image",
-            "gpt-image/1-5-text-to-image": "gpt-image/1.5-text-to-image",
-            "gpt-image/1-5-image-to-image": "gpt-image/1.5-image-to-image",
+            "gpt-image-1.5": "gpt-image/1-5-text-to-image",
+            "gpt-image-1.5-i2i": "gpt-image/1-5-image-to-image",
+            "gpt-image/1.5-text-to-image": "gpt-image/1-5-text-to-image",
+            "gpt-image/1.5-image-to-image": "gpt-image/1-5-image-to-image",
 
             "sora2": "sora-2-text-to-video",
             "sora2-t2v": "sora-2-text-to-video",
@@ -3020,7 +3040,8 @@ class MediaGenerationService:
                     "seedream/4.5-text-to-image":     "seedream/4.5-edit",
                     "flux-2/pro-text-to-image":       "flux-2/pro-image-to-image",
                     "flux-2/flex-text-to-image":      "flux-2/flex-image-to-image",
-                    "gpt-image/1.5-text-to-image":    "gpt-image/1.5-image-to-image",
+                    "gpt-image/1-5-text-to-image":    "gpt-image/1-5-image-to-image",
+                    "gpt-image/1.5-text-to-image":    "gpt-image/1-5-image-to-image",
                 }
                 i2i_model = _t2i_to_i2i_map.get(str(model or "").strip().lower())
                 if i2i_model:

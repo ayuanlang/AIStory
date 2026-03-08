@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse, Response
 from app.core.config import settings
 from app.api import endpoints, settings as settings_api
 from app.db.session import engine, SessionLocal
-from app.models.all_models import Base, APISetting, User
+from app.models.all_models import Base, SystemAPISetting, User
 from app.core.logging import LoggingMiddleware, logger, configure_uvicorn_logging_noise_reduction
 from app.db.init_db import check_and_migrate_tables, create_default_superuser, init_initial_data
 from fastapi import Request
@@ -96,7 +96,7 @@ app.add_middleware(LoggingMiddleware)
 app.add_middleware(
     SelectiveGZipMiddleware,
     minimum_size=settings.GZIP_MINIMUM_SIZE,
-    excluded_path_prefixes=("/uploads",),
+    excluded_path_prefixes=("/uploads", "/api/v1/agent/command/stream", "/api/v1/agent/system-management/command/stream"),
 )
 
 # Ensure upload dir exists
@@ -269,10 +269,10 @@ def _parse_iso_datetime_safe(value):
 def _read_maintenance_status_from_db():
     try:
         with SessionLocal() as db:
-            row = db.query(APISetting).filter(
-                APISetting.category == _MAINTENANCE_CATEGORY,
-                APISetting.provider == _MAINTENANCE_PROVIDER,
-            ).first()
+            row = db.query(SystemAPISetting).filter(
+                SystemAPISetting.category == _MAINTENANCE_CATEGORY,
+                SystemAPISetting.provider == _MAINTENANCE_PROVIDER,
+            ).order_by(SystemAPISetting.id.desc()).first()
             cfg = dict(row.config or {}) if row else {}
 
             enabled = bool(cfg.get("enabled", False))
@@ -338,70 +338,117 @@ def _is_superuser_request(request: Request) -> bool:
         return False
 
 
-@app.middleware("http")
-async def maintenance_mode_middleware(request: Request, call_next):
-    if str(request.method or "").upper() == "OPTIONS":
-        return _apply_cors_headers_to_response(request, Response(status_code=204))
+class _MaintenanceModeMiddleware:
+    """Pure ASGI middleware for maintenance mode (replaces @app.middleware('http') to avoid
+    BaseHTTPMiddleware deadlock with SSE StreamingResponse)."""
 
-    path = str(request.url.path or "")
-    api_prefix = str(settings.API_V1_STR or "")
-    exempt_paths = {
-        "/",
-        "/healthz",
-        f"{api_prefix}/admin/maintenance-status",
-        f"{api_prefix}/admin/maintenance-config",
-        f"{api_prefix}/login",
-        f"{api_prefix}/login/access-token",
-    }
+    def __init__(self, app):
+        self.app = app
 
-    if path in exempt_paths:
-        return await call_next(request)
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
 
-    status = _get_maintenance_status_cached()
-    if not bool(status.get("is_active", False)):
-        return await call_next(request)
+        path = str(scope.get("path") or "")
+        method = str(scope.get("method") or "").upper()
 
-    if _is_superuser_request(request):
-        return await call_next(request)
+        # OPTIONS bypass
+        if method == "OPTIONS":
+            await self.app(scope, receive, send)
+            return
 
-    detail = str(status.get("message") or "系统正在维护")
-    if path.startswith(api_prefix):
-        return _apply_cors_headers_to_response(request, JSONResponse(
-            status_code=503,
-            content={
-                "detail": detail,
-                "maintenance": {
-                    "enabled": bool(status.get("enabled", False)),
-                    "is_active": True,
-                    "ends_at": status.get("ends_at"),
-                },
-            },
-        ))
+        api_prefix = str(settings.API_V1_STR or "")
+        exempt_paths = {
+            "/",
+            "/healthz",
+            f"{api_prefix}/admin/maintenance-status",
+            f"{api_prefix}/admin/maintenance-config",
+            f"{api_prefix}/login",
+            f"{api_prefix}/login/access-token",
+        }
 
-    return _apply_cors_headers_to_response(request, JSONResponse(
-        status_code=503,
-        content={
+        if path in exempt_paths:
+            await self.app(scope, receive, send)
+            return
+
+        status = _get_maintenance_status_cached()
+        if not bool(status.get("is_active", False)):
+            await self.app(scope, receive, send)
+            return
+
+        # Check superuser from token in headers
+        raw_headers = dict(scope.get("headers") or [])
+        auth_header = raw_headers.get(b"authorization", b"")
+        if isinstance(auth_header, bytes):
+            auth_header = auth_header.decode("utf-8", errors="replace")
+        request = Request(scope, receive=receive)
+        if auth_header and _is_superuser_request(request):
+            await self.app(scope, receive, send)
+            return
+
+        # Block with 503
+        detail = str(status.get("message") or "系统正在维护")
+        import json as _json
+        body = _json.dumps({
             "detail": detail,
             "maintenance": {
                 "enabled": bool(status.get("enabled", False)),
                 "is_active": True,
                 "ends_at": status.get("ends_at"),
             },
-        },
-    ))
+        }, ensure_ascii=False).encode("utf-8")
+
+        # Build CORS headers
+        origin = ""
+        raw_origin = raw_headers.get(b"origin", b"")
+        if isinstance(raw_origin, bytes):
+            origin = raw_origin.decode("utf-8", errors="replace")
+        resp_headers = [
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(body)).encode()),
+        ]
+        if origin and _origin_is_cors_allowed(origin):
+            resp_headers.append((b"access-control-allow-origin", origin.encode()))
+            resp_headers.append((b"vary", b"Origin"))
+            resp_headers.append((b"access-control-allow-credentials", b"true" if allow_credentials else b"false"))
+
+        await send({"type": "http.response.start", "status": 503, "headers": resp_headers})
+        await send({"type": "http.response.body", "body": body})
 
 
-@app.middleware("http")
-async def security_headers_middleware(request: Request, call_next):
-    response = await call_next(request)
-    if settings.SECURITY_HEADERS_ENABLED:
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
-        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-        if request.url.scheme == "https":
-            response.headers["Strict-Transport-Security"] = f"max-age={settings.SECURITY_HSTS_SECONDS}; includeSubDomains"
-    return response
+class _SecurityHeadersMiddleware:
+    """Pure ASGI middleware for security headers (replaces @app.middleware('http') to avoid
+    BaseHTTPMiddleware deadlock with SSE StreamingResponse)."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http" or not settings.SECURITY_HEADERS_ENABLED:
+            await self.app(scope, receive, send)
+            return
+
+        is_https = (scope.get("scheme") == "https")
+
+        async def send_with_security_headers(message):
+            if message.get("type") == "http.response.start":
+                raw_headers = list(message.get("headers") or [])
+                raw_headers.append((b"x-content-type-options", b"nosniff"))
+                raw_headers.append((b"x-frame-options", b"DENY"))
+                raw_headers.append((b"referrer-policy", b"strict-origin-when-cross-origin"))
+                raw_headers.append((b"permissions-policy", b"camera=(), microphone=(), geolocation=()"))
+                if is_https:
+                    raw_headers.append((b"strict-transport-security",
+                                        f"max-age={settings.SECURITY_HSTS_SECONDS}; includeSubDomains".encode()))
+                message = {**message, "headers": raw_headers}
+            await send(message)
+
+        await self.app(scope, receive, send_with_security_headers)
+
+
+app.add_middleware(_MaintenanceModeMiddleware)
+app.add_middleware(_SecurityHeadersMiddleware)
 
 app.include_router(endpoints.router, prefix=settings.API_V1_STR)
 app.include_router(settings_api.router, prefix=settings.API_V1_STR)

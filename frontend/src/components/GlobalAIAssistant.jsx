@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { MessageSquare, X } from 'lucide-react';
 import AgentChat from './AgentChat';
@@ -9,6 +9,11 @@ const FLOAT_BUTTON_SIZE = 56;
 const FLOAT_BUTTON_MARGIN = 16;
 const LOG_PANEL_OPEN_OFFSET = 272;
 const POS_STORAGE_KEY = 'aistory.ai.assistant.fab.position';
+const PANEL_RECT_KEY = 'aistory.ai.assistant.panel.rect';
+const MIN_PANEL_W = 340;
+const MIN_PANEL_H = 320;
+const DEFAULT_PANEL_W = 430;
+const DEFAULT_PANEL_H = 560;
 
 const clampFabPosition = (position, logPanelOffsetPx) => {
     if (!position || typeof window === 'undefined') return null;
@@ -19,6 +24,37 @@ const clampFabPosition = (position, logPanelOffsetPx) => {
     const x = Math.min(maxX, Math.max(FLOAT_BUTTON_MARGIN, Number(position.x) || 0));
     const y = Math.min(maxY, Math.max(FLOAT_BUTTON_MARGIN, Number(position.y) || 0));
     return { x, y };
+};
+
+const clampPanelRect = (rect) => {
+    if (typeof window === 'undefined') return rect;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let { x, y, w, h } = rect;
+    w = Math.max(MIN_PANEL_W, Math.min(w, vw - 16));
+    h = Math.max(MIN_PANEL_H, Math.min(h, vh - 16));
+    x = Math.max(8, Math.min(x, vw - w - 8));
+    y = Math.max(8, Math.min(y, vh - h - 8));
+    return { x, y, w, h };
+};
+
+const loadPanelRect = () => {
+    try {
+        const raw = localStorage.getItem(PANEL_RECT_KEY);
+        if (raw) {
+            const p = JSON.parse(raw);
+            if (p && Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.w) && Number.isFinite(p.h)) {
+                return clampPanelRect(p);
+            }
+        }
+    } catch { /* ignore */ }
+    if (typeof window === 'undefined') return { x: 100, y: 100, w: DEFAULT_PANEL_W, h: DEFAULT_PANEL_H };
+    return clampPanelRect({
+        x: window.innerWidth - DEFAULT_PANEL_W - 16,
+        y: window.innerHeight - DEFAULT_PANEL_H - 96,
+        w: DEFAULT_PANEL_W,
+        h: DEFAULT_PANEL_H,
+    });
 };
 
 const GlobalAIAssistant = () => {
@@ -36,6 +72,8 @@ const GlobalAIAssistant = () => {
             return null;
         }
     });
+    const [panelRect, setPanelRect] = useState(loadPanelRect);
+
     const location = useLocation();
     const { isLogOpen } = useLog();
     const dragRef = useRef({
@@ -46,6 +84,8 @@ const GlobalAIAssistant = () => {
         startX: 0,
         startY: 0,
     });
+    // Panel drag/resize state
+    const panelDragRef = useRef({ active: false, type: null, startX: 0, startY: 0, startRect: null });
 
     const isAuthed = useMemo(() => {
         try {
@@ -85,6 +125,11 @@ const GlobalAIAssistant = () => {
         }
     }, [buttonPosition, shouldRender]);
 
+    // Persist panel rect
+    useEffect(() => {
+        try { localStorage.setItem(PANEL_RECT_KEY, JSON.stringify(panelRect)); } catch { /* ignore */ }
+    }, [panelRect]);
+
     useEffect(() => {
         if (!shouldRender) return;
         const onResize = () => {
@@ -95,11 +140,13 @@ const GlobalAIAssistant = () => {
                 if (clamped.x === prev.x && clamped.y === prev.y) return prev;
                 return clamped;
             });
+            setPanelRect((prev) => clampPanelRect(prev));
         };
         window.addEventListener('resize', onResize);
         return () => window.removeEventListener('resize', onResize);
     }, [logPanelOffsetPx, shouldRender]);
 
+    // --- FAB drag handlers ---
     const handlePointerDown = (e) => {
         if (e.button !== 0) return;
         const base = buttonPosition || {
@@ -116,30 +163,48 @@ const GlobalAIAssistant = () => {
         };
     };
 
-    const handlePointerMove = (e) => {
+    const handlePointerMove = useCallback((e) => {
+        // FAB drag
         const state = dragRef.current;
-        if (!state.active) return;
-
-        const dx = e.clientX - state.startClientX;
-        const dy = e.clientY - state.startClientY;
-        if (!state.moved && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) {
-            state.moved = true;
+        if (state.active) {
+            const dx = e.clientX - state.startClientX;
+            const dy = e.clientY - state.startClientY;
+            if (!state.moved && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) {
+                state.moved = true;
+            }
+            const next = clampFabPosition(
+                { x: state.startX + dx, y: state.startY + dy },
+                logPanelOffsetPx,
+            );
+            if (next) setButtonPosition(next);
         }
+        // Panel drag/resize
+        const ps = panelDragRef.current;
+        if (ps.active && ps.startRect) {
+            const dx = e.clientX - ps.startX;
+            const dy = e.clientY - ps.startY;
+            const r = ps.startRect;
+            let next;
+            if (ps.type === 'move') {
+                next = clampPanelRect({ x: r.x + dx, y: r.y + dy, w: r.w, h: r.h });
+            } else {
+                let { x, y, w, h } = r;
+                if (ps.type.includes('e')) w = r.w + dx;
+                if (ps.type.includes('s')) h = r.h + dy;
+                if (ps.type.includes('w')) { w = r.w - dx; x = r.x + dx; }
+                if (ps.type.includes('n')) { h = r.h - dy; y = r.y + dy; }
+                next = clampPanelRect({ x, y, w, h });
+            }
+            setPanelRect(next);
+        }
+    }, [logPanelOffsetPx]);
 
-        const next = clampFabPosition(
-            {
-                x: state.startX + dx,
-                y: state.startY + dy,
-            },
-            logPanelOffsetPx,
-        );
-        if (!next) return;
-        setButtonPosition(next);
-    };
-
-    const handlePointerUp = () => {
+    const handlePointerUp = useCallback(() => {
         dragRef.current.active = false;
-    };
+        panelDragRef.current.active = false;
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+    }, []);
 
     useEffect(() => {
         if (!shouldRender) return;
@@ -149,7 +214,7 @@ const GlobalAIAssistant = () => {
             window.removeEventListener('pointermove', handlePointerMove);
             window.removeEventListener('pointerup', handlePointerUp);
         };
-    }, [shouldRender]);
+    }, [shouldRender, handlePointerMove, handlePointerUp]);
 
     useEffect(() => {
         if (!shouldRender) return;
@@ -177,11 +242,40 @@ const GlobalAIAssistant = () => {
         setIsOpen((prev) => !prev);
     };
 
+    const handleClose = useCallback(() => setIsOpen(false), []);
+
+    // --- Panel drag (header) ---
+    const onPanelHeaderPointerDown = (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        panelDragRef.current = {
+            active: true,
+            type: 'move',
+            startX: e.clientX,
+            startY: e.clientY,
+            startRect: { ...panelRect },
+        };
+        document.body.style.cursor = 'grabbing';
+        document.body.style.userSelect = 'none';
+    };
+
+    // --- Panel resize (edges/corners) ---
+    const onResizePointerDown = (type) => (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        panelDragRef.current = {
+            active: true,
+            type,
+            startX: e.clientX,
+            startY: e.clientY,
+            startRect: { ...panelRect },
+        };
+        document.body.style.userSelect = 'none';
+    };
+
     const buttonBottomStyle = {
         bottom: `calc(20px + env(safe-area-inset-bottom, 0px) + ${logPanelOffsetPx}px)`,
-    };
-    const panelBottomStyle = {
-        bottom: `calc(80px + env(safe-area-inset-bottom, 0px) + ${logPanelOffsetPx}px)`,
     };
     const buttonStyle = buttonPosition
         ? { left: `${buttonPosition.x}px`, top: `${buttonPosition.y}px` }
@@ -191,11 +285,59 @@ const GlobalAIAssistant = () => {
         return null;
     }
 
+    const resizeHandleBase = 'absolute z-10';
+    const EDGE = 5;
+
     return (
         <>
             {isOpen && (
-                <div style={panelBottomStyle} className="fixed right-4 w-[min(92vw,430px)] h-[70vh] max-h-[760px] z-[120]">
-                    <AgentChat context={context} isSuperuser={isSuperuser} onClose={() => setIsOpen(false)} />
+                <div
+                    style={{
+                        position: 'fixed',
+                        left: panelRect.x,
+                        top: panelRect.y,
+                        width: panelRect.w,
+                        height: panelRect.h,
+                        zIndex: 120,
+                    }}
+                    className="flex flex-col"
+                >
+                    {/* Resize handles */}
+                    <div className={`${resizeHandleBase} top-0 left-[${EDGE}px] right-[${EDGE}px] h-[${EDGE}px] cursor-n-resize`}
+                         style={{ top: 0, left: EDGE, right: EDGE, height: EDGE, cursor: 'n-resize' }}
+                         onPointerDown={onResizePointerDown('n')} />
+                    <div className={resizeHandleBase}
+                         style={{ bottom: 0, left: EDGE, right: EDGE, height: EDGE, cursor: 's-resize' }}
+                         onPointerDown={onResizePointerDown('s')} />
+                    <div className={resizeHandleBase}
+                         style={{ top: EDGE, left: 0, bottom: EDGE, width: EDGE, cursor: 'w-resize' }}
+                         onPointerDown={onResizePointerDown('w')} />
+                    <div className={resizeHandleBase}
+                         style={{ top: EDGE, right: 0, bottom: EDGE, width: EDGE, cursor: 'e-resize' }}
+                         onPointerDown={onResizePointerDown('e')} />
+                    {/* Corner handles */}
+                    <div className={resizeHandleBase}
+                         style={{ top: 0, left: 0, width: EDGE * 2, height: EDGE * 2, cursor: 'nw-resize' }}
+                         onPointerDown={onResizePointerDown('nw')} />
+                    <div className={resizeHandleBase}
+                         style={{ top: 0, right: 0, width: EDGE * 2, height: EDGE * 2, cursor: 'ne-resize' }}
+                         onPointerDown={onResizePointerDown('ne')} />
+                    <div className={resizeHandleBase}
+                         style={{ bottom: 0, left: 0, width: EDGE * 2, height: EDGE * 2, cursor: 'sw-resize' }}
+                         onPointerDown={onResizePointerDown('sw')} />
+                    <div className={resizeHandleBase}
+                         style={{ bottom: 0, right: 0, width: EDGE * 2, height: EDGE * 2, cursor: 'se-resize' }}
+                         onPointerDown={onResizePointerDown('se')} />
+
+                    {/* Chat panel with draggable header */}
+                    <div className="flex flex-col h-full">
+                        <AgentChat
+                            context={context}
+                            isSuperuser={isSuperuser}
+                            onClose={handleClose}
+                            onHeaderPointerDown={onPanelHeaderPointerDown}
+                        />
+                    </div>
                 </div>
             )}
 

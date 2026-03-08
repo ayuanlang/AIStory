@@ -32,30 +32,6 @@ class User(Base):
     transactions = relationship("TransactionHistory", back_populates="user")
 
 
-class PricingRule(Base):
-    __tablename__ = "pricing_rules"
-    id = Column(Integer, primary_key=True, index=True)
-    
-    provider = Column(String, nullable=True, index=True) # e.g. "openai", "midjourney"
-    model = Column(String, nullable=True, index=True)    # e.g. "gpt-4", "mj-v6"
-    task_type = Column(String, nullable=False, index=True) # "llm_chat", "image_gen", "video_gen", "analysis"
-    
-    cost = Column(Integer, default=1) # Points per unit (Base/Total if n/a)
-    cost_input = Column(Integer, default=0) # For LLM, per unit input tokens
-    cost_output = Column(Integer, default=0) # For LLM, per unit output tokens
-    
-    # Reference fields for UI auto-calculation (Store user inputs)
-    ref_cost_cny = Column(Float, nullable=True)
-    ref_cost_input_cny = Column(Float, nullable=True)
-    ref_cost_output_cny = Column(Float, nullable=True)
-    ref_markup = Column(Float, default=1.5)
-    ref_exchange_rate = Column(Float, default=10.0)
-
-    unit_type = Column(String, default="per_call") # per_call, per_token, per_million_tokens
-    
-    description = Column(String, nullable=True)
-    is_active = Column(Boolean, default=True)
-
 class TransactionHistory(Base):
     __tablename__ = "transaction_history"
     id = Column(Integer, primary_key=True, index=True)
@@ -274,20 +250,210 @@ class APISetting(Base):
 
 
 class SystemAPISetting(Base):
+    """系统级 API 模型配置表。
+
+    每一行代表一个可用的 AI 模型端点（LLM / Image / Video / Voice / Music 等）。
+    管理员通过后台配置，前端和业务服务按 category + modality 匹配可用模型。
+
+    字段说明:
+      name      — 显示名称，默认 "System Setting"
+      category  — 业务分类: LLM / Image / Video / Voice / Music
+      provider  — 供应商标识: openai / dashscope / volcengine / minimax / kling / siliconflow 等
+      api_key   — API 密钥（多 key 逗号分隔，用于轮询）
+      base_url  — API 基础地址，为空则使用 SDK 默认值
+      model     — 模型标识，如 gpt-4o / seedream-3.0 / wan-x2.1-t2v-turbo
+      modality  — 模态描述 (JSON)，v2 格式，结构:
+                  {
+                    "generation_modes": ["t2i","i2i"],  # 生成方式(缩写)，筛选匹配核心
+                    "max_resolution": "2048x2048",       # 最高输出分辨率
+                    "aspect_ratios": ["1:1","16:9"],    # 支持画幅比
+                    "has_audio": false,                  # 是否支持音频(视频模型)
+                    "max_duration": 10,                  # 最大生成时长(秒)
+                    "base_model": "seedream-4.5",       # 基础模型
+                    "model_version": "v4.5",            # 模型版本
+                    "model_type": "diffusion",          # 架构: diffusion/transformer
+                    "input_formats": ["text","image"],  # 输入格式
+                    "output_format": "image"             # 输出格式
+                  }
+                  generation_modes 缩写: t2i(文生图) i2i(图生图) t2v(文生视频)
+                  i2v(图生视频) v2v(视频转视频) t2a(文生音频) a2t(语音识别)
+                  a2a(音频转音频) s2v(语音驱动视频/数字人) i2t(图像理解)
+      tags      — 模型标签 (JSON string[])，如 ["真人写实","局部重绘","高清"]
+      deprecated— 是否已弃用
+      config    — 额外配置 (JSON)，如 webhook_url / strategy / weights 等
+    is_active — 是否为该类别默认 API（当用户未指定该类别时自动选用）
+    """
     __tablename__ = "system_api_settings"
     id = Column(Integer, primary_key=True, index=True)
 
     name = Column(String, default="System Setting")
-    category = Column(String, index=True)
-    provider = Column(String, index=True)
-    api_key = Column(String)
-    base_url = Column(String, nullable=True)
-    model = Column(String, nullable=True)
-    modality = Column(String, nullable=True, index=True)
-    deprecated = Column(Boolean, default=False)
-    config = Column(JSON, default={})
+    category = Column(String, index=True)       # LLM / Image / Video / Voice / Music
+    provider = Column(String, index=True)       # openai / dashscope / volcengine ...
+    api_key = Column(String)                    # 多key逗号分隔用于轮询
+    base_url = Column(String, nullable=True)    # 自定义API地址
+    model = Column(String, nullable=True)       # 模型标识
+    base_model = Column(String, nullable=True)  # 基础模型归类名（如 qwen-plus / gpt-4o）
+    modality = Column(JSON, nullable=True)      # 模态描述(v2 JSON), 详见 docstring
+    tags = Column(JSON, nullable=True)          # 模型标签 string[]
+    supplier_info = Column(JSON, nullable=True) # 原供应商API定价信息(审计对照用)
+    deprecated = Column(Boolean, default=False) # 是否弃用
+    config = Column(JSON, default={})           # 额外配置(webhook_url等)
 
-    is_active = Column(Boolean, default=False)
+    is_active = Column(Boolean, default=False)  # 是否为该类别默认 API
+
+
+class SystemAPIBillingRule(Base):
+    """按 system_api_settings.id 绑定的细化计费规则（宽表）。
+
+    规则支持 Text/Image/Video 三类模式，按元信息匹配；命中多条时使用价格最高的规则。
+    """
+    __tablename__ = "system_api_billing_rules"
+
+    id = Column(Integer, primary_key=True, index=True)
+    system_api_id = Column(Integer, ForeignKey("system_api_settings.id"), index=True, nullable=False)
+
+    name = Column(String, nullable=False, default="Rule")
+    description = Column(Text, nullable=True)
+    is_active = Column(Boolean, default=True)
+    priority = Column(Integer, default=0)
+
+    # 模式开关
+    applies_to_text = Column(Boolean, default=False)
+    applies_to_image = Column(Boolean, default=False)
+    applies_to_video = Column(Boolean, default=False)
+
+    # 通用匹配要素
+    generation_mode = Column(String, nullable=True)  # t2i/i2i/t2v/i2v/v2v...
+    input_format = Column(String, nullable=True)     # text/image/video/audio
+    output_format = Column(String, nullable=True)    # text/image/video/audio
+    has_audio = Column(Boolean, nullable=True)
+
+    # Text 维度
+    input_tokens_min = Column(Integer, nullable=True)
+    input_tokens_max = Column(Integer, nullable=True)
+    output_tokens_min = Column(Integer, nullable=True)
+    output_tokens_max = Column(Integer, nullable=True)
+    total_tokens_min = Column(Integer, nullable=True)
+    total_tokens_max = Column(Integer, nullable=True)
+
+    # Image 维度
+    image_count_min = Column(Integer, nullable=True)
+    image_count_max = Column(Integer, nullable=True)
+    width_min = Column(Integer, nullable=True)
+    width_max = Column(Integer, nullable=True)
+    height_min = Column(Integer, nullable=True)
+    height_max = Column(Integer, nullable=True)
+    pixels_min = Column(Integer, nullable=True)
+    pixels_max = Column(Integer, nullable=True)
+
+    # Video 维度
+    duration_seconds_min = Column(Float, nullable=True)
+    duration_seconds_max = Column(Float, nullable=True)
+    fps_min = Column(Float, nullable=True)
+    fps_max = Column(Float, nullable=True)
+
+    # 定价
+    billing_unit_type = Column(String, default="per_call")
+    billing_cost = Column(Integer, default=0)
+    billing_cost_input = Column(Integer, default=0)
+    billing_cost_output = Column(Integer, default=0)
+    charge_multiplier = Column(Float, default=2.0)
+
+    extra_conditions = Column(JSON, default={})
+    created_at = Column(String, default=datetime.datetime.utcnow().isoformat)
+    updated_at = Column(String, default=datetime.datetime.utcnow().isoformat)
+
+
+class SMTPSystemConfig(Base):
+    """Dedicated SMTP configuration storage.
+
+    Kept separate from system_api_settings because SMTP is infrastructure config,
+    not an AIGC model endpoint.
+    """
+
+    __tablename__ = "smtp_system_configs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    host = Column(String, nullable=False, default="")
+    port = Column(Integer, nullable=False, default=587)
+    username = Column(String, nullable=False, default="")
+    password = Column(String, nullable=False, default="")
+    use_ssl = Column(Boolean, default=False)
+    use_tls = Column(Boolean, default=True)
+    from_email = Column(String, nullable=False, default="")
+    frontend_base_url = Column(String, nullable=False, default="")
+    is_active = Column(Boolean, default=True)
+    created_at = Column(String, default=datetime.datetime.utcnow().isoformat)
+    updated_at = Column(String, default=datetime.datetime.utcnow().isoformat)
+
+
+class WechatPayConfig(Base):
+    """Dedicated WeChat payment configuration storage.
+
+    Kept separate from system_api_settings because payment config is platform
+    infrastructure, not an AIGC model endpoint.
+    """
+
+    __tablename__ = "wechat_pay_configs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    mchid = Column(String, nullable=False, default="")
+    appid = Column(String, nullable=False, default="")
+    api_v3_key = Column(String, nullable=False, default="")
+    cert_serial_no = Column(String, nullable=False, default="")
+    private_key = Column(Text, nullable=False, default="")
+    notify_url = Column(String, nullable=False, default="")
+    use_mock = Column(Boolean, default=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(String, default=datetime.datetime.utcnow().isoformat)
+    updated_at = Column(String, default=datetime.datetime.utcnow().isoformat)
+
+
+class TransactionAction(Base):
+    """交易动作流水（预扣/结算/退补/取消）审计表。"""
+    __tablename__ = "transaction_action"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    transaction_id = Column(Integer, ForeignKey("transaction_history.id"), index=True, nullable=True)
+    reservation_tx_id = Column(Integer, ForeignKey("transaction_history.id"), index=True, nullable=True)
+    settlement_tx_id = Column(Integer, ForeignKey("transaction_history.id"), index=True, nullable=True)
+
+    stage = Column(String, index=True)  # RESERVED / SETTLED / REFUND / CHARGE / CANCELED
+    task_type = Column(String, index=True)
+    provider = Column(String, index=True, nullable=True)
+    model = Column(String, index=True, nullable=True)
+
+    system_api_id = Column(Integer, ForeignKey("system_api_settings.id"), index=True, nullable=True)
+    matched_rule_id = Column(Integer, ForeignKey("system_api_billing_rules.id"), index=True, nullable=True)
+
+    reserved_cost = Column(Integer, default=0)
+    actual_cost = Column(Integer, default=0)
+    delta = Column(Integer, default=0)
+    charged_amount = Column(Integer, default=0)
+    refunded_amount = Column(Integer, default=0)
+    outstanding_amount = Column(Integer, default=0)
+
+    matched_rule_ids = Column(JSON, default=[])
+    usage_metadata = Column(JSON, default={})
+    billing_metadata = Column(JSON, default={})
+    created_at = Column(String, default=datetime.datetime.utcnow().isoformat)
+
+
+class ProviderKeyPool(Base):
+    """供应商统一密钥池表。
+    每行代表一个供应商的 API 密钥池及其选择策略。
+    provider 唯一索引，全局只有一份密钥池配置。
+    """
+    __tablename__ = "provider_key_pool"
+    id = Column(Integer, primary_key=True, index=True)
+    provider = Column(String, unique=True, index=True, nullable=False)  # 供应商标识(小写)
+    api_keys = Column(JSON, default=[])           # 密钥列表 List[str]
+    strategy = Column(String, default="random")   # random / round_robin / weighted
+    weights = Column(JSON, default=[])            # 权重列表 List[float]，strategy=weighted 时使用
+    created_at = Column(String, default=datetime.datetime.utcnow().isoformat)
+    updated_at = Column(String, default=datetime.datetime.utcnow().isoformat)
+
 
 class RechargePlan(Base):
     __tablename__ = "recharge_plans"

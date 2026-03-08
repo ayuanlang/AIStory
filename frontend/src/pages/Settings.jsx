@@ -188,7 +188,7 @@ const Settings = () => {
         const tab = params.get('tab');
         if (tab === 'billing' || tab === 'usage') {
             setActiveTab('usage');
-        } else if (tab === 'system-api' || tab === 'system_api' || tab === 'api' || tab === 'api-settings') {
+        } else if (tab === 'system-api' || tab === 'system_api' || tab === 'api' || tab === 'api-settings' || tab === 'default-api-activation') {
             setActiveTab('api_settings');
         }
 
@@ -515,8 +515,10 @@ const Settings = () => {
         return orderedKeys.map((category) => ({
             category,
             label: categoryLabelMap[category] || category,
-            groups: (grouped[category] || []).sort((a, b) => String(a.provider || '').localeCompare(String(b.provider || ''))),
-        }));
+            groups: (grouped[category] || [])
+                .filter((item) => !!item?.shared_key_configured)
+                .sort((a, b) => String(a.provider || '').localeCompare(String(b.provider || ''))),
+        })).filter((block) => (block.groups || []).length > 0);
     }, [systemSettings]);
 
 
@@ -1148,14 +1150,15 @@ const Settings = () => {
         try {
             const selected = await selectSystemSetting(setting.id);
             if (selected?.category === 'LLM') {
+                const resolvedEndpoint = selected.base_url || setting.base_url || '';
                 setProvider(selected.provider || 'openai');
-                setEndpoint(selected.base_url || '');
+                setEndpoint(resolvedEndpoint);
                 setModel(selected.model || '');
                 setApiKey('');
                 setLLMConfig({
                     provider: selected.provider || 'openai',
                     apiKey: '',
-                    endpoint: selected.base_url || '',
+                    endpoint: resolvedEndpoint,
                     model: selected.model || ''
                 });
             }
@@ -1208,7 +1211,8 @@ const Settings = () => {
                         <div className="space-y-2">
                             <label className="text-sm font-medium">{t('API 密钥', 'API Key')}</label>
                             <input 
-                                type="password" 
+                                type="password"
+                                autoComplete="off"
                                 value={apiKey}
                                 onChange={(e) => setApiKey(e.target.value)}
                                 placeholder={t('sk-...', 'sk-...')}
@@ -1243,7 +1247,8 @@ const Settings = () => {
                          <div className="space-y-2">
                                     <label className="text-sm font-medium">{t('API 密钥', 'API Key')}</label>
                             <input 
-                                type="password" 
+                                type="password"
+                                autoComplete="off"
                                 value={apiKey}
                                 onChange={(e) => setApiKey(e.target.value)}
                                 placeholder={t('sk-...', 'sk-...')}
@@ -1284,7 +1289,8 @@ const Settings = () => {
                          <div className="space-y-2">
                                     <label className="text-sm font-medium">{t('API 密钥', 'API Key')}</label>
                             <input 
-                                type="password" 
+                                type="password"
+                                autoComplete="off"
                                 value={apiKey}
                                 onChange={(e) => setApiKey(e.target.value)}
                                 placeholder={t('sk-...', 'sk-...')}
@@ -1345,10 +1351,10 @@ const Settings = () => {
                                          {t('常规', 'General')}
                             </button>
                             <button 
-                                onClick={() => trackMenuAction('settings.tab.api_settings', t('API 设置', 'API Settings'), () => setActiveTab('api_settings'))}
+                                onClick={() => trackMenuAction('settings.tab.api_settings', t('默认 API 激活', 'Default API Activation'), () => setActiveTab('api_settings'))}
                                 className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'api_settings' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
                             >
-                                         {t('API 设置', 'API Settings')}
+                                         {t('默认 API 激活', 'Default API Activation')}
                             </button>
                             <button
                                 onClick={() => trackMenuAction('settings.tab.account', t('用户管理', 'Account'), () => setActiveTab('account'))}
@@ -1535,6 +1541,7 @@ const Settings = () => {
                                     <label className="text-sm font-medium">{t('当前密码', 'Current Password')}</label>
                                     <input
                                         type="password"
+                                        autoComplete="current-password"
                                         value={currentPassword}
                                         onChange={(e) => setCurrentPassword(e.target.value)}
                                         className="w-full p-2 rounded-md bg-white/10 border border-white/10"
@@ -1544,6 +1551,7 @@ const Settings = () => {
                                     <label className="text-sm font-medium">{t('新密码', 'New Password')}</label>
                                     <input
                                         type="password"
+                                        autoComplete="new-password"
                                         value={newPassword}
                                         onChange={(e) => setNewPassword(e.target.value)}
                                         className="w-full p-2 rounded-md bg-white/10 border border-white/10"
@@ -1553,6 +1561,7 @@ const Settings = () => {
                                     <label className="text-sm font-medium">{t('确认新密码', 'Confirm New Password')}</label>
                                     <input
                                         type="password"
+                                        autoComplete="new-password"
                                         value={confirmPassword}
                                         onChange={(e) => setConfirmPassword(e.target.value)}
                                         className="w-full p-2 rounded-md bg-white/10 border border-white/10"
@@ -1655,16 +1664,19 @@ const Settings = () => {
             ) : activeTab === 'api_settings' ? (
                 <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
                     <div className="space-y-4">
-                        <h2 className="text-xl font-semibold">{t('系统 API 设置', 'System API Settings')}</h2>
-                        <div className="bg-black/20 p-6 rounded-xl border border-white/10 space-y-4 shadow-sm">
+                        <div className="rounded-xl border border-cyan-400/30 bg-cyan-500/10 p-4">
+                            <h2 className="text-2xl font-extrabold tracking-wide text-cyan-200">{t('默认 API 激活', 'Default API Activation')}</h2>
+                            <p className="text-xs text-cyan-100/80 mt-1">{t('仅用于当前用户选择每个类别的默认激活 API 配置。', 'Only used for current user default active API selection by category.')}</p>
+                        </div>
+                        <div className="bg-black/20 p-6 rounded-xl border border-cyan-400/20 space-y-4 shadow-sm">
                             <div className="flex items-center justify-between gap-3">
-                                <h3 className="text-base font-medium">{t('选择共享提供方配置', 'Select Shared Provider Configuration')}</h3>
+                                <h3 className="text-base font-medium">{t('选择默认激活的 API 配置', 'Select Default Activated API Config')}</h3>
                                 <span className={`text-xs px-2 py-0.5 rounded border ${userCredits > 0 ? 'text-green-300 border-green-500/40 bg-green-500/10' : 'text-yellow-300 border-yellow-500/40 bg-yellow-500/10'}`}>
                                     {t('积分', 'Credits')}: {userCredits}
                                 </span>
                             </div>
                             <p className="text-xs text-muted-foreground">
-                                {t('系统密钥按提供方共享。你可以在每个类别中选择一个模型配置作为当前激活项；可计费动作会在调用时校验积分。', 'System keys are shared by provider. Choose one model config in each category as your active setting. Credits are checked at call time for billable actions.')}
+                                {t('在每个类别中选择一个默认激活配置。调用时将按你当前激活项生效。', 'Pick one default active config per category. Calls will use your currently active selection.')}
                             </p>
 
                             {!isSystemSettingsLoading && categorizedSystemSettings.length > 0 && (
@@ -1727,7 +1739,10 @@ const Settings = () => {
                                                                         <div className="font-mono break-all flex flex-wrap items-center gap-2">
                                                                             <span>{row.model || '-'}</span>
                                                                             <span className={`text-[10px] px-1.5 py-0.5 rounded border ${row.deprecated ? 'border-red-500/30 text-red-300 bg-red-500/10' : 'border-green-500/30 text-green-300 bg-green-500/10'}`}>
-                                                                                {row.deprecated ? t('状态：已弃用', 'Status: Deprecated') : t('状态：正常', 'Status: Active')}
+                                                                                {row.deprecated ? t('弃用状态：已弃用', 'Deprecated: Yes') : t('弃用状态：未弃用', 'Deprecated: No')}
+                                                                            </span>
+                                                                            <span className={`text-[10px] px-1.5 py-0.5 rounded border ${row.is_active ? 'border-emerald-500/30 text-emerald-300 bg-emerald-500/10' : 'border-gray-500/30 text-gray-300 bg-gray-500/10'}`}>
+                                                                                {row.is_active ? t('启用状态：启用中', 'Activation: Active') : t('启用状态：未启用', 'Activation: Inactive')}
                                                                             </span>
                                                                         </div>
                                                                     </div>

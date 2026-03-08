@@ -1,10 +1,11 @@
 
 
 import requests
+import httpx
 import json
 import asyncio
 import time
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, AsyncGenerator
 import logging
 import os
 import re
@@ -63,6 +64,44 @@ def _debug_log(msg, level="info"):
     print(msg)
     getattr(logger, level, logger.info)(msg)
 
+# ---------------------------------------------------------------------------
+# Token-aware history trimming
+# ---------------------------------------------------------------------------
+# Rough chars-per-token ratio (conservative; works for CJK & English mixed text).
+_CHARS_PER_TOKEN = 3
+_DEFAULT_HISTORY_TOKEN_BUDGET = 6000   # tokens reserved for history messages
+_MIN_HISTORY_MESSAGES = 2             # always keep at least last 2 messages
+_MAX_HISTORY_MESSAGES = 20            # hard upper bound
+
+def _estimate_tokens(text: str) -> int:
+    """Fast approximate token count."""
+    return max(1, len(text) // _CHARS_PER_TOKEN)
+
+def _trim_history_by_token_budget(
+    history: List[Dict[str, str]],
+    budget: int = _DEFAULT_HISTORY_TOKEN_BUDGET,
+) -> List[Dict[str, str]]:
+    """
+    Select the most recent history messages that fit within *budget* tokens.
+    Always keeps at least _MIN_HISTORY_MESSAGES (even if over budget) and
+    never more than _MAX_HISTORY_MESSAGES.
+    """
+    if not history:
+        return []
+    # Take at most _MAX_HISTORY_MESSAGES from the tail
+    candidates = list(history[-_MAX_HISTORY_MESSAGES:])
+    # Walk backwards, accumulating tokens
+    selected: list = []
+    used = 0
+    for msg in reversed(candidates):
+        cost = _estimate_tokens(msg.get("content", ""))
+        if used + cost > budget and len(selected) >= _MIN_HISTORY_MESSAGES:
+            break
+        selected.append(msg)
+        used += cost
+    selected.reverse()
+    return selected
+
 _DEFAULT_AGENT_SYSTEM_PROMPT = """
 You are an AI assistant for a Storyboard Editor application.
 Your goal is to help the user edit, create, and manage storyboard projects.
@@ -106,6 +145,28 @@ You have access to the following tools:
      - Parameters:
          - `objective`: (string)
          - `tasks`: (array of strings, optional)
+
+7. `recommend_model`
+     - Use this when the user describes requirements for a model (e.g. "I need a fast video model", "推荐一个高清图片模型", "哪个模型适合生成动漫风格").
+     - Searches available system API models by category, modality, and tags, then uses LLM to rank and recommend.
+     - Parameters:
+         - `requirement`: (string, required) User's description of what they need.
+         - `category`: (string, optional) Filter by category: LLM / Image / Video / Voice / Music.
+         - `generation_mode`: (string, optional) Filter by generation mode: t2i / i2i / t2v / i2v / v2v / t2a / a2t / t2m / t2s.
+     - Returns a ranked list of recommended models with reasons. Each recommendation includes a `setting_id` for activation.
+
+8. `activate_model`
+     - Use this to activate a recommended system API model for the user.
+     - MUST only be called after user explicitly confirms a recommendation from `recommend_model`.
+     - Parameters:
+         - `setting_id`: (integer, required) The system API setting ID to activate.
+     - This replaces the user's current active model in the same category.
+
+CONTEXT DATA:
+The `Current Project Context` system message contains a field `my_active_api_settings` — an array of the user's currently activated API settings across all categories (LLM, Image, Video, etc.).
+Each item includes: category, provider, model, name, and api_pricing (unit_type, cost, cost_input, cost_output in platform credits where 1 credit = CNY 0.01).
+When the user asks about their current models, API settings, or pricing, answer directly from this context data — no tool call is needed.
+When the user asks to recommend, switch, or change models, use `recommend_model` first, then `activate_model` after user confirmation.
 
 RESPONSE FORMAT:
 You must respond with a JSON object. Do not include markdown formatting (like ```json).
@@ -202,8 +263,12 @@ class LLMService:
             return text
 
         cleaned = text
+        # Strip closed <think>...</think> blocks
         cleaned = re.sub(r"<think\b[^>]*>[\s\S]*?</think>", "", cleaned, flags=re.IGNORECASE)
+        # Strip orphan </think> tags
         cleaned = re.sub(r"</think>", "", cleaned, flags=re.IGNORECASE)
+        # Strip unclosed <think> blocks — consume content up to JSON ({) or markdown (```) boundary, or end of string
+        cleaned = re.sub(r"<think\b[^>]*>(?:(?!\{|```)[\s\S])*", "", cleaned, flags=re.IGNORECASE)
 
         cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
         return cleaned.strip()
@@ -721,13 +786,25 @@ class LLMService:
         messages.append({"role": "system", "content": context_str})
 
         # Add history
-        for msg in history[-5:]: # Keep last 5 turns
+        for msg in _trim_history_by_token_budget(history or []):
             messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
         
         # Add current query
         messages.append({"role": "user", "content": query})
 
         extra_config = dict(config.get("config", {}) or {})
+        # System-management/project-agent planning expects JSON plan text,
+        # not provider-side function-calling. Strip tool-calling knobs to
+        # avoid upstream errors like "function ... not found in declarations".
+        for key in (
+            "tools",
+            "tool_choice",
+            "parallel_tool_calls",
+            "functions",
+            "function_call",
+            "function_declarations",
+        ):
+            extra_config.pop(key, None)
         extra_config.setdefault("__provider", config.get("provider") or self._infer_provider(base_url, model))
 
         try:
@@ -738,7 +815,8 @@ class LLMService:
             err_msg = self._vendor_failed_message(provider, e)
             return {
                 "reply": f"Sorry, I encountered an error communicating with the AI provider: {err_msg}",
-                "plan": []
+                "plan": [],
+                "_llm_error": True,
             }
 
     async def analyze_intent_with_system_prompt(
@@ -766,11 +844,23 @@ class LLMService:
             {"role": "system", "content": f"Current Runtime Context: {json.dumps(context or {}, default=str)}"},
         ]
 
-        for msg in (history or [])[-5:]:
+        for msg in _trim_history_by_token_budget(history or []):
             messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
         messages.append({"role": "user", "content": query})
 
         extra_config = dict(config.get("config", {}) or {})
+        # Intent analysis uses JSON plan parsing, not provider-native function calling.
+        # Strip function-calling keys to avoid upstream "function declaration not found" errors.
+        for key in (
+            "tools",
+            "tool_choice",
+            "parallel_tool_calls",
+            "functions",
+            "function_call",
+            "function_declarations",
+        ):
+            extra_config.pop(key, None)
+        extra_config.setdefault("response_format", {"type": "json_object"})
         extra_config.setdefault("__provider", config.get("provider") or self._infer_provider(base_url, model))
 
         try:
@@ -781,7 +871,8 @@ class LLMService:
             err_msg = self._vendor_failed_message(provider, e)
             return {
                 "reply": f"Sorry, I encountered an error communicating with the AI provider: {err_msg}",
-                "plan": []
+                "plan": [],
+                "_llm_error": True,
             }
 
 
@@ -826,7 +917,9 @@ class LLMService:
     async def _call_openai_compatible(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> Dict[str, Any]:
         full_response = await self._raw_llm_request_full(base_url, api_key, model, messages, extra_config)
         content = self._extract_text_from_response(full_response)
+        logger.info("[_call_openai_compatible] extracted content length=%d snippet=%s", len(content or ""), (content or "")[:200])
         content = self._sanitize_response_content(content)
+        logger.info("[_call_openai_compatible] sanitized content length=%d snippet=%s", len(content or ""), (content or "")[:200])
         usage = full_response.get("usage", {})
         finish_reason = self._extract_finish_reason_from_response(full_response)
         
@@ -841,29 +934,84 @@ class LLMService:
             if lines[-1].startswith("```"):
                 lines = lines[:-1]
             clean_content = "\n".join(lines)
-            
-        try:
-            result = json.loads(clean_content)
-            # Validate keys
+
+        # Try direct parse first
+        result = self._try_parse_json_plan(clean_content)
+        if result is not None:
+            logger.info("[_call_openai_compatible] parsed JSON plan | plan_count=%d reply_len=%d", len(result.get("plan") or []), len(str(result.get("reply") or "")))
             if "reply" not in result:
                 result["reply"] = clean_content
             if "plan" not in result:
                 result["plan"] = []
-            
-            # Inject Usage
             result["usage"] = usage
             result["finish_reason"] = finish_reason
             return result
 
-        except json.JSONDecodeError:
-            # Fallback if not valid JSON
-            return {
-                "reply": clean_content,
-                "plan": [],
-                "usage": usage,
-                "finish_reason": finish_reason,
-            }
+        logger.info("[_call_openai_compatible] no JSON plan found, returning as plain reply | content_len=%d", len(clean_content))
+        # Fallback if not valid JSON
+        return {
+            "reply": clean_content,
+            "plan": [],
+            "usage": usage,
+            "finish_reason": finish_reason,
+        }
 
+    def _try_parse_json_plan(self, text: str) -> Optional[Dict[str, Any]]:
+        """Try to extract a JSON object with 'reply'/'plan' from text.
+
+        Handles cases where the LLM returns JSON surrounded by prose,
+        leftover think-tag fragments, or other non-JSON text.
+        """
+        if not text or not text.strip():
+            return None
+        text = text.strip()
+
+        # 1) Direct parse
+        try:
+            obj = json.loads(text)
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            pass
+
+        # 2) Find the first top-level { ... } block via brace matching
+        start = text.find("{")
+        if start == -1:
+            return None
+        depth = 0
+        in_string = False
+        escape_next = False
+        end = -1
+        for i in range(start, len(text)):
+            ch = text[i]
+            if escape_next:
+                escape_next = False
+                continue
+            if ch == "\\":
+                if in_string:
+                    escape_next = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
+        if end == -1:
+            return None
+        try:
+            obj = json.loads(text[start:end + 1])
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            pass
+        return None
 
     async def generate_content(self, user_prompt: str, system_prompt: str, config: Dict[str, Any], image_urls: List[str] = None, video_urls: List[str] = None) -> Dict[str, Any]:
         """
@@ -1245,7 +1393,339 @@ class LLMService:
         else:
              raise Exception(self._vendor_failed_message(provider, f"Invalid API Response: {data}"))
 
+    # ── Streaming LLM request ──────────────────────────────────────────────
+
+    async def _raw_llm_request_stream(
+        self,
+        base_url: str,
+        api_key: str,
+        model: str,
+        messages: List[Dict],
+        extra_config: Dict[str, Any] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """Async generator yielding streaming events from an OpenAI-compatible API.
+
+        Yields dicts:
+            {"type": "token", "content": "..."}   – text delta
+            {"type": "done",  "usage": {...}}      – stream finished
+        """
+        if not base_url:
+            base_url = "https://api.openai.com/v1"
+
+        resolved_category = str((extra_config or {}).get("__resolved_category") or "LLM").strip().upper()
+        provider = (extra_config or {}).get("__provider") or self._infer_provider(base_url, model)
+
+        # KIE provider does not support streaming – fall back to non-streaming
+        if provider == "kie" and resolved_category == "LLM":
+            full_response = await self._raw_kie_llm_request_full(base_url, api_key, model, messages, extra_config)
+            content = self._extract_text_from_response(full_response)
+            if content:
+                yield {"type": "token", "content": content}
+            yield {"type": "done", "usage": full_response.get("usage", {})}
+            return
+
+        if provider == "grsai" and resolved_category == "LLM":
+            base_url = self._normalize_grsai_llm_base_url(base_url)
+
+        # ── Build URL (same logic as _raw_llm_request_full) ──
+        configured_endpoint = ((extra_config or {}).get("endpoint") or "").strip()
+        if configured_endpoint and resolved_category == "LLM":
+            endpoint_lower = configured_endpoint.lower()
+            if "/chat/completions" in endpoint_lower:
+                url = configured_endpoint.rstrip("/")
+            else:
+                url = f"{configured_endpoint.rstrip('/')}/chat/completions"
+        elif configured_endpoint and resolved_category != "LLM":
+            url = configured_endpoint.rstrip("/")
+        else:
+            url = base_url.rstrip("/")
+            if resolved_category == "LLM" and not url.endswith("/chat/completions"):
+                url = f"{url}/chat/completions"
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        payload = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+            "temperature": 0.7,
+        }
+
+        if extra_config:
+            for k, v in extra_config.items():
+                if k not in ["model", "messages", "stream"] and not str(k).startswith("__"):
+                    payload[k] = v
+
+        print(f"[STREAM-DEBUG] _raw_llm_request_stream: url={url}, model={model}, provider={provider}, payload_keys={list(payload.keys())}, stream={payload.get('stream')}")
+        logger.info(
+            "Calling LLM (stream): provider=%s model=%s url=%s messages=%d",
+            provider, model, url, len(messages or []),
+        )
+
+        usage: Dict[str, Any] = {}
+        timeout = httpx.Timeout(connect=30.0, read=float(DEFAULT_LLM_TIMEOUT_SECONDS), write=30.0, pool=30.0)
+
+        try:
+            print(f"[STREAM-DEBUG] _raw_llm_request_stream: opening httpx connection to {url}...")
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                async with client.stream("POST", url, json=payload, headers=headers) as response:
+                    print(f"[STREAM-DEBUG] _raw_llm_request_stream: got response status={response.status_code}")
+                    if response.status_code != 200:
+                        error_body = await response.aread()
+                        raise Exception(
+                            self._vendor_failed_message(
+                                provider,
+                                f"API Error {response.status_code}: {error_body.decode('utf-8', errors='replace')[:500]}",
+                            )
+                        )
+
+                    import asyncio as _asyncio
+                    _heartbeat_interval = 15  # seconds
+                    _last_yield_time = _asyncio.get_event_loop().time()
+
+                    async for raw_line in response.aiter_lines():
+                        line = raw_line.strip()
+                        if not line:
+                            # Send heartbeat if no data for a while (keeps SSE alive)
+                            now = _asyncio.get_event_loop().time()
+                            if now - _last_yield_time > _heartbeat_interval:
+                                yield {"type": "heartbeat", "content": ""}
+                                _last_yield_time = now
+                            continue
+                        if not line.startswith("data:"):
+                            continue
+                        data_str = line[5:].strip()
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue
+
+                        # Capture usage if the provider includes it in a chunk
+                        if chunk.get("usage"):
+                            usage = chunk["usage"]
+
+                        choices = chunk.get("choices") or []
+                        if not choices:
+                            continue
+                        delta = choices[0].get("delta") or {}
+                        content = delta.get("content") or ""
+                        if not content:
+                            content = delta.get("reasoning_content") or ""
+                        if content:
+                            yield {"type": "token", "content": content}
+                            _last_yield_time = _asyncio.get_event_loop().time()
+
+        except httpx.ConnectError as exc:
+            raise Exception(self._vendor_failed_message(provider, f"Connection failed: {exc}"))
+        except httpx.ReadTimeout as exc:
+            raise Exception(self._vendor_failed_message(provider, f"Read timeout: {exc}"))
+
+        yield {"type": "done", "usage": usage}
+
+    async def stream_analyze_intent(
+        self,
+        query: str,
+        context: Dict[str, Any],
+        history: List[Dict[str, str]],
+        config: Dict[str, Any],
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """Streaming version of analyze_intent.
+
+        Yields:
+            {"type": "token", "content": "..."}  – text deltas from the LLM
+            {"type": "result", "reply": "...", "plan": [...], "usage": {...}}  – final parsed result
+        """
+        if not config:
+            yield {"type": "result", "reply": "No LLM config provided.", "plan": [], "usage": {}}
+            return
+        api_key = config.get("api_key")
+        base_url = config.get("base_url")
+        model = config.get("model")
+        if not api_key:
+            yield {"type": "result", "reply": "Please configure your LLM API Key in Settings.", "plan": [], "usage": {}}
+            return
+
+        messages = [
+            {"role": "system", "content": self._get_agent_system_prompt()},
+            {"role": "system", "content": f"Current Project Context: {json.dumps(context or {}, default=str)}"},
+        ]
+        for msg in _trim_history_by_token_budget(history or []):
+            messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
+        messages.append({"role": "user", "content": query})
+
+        extra_config = dict(config.get("config", {}) or {})
+        extra_config.setdefault("__provider", config.get("provider") or self._infer_provider(base_url, model))
+
+        print(f"[STREAM-DEBUG] llm_service.stream_analyze_intent: calling _raw_llm_request_stream, base_url={base_url}, model={model}, messages_count={len(messages)}")
+        accumulated = ""
+        usage: Dict[str, Any] = {}
+        try:
+            async for event in self._raw_llm_request_stream(base_url, api_key, model, messages, extra_config):
+                if event["type"] == "token":
+                    accumulated += event["content"]
+                    if len(accumulated) <= 100:
+                        print(f"[STREAM-DEBUG] llm_service.stream_analyze_intent: accumulated so far: {repr(accumulated[:100])}")
+                    yield event
+                elif event["type"] == "done":
+                    print(f"[STREAM-DEBUG] llm_service.stream_analyze_intent: done event, usage={usage}, accumulated_len={len(accumulated)}")
+                    usage = event.get("usage", {})
+        except Exception as e:
+            print(f"[STREAM-DEBUG] llm_service.stream_analyze_intent ERROR: {e}")
+            logger.error("stream_analyze_intent error: %s", e)
+            provider = extra_config.get("__provider") or config.get("provider") or self._infer_provider(base_url, model)
+            yield {"type": "result", "reply": f"Error: {self._vendor_failed_message(provider, e)}", "plan": [], "usage": {}, "_llm_error": True}
+            return
+
+        # Parse the accumulated response
+        content = self._sanitize_response_content(accumulated)
+        clean = content.strip()
+        if clean.startswith("```"):
+            lines = clean.split("\n")
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            clean = "\n".join(lines)
+
+        result = self._try_parse_json_plan(clean)
+        if result is not None:
+            if "reply" not in result:
+                result["reply"] = clean
+            if "plan" not in result:
+                result["plan"] = []
+        else:
+            result = {"reply": clean, "plan": []}
+        result["usage"] = usage
+        yield {"type": "result", **result}
+
+    async def stream_analyze_intent_with_system_prompt(
+        self,
+        query: str,
+        context: Dict[str, Any],
+        history: List[Dict[str, str]],
+        config: Dict[str, Any],
+        system_prompt: str,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """Streaming version of analyze_intent_with_system_prompt."""
+        if not config:
+            yield {"type": "result", "reply": "No LLM config provided.", "plan": [], "usage": {}}
+            return
+        api_key = config.get("api_key")
+        base_url = config.get("base_url")
+        model = config.get("model")
+        if not api_key:
+            yield {"type": "result", "reply": "Please configure your LLM API Key in Settings.", "plan": [], "usage": {}}
+            return
+
+        resolved_prompt = str(system_prompt or "").strip() or self._get_agent_system_prompt()
+        messages = [
+            {"role": "system", "content": resolved_prompt},
+            {"role": "system", "content": f"Current Runtime Context: {json.dumps(context or {}, default=str)}"},
+        ]
+        for msg in _trim_history_by_token_budget(history or []):
+            messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
+        messages.append({"role": "user", "content": query})
+
+        extra_config = dict(config.get("config", {}) or {})
+        # Keep streaming intent-analysis aligned with non-streaming behavior.
+        for key in (
+            "tools",
+            "tool_choice",
+            "parallel_tool_calls",
+            "functions",
+            "function_call",
+            "function_declarations",
+        ):
+            extra_config.pop(key, None)
+        extra_config.setdefault("response_format", {"type": "json_object"})
+        extra_config.setdefault("__provider", config.get("provider") or self._infer_provider(base_url, model))
+
+        accumulated = ""
+        usage: Dict[str, Any] = {}
+        try:
+            async for event in self._raw_llm_request_stream(base_url, api_key, model, messages, extra_config):
+                if event["type"] == "token":
+                    accumulated += event["content"]
+                    yield event
+                elif event["type"] == "done":
+                    usage = event.get("usage", {})
+        except Exception as e:
+            logger.error("stream_analyze_intent_with_system_prompt error: %s", e)
+            provider = extra_config.get("__provider") or config.get("provider") or self._infer_provider(base_url, model)
+            yield {"type": "result", "reply": f"Error: {self._vendor_failed_message(provider, e)}", "plan": [], "usage": {}, "_llm_error": True}
+            return
+
+        content = self._sanitize_response_content(accumulated)
+        clean = content.strip()
+        if clean.startswith("```"):
+            lines = clean.split("\n")
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            clean = "\n".join(lines)
+
+        result = self._try_parse_json_plan(clean)
+        if result is not None:
+            if "reply" not in result:
+                result["reply"] = clean
+            if "plan" not in result:
+                result["plan"] = []
+        else:
+            result = {"reply": clean, "plan": []}
+        result["usage"] = usage
+        yield {"type": "result", **result}
+
     # ── Retry-with-fallback wrappers ──────────────────────────────────────
+
+    @staticmethod
+    def _build_routing_metadata_from_config(config: Dict[str, Any]) -> Dict[str, Any]:
+        cfg = config or {}
+        cfg_extra = cfg.get("config") or {}
+        system_api_id = cfg_extra.get("__resolved_setting_id")
+        try:
+            system_api_id = int(system_api_id) if system_api_id is not None else None
+        except Exception:
+            system_api_id = None
+
+        provider = str(cfg.get("provider") or "").strip() or None
+        model = str(cfg.get("model") or "").strip() or None
+        resolved_source = str(cfg_extra.get("__resolved_source") or "").strip() or None
+        return {
+            "provider": provider,
+            "model": model,
+            "system_api_id": system_api_id,
+            "resolved_source": resolved_source,
+        }
+
+    def _attach_routing_metadata(self, result: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(result, dict):
+            return result
+
+        routing = self._build_routing_metadata_from_config(config)
+        provider = routing.get("provider")
+        model = routing.get("model")
+        system_api_id = routing.get("system_api_id")
+
+        if provider:
+            result["provider"] = provider
+        if model:
+            result["model"] = model
+        if system_api_id is not None:
+            result["system_api_id"] = system_api_id
+
+        result["routing_metadata"] = {
+            "provider": provider,
+            "model": model,
+            "system_api_id": system_api_id,
+            "resolved_source": routing.get("resolved_source"),
+        }
+        return result
 
     async def generate_content_with_fallback(
         self,
@@ -1272,7 +1752,7 @@ class LLMService:
             result = await self.generate_content(user_prompt, system_prompt, config, image_urls, video_urls)
             content = str(result.get("content") or "")
             if not content.startswith("Error:"):
-                return result
+                return self._attach_routing_metadata(result, config)
             last_err = content
             logger.warning(
                 "[llm_fallback] active attempt %d/2 failed | provider=%s model=%s err=%s",
@@ -1292,14 +1772,14 @@ class LLMService:
             result = await self.generate_content(user_prompt, system_prompt, fb_cfg, image_urls, video_urls)
             content = str(result.get("content") or "")
             if not content.startswith("Error:"):
-                return result
+                return self._attach_routing_metadata(result, fb_cfg)
             last_err = content
             logger.warning(
                 "[llm_fallback] fallback %d/%d failed | provider=%s model=%s err=%s",
                 idx, len(fallbacks), fb_cfg.get("provider"), fb_cfg.get("model"), content[:200],
             )
 
-        return {"content": last_err, "usage": {}, "finish_reason": None}
+        return self._attach_routing_metadata({"content": last_err, "usage": {}, "finish_reason": None}, config)
 
     async def chat_completion_with_fallback(
         self,
@@ -1321,7 +1801,8 @@ class LLMService:
         # ── active config: 2 attempts ──
         for attempt in range(1, 3):
             try:
-                return await self.chat_completion(messages, config)
+                result = await self.chat_completion(messages, config)
+                return self._attach_routing_metadata(result, config)
             except Exception as e:
                 last_exc = e
                 logger.warning(
@@ -1340,7 +1821,8 @@ class LLMService:
                     "[llm_fallback] chat_completion fallback %d/%d | provider=%s model=%s",
                     idx, len(fallbacks), fb_cfg.get("provider"), fb_cfg.get("model"),
                 )
-                return await self.chat_completion(messages, fb_cfg)
+                result = await self.chat_completion(messages, fb_cfg)
+                return self._attach_routing_metadata(result, fb_cfg)
             except Exception as e:
                 last_exc = e
                 logger.warning(

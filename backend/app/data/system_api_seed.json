@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "exported_at": "2026-03-06T13:24:00.804850+00:00",
   "count": 141,
   "items": [
@@ -18,7 +18,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Grsai gpt-image-1.5",
@@ -32,7 +33,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Grsai nano-banana",
@@ -49,7 +51,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Grsai (Dakka)",
@@ -78,7 +81,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": true
+      "is_active": true,
+      "tags": null
     },
     {
       "name": "Grsai nano-banana-pro",
@@ -92,7 +96,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Grsai nano-banana-pro-4k-vip",
@@ -106,7 +111,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Grsai nano-banana-pro-cl",
@@ -120,7 +126,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Grsai nano-banana-pro-vip",
@@ -134,7 +141,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Grsai nano-banana-pro-vt",
@@ -148,7 +156,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Grsai sora-create-character",
@@ -164,7 +173,8 @@
         "disable_api": true
       },
       "deprecated": true,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Grsai sora-image",
@@ -180,7 +190,8 @@
         "disable_api": false
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Grsai sora-upload-character",
@@ -196,7 +207,8 @@
         "disable_api": true
       },
       "deprecated": true,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Flux-2",
@@ -216,7 +228,8 @@
         "disable_api": true
       },
       "deprecated": true,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Flux2 Flex I2I (Canonical)",
@@ -224,7 +237,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "flux-2/flex-image-to-image",
-      "modality": "image-to-image",
+      "modality": {
+        "generation_modes": [
+          "i2i"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -236,7 +253,8 @@
         "disable_api": true
       },
       "deprecated": true,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Flux2 Flex T2I (Canonical)",
@@ -244,7 +262,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "flux-2/flex-text-to-image",
-      "modality": "text-to-image",
+      "modality": {
+        "generation_modes": [
+          "t2i"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -256,7 +278,8 @@
         "disable_api": true
       },
       "deprecated": true,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Flux2 Pro I2I (Canonical)",
@@ -264,7 +287,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "flux-2/pro-image-to-image",
-      "modality": "image-to-image",
+      "modality": {
+        "generation_modes": [
+          "i2i"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -276,7 +303,8 @@
         "disable_api": true
       },
       "deprecated": true,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Flux2 Pro T2I (Canonical)",
@@ -284,7 +312,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "flux-2/pro-text-to-image",
-      "modality": "text-to-image",
+      "modality": {
+        "generation_modes": [
+          "t2i"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -296,7 +328,8 @@
         "disable_api": true
       },
       "deprecated": true,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Flux Kontext Pro",
@@ -314,7 +347,8 @@
         "disable_api": true
       },
       "deprecated": true,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Google Imagen4",
@@ -322,7 +356,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "google/imagen4",
-      "modality": "text-to-image",
+      "modality": {
+        "generation_modes": [
+          "t2i"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -332,7 +370,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Google Imagen4 Fast (Canonical)",
@@ -340,7 +379,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "google/imagen4-fast",
-      "modality": "text-to-image",
+      "modality": {
+        "generation_modes": [
+          "t2i"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -350,7 +393,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Google Imagen4 Ultra (Canonical)",
@@ -358,7 +402,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "google/imagen4-ultra",
-      "modality": "text-to-image",
+      "modality": {
+        "generation_modes": [
+          "t2i"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -368,7 +416,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Google Nano Banana",
@@ -376,7 +425,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "google/nano-banana",
-      "modality": "text-to-image",
+      "modality": {
+        "generation_modes": [
+          "t2i"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -386,7 +439,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Google Nano Banana Edit",
@@ -394,7 +448,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "google/nano-banana-edit",
-      "modality": "image-to-image",
+      "modality": {
+        "generation_modes": [
+          "i2i"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -404,7 +462,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Google Nano Banana 2",
@@ -412,17 +471,22 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "google/nanobanana2",
-      "modality": null,
+      "modality": {
+        "generation_modes": [
+          "t2i"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
         "credits_endpoint": "https://api.kie.ai/api/v1/user/credits",
         "credits_endpoint_v2": "https://api.kie.ai/api/v1/chat/credit",
-        "deprecated": true,
+        "deprecated": false,
         "provider_api_key_strategy": "random"
       },
-      "deprecated": true,
-      "is_active": false
+      "deprecated": false,
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Google Pro Image-to-Image",
@@ -430,17 +494,22 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "google/pro-image-to-image",
-      "modality": null,
+      "modality": {
+        "generation_modes": [
+          "i2i"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
         "credits_endpoint": "https://api.kie.ai/api/v1/user/credits",
         "credits_endpoint_v2": "https://api.kie.ai/api/v1/chat/credit",
-        "deprecated": true,
+        "deprecated": false,
         "provider_api_key_strategy": "random"
       },
-      "deprecated": true,
-      "is_active": false
+      "deprecated": false,
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie GPT Image 1.5 I2I",
@@ -458,7 +527,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie GPT Image 1.5 T2I",
@@ -476,43 +546,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
-    },
-    {
-      "name": "Kie GPT Image 1.5 I2I",
-      "category": "Image",
-      "provider": "kie",
-      "base_url": "https://api.kie.ai",
-      "model": "gpt-image/1.5-image-to-image",
-      "modality": "image-to-image",
-      "config": {
-        "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
-        "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
-        "credits_endpoint": "https://api.kie.ai/api/v1/user/credits",
-        "credits_endpoint_v2": "https://api.kie.ai/api/v1/chat/credit",
-        "deprecated": false,
-        "provider_api_key_strategy": "random"
-      },
-      "deprecated": false,
-      "is_active": false
-    },
-    {
-      "name": "Kie GPT Image 1.5 T2I",
-      "category": "Image",
-      "provider": "kie",
-      "base_url": "https://api.kie.ai",
-      "model": "gpt-image/1.5-text-to-image",
-      "modality": "text-to-image",
-      "config": {
-        "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
-        "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
-        "credits_endpoint": "https://api.kie.ai/api/v1/user/credits",
-        "credits_endpoint_v2": "https://api.kie.ai/api/v1/chat/credit",
-        "deprecated": false,
-        "provider_api_key_strategy": "random"
-      },
-      "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Grok Imagine",
@@ -530,7 +565,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Grok Imagine I2I (Canonical)",
@@ -538,7 +574,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "grok-imagine/image-to-image",
-      "modality": "image-to-image",
+      "modality": {
+        "generation_modes": [
+          "i2i"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -548,7 +588,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Grok Imagine T2I (Canonical)",
@@ -556,7 +597,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "grok-imagine/text-to-image",
-      "modality": "text-to-image",
+      "modality": {
+        "generation_modes": [
+          "t2i"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -566,7 +611,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Grok Imagine Upscale (Canonical)",
@@ -574,7 +620,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "grok-imagine/upscale",
-      "modality": "image-to-image",
+      "modality": {
+        "generation_modes": [
+          "i2i"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -584,7 +634,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Ideogram",
@@ -602,7 +653,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Ideogram Character",
@@ -610,7 +662,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "ideogram/character",
-      "modality": "text-to-image",
+      "modality": {
+        "generation_modes": [
+          "t2i"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -620,7 +676,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Ideogram Character Edit",
@@ -628,7 +685,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "ideogram/character-edit",
-      "modality": "image-to-image",
+      "modality": {
+        "generation_modes": [
+          "i2i"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -638,7 +699,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Ideogram Character Remix",
@@ -646,7 +708,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "ideogram/character-remix",
-      "modality": "image-to-image",
+      "modality": {
+        "generation_modes": [
+          "i2i"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -656,7 +722,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Ideogram V3 Reframe",
@@ -664,7 +731,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "ideogram/v3-reframe",
-      "modality": "image-to-image",
+      "modality": {
+        "generation_modes": [
+          "i2i"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -674,7 +745,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Google Imagen4 Fast",
@@ -692,7 +764,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Google Imagen4 Ultra",
@@ -710,7 +783,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Qwen Image",
@@ -728,7 +802,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Qwen Edit (Canonical)",
@@ -736,7 +811,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "qwen/image-edit",
-      "modality": "image-to-image",
+      "modality": {
+        "generation_modes": [
+          "i2i"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -746,7 +825,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Qwen I2I (Canonical)",
@@ -754,7 +834,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "qwen/image-to-image",
-      "modality": "image-to-image",
+      "modality": {
+        "generation_modes": [
+          "i2i"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -764,7 +848,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Qwen T2I (Canonical)",
@@ -772,7 +857,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "qwen/text-to-image",
-      "modality": "text-to-image",
+      "modality": {
+        "generation_modes": [
+          "t2i"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -782,7 +871,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Recraft",
@@ -800,7 +890,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Recraft Crisp Upscale",
@@ -808,7 +899,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "recraft/crisp-upscale",
-      "modality": "image-to-image",
+      "modality": {
+        "generation_modes": [
+          "i2i"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -818,7 +913,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Recraft Remove BG",
@@ -826,7 +922,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "recraft/remove-background",
-      "modality": "image-to-image",
+      "modality": {
+        "generation_modes": [
+          "i2i"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -836,7 +936,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Seedream 4.5 Edit",
@@ -844,7 +945,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "seedream/4.5-edit",
-      "modality": "image-to-image",
+      "modality": {
+        "generation_modes": [
+          "i2i"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -854,7 +959,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Seedream 4.5",
@@ -862,7 +968,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "seedream/4.5-text-to-image",
-      "modality": "text-to-image",
+      "modality": {
+        "generation_modes": [
+          "t2i"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -872,7 +982,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Topaz",
@@ -890,7 +1001,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Topaz Image Upscale",
@@ -898,7 +1010,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "topaz/image-upscale",
-      "modality": "image-to-image",
+      "modality": {
+        "generation_modes": [
+          "i2i"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -908,7 +1024,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Z-image v4.0",
@@ -927,7 +1044,8 @@
         "disable_api": false
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Z-image v4.5",
@@ -946,7 +1064,8 @@
         "disable_api": false
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Tencent Hunyuan",
@@ -962,7 +1081,8 @@
         "webHook": ""
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Volcengine Ark",
@@ -974,8 +1094,9 @@
       "config": {
         "webHook": ""
       },
-      "deprecated": false,
-      "is_active": false
+      "deprecated": true,
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "doubao",
@@ -989,7 +1110,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Doubao (Ark/DeepSeek)",
@@ -1002,7 +1124,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Grsai gemini-2.5-pro",
@@ -1016,7 +1139,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Grsai gemini-3-pro",
@@ -1040,7 +1164,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Grsai gemini-2.5-pro",
@@ -1064,7 +1189,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": true
+      "is_active": true,
+      "tags": null
     },
     {
       "name": "Kie Claude Opus 4.5",
@@ -1082,7 +1208,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Claude Opus 4.5",
@@ -1100,7 +1227,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Claude Sonnet 4.5",
@@ -1118,7 +1246,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Claude Sonnet 4.5",
@@ -1136,7 +1265,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Gemini 2.5 Flash",
@@ -1153,7 +1283,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Gemini 2.5 Pro",
@@ -1172,7 +1303,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Gemini 3 Pro",
@@ -1190,7 +1322,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie GPT-5-2",
@@ -1208,7 +1341,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Zhipu GLM (Ark)",
@@ -1219,7 +1353,8 @@
       "modality": null,
       "config": {},
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "baidu_translate",
@@ -1242,24 +1377,8 @@
         "billing_cost_output": 1800
       },
       "deprecated": false,
-      "is_active": true
-    },
-    {
-      "name": "Kie ElevenLabs",
-      "category": "Tools",
-      "provider": "kie",
-      "base_url": "https://api.kie.ai",
-      "model": "elevenlabs",
-      "modality": null,
-      "config": {
-        "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
-        "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
-        "credits_endpoint": "https://api.kie.ai/api/v1/user/credits",
-        "deprecated": true,
-        "provider_api_key_strategy": "random"
-      },
-      "deprecated": true,
-      "is_active": false
+      "is_active": true,
+      "tags": null
     },
     {
       "name": "Kie ElevenLabs Audio Isolation",
@@ -1267,7 +1386,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "elevenlabs/audio-isolation",
-      "modality": "audio-to-audio",
+      "modality": {
+        "generation_modes": [
+          "a2a"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -1277,7 +1400,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie ElevenLabs Sound Effect v2",
@@ -1285,7 +1409,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "elevenlabs/sound-effect-v2",
-      "modality": "text-to-audio",
+      "modality": {
+        "generation_modes": [
+          "t2a"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -1295,7 +1423,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie ElevenLabs Speech-to-Text",
@@ -1303,7 +1432,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "elevenlabs/speech-to-text",
-      "modality": "audio-to-text",
+      "modality": {
+        "generation_modes": [
+          "a2t"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -1313,7 +1446,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie ElevenLabs Text to Dialogue v3",
@@ -1321,7 +1455,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "elevenlabs/text-to-dialogue-v3",
-      "modality": "text-to-audio",
+      "modality": {
+        "generation_modes": [
+          "t2a"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -1331,7 +1469,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie ElevenLabs TTS Multilingual v2",
@@ -1339,7 +1478,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "elevenlabs/text-to-speech-multilingual-v2",
-      "modality": "text-to-audio",
+      "modality": {
+        "generation_modes": [
+          "t2a"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -1349,7 +1492,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie ElevenLabs TTS Turbo 2.5",
@@ -1357,7 +1501,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "elevenlabs/text-to-speech-turbo-2-5",
-      "modality": "text-to-audio",
+      "modality": {
+        "generation_modes": [
+          "t2a"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -1367,7 +1515,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "doubao",
@@ -1384,7 +1533,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "doubao",
@@ -1401,7 +1551,245 @@
         "disable_api": true
       },
       "deprecated": true,
-      "is_active": false
+      "is_active": false,
+      "tags": null
+    },
+    {
+      "name": "doubao seedance-1.5-pro (有声/token计费)",
+      "category": "Video",
+      "provider": "doubao",
+      "base_url": "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks",
+      "model": "doubao-seedance-1-5-pro",
+      "modality": null,
+      "config": {
+        "endpoint": "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks",
+        "generate_audio": true,
+        "draft": false,
+        "provider_api_key_strategy": "random",
+        "api_pricing": {
+          "unit_type": "per_million_tokens",
+          "cost": 800,
+          "cost_input": 0,
+          "cost_output": 0
+        },
+        "ref_cost_cny_per_million_tokens": 8.0,
+        "ref_cost_cny_per_million_tokens_online": 16.0,
+        "video_token_defaults": {
+          "width": 1280,
+          "height": 720,
+          "fps": 24,
+          "draft_token_coefficient": 1.0
+        }
+      },
+      "deprecated": false,
+      "is_active": false,
+      "tags": [
+        "token_billing",
+        "async"
+      ]
+    },
+    {
+      "name": "doubao seedance-1.5-pro (无声/token计费)",
+      "category": "Video",
+      "provider": "doubao",
+      "base_url": "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks",
+      "model": "doubao-seedance-1-5-pro-silent",
+      "modality": null,
+      "config": {
+        "endpoint": "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks",
+        "generate_audio": false,
+        "draft": false,
+        "provider_api_key_strategy": "random",
+        "api_pricing": {
+          "unit_type": "per_million_tokens",
+          "cost": 400,
+          "cost_input": 0,
+          "cost_output": 0
+        },
+        "ref_cost_cny_per_million_tokens": 4.0,
+        "ref_cost_cny_per_million_tokens_online": 8.0,
+        "video_token_defaults": {
+          "width": 1280,
+          "height": 720,
+          "fps": 24,
+          "draft_token_coefficient": 1.0
+        }
+      },
+      "deprecated": false,
+      "is_active": false,
+      "tags": [
+        "token_billing",
+        "async"
+      ]
+    },
+    {
+      "name": "doubao seedance-1.5-pro draft (有声/token计费)",
+      "category": "Video",
+      "provider": "doubao",
+      "base_url": "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks",
+      "model": "doubao-seedance-1-5-pro-draft",
+      "modality": null,
+      "config": {
+        "endpoint": "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks",
+        "generate_audio": true,
+        "draft": true,
+        "provider_api_key_strategy": "random",
+        "api_pricing": {
+          "unit_type": "per_million_tokens",
+          "cost": 800,
+          "cost_input": 0,
+          "cost_output": 0
+        },
+        "ref_cost_cny_per_million_tokens": 8.0,
+        "ref_cost_cny_per_million_tokens_online": 16.0,
+        "video_token_defaults": {
+          "width": 854,
+          "height": 480,
+          "fps": 24,
+          "draft_token_coefficient": 0.6
+        }
+      },
+      "deprecated": false,
+      "is_active": false,
+      "tags": [
+        "token_billing",
+        "async",
+        "draft"
+      ]
+    },
+    {
+      "name": "doubao seedance-1.5-pro draft (无声/token计费)",
+      "category": "Video",
+      "provider": "doubao",
+      "base_url": "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks",
+      "model": "doubao-seedance-1-5-pro-draft-silent",
+      "modality": null,
+      "config": {
+        "endpoint": "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks",
+        "generate_audio": false,
+        "draft": true,
+        "provider_api_key_strategy": "random",
+        "api_pricing": {
+          "unit_type": "per_million_tokens",
+          "cost": 400,
+          "cost_input": 0,
+          "cost_output": 0
+        },
+        "ref_cost_cny_per_million_tokens": 4.0,
+        "ref_cost_cny_per_million_tokens_online": 8.0,
+        "video_token_defaults": {
+          "width": 854,
+          "height": 480,
+          "fps": 24,
+          "draft_token_coefficient": 0.7
+        }
+      },
+      "deprecated": false,
+      "is_active": false,
+      "tags": [
+        "token_billing",
+        "async",
+        "draft"
+      ]
+    },
+    {
+      "name": "doubao seedance-1.0-pro (token计费)",
+      "category": "Video",
+      "provider": "doubao",
+      "base_url": "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks",
+      "model": "doubao-seedance-1-0-pro",
+      "modality": null,
+      "config": {
+        "endpoint": "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks",
+        "draft": false,
+        "provider_api_key_strategy": "random",
+        "api_pricing": {
+          "unit_type": "per_million_tokens",
+          "cost": 750,
+          "cost_input": 0,
+          "cost_output": 0
+        },
+        "ref_cost_cny_per_million_tokens": 7.5,
+        "ref_cost_cny_per_million_tokens_online": 15.0,
+        "video_token_defaults": {
+          "width": 1280,
+          "height": 720,
+          "fps": 24,
+          "draft_token_coefficient": 1.0
+        }
+      },
+      "deprecated": false,
+      "is_active": false,
+      "tags": [
+        "token_billing",
+        "async"
+      ]
+    },
+    {
+      "name": "doubao seedance-1.0-pro-fast (token计费)",
+      "category": "Video",
+      "provider": "doubao",
+      "base_url": "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks",
+      "model": "doubao-seedance-1-0-pro-fast",
+      "modality": null,
+      "config": {
+        "endpoint": "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks",
+        "draft": false,
+        "provider_api_key_strategy": "random",
+        "api_pricing": {
+          "unit_type": "per_million_tokens",
+          "cost": 210,
+          "cost_input": 0,
+          "cost_output": 0
+        },
+        "ref_cost_cny_per_million_tokens": 2.1,
+        "ref_cost_cny_per_million_tokens_online": 4.2,
+        "video_token_defaults": {
+          "width": 1280,
+          "height": 720,
+          "fps": 24,
+          "draft_token_coefficient": 1.0
+        }
+      },
+      "deprecated": false,
+      "is_active": false,
+      "tags": [
+        "token_billing",
+        "async"
+      ]
+    },
+    {
+      "name": "doubao seedance-1.0-lite (token计费)",
+      "category": "Video",
+      "provider": "doubao",
+      "base_url": "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks",
+      "model": "doubao-seedance-1-0-lite",
+      "modality": null,
+      "config": {
+        "endpoint": "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks",
+        "draft": false,
+        "provider_api_key_strategy": "random",
+        "api_pricing": {
+          "unit_type": "per_million_tokens",
+          "cost": 500,
+          "cost_input": 0,
+          "cost_output": 0
+        },
+        "ref_cost_cny_per_million_tokens": 5.0,
+        "ref_cost_cny_per_million_tokens_online": 10.0,
+        "video_token_defaults": {
+          "width": 1280,
+          "height": 720,
+          "fps": 24,
+          "draft_token_coefficient": 1.0
+        }
+      },
+      "deprecated": false,
+      "is_active": false,
+      "tags": [
+        "token_billing",
+        "async"
+      ]
     },
     {
       "name": "Grsai sora-2",
@@ -1418,7 +1806,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": true,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Grsai veo3.1-fast",
@@ -1445,7 +1834,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": true,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Grsai veo3.1-fast-1080p",
@@ -1462,7 +1852,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": true,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Grsai veo3.1-fast-4k",
@@ -1479,7 +1870,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": true,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Grsai veo3.1-pro",
@@ -1496,7 +1888,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": true,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Grsai veo3.1-pro-1080p",
@@ -1513,7 +1906,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": true,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Grsai veo3.1-pro-4k",
@@ -1530,7 +1924,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": true,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Bytedance v1 Lite",
@@ -1548,7 +1943,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Bytedance v1 Pro",
@@ -1566,7 +1962,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Bytedance V1 Lite I2V (Canonical)",
@@ -1574,7 +1971,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "bytedance/v1-lite-image-to-video",
-      "modality": "image-to-video",
+      "modality": {
+        "generation_modes": [
+          "i2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -1584,7 +1985,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Bytedance V1 Lite T2V (Canonical)",
@@ -1592,7 +1994,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "bytedance/v1-lite-text-to-video",
-      "modality": "text-to-video",
+      "modality": {
+        "generation_modes": [
+          "t2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -1602,7 +2008,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Bytedance V1 Pro Fast I2V (Canonical)",
@@ -1610,7 +2017,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "bytedance/v1-pro-fast-image-to-video",
-      "modality": "image-to-video",
+      "modality": {
+        "generation_modes": [
+          "i2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -1620,7 +2031,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Bytedance V1 Pro I2V (Canonical)",
@@ -1628,7 +2040,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "bytedance/v1-pro-image-to-video",
-      "modality": "image-to-video",
+      "modality": {
+        "generation_modes": [
+          "i2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -1638,7 +2054,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Bytedance V1 Pro T2V (Canonical)",
@@ -1646,7 +2063,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "bytedance/v1-pro-text-to-video",
-      "modality": "text-to-video",
+      "modality": {
+        "generation_modes": [
+          "t2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -1656,7 +2077,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Grok Imagine Video",
@@ -1674,7 +2096,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Grok Imagine I2V (Canonical)",
@@ -1682,7 +2105,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "grok-imagine/image-to-video",
-      "modality": "image-to-video",
+      "modality": {
+        "generation_modes": [
+          "i2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -1692,7 +2119,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Grok Imagine T2V (Canonical)",
@@ -1700,7 +2128,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "grok-imagine/text-to-video",
-      "modality": "text-to-video",
+      "modality": {
+        "generation_modes": [
+          "t2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -1710,7 +2142,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Hailuo",
@@ -1728,7 +2161,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Hailuo Pro I2V (Canonical)",
@@ -1736,7 +2170,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "hailuo/02-image-to-video-pro",
-      "modality": "image-to-video",
+      "modality": {
+        "generation_modes": [
+          "i2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -1746,7 +2184,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Hailuo Standard I2V (Canonical)",
@@ -1754,7 +2193,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "hailuo/02-image-to-video-standard",
-      "modality": "image-to-video",
+      "modality": {
+        "generation_modes": [
+          "i2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -1764,7 +2207,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Hailuo Pro T2V (Canonical)",
@@ -1772,7 +2216,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "hailuo/02-text-to-video-pro",
-      "modality": "text-to-video",
+      "modality": {
+        "generation_modes": [
+          "t2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -1782,7 +2230,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Hailuo Standard T2V (Canonical)",
@@ -1790,7 +2239,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "hailuo/02-text-to-video-standard",
-      "modality": "text-to-video",
+      "modality": {
+        "generation_modes": [
+          "t2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -1800,7 +2253,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Hailuo 2.3 Pro I2V",
@@ -1808,7 +2262,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "hailuo/2-3-image-to-video-pro",
-      "modality": "image-to-video",
+      "modality": {
+        "generation_modes": [
+          "i2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -1818,7 +2276,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Hailuo 2.3 Standard I2V",
@@ -1826,7 +2285,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "hailuo/2-3-image-to-video-standard",
-      "modality": "image-to-video",
+      "modality": {
+        "generation_modes": [
+          "i2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -1836,7 +2299,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Infinitalk From Audio",
@@ -1844,7 +2308,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "infinitalk/from-audio",
-      "modality": "audio-to-video",
+      "modality": {
+        "generation_modes": [
+          "audio-to-video"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -1854,7 +2322,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Kling 2.6 I2V",
@@ -1862,7 +2331,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "kling-2.6/image-to-video",
-      "modality": "image-to-video",
+      "modality": {
+        "generation_modes": [
+          "i2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -1872,7 +2345,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Kling 2.6 Motion Control",
@@ -1880,7 +2354,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "kling-2.6/motion-control",
-      "modality": "image-to-video",
+      "modality": {
+        "generation_modes": [
+          "i2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -1890,7 +2368,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Kling 2.6 T2V",
@@ -1898,7 +2377,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "kling-2.6/text-to-video",
-      "modality": "text-to-video",
+      "modality": {
+        "generation_modes": [
+          "t2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -1908,7 +2391,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Kling 3.0",
@@ -1916,7 +2400,12 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "kling-3.0/video",
-      "modality": "text-to-video,image-to-video",
+      "modality": {
+        "generation_modes": [
+          "t2v",
+          "i2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -1926,7 +2415,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Kling v2.1",
@@ -1944,7 +2434,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Kling v2.5",
@@ -1962,7 +2453,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Kling V2.1 Master I2V",
@@ -1970,7 +2462,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "kling/v2-1-master-image-to-video",
-      "modality": "image-to-video",
+      "modality": {
+        "generation_modes": [
+          "i2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -1980,7 +2476,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Kling V2.1 Master T2V",
@@ -1988,7 +2485,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "kling/v2-1-master-text-to-video",
-      "modality": "text-to-video",
+      "modality": {
+        "generation_modes": [
+          "t2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -1998,7 +2499,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Kling V2.1 Pro",
@@ -2006,7 +2508,12 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "kling/v2-1-pro",
-      "modality": "text-to-video,image-to-video",
+      "modality": {
+        "generation_modes": [
+          "t2v",
+          "i2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -2016,7 +2523,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Kling V2.1 Standard",
@@ -2024,7 +2532,12 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "kling/v2-1-standard",
-      "modality": "text-to-video,image-to-video",
+      "modality": {
+        "generation_modes": [
+          "t2v",
+          "i2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -2034,7 +2547,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Kling 2.5 Turbo I2V Pro",
@@ -2042,7 +2556,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "kling/v2-5-turbo-image-to-video-pro",
-      "modality": "image-to-video",
+      "modality": {
+        "generation_modes": [
+          "i2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -2052,7 +2570,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Kling 2.5 Turbo T2V Pro",
@@ -2060,7 +2579,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "kling/v2-5-turbo-text-to-video-pro",
-      "modality": "text-to-video",
+      "modality": {
+        "generation_modes": [
+          "t2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -2070,7 +2593,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Sora2 Characters",
@@ -2078,7 +2602,12 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "sora-2-characters",
-      "modality": "text-to-video,image-to-video",
+      "modality": {
+        "generation_modes": [
+          "t2v",
+          "i2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -2090,7 +2619,8 @@
         "disable_api": true
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Sora2 Characters Pro",
@@ -2098,7 +2628,12 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "sora-2-characters-pro",
-      "modality": "text-to-video,image-to-video",
+      "modality": {
+        "generation_modes": [
+          "t2v",
+          "i2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -2110,7 +2645,8 @@
         "disable_api": true
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Sora2 I2V (Canonical)",
@@ -2118,7 +2654,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "sora-2-image-to-video",
-      "modality": "image-to-video",
+      "modality": {
+        "generation_modes": [
+          "i2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -2128,7 +2668,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Sora2 Pro I2V (Canonical)",
@@ -2136,7 +2677,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "sora-2-pro-image-to-video",
-      "modality": "image-to-video",
+      "modality": {
+        "generation_modes": [
+          "i2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -2146,7 +2691,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Sora2 Pro Storyboard",
@@ -2154,7 +2700,12 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "sora-2-pro-storyboard",
-      "modality": "text-to-video,image-to-video",
+      "modality": {
+        "generation_modes": [
+          "t2v",
+          "i2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -2164,7 +2715,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Sora2 Pro T2V (Canonical)",
@@ -2172,7 +2724,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "sora-2-pro-text-to-video",
-      "modality": "text-to-video",
+      "modality": {
+        "generation_modes": [
+          "t2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -2182,7 +2738,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Sora2 T2V (Canonical)",
@@ -2190,7 +2747,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "sora-2-text-to-video",
-      "modality": "text-to-video",
+      "modality": {
+        "generation_modes": [
+          "t2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -2200,7 +2761,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Sora2 Watermark Remover",
@@ -2208,7 +2770,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "sora-watermark-remover",
-      "modality": "video-to-video",
+      "modality": {
+        "generation_modes": [
+          "v2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -2218,7 +2784,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Sora2",
@@ -2236,7 +2803,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Topaz Video Upscale",
@@ -2244,7 +2812,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "topaz/video-upscale",
-      "modality": "video-to-video",
+      "modality": {
+        "generation_modes": [
+          "v2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -2254,7 +2826,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Veo3 Fast",
@@ -2281,7 +2854,8 @@
         "billing_cost_output": 0
       },
       "deprecated": false,
-      "is_active": true
+      "is_active": true,
+      "tags": null
     },
     {
       "name": "Kie Veo 3.1 Quality",
@@ -2299,7 +2873,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Veo 3.1 Fast",
@@ -2317,7 +2892,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Wan Turbo",
@@ -2335,7 +2911,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Wan 2.2 A14B I2V Turbo",
@@ -2343,7 +2920,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "wan/2-2-a14b-image-to-video-turbo",
-      "modality": "image-to-video",
+      "modality": {
+        "generation_modes": [
+          "i2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -2353,7 +2934,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Wan 2.2 A14B Speech2Video",
@@ -2361,7 +2943,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "wan/2-2-a14b-speech-to-video-turbo",
-      "modality": "speech-to-video",
+      "modality": {
+        "generation_modes": [
+          "s2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -2371,7 +2957,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Wan 2.2 A14B T2V Turbo",
@@ -2379,7 +2966,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "wan/2-2-a14b-text-to-video-turbo",
-      "modality": "text-to-video",
+      "modality": {
+        "generation_modes": [
+          "t2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -2389,7 +2980,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Wan Animate Move",
@@ -2397,7 +2989,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "wan/2-2-animate-move",
-      "modality": "image-to-video",
+      "modality": {
+        "generation_modes": [
+          "i2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -2407,7 +3003,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Wan Animate Replace",
@@ -2415,7 +3012,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "wan/2-2-animate-replace",
-      "modality": "image-to-video",
+      "modality": {
+        "generation_modes": [
+          "i2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -2425,7 +3026,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Wan 2.6 Flash I2V",
@@ -2433,7 +3035,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "wan/2-6-flash-image-to-video",
-      "modality": "image-to-video",
+      "modality": {
+        "generation_modes": [
+          "i2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -2443,7 +3049,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Wan 2.6 Flash V2V",
@@ -2451,7 +3058,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "wan/2-6-flash-video-to-video",
-      "modality": "video-to-video",
+      "modality": {
+        "generation_modes": [
+          "v2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -2461,7 +3072,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Wan 2.6 I2V (Canonical)",
@@ -2469,7 +3081,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "wan/2-6-image-to-video",
-      "modality": "image-to-video",
+      "modality": {
+        "generation_modes": [
+          "i2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -2479,7 +3095,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Wan 2.6 T2V (Canonical)",
@@ -2487,7 +3104,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "wan/2-6-text-to-video",
-      "modality": "text-to-video",
+      "modality": {
+        "generation_modes": [
+          "t2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -2497,7 +3118,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Kie Wan 2.6 V2V (Canonical)",
@@ -2505,7 +3127,11 @@
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "wan/2-6-video-to-video",
-      "modality": "video-to-video",
+      "modality": {
+        "generation_modes": [
+          "v2v"
+        ]
+      },
       "config": {
         "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
         "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
@@ -2515,7 +3141,8 @@
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
-      "is_active": false
+      "is_active": false,
+      "tags": null
     },
     {
       "name": "Aliyun Wanxiang",
@@ -2533,7 +3160,109 @@
         "disable_api": true
       },
       "deprecated": true,
-      "is_active": false
+      "is_active": false,
+      "tags": null
+    },
+    {
+      "name": "Kie 4o Image",
+      "category": "Image",
+      "provider": "kie",
+      "base_url": "https://api.kie.ai",
+      "model": "gpt4o-image",
+      "modality": {
+        "generation_modes": [
+          "t2i",
+          "i2i"
+        ]
+      },
+      "config": {
+        "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
+        "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
+        "credits_endpoint": "https://api.kie.ai/api/v1/user/credits",
+        "credits_endpoint_v2": "https://api.kie.ai/api/v1/chat/credit",
+        "deprecated": false,
+        "provider_api_key_strategy": "random",
+        "is_deprecated": true,
+        "disable_api": true
+      },
+      "deprecated": false,
+      "is_active": false,
+      "tags": null
+    },
+    {
+      "name": "Kie Runway Gen3 Alpha",
+      "category": "Video",
+      "provider": "kie",
+      "base_url": "https://api.kie.ai",
+      "model": "runwayml/gen3a-turbo",
+      "modality": {
+        "generation_modes": [
+          "t2v"
+        ]
+      },
+      "config": {
+        "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
+        "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
+        "credits_endpoint": "https://api.kie.ai/api/v1/user/credits",
+        "credits_endpoint_v2": "https://api.kie.ai/api/v1/chat/credit",
+        "deprecated": false,
+        "provider_api_key_strategy": "random",
+        "is_deprecated": true,
+        "disable_api": true
+      },
+      "deprecated": false,
+      "is_active": false,
+      "tags": null
+    },
+    {
+      "name": "Kie Runway Gen3 Alpha Image to Video",
+      "category": "Video",
+      "provider": "kie",
+      "base_url": "https://api.kie.ai",
+      "model": "runwayml/gen3a-turbo-image-to-video",
+      "modality": {
+        "generation_modes": [
+          "i2v"
+        ]
+      },
+      "config": {
+        "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
+        "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
+        "credits_endpoint": "https://api.kie.ai/api/v1/user/credits",
+        "credits_endpoint_v2": "https://api.kie.ai/api/v1/chat/credit",
+        "deprecated": false,
+        "provider_api_key_strategy": "random",
+        "is_deprecated": true,
+        "disable_api": true
+      },
+      "deprecated": false,
+      "is_active": false,
+      "tags": null
+    },
+    {
+      "name": "Kie Suno",
+      "category": "Audio",
+      "provider": "kie",
+      "base_url": "https://api.kie.ai",
+      "model": "suno",
+      "modality": {
+        "generation_modes": [
+          "t2a"
+        ]
+      },
+      "config": {
+        "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
+        "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
+        "credits_endpoint": "https://api.kie.ai/api/v1/user/credits",
+        "credits_endpoint_v2": "https://api.kie.ai/api/v1/chat/credit",
+        "deprecated": false,
+        "provider_api_key_strategy": "random",
+        "is_deprecated": true,
+        "disable_api": true
+      },
+      "deprecated": false,
+      "is_active": false,
+      "tags": null
     }
   ]
 }

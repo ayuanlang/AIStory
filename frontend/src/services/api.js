@@ -78,7 +78,7 @@ async function pollTask(taskId, { interval = LLM_POLL_INTERVAL, timeout = LLM_PO
  */
 async function asyncLLMPost(url, data, config = {}) {
   const sep = url.includes('?') ? '&' : '?';
-  const res = await api.post(`${url}${sep}async=1`, data, config);
+  const res = await api.post(`${url}${sep}async_mode=1`, data, config);
   if (res.data && res.data.task_id && res.data.async) {
     return await pollTask(res.data.task_id, config.pollOptions);
   }
@@ -390,6 +390,97 @@ export const sendSystemManagementAgentCommand = async (query, context = {}, hist
         context,
         history,
     });
+};
+
+// ── SSE Streaming Agent Commands ────────────────────────────────────────
+
+/**
+ * Stream an agent command via SSE (Server-Sent Events).
+ * @param {string} url - API path (e.g. '/agent/command/stream')
+ * @param {object} body - Request body {query, context, history}
+ * @param {object} callbacks - { onToken(text), onToolStart(tool,params), onToolResult(tool,status,result), onDone(result), onError(msg) }
+ * @returns {Promise<object>} The final "done" payload
+ */
+async function streamSSE(url, body, callbacks = {}) {
+    const token = localStorage.getItem('token');
+    const baseURL = api.defaults.baseURL || '';
+    const fullURL = `${baseURL}${url}`;
+
+    const response = await fetch(fullURL, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+        let detail = `HTTP ${response.status}`;
+        try {
+            const errJson = await response.json();
+            detail = errJson.detail || detail;
+        } catch (_) { /* ignore */ }
+        const err = new Error(detail);
+        err.response = { status: response.status, data: { detail } };
+        throw err;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let finalResult = null;
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop(); // keep incomplete line in buffer
+
+        let currentEventType = 'message';
+        for (const line of lines) {
+            if (line.startsWith('event:')) {
+                currentEventType = line.slice(6).trim();
+                continue;
+            }
+            if (line.startsWith('data:')) {
+                const dataStr = line.slice(5).trim();
+                if (!dataStr) continue;
+                try {
+                    const event = JSON.parse(dataStr);
+                    const type = event.type || currentEventType;
+
+                    if (type === 'token' && callbacks.onToken) {
+                        callbacks.onToken(event.content || '');
+                    } else if (type === 'tool_start' && callbacks.onToolStart) {
+                        callbacks.onToolStart(event.tool, event.parameters);
+                    } else if (type === 'tool_result' && callbacks.onToolResult) {
+                        callbacks.onToolResult(event.tool, event.status, event.result);
+                    } else if (type === 'done') {
+                        finalResult = event;
+                        if (callbacks.onDone) callbacks.onDone(event);
+                    } else if (type === 'error') {
+                        if (callbacks.onError) callbacks.onError(event.message || 'Unknown error');
+                    }
+                } catch (_) { /* ignore malformed JSON */ }
+            }
+            if (line === '') {
+                currentEventType = 'message'; // reset after blank line
+            }
+        }
+    }
+
+    return finalResult || {};
+}
+
+export const streamAgentCommand = async (query, context = {}, history = [], callbacks = {}) => {
+    return await streamSSE('/agent/command/stream', { query, context, history }, callbacks);
+};
+
+export const streamSystemManagementAgentCommand = async (query, context = {}, history = [], callbacks = {}) => {
+    return await streamSSE('/agent/system-management/command/stream', { query, context, history }, callbacks);
 };
 
 export const fetchProjects = async () => {
@@ -1339,6 +1430,56 @@ export const getSystemSettingsManage = async () => {
     return response.data;
 }
 
+export const getSystemApisMissingBillingRulesManage = async () => {
+    // Compatibility-first implementation:
+    // derive "missing billing rules" from stable endpoints to avoid noisy 405/422
+    // in mixed deployments where /missing-billing-rules is not consistently routable.
+    const [settingsRes, rulesRes] = await Promise.all([
+        api.get('/settings/system/manage', {
+            params: { _ts: Date.now() },
+            headers: {
+                'Cache-Control': 'no-cache',
+                Pragma: 'no-cache',
+            },
+        }),
+        api.get('/settings/system/manage/billing-rules', {
+            params: { _ts: Date.now() },
+            headers: {
+                'Cache-Control': 'no-cache',
+                Pragma: 'no-cache',
+            },
+        }),
+    ]);
+
+    const settings = Array.isArray(settingsRes?.data) ? settingsRes.data : [];
+    const groupedRules = (rulesRes?.data && typeof rulesRes.data === 'object') ? rulesRes.data : {};
+
+    const billedApiIds = new Set(
+        Object.keys(groupedRules)
+            .map((x) => Number(x || 0))
+            .filter((id) => Number.isFinite(id) && id > 0)
+    );
+
+    return settings
+        .filter((row) => {
+            const id = Number(row?.id || 0);
+            if (!Number.isFinite(id) || id <= 0) return false;
+            if (Boolean(row?.deprecated)) return false;
+            if (!Boolean(row?.is_active)) return false;
+            return !billedApiIds.has(id);
+        })
+        .map((row) => ({
+            id: Number(row?.id || 0),
+            name: row?.name || null,
+            category: row?.category || '',
+            provider: row?.provider || '',
+            model: row?.model || null,
+            base_model: row?.base_model || null,
+            deprecated: Boolean(row?.deprecated),
+            is_active: Boolean(row?.is_active),
+        }));
+}
+
 export const createSystemSettingManage = async (data) => {
     const response = await api.post('/settings/system/manage', data);
     return response.data;
@@ -1407,6 +1548,90 @@ export const deleteSystemSettingManage = async (settingId) => {
     return response.data;
 }
 
+export const listSystemApiBillingRulesManage = async (systemApiId) => {
+    const response = await api.get(`/settings/system/manage/${systemApiId}/billing-rules`, {
+        params: { _ts: Date.now() },
+        headers: {
+            'Cache-Control': 'no-cache',
+            Pragma: 'no-cache',
+        },
+    });
+    return response.data;
+}
+
+export const listSystemApiBillingRulesBatchManage = async (systemApiIds = []) => {
+    const ids = (Array.isArray(systemApiIds) ? systemApiIds : [])
+        .map((id) => Number(id || 0))
+        .filter((id) => Number.isFinite(id) && id > 0);
+    const response = await api.get('/settings/system/manage/billing-rules', {
+        params: {
+            ...(ids.length ? { system_api_ids: ids.join(',') } : {}),
+            _ts: Date.now(),
+        },
+        headers: {
+            'Cache-Control': 'no-cache',
+            Pragma: 'no-cache',
+        },
+    });
+    return response.data;
+}
+
+export const createSystemApiBillingRuleManage = async (systemApiId, payload) => {
+    const response = await api.post(`/settings/system/manage/${systemApiId}/billing-rules`, payload);
+    return response.data;
+}
+
+export const updateSystemApiBillingRuleManage = async (ruleId, payload) => {
+    const response = await api.post(`/settings/system/manage/billing-rules/${ruleId}`, payload);
+    return response.data;
+}
+
+export const deleteSystemApiBillingRuleManage = async (ruleId) => {
+    const response = await api.delete(`/settings/system/manage/billing-rules/${ruleId}`);
+    return response.data;
+}
+
+export const deleteSystemApiBillingRulesBatchManage = async (ruleIds = []) => {
+    const ids = (Array.isArray(ruleIds) ? ruleIds : [])
+        .map((id) => Number(id || 0))
+        .filter((id) => Number.isFinite(id) && id > 0);
+    if (!ids.length) {
+        return { ok: true, deleted_count: 0, deleted_ids: [], missing_ids: [] };
+    }
+    const response = await api.delete('/settings/system/manage/billing-rules', {
+        params: {
+            rule_ids: ids.join(','),
+        },
+    });
+    return response.data;
+}
+
+export const resetSystemApiBillingRuleChargeMultipliersManage = async (payload = {}) => {
+    const response = await api.post('/settings/system/manage/billing-rules/reset-charge-multiplier', payload || {});
+    return response.data;
+}
+
+// provider_key_pool CRUD
+export const listProviderKeyPools = async () => {
+    const response = await api.get('/settings/system/manage/provider-key-pools');
+    return response.data;
+}
+
+export const createProviderKeyPool = async (payload) => {
+    const response = await api.post('/settings/system/manage/provider-key-pools', payload);
+    return response.data;
+}
+
+export const updateProviderKeyPool = async (poolId, payload) => {
+    const response = await api.post(`/settings/system/manage/provider-key-pools/${poolId}`, payload);
+    return response.data;
+}
+
+export const deleteProviderKeyPool = async (poolId) => {
+    const response = await api.delete(`/settings/system/manage/provider-key-pools/${poolId}`);
+    return response.data;
+}
+
 export const exportSystemSettingsManage = async () => {
     const response = await api.get('/settings/system/manage/export');
     return response.data;
@@ -1436,6 +1661,16 @@ export const validateSystemProviderBundleManage = async (payload) => {
     const response = await api.post('/settings/system/manage/provider-bundle/validate', payload);
     return response.data;
 };
+
+export const exportSystemConfigSyncBundleManage = async () => {
+    const response = await api.get('/settings/system/manage/sync/export');
+    return response.data;
+}
+
+export const importSystemConfigSyncBundleManage = async (payload) => {
+    const response = await api.post('/settings/system/manage/sync/import', payload);
+    return response.data;
+}
 
 export const getAdminLlmLogFiles = async () => {
     const response = await api.get('/admin/llm-logs/files');
@@ -1691,11 +1926,22 @@ export const getBillingOptions = async () => (await api.get('/billing/options'))
 export const getBillingFeaturePricing = async () => (await api.get('/billing/feature-pricing')).data;
 export const updateBillingFeaturePricing = async (featurePricing) => (await api.put('/billing/feature-pricing', { feature_pricing: featurePricing || {} })).data;
 export const getBillingDefaultApiPricing = async () => (await api.get('/billing/default-api-pricing')).data;
-export const updateBillingDefaultApiPricing = async (defaultApiPricing) => (await api.put('/billing/default-api-pricing', { default_api_pricing: defaultApiPricing || {} })).data;
+export const updateBillingDefaultApiPricing = async (defaultApiPricing, contentFallbackPricing) => {
+    const payload = { default_api_pricing: defaultApiPricing || {} };
+    if (contentFallbackPricing !== undefined) {
+        payload.content_fallback_pricing = contentFallbackPricing;
+    }
+    return (await api.put('/billing/default-api-pricing', payload)).data;
+};
 export const getAgentToolPolicy = async () => (await api.get('/settings/system/agent/tools-policy')).data;
 export const updateAgentToolPolicy = async (payload = {}) => (await api.put('/settings/system/agent/tools-policy', payload || {})).data;
 export const getSystemAIAssistantAnalyze = async (payload = {}) => (await api.post('/settings/system/ai-assistant/analyze', payload || {})).data;
 export const getSystemAIAssistantApply = async (payload = {}) => (await api.post('/settings/system/ai-assistant/apply', payload || {})).data;
+export const aiAssistantExchangeRate = async (payload = {}) => (await api.post('/settings/system/ai-assistant/tools/exchange-rate', payload || {})).data;
+export const aiAssistantFetchPricing = async (payload = {}) => (await api.post('/settings/system/ai-assistant/tools/fetch-pricing', payload || {})).data;
+export const fetchKiePricingManage = async (payload = {}) => (await api.post('/settings/system/manage/kie-pricing/fetch', payload || {})).data;
+export const generateKiePricingRulesManage = async (payload = {}) => (await api.post('/settings/system/manage/kie-pricing/generate', payload || {})).data;
+export const applyKiePricingRulesManage = async (payload = {}) => (await api.post('/settings/system/manage/kie-pricing/apply', payload || {})).data;
 export const getTransactions = async (limit=100, userId=null) => {
     let url = `/billing/transactions?limit=${limit}`;
     if (userId) url += `&user_id=${userId}`;

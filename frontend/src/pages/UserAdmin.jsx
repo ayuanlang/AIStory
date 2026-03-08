@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getSystemSettingsManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, getAdminLlmLogFiles, getAdminLlmLogView, getAdminStorageUsage, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt } from '../services/api';
+import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, getAdminLlmLogFiles, getAdminLlmLogView, getAdminStorageUsage, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, generateKiePricingRulesManage, applyKiePricingRulesManage } from '../services/api';
 import Footer from '../components/Footer';
-import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive } from 'lucide-react';
+import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive, Database } from 'lucide-react';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
 import { getUiLang, tUI } from '../lib/uiLang';
 
@@ -17,12 +17,23 @@ const UserAdmin = () => {
     const [defaultApiPricingMap, setDefaultApiPricingMap] = useState({});
     const [recommendedDefaultApiPricingMap, setRecommendedDefaultApiPricingMap] = useState({});
     const [defaultApiPricingRows, setDefaultApiPricingRows] = useState([]);
+    const [contentFallbackPricing, setContentFallbackPricing] = useState({
+        enabled: false,
+        strategy: 'manual',
+        content_pricing: {
+            text: { unit_type: 'per_call', cost: 0, cost_input: 0, cost_output: 0 },
+            image: { unit_type: 'per_call', cost: 0, cost_input: 0, cost_output: 0 },
+            video: { unit_type: 'per_second', cost: 0, cost_input: 0, cost_output: 0 },
+        },
+    });
+    const [contentFallbackRows, setContentFallbackRows] = useState([]);
     const [isDefaultApiPricingSaving, setIsDefaultApiPricingSaving] = useState(false);
     const [agentToolPolicy, setAgentToolPolicy] = useState({ default_allow: true, roles: {} });
     const [agentToolPolicyDraft, setAgentToolPolicyDraft] = useState('{\n  "default_allow": true,\n  "roles": {}\n}');
     const [isAgentToolPolicySaving, setIsAgentToolPolicySaving] = useState(false);
     const [transactions, setTransactions] = useState([]);
     const [transactionFilterUser, setTransactionFilterUser] = useState(''); // User ID filter
+    const [isPricingBootstrapLoaded, setIsPricingBootstrapLoaded] = useState(false);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
 
@@ -68,10 +79,83 @@ const UserAdmin = () => {
     const [runtimeStats, setRuntimeStats] = useState(null);
     const [systemApiRows, setSystemApiRows] = useState([]);
     const [isSystemApiLoading, setIsSystemApiLoading] = useState(false);
+    const [isSystemApiEditing, setIsSystemApiEditing] = useState(false);
+    const [systemApiEditToast, setSystemApiEditToast] = useState('');
+    const [billingRuleRows, setBillingRuleRows] = useState([]);
+    const [missingBillingRuleApiRows, setMissingBillingRuleApiRows] = useState([]);
+    const [isMissingBillingRuleCheckLoading, setIsMissingBillingRuleCheckLoading] = useState(false);
+    const [isBillingRuleLoading, setIsBillingRuleLoading] = useState(false);
+    const [isBatchResetMultiplierLoading, setIsBatchResetMultiplierLoading] = useState(false);
+    const [isBillingRuleEditing, setIsBillingRuleEditing] = useState(false);
+    const [billingRuleEditToast, setBillingRuleEditToast] = useState('');
+    const [selectedBillingRuleId, setSelectedBillingRuleId] = useState('');
+    const [selectedBillingRuleIds, setSelectedBillingRuleIds] = useState([]);
+    const [billingRuleFilterKeyword, setBillingRuleFilterKeyword] = useState('');
+    const [billingRuleFilterStatus, setBillingRuleFilterStatus] = useState('all');
+    const [billingRuleFilterTarget, setBillingRuleFilterTarget] = useState('all');
+    const [billingRuleFilterUnitType, setBillingRuleFilterUnitType] = useState('all');
+    const [kiePricingUrl, setKiePricingUrl] = useState('https://kie.ai/zh-CN/pricing');
+    const [kiePricingProviderFilter, setKiePricingProviderFilter] = useState('kie');
+    const [kiePricingManualText, setKiePricingManualText] = useState('');
+    const [kiePricingManualTablesText, setKiePricingManualTablesText] = useState('[]');
+    const [isKiePricingLoading, setIsKiePricingLoading] = useState(false);
+    const [isKiePricingConfirmed, setIsKiePricingConfirmed] = useState(false);
+    const [kiePricingResult, setKiePricingResult] = useState(null);
+    const [selectedKieSuggestionIds, setSelectedKieSuggestionIds] = useState([]);
+    const [isKieSuggestionEditOpen, setIsKieSuggestionEditOpen] = useState(false);
+    const [editingKieSuggestionIndex, setEditingKieSuggestionIndex] = useState(-1);
+    const [editingKieSuggestionMeta, setEditingKieSuggestionMeta] = useState({ system_api_id: '', model: '' });
+    const [kieSuggestionEditForm, setKieSuggestionEditForm] = useState({
+        target_system_api_id: '',
+        billing_unit_type: 'per_call',
+        billing_cost: '0',
+        billing_cost_input: '0',
+        billing_cost_output: '0',
+        granular_rules: [],
+    });
+    const [billingRuleForm, setBillingRuleForm] = useState({
+        name: 'Rule',
+        description: '',
+        is_active: true,
+        priority: '0',
+        applies_to_text: true,
+        applies_to_image: false,
+        applies_to_video: false,
+        generation_mode: '',
+        input_format: '',
+        output_format: '',
+        has_audio: 'any',
+        input_tokens_min: '',
+        input_tokens_max: '',
+        output_tokens_min: '',
+        output_tokens_max: '',
+        total_tokens_min: '',
+        total_tokens_max: '',
+        image_count_min: '',
+        image_count_max: '',
+        width_min: '',
+        width_max: '',
+        height_min: '',
+        height_max: '',
+        pixels_min: '',
+        pixels_max: '',
+        duration_seconds_min: '',
+        duration_seconds_max: '',
+        fps_min: '',
+        fps_max: '',
+        billing_unit_type: 'per_call',
+        billing_cost: '0',
+        billing_cost_input: '0',
+        billing_cost_output: '0',
+        charge_multiplier: '2',
+        extra_conditions_text: '{}',
+    });
     const [isSystemApiImporting, setIsSystemApiImporting] = useState(false);
     const [isSystemApiExporting, setIsSystemApiExporting] = useState(false);
     const [isSystemProviderBundleImporting, setIsSystemProviderBundleImporting] = useState(false);
     const [isSystemProviderBundleExporting, setIsSystemProviderBundleExporting] = useState(false);
+    const [isSystemConfigSyncExporting, setIsSystemConfigSyncExporting] = useState(false);
+    const [isSystemConfigSyncImporting, setIsSystemConfigSyncImporting] = useState(false);
     const [selectedSystemApiId, setSelectedSystemApiId] = useState('');
     const [systemApiFilterCategory, setSystemApiFilterCategory] = useState('all');
     const [systemApiFilterProvider, setSystemApiFilterProvider] = useState('all');
@@ -83,24 +167,32 @@ const UserAdmin = () => {
     const [providerKeyStrategy, setProviderKeyStrategy] = useState('random');
     const [providerKeyWeightsText, setProviderKeyWeightsText] = useState('');
     const [isProviderKeysSaving, setIsProviderKeysSaving] = useState(false);
+    const [providerKeyPoolRows, setProviderKeyPoolRows] = useState([]);
+    const [isProviderKeyPoolLoading, setIsProviderKeyPoolLoading] = useState(false);
+    const [selectedKeyPoolId, setSelectedKeyPoolId] = useState('');
+    const [keyPoolForm, setKeyPoolForm] = useState({ provider: '', api_keys: '', strategy: 'random', weights: '' });
     const [systemApiForm, setSystemApiForm] = useState({
         name: '',
         category: 'LLM',
         provider: '',
+        api_key: '',
         base_url: '',
         model: '',
-        webHook: '',
-        api_unit_type: 'per_call',
-        api_cost: '0',
-        api_cost_input: '0',
-        api_cost_output: '0',
-        smart_priority: '100',
-        smart_retry_limit: '1',
-        smart_multi_ref_default: false,
+        base_model: '',
+        config: '{}',
         is_active: false,
+        deprecated: false,
+        tags: '',
+        modality: '',
+        supplier_info: '',
+        billing_unit_type: 'per_call',
+        billing_cost: '0',
+        billing_cost_input: '0',
+        billing_cost_output: '0',
     });
     const systemApiImportInputRef = React.useRef(null);
     const systemProviderBundleImportInputRef = React.useRef(null);
+    const systemConfigSyncImportInputRef = React.useRef(null);
     const [llmLogFiles, setLlmLogFiles] = useState([]);
     const [selectedLlmLogFile, setSelectedLlmLogFile] = useState('llm_calls.log');
     const [llmLogTailLines, setLlmLogTailLines] = useState(300);
@@ -115,6 +207,16 @@ const UserAdmin = () => {
     const [selectedPromptSkillId, setSelectedPromptSkillId] = useState('');
     const [selectedPromptSkillText, setSelectedPromptSkillText] = useState('');
     const [isPromptSkillTextLoading, setIsPromptSkillTextLoading] = useState(false);
+
+    const showSystemApiEditToast = (text) => {
+        setSystemApiEditToast(String(text || '').trim());
+        setTimeout(() => setSystemApiEditToast(''), 1800);
+    };
+
+    const showBillingRuleEditToast = (text) => {
+        setBillingRuleEditToast(String(text || '').trim());
+        setTimeout(() => setBillingRuleEditToast(''), 1800);
+    };
 
     // ... existing code ...
 
@@ -152,6 +254,7 @@ const UserAdmin = () => {
     };
 
     const DEFAULT_API_PRICING_CATEGORY_ORDER = ['LLM', 'Vision', 'Image', 'Video', 'Tools'];
+    const CONTENT_FALLBACK_TYPE_ORDER = ['text', 'image', 'video'];
     const DEFAULT_API_PRICING_FALLBACK = {
         LLM: { unit_type: 'per_million_tokens', cost: 90, cost_input: 90, cost_output: 700 },
         Vision: { unit_type: 'per_million_tokens', cost: 120, cost_input: 120, cost_output: 800 },
@@ -202,6 +305,62 @@ const UserAdmin = () => {
             };
         });
         return normalizeDefaultApiPricingMap(next);
+    };
+
+    const normalizeContentFallbackPricing = (obj = {}) => {
+        const src = (obj && typeof obj === 'object' && !Array.isArray(obj)) ? obj : {};
+        const strategyRaw = String(src.strategy || 'manual').trim().toLowerCase();
+        const strategy = ['manual', 'average', 'highest'].includes(strategyRaw) ? strategyRaw : 'manual';
+        const contentSrc = (src.content_pricing && typeof src.content_pricing === 'object' && !Array.isArray(src.content_pricing)) ? src.content_pricing : {};
+
+        const outMap = {};
+        CONTENT_FALLBACK_TYPE_ORDER.forEach((contentType) => {
+            const raw = (contentSrc[contentType] && typeof contentSrc[contentType] === 'object' && !Array.isArray(contentSrc[contentType])) ? contentSrc[contentType] : {};
+            const defaultUnit = contentType === 'video' ? 'per_second' : 'per_call';
+            outMap[contentType] = {
+                unit_type: normalizeApiPricingUnitType(raw?.unit_type ?? defaultUnit),
+                cost: toNonNegativeInt(raw?.cost ?? 0),
+                cost_input: toNonNegativeInt(raw?.cost_input ?? 0),
+                cost_output: toNonNegativeInt(raw?.cost_output ?? 0),
+            };
+        });
+
+        return {
+            enabled: !!src.enabled,
+            strategy,
+            content_pricing: outMap,
+        };
+    };
+
+    const buildContentFallbackRows = (obj = {}) => {
+        const normalized = normalizeContentFallbackPricing(obj);
+        return CONTENT_FALLBACK_TYPE_ORDER.map((contentType) => ({
+            id: `content-fallback-${contentType}`,
+            content_type: contentType,
+            unit_type: normalized.content_pricing[contentType].unit_type,
+            cost: String(normalized.content_pricing[contentType].cost),
+            cost_input: String(normalized.content_pricing[contentType].cost_input),
+            cost_output: String(normalized.content_pricing[contentType].cost_output),
+        }));
+    };
+
+    const buildContentFallbackMapFromRows = (rows = []) => {
+        const outMap = {};
+        (rows || []).forEach((row) => {
+            const contentType = String(row?.content_type || '').trim().toLowerCase();
+            if (!CONTENT_FALLBACK_TYPE_ORDER.includes(contentType)) return;
+            outMap[contentType] = {
+                unit_type: normalizeApiPricingUnitType(row?.unit_type),
+                cost: toNonNegativeInt(row?.cost),
+                cost_input: toNonNegativeInt(row?.cost_input),
+                cost_output: toNonNegativeInt(row?.cost_output),
+            };
+        });
+        return normalizeContentFallbackPricing({
+            enabled: !!contentFallbackPricing?.enabled,
+            strategy: contentFallbackPricing?.strategy || 'manual',
+            content_pricing: outMap,
+        });
     };
 
     const createEmptyFeaturePricingRow = () => ({
@@ -431,8 +590,13 @@ const UserAdmin = () => {
             const normalized = Array.isArray(rows) ? rows : [];
             setSystemApiRows(normalized);
             if (normalized.length > 0) {
-                const current = normalized.find((row) => String(row.id) === String(selectedSystemApiId)) || normalized[0];
-                setSelectedSystemApiId(String(current.id));
+                if (activeTab === 'pricing_rules') {
+                    const current = normalized.find((row) => String(row.id) === String(selectedSystemApiId));
+                    setSelectedSystemApiId(current ? String(current.id) : '');
+                } else {
+                    const current = normalized.find((row) => String(row.id) === String(selectedSystemApiId)) || normalized[0];
+                    setSelectedSystemApiId(String(current.id));
+                }
             } else {
                 setSelectedSystemApiId('');
             }
@@ -446,7 +610,7 @@ const UserAdmin = () => {
     };
 
     useEffect(() => {
-        if (activeTab === 'system_api') {
+        if (activeTab === 'system_api' || activeTab === 'pricing_rules') {
             fetchSystemApiManageRows();
         }
     }, [activeTab]);
@@ -477,15 +641,802 @@ const UserAdmin = () => {
         return Math.floor(parsed);
     };
 
+    const toRuleChargeMultiplier = (value, fallback = 2) => {
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed) || parsed < 0) return Number(fallback);
+        return parsed;
+    };
+
     const getApiPricing = (row) => {
-        const cfg = getSystemApiConfig(row);
-        const pricing = (cfg?.api_pricing && typeof cfg.api_pricing === 'object') ? cfg.api_pricing : {};
+        // 仅从宽表列读取计价信息
         return {
-            unit_type: normalizeApiPricingUnitType(pricing?.unit_type ?? cfg?.billing_unit_type ?? 'per_call'),
-            cost: toNonNegativeInt(pricing?.cost ?? cfg?.billing_cost ?? 0),
-            cost_input: toNonNegativeInt(pricing?.cost_input ?? cfg?.billing_cost_input ?? 0),
-            cost_output: toNonNegativeInt(pricing?.cost_output ?? cfg?.billing_cost_output ?? 0),
+            unit_type: normalizeApiPricingUnitType(row?.billing_unit_type ?? 'per_call'),
+            cost: toNonNegativeInt(row?.billing_cost ?? 0),
+            cost_input: toNonNegativeInt(row?.billing_cost_input ?? 0),
+            cost_output: toNonNegativeInt(row?.billing_cost_output ?? 0),
         };
+    };
+
+    const safeJsonStr = (val) => {
+        if (val === null || val === undefined) return '';
+        if (typeof val === 'string') return val;
+        try { return JSON.stringify(val, null, 2); } catch { return ''; }
+    };
+
+    const createEmptyBillingRuleForm = () => ({
+        name: 'Rule',
+        description: '',
+        is_active: true,
+        priority: '0',
+        applies_to_text: true,
+        applies_to_image: false,
+        applies_to_video: false,
+        generation_mode: '',
+        input_format: '',
+        output_format: '',
+        has_audio: 'any',
+        input_tokens_min: '',
+        input_tokens_max: '',
+        output_tokens_min: '',
+        output_tokens_max: '',
+        total_tokens_min: '',
+        total_tokens_max: '',
+        image_count_min: '',
+        image_count_max: '',
+        width_min: '',
+        width_max: '',
+        height_min: '',
+        height_max: '',
+        pixels_min: '',
+        pixels_max: '',
+        duration_seconds_min: '',
+        duration_seconds_max: '',
+        fps_min: '',
+        fps_max: '',
+        billing_unit_type: 'per_call',
+        billing_cost: '0',
+        billing_cost_input: '0',
+        billing_cost_output: '0',
+        charge_multiplier: '2',
+        extra_conditions_text: '{}',
+    });
+
+    const toNullableText = (value) => {
+        const text = String(value || '').trim();
+        return text || null;
+    };
+
+    const toNullableInt = (value) => {
+        const text = String(value ?? '').trim();
+        if (!text) return null;
+        const parsed = Number(text);
+        if (!Number.isFinite(parsed)) return null;
+        return Math.floor(parsed);
+    };
+
+    const toNullableFloat = (value) => {
+        const text = String(value ?? '').trim();
+        if (!text) return null;
+        const parsed = Number(text);
+        if (!Number.isFinite(parsed)) return null;
+        return parsed;
+    };
+
+    const toNullableBool = (value) => {
+        if (value === true || value === false) return value;
+        const text = String(value || '').trim().toLowerCase();
+        if (text === 'true') return true;
+        if (text === 'false') return false;
+        return null;
+    };
+
+    const parseRuleExtraConditions = (text) => {
+        const trimmed = String(text || '').trim();
+        if (!trimmed) return {};
+        try {
+            const parsed = JSON.parse(trimmed);
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                throw new Error('extra_conditions must be a JSON object');
+            }
+            return parsed;
+        } catch {
+            throw new Error('extra_conditions 必须是 JSON 对象');
+        }
+    };
+
+    const ruleRowToForm = (row) => ({
+        name: String(row?.name || 'Rule'),
+        description: String(row?.description || ''),
+        is_active: !!row?.is_active,
+        priority: String(row?.priority ?? 0),
+        applies_to_text: !!row?.applies_to_text,
+        applies_to_image: !!row?.applies_to_image,
+        applies_to_video: !!row?.applies_to_video,
+        generation_mode: String(row?.generation_mode || ''),
+        input_format: String(row?.input_format || ''),
+        output_format: String(row?.output_format || ''),
+        has_audio: row?.has_audio === true ? 'true' : (row?.has_audio === false ? 'false' : 'any'),
+        input_tokens_min: row?.input_tokens_min === null || row?.input_tokens_min === undefined ? '' : String(row.input_tokens_min),
+        input_tokens_max: row?.input_tokens_max === null || row?.input_tokens_max === undefined ? '' : String(row.input_tokens_max),
+        output_tokens_min: row?.output_tokens_min === null || row?.output_tokens_min === undefined ? '' : String(row.output_tokens_min),
+        output_tokens_max: row?.output_tokens_max === null || row?.output_tokens_max === undefined ? '' : String(row.output_tokens_max),
+        total_tokens_min: row?.total_tokens_min === null || row?.total_tokens_min === undefined ? '' : String(row.total_tokens_min),
+        total_tokens_max: row?.total_tokens_max === null || row?.total_tokens_max === undefined ? '' : String(row.total_tokens_max),
+        image_count_min: row?.image_count_min === null || row?.image_count_min === undefined ? '' : String(row.image_count_min),
+        image_count_max: row?.image_count_max === null || row?.image_count_max === undefined ? '' : String(row.image_count_max),
+        width_min: row?.width_min === null || row?.width_min === undefined ? '' : String(row.width_min),
+        width_max: row?.width_max === null || row?.width_max === undefined ? '' : String(row.width_max),
+        height_min: row?.height_min === null || row?.height_min === undefined ? '' : String(row.height_min),
+        height_max: row?.height_max === null || row?.height_max === undefined ? '' : String(row.height_max),
+        pixels_min: row?.pixels_min === null || row?.pixels_min === undefined ? '' : String(row.pixels_min),
+        pixels_max: row?.pixels_max === null || row?.pixels_max === undefined ? '' : String(row.pixels_max),
+        duration_seconds_min: row?.duration_seconds_min === null || row?.duration_seconds_min === undefined ? '' : String(row.duration_seconds_min),
+        duration_seconds_max: row?.duration_seconds_max === null || row?.duration_seconds_max === undefined ? '' : String(row.duration_seconds_max),
+        fps_min: row?.fps_min === null || row?.fps_min === undefined ? '' : String(row.fps_min),
+        fps_max: row?.fps_max === null || row?.fps_max === undefined ? '' : String(row.fps_max),
+        billing_unit_type: normalizeApiPricingUnitType(row?.billing_unit_type || 'per_call'),
+        billing_cost: String(toNonNegativeInt(row?.billing_cost ?? 0)),
+        billing_cost_input: String(toNonNegativeInt(row?.billing_cost_input ?? 0)),
+        billing_cost_output: String(toNonNegativeInt(row?.billing_cost_output ?? 0)),
+        charge_multiplier: String(toRuleChargeMultiplier(row?.charge_multiplier, 2)),
+        extra_conditions_text: safeJsonStr(row?.extra_conditions ?? {}) || '{}',
+    });
+
+    const buildBillingRulePayloadFromForm = (form) => ({
+        name: String(form?.name || 'Rule').trim() || 'Rule',
+        description: toNullableText(form?.description),
+        is_active: !!form?.is_active,
+        priority: toNullableInt(form?.priority) ?? 0,
+        applies_to_text: !!form?.applies_to_text,
+        applies_to_image: !!form?.applies_to_image,
+        applies_to_video: !!form?.applies_to_video,
+        generation_mode: toNullableText(form?.generation_mode),
+        input_format: toNullableText(form?.input_format),
+        output_format: toNullableText(form?.output_format),
+        has_audio: toNullableBool(form?.has_audio),
+        input_tokens_min: toNullableInt(form?.input_tokens_min),
+        input_tokens_max: toNullableInt(form?.input_tokens_max),
+        output_tokens_min: toNullableInt(form?.output_tokens_min),
+        output_tokens_max: toNullableInt(form?.output_tokens_max),
+        total_tokens_min: toNullableInt(form?.total_tokens_min),
+        total_tokens_max: toNullableInt(form?.total_tokens_max),
+        image_count_min: toNullableInt(form?.image_count_min),
+        image_count_max: toNullableInt(form?.image_count_max),
+        width_min: toNullableInt(form?.width_min),
+        width_max: toNullableInt(form?.width_max),
+        height_min: toNullableInt(form?.height_min),
+        height_max: toNullableInt(form?.height_max),
+        pixels_min: toNullableInt(form?.pixels_min),
+        pixels_max: toNullableInt(form?.pixels_max),
+        duration_seconds_min: toNullableFloat(form?.duration_seconds_min),
+        duration_seconds_max: toNullableFloat(form?.duration_seconds_max),
+        fps_min: toNullableFloat(form?.fps_min),
+        fps_max: toNullableFloat(form?.fps_max),
+        billing_unit_type: normalizeApiPricingUnitType(form?.billing_unit_type),
+        billing_cost: toNonNegativeInt(form?.billing_cost),
+        billing_cost_input: toNonNegativeInt(form?.billing_cost_input),
+        billing_cost_output: toNonNegativeInt(form?.billing_cost_output),
+        charge_multiplier: toRuleChargeMultiplier(form?.charge_multiplier, 2),
+        extra_conditions: parseRuleExtraConditions(form?.extra_conditions_text),
+    });
+
+    const normalizeBillingRuleRows = (payload, fallbackSystemApiId = null) => {
+        const list = Array.isArray(payload)
+            ? payload
+            : (Array.isArray(payload?.items)
+                ? payload.items
+                : (Array.isArray(payload?.rules)
+                    ? payload.rules
+                    : (Array.isArray(payload?.data) ? payload.data : [])));
+
+        return list
+            .filter((row) => row && typeof row === 'object')
+            .map((row) => ({
+                ...row,
+                system_api_id: row?.system_api_id ?? fallbackSystemApiId ?? null,
+            }));
+    };
+
+    const fetchBillingRulesForSystemApi = async (systemApiId) => {
+        const targetId = Number(systemApiId || 0);
+        setIsBillingRuleLoading(true);
+        try {
+            let normalized = [];
+            if (targetId) {
+                const rows = await listSystemApiBillingRulesManage(targetId);
+                normalized = normalizeBillingRuleRows(rows, targetId);
+            } else {
+                const ids = (systemApiRows || []).map((row) => Number(row?.id || 0)).filter((id) => id > 0);
+                if (ids.length > 0) {
+                    const grouped = await listSystemApiBillingRulesBatchManage(ids);
+                    normalized = ids.flatMap((id) => normalizeBillingRuleRows(grouped?.[String(id)] || [], id));
+                }
+            }
+            setBillingRuleRows(normalized);
+            setSelectedBillingRuleId((prev) => {
+                if (prev && normalized.some((row) => String(row.id) === String(prev))) return prev;
+                return normalized.length > 0 ? String(normalized[0].id) : '';
+            });
+            setSelectedBillingRuleIds((prev) => (prev || []).filter((id) => normalized.some((row) => Number(row.id) === Number(id))));
+            if (normalized.length === 0) {
+                setBillingRuleForm(createEmptyBillingRuleForm());
+            }
+        } catch (e) {
+            console.error('Failed to load billing rules', e);
+            setBillingRuleRows([]);
+            setSelectedBillingRuleId('');
+            setSelectedBillingRuleIds([]);
+            setBillingRuleForm(createEmptyBillingRuleForm());
+        } finally {
+            setIsBillingRuleLoading(false);
+        }
+    };
+
+    const handleCheckMissingBillingRuleApis = async () => {
+        setIsMissingBillingRuleCheckLoading(true);
+        try {
+            const rows = await getSystemApisMissingBillingRulesManage();
+            const normalized = Array.isArray(rows) ? rows : [];
+            setMissingBillingRuleApiRows(normalized);
+            alert(
+                normalized.length > 0
+                    ? t(`检查完成：发现 ${normalized.length} 条 API 未关联计费规则。`, `Check completed: found ${normalized.length} APIs without billing rules.`)
+                    : t('检查完成：所有启用且未弃用 API 均已关联计费规则。', 'Check completed: all active and non-deprecated APIs have billing rules.')
+            );
+        } catch (e) {
+            console.error('Failed to check missing billing rules', e);
+            alert(e?.response?.data?.detail || e.message || t('检查失败', 'Check failed'));
+        } finally {
+            setIsMissingBillingRuleCheckLoading(false);
+        }
+    };
+
+    const systemApiIdDigest = React.useMemo(
+        () => (systemApiRows || []).map((row) => Number(row?.id || 0)).filter((id) => id > 0).sort((a, b) => a - b).join(','),
+        [systemApiRows]
+    );
+
+    useEffect(() => {
+        if (activeTab !== 'system_api' && activeTab !== 'pricing_rules') return;
+        fetchBillingRulesForSystemApi(selectedSystemApiId);
+    }, [activeTab, selectedSystemApiId, systemApiIdDigest]);
+
+    useEffect(() => {
+        if (!selectedBillingRuleId) {
+            setBillingRuleForm(createEmptyBillingRuleForm());
+            return;
+        }
+        const row = billingRuleRows.find((item) => String(item.id) === String(selectedBillingRuleId));
+        if (!row) return;
+        setBillingRuleForm(ruleRowToForm(row));
+    }, [selectedBillingRuleId, billingRuleRows]);
+
+    const filteredBillingRuleRows = React.useMemo(() => {
+        const keyword = String(billingRuleFilterKeyword || '').trim().toLowerCase();
+        return (billingRuleRows || []).filter((row) => {
+            if (billingRuleFilterStatus === 'active' && !row?.is_active) return false;
+            if (billingRuleFilterStatus === 'inactive' && !!row?.is_active) return false;
+            if (billingRuleFilterTarget === 'text' && !row?.applies_to_text) return false;
+            if (billingRuleFilterTarget === 'image' && !row?.applies_to_image) return false;
+            if (billingRuleFilterTarget === 'video' && !row?.applies_to_video) return false;
+            if (billingRuleFilterUnitType !== 'all' && String(row?.billing_unit_type || '') !== billingRuleFilterUnitType) return false;
+            if (!keyword) return true;
+
+            const haystack = [
+                row?.name,
+                row?.description,
+                row?.generation_mode,
+                row?.input_format,
+                row?.output_format,
+                row?.billing_unit_type,
+            ].map((v) => String(v || '').toLowerCase()).join(' ');
+            return haystack.includes(keyword);
+        });
+    }, [billingRuleRows, billingRuleFilterKeyword, billingRuleFilterStatus, billingRuleFilterTarget, billingRuleFilterUnitType]);
+
+    useEffect(() => {
+        if (!filteredBillingRuleRows.length) {
+            setSelectedBillingRuleId('');
+            return;
+        }
+        const exists = filteredBillingRuleRows.some((row) => String(row.id) === String(selectedBillingRuleId));
+        if (!exists) {
+            setSelectedBillingRuleId(String(filteredBillingRuleRows[0].id));
+        }
+    }, [filteredBillingRuleRows, selectedBillingRuleId]);
+
+    const selectedBillingRuleRow = React.useMemo(
+        () => billingRuleRows.find((item) => String(item?.id) === String(selectedBillingRuleId)) || null,
+        [billingRuleRows, selectedBillingRuleId]
+    );
+
+    const selectedBillingRuleIdSet = React.useMemo(
+        () => new Set((selectedBillingRuleIds || []).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)),
+        [selectedBillingRuleIds]
+    );
+
+    const selectedFilteredBillingRuleCount = React.useMemo(
+        () => filteredBillingRuleRows.filter((row) => selectedBillingRuleIdSet.has(Number(row?.id))).length,
+        [filteredBillingRuleRows, selectedBillingRuleIdSet]
+    );
+
+    const allFilteredBillingRuleIds = React.useMemo(
+        () => filteredBillingRuleRows.map((row) => Number(row?.id || 0)).filter((id) => id > 0),
+        [filteredBillingRuleRows]
+    );
+
+    const toggleBillingRuleSelection = (ruleId, checked) => {
+        const id = Number(ruleId || 0);
+        if (!id) return;
+        setSelectedBillingRuleIds((prev) => {
+            const set = new Set((prev || []).map((v) => Number(v)).filter((v) => v > 0));
+            if (checked) {
+                set.add(id);
+            } else {
+                set.delete(id);
+            }
+            return Array.from(set);
+        });
+    };
+
+    const toggleSelectAllFilteredBillingRules = (checked) => {
+        if (!checked) {
+            setSelectedBillingRuleIds((prev) => {
+                const drop = new Set(allFilteredBillingRuleIds);
+                return (prev || []).filter((id) => !drop.has(Number(id)));
+            });
+            return;
+        }
+        setSelectedBillingRuleIds((prev) => {
+            const set = new Set((prev || []).map((v) => Number(v)).filter((v) => v > 0));
+            allFilteredBillingRuleIds.forEach((id) => set.add(id));
+            return Array.from(set);
+        });
+    };
+
+    const selectedBillingRuleApiLabel = React.useMemo(() => {
+        if (!selectedBillingRuleRow) return '-';
+        const apiRow = systemApiRows.find((api) => Number(api?.id) === Number(selectedBillingRuleRow?.system_api_id));
+        if (!apiRow) return `ID:${selectedBillingRuleRow?.system_api_id || '-'}`;
+        return `[${apiRow.category}] ${apiRow.provider}/${apiRow.model || '-'} (ID:${apiRow.id})`;
+    }, [selectedBillingRuleRow, systemApiRows]);
+
+    const handleCreateBillingRule = async () => {
+        const systemApiId = Number(selectedSystemApiId || 0);
+        if (!systemApiId) {
+            alert(t('请先选择一个系统 API 配置', 'Select a system API setting first'));
+            return;
+        }
+        try {
+            const payload = {
+                system_api_id: systemApiId,
+                ...buildBillingRulePayloadFromForm(billingRuleForm),
+            };
+            const created = await createSystemApiBillingRuleManage(systemApiId, payload);
+            await fetchBillingRulesForSystemApi(systemApiId);
+            if (created?.id) {
+                setSelectedBillingRuleId(String(created.id));
+            }
+            alert(t('定价规则已创建', 'Pricing rule created'));
+        } catch (e) {
+            alert(e?.response?.data?.detail || e.message || t('创建定价规则失败', 'Failed to create pricing rule'));
+        }
+    };
+
+    const handleUpdateBillingRule = async () => {
+        const ruleId = Number(selectedBillingRuleId || 0);
+        if (!ruleId) {
+            alert(t('请先选择一条定价规则', 'Select a pricing rule first'));
+            return;
+        }
+        try {
+            const payload = buildBillingRulePayloadFromForm(billingRuleForm);
+            await updateSystemApiBillingRuleManage(ruleId, payload);
+            await fetchBillingRulesForSystemApi(selectedSystemApiId);
+            alert(t('定价规则已更新', 'Pricing rule updated'));
+        } catch (e) {
+            alert(e?.response?.data?.detail || e.message || t('更新定价规则失败', 'Failed to update pricing rule'));
+        }
+    };
+
+    const handleDeleteBillingRule = async () => {
+        const selectedIds = (selectedBillingRuleIds || []).map((id) => Number(id || 0)).filter((id) => id > 0);
+        const fallbackId = Number(selectedBillingRuleId || 0);
+        const targetIds = selectedIds.length > 0 ? selectedIds : (fallbackId ? [fallbackId] : []);
+        if (!targetIds.length) {
+            alert(t('请先选择至少一条定价规则', 'Select at least one pricing rule first'));
+            return;
+        }
+        const confirmText = targetIds.length > 1
+            ? t(`确认删除选中的 ${targetIds.length} 条定价规则？`, `Delete ${targetIds.length} selected pricing rules?`)
+            : t('确认删除该定价规则？', 'Delete this pricing rule?');
+        if (!await confirmUiMessage(confirmText)) return;
+        try {
+            if (targetIds.length > 1) {
+                await deleteSystemApiBillingRulesBatchManage(targetIds);
+            } else {
+                await deleteSystemApiBillingRuleManage(targetIds[0]);
+            }
+            setSelectedBillingRuleIds([]);
+            setSelectedBillingRuleId('');
+            await fetchBillingRulesForSystemApi(selectedSystemApiId);
+            alert(targetIds.length > 1
+                ? t(`已删除 ${targetIds.length} 条定价规则`, `Deleted ${targetIds.length} pricing rules`)
+                : t('定价规则已删除', 'Pricing rule deleted'));
+        } catch (e) {
+            alert(e?.response?.data?.detail || e.message || t('删除定价规则失败', 'Failed to delete pricing rule'));
+        }
+    };
+
+    const handleBatchResetBillingRuleChargeMultiplier = async () => {
+        const selectedApiId = Number(selectedSystemApiId || 0);
+        const scopeHint = selectedApiId > 0
+            ? t('当前筛选 API 的规则', 'rules under current selected API')
+            : t('全部规则', 'all rules');
+        const ok = await confirmUiMessage(
+            t(`确认按成本积分批量重置${scopeHint}的扣费倍率？高成本规则将得到更低倍率，范围 1.1-2.0。`, `Reset charge multipliers for ${scopeHint} by cost score? Higher-cost rules will get lower multipliers in range 1.1-2.0.`)
+        );
+        if (!ok) return;
+
+        setIsBatchResetMultiplierLoading(true);
+        try {
+            const result = await resetSystemApiBillingRuleChargeMultipliersManage({
+                system_api_ids: selectedApiId > 0 ? [selectedApiId] : [],
+                min_multiplier: 1.1,
+                max_multiplier: 2.0,
+                default_multiplier: 2.0,
+            });
+            await fetchBillingRulesForSystemApi(selectedSystemApiId);
+            alert(
+                t(
+                    `重置完成：共 ${Number(result?.total_rules || 0)} 条，更新 ${Number(result?.updated_rules || 0)} 条。成本范围 ${Number(result?.min_cost || 0)}-${Number(result?.max_cost || 0)}。`,
+                    `Reset completed: total ${Number(result?.total_rules || 0)}, updated ${Number(result?.updated_rules || 0)}. Cost range ${Number(result?.min_cost || 0)}-${Number(result?.max_cost || 0)}.`
+                )
+            );
+        } catch (e) {
+            alert(e?.response?.data?.detail || e?.message || t('批量重置倍率失败', 'Failed to reset charge multipliers'));
+        } finally {
+            setIsBatchResetMultiplierLoading(false);
+        }
+    };
+
+    const handleConfirmManualKiePricing = () => {
+        if (!String(kiePricingManualText || '').trim()) {
+            alert(t('请先粘贴要分析的 KIE 定价内容', 'Please paste KIE pricing content to analyze first'));
+            return;
+        }
+        setIsKiePricingConfirmed(true);
+        alert(t('已确认手工输入内容，现在可以进行匹配与规则生成', 'Manual input confirmed. You can now run matching and rule generation.'));
+    };
+
+    const handleRunKiePricingAssistant = async (applyBaseRules = false) => {
+        if (!isKiePricingConfirmed || !String(kiePricingManualText || '').trim()) {
+            alert(t('请先粘贴并确认 KIE 定价内容', 'Please paste and confirm KIE pricing content first'));
+            return;
+        }
+        try {
+            const selectedIds = (selectedKieSuggestionIds || []).map((id) => Number(id || 0)).filter((id) => id > 0);
+
+            // Step-3 optimization: if suggestions already exist, apply directly without regenerating.
+            if (applyBaseRules && Array.isArray(kiePricingResult?.matches) && kiePricingResult.matches.length > 0) {
+                setIsKiePricingLoading(true);
+                const applyResult = await applyKiePricingRulesManage({
+                    provider_filter: kiePricingResult?.provider_filter || kiePricingProviderFilter,
+                    include_deprecated: false,
+                    selected_system_api_ids: selectedIds,
+                    matches: kiePricingResult.matches,
+                });
+                setKiePricingResult((prev) => ({ ...(prev || {}), ...(applyResult || {}) }));
+                await fetchBillingRulesForSystemApi(selectedSystemApiId);
+
+                const appliedCount = Number(applyResult?.applied_count || 0);
+                const applyStatus = String(applyResult?.apply_status || 'not_requested');
+                if (appliedCount > 0 && applyStatus === 'applied') {
+                    alert(t(`KIE 基础规则已写入 ${appliedCount} 个模型`, `KIE base rules were written to ${appliedCount} models`));
+                } else {
+                    alert(
+                        (applyResult?.apply_message && String(applyResult.apply_message).trim())
+                        || t('本次未写入任何基础规则，请检查匹配结果或勾选项', 'No base rules were written this time. Check matches or selected items.')
+                    );
+                }
+                return;
+            }
+
+            const rawTablesText = String(kiePricingManualTablesText || '').trim();
+
+            setIsKiePricingLoading(true);
+            const result = await generateKiePricingRulesManage({
+                url: kiePricingUrl,
+                provider_filter: kiePricingProviderFilter,
+                include_deprecated: false,
+                apply_base_rules: !!applyBaseRules,
+                selected_system_api_ids: selectedIds,
+                confirmed: true,
+                confirmed_pricing_text: String(kiePricingManualText || ''),
+                confirmed_pricing_tables_text: rawTablesText,
+            });
+            setKiePricingResult(result || null);
+            setSelectedKieSuggestionIds((Array.isArray(result?.matches) ? result.matches : []).map((x) => Number(x?.system_api_id || 0)).filter((id) => id > 0));
+            if (applyBaseRules) {
+                await fetchBillingRulesForSystemApi(selectedSystemApiId);
+            }
+            if (applyBaseRules) {
+                const appliedCount = Number(result?.applied_count || 0);
+                const applyStatus = String(result?.apply_status || 'not_requested');
+                if (appliedCount > 0 && applyStatus === 'applied') {
+                    alert(t(`KIE 基础规则已写入 ${appliedCount} 个模型`, `KIE base rules were written to ${appliedCount} models`));
+                } else {
+                    alert(
+                        (result?.apply_message && String(result.apply_message).trim())
+                        || t('本次未写入任何基础规则，请检查匹配结果或勾选项', 'No base rules were written this time. Check matches or selected items.')
+                    );
+                }
+            } else {
+                alert(t('KIE 规则建议已生成', 'KIE pricing suggestions generated'));
+            }
+        } catch (e) {
+            alert(e?.response?.data?.detail || e?.message || t('执行 KIE 定价助手失败', 'Failed to run KIE pricing assistant'));
+        } finally {
+            setIsKiePricingLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        setIsKiePricingConfirmed(false);
+        setKiePricingResult(null);
+        setSelectedKieSuggestionIds([]);
+        closeKieSuggestionEditor();
+    }, [kiePricingUrl]);
+
+    useEffect(() => {
+        setIsKiePricingConfirmed(false);
+        setKiePricingResult(null);
+        setSelectedKieSuggestionIds([]);
+        closeKieSuggestionEditor();
+    }, [kiePricingManualText, kiePricingManualTablesText]);
+
+    const toggleKieSuggestionSelection = (systemApiId, checked) => {
+        const id = Number(systemApiId || 0);
+        if (!id) return;
+        setSelectedKieSuggestionIds((prev) => {
+            const set = new Set((prev || []).map((v) => Number(v)).filter((v) => v > 0));
+            if (checked) set.add(id);
+            else set.delete(id);
+            return Array.from(set);
+        });
+    };
+
+    const toggleAllKieSuggestions = (checked) => {
+        if (!Array.isArray(kiePricingResult?.matches)) {
+            setSelectedKieSuggestionIds([]);
+            return;
+        }
+        if (!checked) {
+            setSelectedKieSuggestionIds([]);
+            return;
+        }
+        setSelectedKieSuggestionIds(kiePricingResult.matches.map((x) => Number(x?.system_api_id || 0)).filter((id) => id > 0));
+    };
+
+    const closeKieSuggestionEditor = () => {
+        setIsKieSuggestionEditOpen(false);
+        setEditingKieSuggestionIndex(-1);
+        setEditingKieSuggestionMeta({ system_api_id: '', model: '' });
+        setKieSuggestionEditForm({
+            target_system_api_id: '',
+            billing_unit_type: 'per_call',
+            billing_cost: '0',
+            billing_cost_input: '0',
+            billing_cost_output: '0',
+            granular_rules: [],
+        });
+    };
+
+    const createEmptyKieGranularRule = (fallbackUnitType = 'per_call') => ({
+        name: '',
+        billing_unit_type: normalizeApiPricingUnitType(fallbackUnitType),
+        billing_cost: '0',
+        billing_cost_input: '0',
+        billing_cost_output: '0',
+        width_min: '',
+        width_max: '',
+        height_min: '',
+        height_max: '',
+        pixels_min: '',
+        pixels_max: '',
+        generation_mode: '',
+        input_format: '',
+        output_format: '',
+        priority: '1000',
+        applies_to_text: false,
+        applies_to_image: true,
+        applies_to_video: false,
+        extra_conditions: {},
+    });
+
+    const normalizeKieGranularRuleForEdit = (rule, fallbackUnitType = 'per_call') => {
+        const source = (rule && typeof rule === 'object') ? rule : {};
+        return {
+            name: String(source?.name || ''),
+            billing_unit_type: normalizeApiPricingUnitType(source?.billing_unit_type || fallbackUnitType),
+            billing_cost: String(toNonNegativeInt(source?.billing_cost ?? source?.cost ?? 0)),
+            billing_cost_input: String(toNonNegativeInt(source?.billing_cost_input ?? source?.cost_input ?? 0)),
+            billing_cost_output: String(toNonNegativeInt(source?.billing_cost_output ?? source?.cost_output ?? 0)),
+            width_min: source?.width_min === null || source?.width_min === undefined ? '' : String(toNonNegativeInt(source.width_min)),
+            width_max: source?.width_max === null || source?.width_max === undefined ? '' : String(toNonNegativeInt(source.width_max)),
+            height_min: source?.height_min === null || source?.height_min === undefined ? '' : String(toNonNegativeInt(source.height_min)),
+            height_max: source?.height_max === null || source?.height_max === undefined ? '' : String(toNonNegativeInt(source.height_max)),
+            pixels_min: source?.pixels_min === null || source?.pixels_min === undefined ? '' : String(toNonNegativeInt(source.pixels_min)),
+            pixels_max: source?.pixels_max === null || source?.pixels_max === undefined ? '' : String(toNonNegativeInt(source.pixels_max)),
+            generation_mode: String(source?.generation_mode || ''),
+            input_format: String(source?.input_format || ''),
+            output_format: String(source?.output_format || ''),
+            priority: source?.priority === null || source?.priority === undefined ? '1000' : String(toNonNegativeInt(source.priority)),
+            applies_to_text: !!source?.applies_to_text,
+            applies_to_image: source?.applies_to_image === undefined ? true : !!source?.applies_to_image,
+            applies_to_video: !!source?.applies_to_video,
+            extra_conditions: (source?.extra_conditions && typeof source.extra_conditions === 'object') ? source.extra_conditions : {},
+        };
+    };
+
+    const addKieGranularRuleForEdit = () => {
+        setKieSuggestionEditForm((prev) => ({
+            ...prev,
+            granular_rules: [
+                ...(Array.isArray(prev?.granular_rules) ? prev.granular_rules : []),
+                createEmptyKieGranularRule(prev?.billing_unit_type || 'per_call'),
+            ],
+        }));
+    };
+
+    const removeKieGranularRuleForEdit = (ruleIndex) => {
+        setKieSuggestionEditForm((prev) => ({
+            ...prev,
+            granular_rules: (Array.isArray(prev?.granular_rules) ? prev.granular_rules : []).filter((_, idx) => idx !== ruleIndex),
+        }));
+    };
+
+    const updateKieGranularRuleForEdit = (ruleIndex, field, value) => {
+        setKieSuggestionEditForm((prev) => ({
+            ...prev,
+            granular_rules: (Array.isArray(prev?.granular_rules) ? prev.granular_rules : []).map((item, idx) => {
+                if (idx !== ruleIndex) return item;
+                if (field === 'billing_unit_type') {
+                    return { ...item, [field]: normalizeApiPricingUnitType(value) };
+                }
+                return { ...item, [field]: value };
+            }),
+        }));
+    };
+
+    const openKieSuggestionEditor = (rowIndex) => {
+        const row = (Array.isArray(kiePricingResult?.matches) ? kiePricingResult.matches : [])[rowIndex];
+        if (!row) return;
+        setEditingKieSuggestionIndex(rowIndex);
+        setEditingKieSuggestionMeta({
+            system_api_id: String(row?.system_api_id || ''),
+            model: String(row?.model || ''),
+        });
+        setKieSuggestionEditForm({
+            target_system_api_id: String(row?.system_api_id || ''),
+            billing_unit_type: normalizeApiPricingUnitType(row?.base_rule?.billing_unit_type),
+            billing_cost: String(toNonNegativeInt(row?.base_rule?.billing_cost ?? 0)),
+            billing_cost_input: String(toNonNegativeInt(row?.base_rule?.billing_cost_input ?? 0)),
+            billing_cost_output: String(toNonNegativeInt(row?.base_rule?.billing_cost_output ?? 0)),
+            granular_rules: (Array.isArray(row?.granular_rules) ? row.granular_rules : []).map((gr) =>
+                normalizeKieGranularRuleForEdit(gr, row?.base_rule?.billing_unit_type || 'per_call')
+            ),
+        });
+        setIsKieSuggestionEditOpen(true);
+    };
+
+    const saveKieSuggestionEditor = () => {
+        const rowIndex = Number(editingKieSuggestionIndex);
+        if (!Number.isInteger(rowIndex) || rowIndex < 0) {
+            closeKieSuggestionEditor();
+            return;
+        }
+        const targetSystemApiId = Number(kieSuggestionEditForm.target_system_api_id || 0);
+        if (targetSystemApiId <= 0) {
+            alert(t('请选择目标 System API', 'Please select a target System API'));
+            return;
+        }
+        const sourceRow = (Array.isArray(kiePricingResult?.matches) ? kiePricingResult.matches : [])[rowIndex];
+        const oldSystemApiId = Number(sourceRow?.system_api_id || 0);
+        const selectedApiRow = (Array.isArray(systemApiRows) ? systemApiRows : []).find((x) => Number(x?.id || 0) === targetSystemApiId);
+        const toOptionalNonNegativeInt = (value) => {
+            const text = String(value ?? '').trim();
+            if (!text) return null;
+            return toNonNegativeInt(text);
+        };
+        const normalizedGranularRules = (Array.isArray(kieSuggestionEditForm?.granular_rules) ? kieSuggestionEditForm.granular_rules : [])
+            .map((item, idx) => {
+                const source = (item && typeof item === 'object') ? item : {};
+                const nameText = String(source?.name || '').trim() || `Granular Rule ${idx + 1}`;
+                return {
+                    name: nameText,
+                    billing_unit_type: normalizeApiPricingUnitType(source?.billing_unit_type || kieSuggestionEditForm.billing_unit_type || 'per_call'),
+                    billing_cost: toNonNegativeInt(source?.billing_cost ?? 0),
+                    billing_cost_input: toNonNegativeInt(source?.billing_cost_input ?? 0),
+                    billing_cost_output: toNonNegativeInt(source?.billing_cost_output ?? 0),
+                    width_min: toOptionalNonNegativeInt(source?.width_min),
+                    width_max: toOptionalNonNegativeInt(source?.width_max),
+                    height_min: toOptionalNonNegativeInt(source?.height_min),
+                    height_max: toOptionalNonNegativeInt(source?.height_max),
+                    pixels_min: toOptionalNonNegativeInt(source?.pixels_min),
+                    pixels_max: toOptionalNonNegativeInt(source?.pixels_max),
+                    generation_mode: String(source?.generation_mode || '').trim() || null,
+                    input_format: String(source?.input_format || '').trim() || null,
+                    output_format: String(source?.output_format || '').trim() || null,
+                    priority: toNonNegativeInt(source?.priority ?? 1000),
+                    applies_to_text: !!source?.applies_to_text,
+                    applies_to_image: source?.applies_to_image === undefined ? true : !!source?.applies_to_image,
+                    applies_to_video: !!source?.applies_to_video,
+                    extra_conditions: (source?.extra_conditions && typeof source.extra_conditions === 'object') ? source.extra_conditions : {},
+                };
+            })
+            .filter((item) => {
+                const hasCost = toNonNegativeInt(item?.billing_cost ?? 0) > 0;
+                const hasDimension = [item?.width_min, item?.width_max, item?.height_min, item?.height_max, item?.pixels_min, item?.pixels_max]
+                    .some((v) => Number(v || 0) > 0);
+                const hasMeta = String(item?.generation_mode || '').trim() || String(item?.input_format || '').trim() || String(item?.output_format || '').trim();
+                return hasCost || hasDimension || !!hasMeta;
+            });
+        setKiePricingResult((prev) => {
+            if (!prev || !Array.isArray(prev.matches)) return prev;
+            const nextMatches = prev.matches.map((row, idx) => {
+                if (idx !== rowIndex) return row;
+                const currentBaseRule = (row?.base_rule && typeof row.base_rule === 'object') ? row.base_rule : {};
+                return {
+                    ...row,
+                    system_api_id: targetSystemApiId,
+                    provider: selectedApiRow?.provider || row?.provider,
+                    category: selectedApiRow?.category || row?.category,
+                    model: selectedApiRow?.model || row?.model,
+                    base_rule: {
+                        ...currentBaseRule,
+                        billing_unit_type: normalizeApiPricingUnitType(kieSuggestionEditForm.billing_unit_type),
+                        billing_cost: toNonNegativeInt(kieSuggestionEditForm.billing_cost),
+                        billing_cost_input: toNonNegativeInt(kieSuggestionEditForm.billing_cost_input),
+                        billing_cost_output: toNonNegativeInt(kieSuggestionEditForm.billing_cost_output),
+                    },
+                    granular_rules: normalizedGranularRules,
+                };
+            });
+            return {
+                ...prev,
+                matches: nextMatches,
+            };
+        });
+        if (oldSystemApiId > 0 && oldSystemApiId !== targetSystemApiId) {
+            setSelectedKieSuggestionIds((prev) => {
+                const set = new Set((prev || []).map((v) => Number(v)).filter((v) => v > 0));
+                if (set.has(oldSystemApiId)) {
+                    set.delete(oldSystemApiId);
+                    set.add(targetSystemApiId);
+                }
+                return Array.from(set);
+            });
+        }
+        closeKieSuggestionEditor();
+    };
+
+    const formatKieGranularRuleSummary = (rule) => {
+        if (!rule || typeof rule !== 'object') return '-';
+        const label = String(rule?.name || '').trim();
+        const wMin = Number(rule?.width_min || 0);
+        const wMax = Number(rule?.width_max || 0);
+        const hMin = Number(rule?.height_min || 0);
+        const hMax = Number(rule?.height_max || 0);
+        const cost = toNonNegativeInt(rule?.billing_cost ?? 0);
+        const unit = normalizeApiPricingUnitType(rule?.billing_unit_type);
+        const sizeText = (wMin > 0 && hMin > 0)
+            ? `${wMin}${wMax > 0 && wMax !== wMin ? `-${wMax}` : ''}x${hMin}${hMax > 0 && hMax !== hMin ? `-${hMax}` : ''}`
+            : '';
+        if (label && sizeText) return `${label}: ${sizeText} -> ${cost} ${unit}`;
+        if (label) return `${label}: ${cost} ${unit}`;
+        if (sizeText) return `${sizeText} -> ${cost} ${unit}`;
+        return `${cost} ${unit}`;
     };
 
     useEffect(() => {
@@ -494,39 +1445,44 @@ const UserAdmin = () => {
                 name: '',
                 category: 'LLM',
                 provider: '',
+                api_key: '',
                 base_url: '',
                 model: '',
-                webHook: '',
-                api_unit_type: 'per_call',
-                api_cost: '0',
-                api_cost_input: '0',
-                api_cost_output: '0',
-                smart_priority: '100',
-                smart_retry_limit: '1',
-                smart_multi_ref_default: false,
+                base_model: '',
+                config: '{}',
                 is_active: false,
+                deprecated: false,
+                tags: '',
+                modality: '',
+                supplier_info: '',
+                billing_unit_type: 'per_call',
+                billing_cost: '0',
+                billing_cost_input: '0',
+                billing_cost_output: '0',
             });
             return;
         }
         const row = systemApiRows.find((item) => String(item.id) === String(selectedSystemApiId));
         if (!row) return;
-        const cfg = getSystemApiConfig(row);
         const pricing = getApiPricing(row);
         setSystemApiForm({
             name: row.name || '',
             category: row.category || 'LLM',
             provider: row.provider || '',
+            api_key: row.api_key || '',
             base_url: row.base_url || '',
             model: row.model || '',
-            webHook: cfg?.webHook || '',
-            api_unit_type: pricing.unit_type,
-            api_cost: String(pricing.cost),
-            api_cost_input: String(pricing.cost_input),
-            api_cost_output: String(pricing.cost_output),
-            smart_priority: String(cfg?.smart_priority ?? cfg?.priority ?? '100'),
-            smart_retry_limit: String(cfg?.smart_retry_limit ?? cfg?.retry_limit ?? '1'),
-            smart_multi_ref_default: !!cfg?.smart_multi_ref_default,
+            base_model: row.base_model || '',
+            config: safeJsonStr(row.config) || '{}',
             is_active: !!row.is_active,
+            deprecated: !!row.deprecated,
+            tags: Array.isArray(row.tags) ? row.tags.join(', ') : safeJsonStr(row.tags),
+            modality: safeJsonStr(row.modality),
+            supplier_info: safeJsonStr(row.supplier_info),
+            billing_unit_type: pricing.unit_type,
+            billing_cost: String(pricing.cost),
+            billing_cost_input: String(pricing.cost_input),
+            billing_cost_output: String(pricing.cost_output),
         });
     }, [selectedSystemApiId, systemApiRows]);
 
@@ -665,6 +1621,7 @@ const UserAdmin = () => {
     };
 
     useEffect(() => {
+        if (activeTab === 'pricing_rules') return;
         if (!visibleSystemApiRows.length) {
             setSelectedSystemApiId('');
             return;
@@ -673,7 +1630,25 @@ const UserAdmin = () => {
         if (!existsInFiltered) {
             setSelectedSystemApiId(String(visibleSystemApiRows[0].id));
         }
-    }, [visibleSystemApiRows, selectedSystemApiId]);
+    }, [visibleSystemApiRows, selectedSystemApiId, activeTab]);
+
+    const parseJsonFieldSafe = (text) => {
+        const trimmed = String(text || '').trim();
+        if (!trimmed) return undefined;
+        try { return JSON.parse(trimmed); } catch { return undefined; }
+    };
+
+    const parseTagsField = (text) => {
+        const trimmed = String(text || '').trim();
+        if (!trimmed) return undefined;
+        // try JSON array first
+        try {
+            const parsed = JSON.parse(trimmed);
+            if (Array.isArray(parsed)) return parsed;
+        } catch { /* ignore */ }
+        // fallback: comma-separated
+        return trimmed.split(',').map(s => s.trim()).filter(Boolean);
+    };
 
     const handleCreateSystemApiSetting = async () => {
         const provider = String(systemApiForm.provider || '').trim();
@@ -686,21 +1661,19 @@ const UserAdmin = () => {
                 name: String(systemApiForm.name || '').trim() || undefined,
                 category: systemApiForm.category || 'LLM',
                 provider,
+                api_key: String(systemApiForm.api_key || '').trim() || undefined,
                 base_url: String(systemApiForm.base_url || '').trim() || undefined,
                 model: String(systemApiForm.model || '').trim() || undefined,
-                config: {
-                    webHook: String(systemApiForm.webHook || '').trim() || '',
-                    api_pricing: {
-                        unit_type: normalizeApiPricingUnitType(systemApiForm.api_unit_type),
-                        cost: toNonNegativeInt(systemApiForm.api_cost),
-                        cost_input: toNonNegativeInt(systemApiForm.api_cost_input),
-                        cost_output: toNonNegativeInt(systemApiForm.api_cost_output),
-                    },
-                    smart_priority: Number(systemApiForm.smart_priority || 100),
-                    smart_retry_limit: Number(systemApiForm.smart_retry_limit || 1),
-                    smart_multi_ref_default: !!systemApiForm.smart_multi_ref_default,
-                },
+                base_model: String(systemApiForm.base_model || '').trim() || undefined,
+                config: parseJsonFieldSafe(systemApiForm.config) || {},
                 is_active: !!systemApiForm.is_active,
+                tags: parseTagsField(systemApiForm.tags),
+                modality: parseJsonFieldSafe(systemApiForm.modality),
+                supplier_info: parseJsonFieldSafe(systemApiForm.supplier_info),
+                billing_unit_type: normalizeApiPricingUnitType(systemApiForm.billing_unit_type),
+                billing_cost: toNonNegativeInt(systemApiForm.billing_cost),
+                billing_cost_input: toNonNegativeInt(systemApiForm.billing_cost_input),
+                billing_cost_output: toNonNegativeInt(systemApiForm.billing_cost_output),
             });
             await fetchSystemApiManageRows();
             alert('System API setting created.');
@@ -719,21 +1692,19 @@ const UserAdmin = () => {
                 name: String(systemApiForm.name || '').trim() || undefined,
                 category: systemApiForm.category || 'LLM',
                 provider: String(systemApiForm.provider || '').trim() || undefined,
+                api_key: String(systemApiForm.api_key || '').trim() || undefined,
                 base_url: String(systemApiForm.base_url || '').trim() || undefined,
                 model: String(systemApiForm.model || '').trim() || undefined,
-                config: {
-                    webHook: String(systemApiForm.webHook || '').trim() || '',
-                    api_pricing: {
-                        unit_type: normalizeApiPricingUnitType(systemApiForm.api_unit_type),
-                        cost: toNonNegativeInt(systemApiForm.api_cost),
-                        cost_input: toNonNegativeInt(systemApiForm.api_cost_input),
-                        cost_output: toNonNegativeInt(systemApiForm.api_cost_output),
-                    },
-                    smart_priority: Number(systemApiForm.smart_priority || 100),
-                    smart_retry_limit: Number(systemApiForm.smart_retry_limit || 1),
-                    smart_multi_ref_default: !!systemApiForm.smart_multi_ref_default,
-                },
+                base_model: String(systemApiForm.base_model || '').trim() || undefined,
+                config: parseJsonFieldSafe(systemApiForm.config) || {},
                 is_active: !!systemApiForm.is_active,
+                tags: parseTagsField(systemApiForm.tags),
+                modality: parseJsonFieldSafe(systemApiForm.modality),
+                supplier_info: parseJsonFieldSafe(systemApiForm.supplier_info),
+                billing_unit_type: normalizeApiPricingUnitType(systemApiForm.billing_unit_type),
+                billing_cost: toNonNegativeInt(systemApiForm.billing_cost),
+                billing_cost_input: toNonNegativeInt(systemApiForm.billing_cost_input),
+                billing_cost_output: toNonNegativeInt(systemApiForm.billing_cost_output),
             });
             await fetchSystemApiManageRows();
             alert('System API setting updated.');
@@ -855,6 +1826,81 @@ const UserAdmin = () => {
         } finally {
             setIsProviderKeysSaving(false);
         }
+    };
+
+    // ─── provider_key_pool CRUD ───
+    const fetchProviderKeyPools = async () => {
+        setIsProviderKeyPoolLoading(true);
+        try {
+            const rows = await listProviderKeyPools();
+            setProviderKeyPoolRows(Array.isArray(rows) ? rows : []);
+        } catch (e) {
+            console.error('Failed to load provider key pools', e);
+            setProviderKeyPoolRows([]);
+        } finally {
+            setIsProviderKeyPoolLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        if (activeTab === 'system_api') {
+            fetchProviderKeyPools();
+        }
+    }, [activeTab]);
+
+    useEffect(() => {
+        if (!selectedKeyPoolId) {
+            setKeyPoolForm({ provider: '', api_keys: '', strategy: 'random', weights: '' });
+            return;
+        }
+        const row = providerKeyPoolRows.find((r) => String(r.id) === String(selectedKeyPoolId));
+        if (!row) return;
+        setKeyPoolForm({
+            provider: row.provider || '',
+            api_keys: Array.isArray(row.api_keys) ? row.api_keys.join('\n') : '',
+            strategy: row.strategy || 'random',
+            weights: Array.isArray(row.weights) && row.weights.length ? row.weights.join('\n') : '',
+        });
+    }, [selectedKeyPoolId, providerKeyPoolRows]);
+
+    const handleCreateKeyPool = async () => {
+        const provider = String(keyPoolForm.provider || '').trim();
+        if (!provider) { alert(t('Provider 不能为空', 'Provider is required')); return; }
+        const keys = String(keyPoolForm.api_keys || '').split(/\r?\n|,/).map(s => s.trim()).filter(Boolean);
+        const weights = String(keyPoolForm.weights || '').split(/\r?\n|,/).map(s => Number(s.trim())).filter(n => Number.isFinite(n) && n > 0);
+        try {
+            await createProviderKeyPool({ provider, api_keys: keys, strategy: keyPoolForm.strategy || 'random', weights: keyPoolForm.strategy === 'weighted' ? weights : undefined });
+            await fetchProviderKeyPools();
+            setSelectedKeyPoolId('');
+            alert(t('已创建', 'Created'));
+        } catch (e) { alert(e?.response?.data?.detail || e.message || 'Failed'); }
+    };
+
+    const handleUpdateKeyPool = async () => {
+        if (!selectedKeyPoolId) { alert(t('请先选择一条记录', 'Select a record first')); return; }
+        const keys = String(keyPoolForm.api_keys || '').split(/\r?\n|,/).map(s => s.trim()).filter(Boolean);
+        const weights = String(keyPoolForm.weights || '').split(/\r?\n|,/).map(s => Number(s.trim())).filter(n => Number.isFinite(n) && n > 0);
+        try {
+            await updateProviderKeyPool(Number(selectedKeyPoolId), {
+                provider: String(keyPoolForm.provider || '').trim() || undefined,
+                api_keys: keys,
+                strategy: keyPoolForm.strategy || 'random',
+                weights: keyPoolForm.strategy === 'weighted' ? weights : undefined,
+            });
+            await fetchProviderKeyPools();
+            alert(t('已更新', 'Updated'));
+        } catch (e) { alert(e?.response?.data?.detail || e.message || 'Failed'); }
+    };
+
+    const handleDeleteKeyPool = async () => {
+        if (!selectedKeyPoolId) { alert(t('请先选择一条记录', 'Select a record first')); return; }
+        if (!await confirmUiMessage(t('确认删除该供应商密钥池？', 'Delete this provider key pool entry?'))) return;
+        try {
+            await deleteProviderKeyPool(Number(selectedKeyPoolId));
+            setSelectedKeyPoolId('');
+            await fetchProviderKeyPools();
+            alert(t('已删除', 'Deleted'));
+        } catch (e) { alert(e?.response?.data?.detail || e.message || 'Failed'); }
     };
 
     const handleExportSystemApiSettings = async () => {
@@ -995,6 +2041,96 @@ const UserAdmin = () => {
             alert(e?.response?.data?.detail || e.message || 'Failed to import system API provider bundle');
         } finally {
             setIsSystemProviderBundleImporting(false);
+        }
+    };
+
+    const handleExportSystemConfigSyncBundle = async () => {
+        setIsSystemConfigSyncExporting(true);
+        try {
+            const payload = await exportSystemConfigSyncBundleManage();
+            const dataStr = JSON.stringify(payload, null, 2);
+            const blob = new Blob([dataStr], { type: 'application/json;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            const ts = new Date().toISOString().replace(/[:.]/g, '-');
+            a.href = url;
+            a.download = `system_config_sync_bundle_${ts}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            alert('System config sync bundle exported.');
+        } catch (e) {
+            alert(e?.response?.data?.detail || e.message || 'Failed to export system config sync bundle');
+        } finally {
+            setIsSystemConfigSyncExporting(false);
+        }
+    };
+
+    const handleOpenImportSystemConfigSyncBundle = () => {
+        if (systemConfigSyncImportInputRef.current) {
+            systemConfigSyncImportInputRef.current.value = '';
+            systemConfigSyncImportInputRef.current.click();
+        }
+    };
+
+    const handleImportSystemConfigSyncBundleFile = async (event) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+
+        try {
+            const text = await file.text();
+            const parsed = JSON.parse(text);
+            const data = parsed?.data;
+            if (!data || typeof data !== 'object') {
+                alert('Invalid sync bundle file. Expected { data: {...} }.');
+                return;
+            }
+
+            const confirmReplace = await confirmUiMessage(
+                'This will replace current deployment config with the bundle data and keep tables in full sync. Continue?',
+                {
+                    title: 'Full Sync Import',
+                    confirmText: 'Import & Replace',
+                    cancelText: 'Cancel',
+                }
+            );
+            if (!confirmReplace) {
+                return;
+            }
+
+            const confirmClearTables = await confirmUiMessage(
+                '将清空并重建以下表数据：system_api_settings（非 System_*）、system_api_billing_rules、provider_key_pool、smtp_system_configs、wechat_pay_configs。是否继续？',
+                {
+                    title: '确认清空原表数据',
+                    confirmText: '确认清空并导入',
+                    cancelText: '取消',
+                }
+            );
+            if (!confirmClearTables) {
+                return;
+            }
+
+            setIsSystemConfigSyncImporting(true);
+            const result = await importSystemConfigSyncBundleManage({
+                data,
+                replace_all: true,
+                confirm_clear_existing: true,
+            });
+            await Promise.all([
+                fetchSystemApiManageRows(),
+                fetchProviderKeyPools(),
+                fetchPaymentConfig(),
+                fetchSmtpConfig(),
+            ]);
+            if (Number(selectedSystemApiId || 0) > 0) {
+                await fetchBillingRulesForSystemApi(Number(selectedSystemApiId));
+            }
+            alert(`Full sync import finished. Providers: ${result?.provider_result?.providers || 0}, Billing Rules: ${result?.billing_rules?.created || 0}`);
+        } catch (e) {
+            alert(e?.response?.data?.detail || e.message || 'Failed to import system config sync bundle');
+        } finally {
+            setIsSystemConfigSyncImporting(false);
         }
     };
 
@@ -1285,13 +2421,8 @@ const UserAdmin = () => {
     const fetchAllData = async () => {
         setLoading(true);
         try {
-            const [usersRes, transRes, optionsRes, featurePricingRes, defaultApiPricingRes, agentToolPolicyRes] = await Promise.allSettled([
+            const [usersRes] = await Promise.allSettled([
                 api.get('/users'),
-                getTransactions(50, transactionFilterUser || null),
-                getBillingOptions(),
-                getBillingFeaturePricing(),
-                getBillingDefaultApiPricing(),
-                getAgentToolPolicy(),
             ]);
 
             if (usersRes.status === 'fulfilled') {
@@ -1305,6 +2436,22 @@ const UserAdmin = () => {
                 }
             } 
             
+        } catch (e) {
+            setError(e.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const fetchPricingBootstrapData = async () => {
+        try {
+            const [optionsRes, featurePricingRes, defaultApiPricingRes, agentToolPolicyRes] = await Promise.allSettled([
+                getBillingOptions(),
+                getBillingFeaturePricing(),
+                getBillingDefaultApiPricing(),
+                getAgentToolPolicy(),
+            ]);
+
             if (optionsRes.status === 'fulfilled') {
                 setBillingOptions(optionsRes.value);
                 if (!featurePricingRes || featurePricingRes.status !== 'fulfilled') {
@@ -1323,14 +2470,20 @@ const UserAdmin = () => {
             if (defaultApiPricingRes.status === 'fulfilled') {
                 const normalizedDefault = normalizeDefaultApiPricingMap(defaultApiPricingRes.value?.default_api_pricing || {});
                 const normalizedRecommended = normalizeDefaultApiPricingMap(defaultApiPricingRes.value?.recommended_default_api_pricing || {});
+                const normalizedContentFallback = normalizeContentFallbackPricing(defaultApiPricingRes.value?.content_fallback_pricing || {});
                 setDefaultApiPricingMap(normalizedDefault);
                 setRecommendedDefaultApiPricingMap(normalizedRecommended);
                 setDefaultApiPricingRows(buildDefaultApiPricingRows(normalizedDefault));
+                setContentFallbackPricing(normalizedContentFallback);
+                setContentFallbackRows(buildContentFallbackRows(normalizedContentFallback));
             } else {
                 const fallbackDefault = normalizeDefaultApiPricingMap({});
+                const fallbackContent = normalizeContentFallbackPricing({});
                 setDefaultApiPricingMap(fallbackDefault);
                 setRecommendedDefaultApiPricingMap(fallbackDefault);
                 setDefaultApiPricingRows(buildDefaultApiPricingRows(fallbackDefault));
+                setContentFallbackPricing(fallbackContent);
+                setContentFallbackRows(buildContentFallbackRows(fallbackContent));
             }
 
             if (agentToolPolicyRes.status === 'fulfilled') {
@@ -1339,11 +2492,9 @@ const UserAdmin = () => {
                 setAgentToolPolicyDraft(JSON.stringify(normalizedPolicy, null, 2));
             }
 
-            if (transRes.status === 'fulfilled') setTransactions(transRes.value.sort((a,b)=>b.id-a.id));
+            setIsPricingBootstrapLoaded(true);
         } catch (e) {
-            setError(e.message);
-        } finally {
-            setLoading(false);
+            console.error('Failed to load pricing bootstrap data', e);
         }
     };
 
@@ -1362,6 +2513,12 @@ const UserAdmin = () => {
             fetchTransactionsOnly();
         }
     }, [transactionFilterUser, activeTab]);
+
+    useEffect(() => {
+        if (activeTab === 'pricing' && !isPricingBootstrapLoaded) {
+            fetchPricingBootstrapData();
+        }
+    }, [activeTab, isPricingBootstrapLoaded]);
 
     const handleSaveFeaturePricing = async () => {
         try {
@@ -1415,10 +2572,14 @@ const UserAdmin = () => {
         try {
             setIsDefaultApiPricingSaving(true);
             const normalized = buildDefaultApiPricingMapFromRows(defaultApiPricingRows);
-            const res = await updateBillingDefaultApiPricing(normalized);
+            const normalizedContentFallback = buildContentFallbackMapFromRows(contentFallbackRows);
+            const res = await updateBillingDefaultApiPricing(normalized, normalizedContentFallback);
             const saved = normalizeDefaultApiPricingMap(res?.default_api_pricing || {});
+            const savedContentFallback = normalizeContentFallbackPricing(res?.content_fallback_pricing || {});
             setDefaultApiPricingMap(saved);
             setDefaultApiPricingRows(buildDefaultApiPricingRows(saved));
+            setContentFallbackPricing(savedContentFallback);
+            setContentFallbackRows(buildContentFallbackRows(savedContentFallback));
             alert(t('默认 API 定价映射已保存', 'Default API pricing map saved'));
         } catch (e) {
             alert(t('保存默认 API 定价映射失败：', 'Failed to save default API pricing map: ') + (e?.message || 'unknown error'));
@@ -1433,6 +2594,20 @@ const UserAdmin = () => {
 
     const handleRestoreRecommendedDefaultApiPricingRows = () => {
         setDefaultApiPricingRows(buildDefaultApiPricingRows(recommendedDefaultApiPricingMap || {}));
+    };
+
+    const handleContentFallbackRowChange = (rowId, field, value) => {
+        setContentFallbackRows((prev) => prev.map((row) => {
+            if (row.id !== rowId) return row;
+            if (field === 'unit_type') {
+                return { ...row, unit_type: normalizeApiPricingUnitType(value) };
+            }
+            return { ...row, [field]: String(value).replace(/[^0-9]/g, '') };
+        }));
+    };
+
+    const handleResetContentFallbackRows = () => {
+        setContentFallbackRows(buildContentFallbackRows(contentFallbackPricing || {}));
     };
 
     const handleSaveAgentToolPolicy = async () => {
@@ -1508,6 +2683,13 @@ const UserAdmin = () => {
         </button>
     );
 
+    const RuleField = ({ label, children }) => (
+        <label className="block space-y-1">
+            <span className="text-[11px] uppercase tracking-wide text-gray-400">{label}</span>
+            {children}
+        </label>
+    );
+
 
 
     const updateUser = async (userId, data) => {
@@ -1572,6 +2754,9 @@ const UserAdmin = () => {
                         <TabButton id="pricing" label={t('定价', 'Pricing')} icon={DollarSign} />
                         <TabButton id="transactions" label={t('记录', 'History')} icon={Activity} />
                         <TabButton id="system_api" label={t('系统 API', 'System API')} icon={Key} />
+                        <TabButton id="config_sync" label={t('配置同步', 'Config Sync')} icon={Database} />
+                        <TabButton id="pricing_rules" label={t('计费规则', 'Pricing Rules')} icon={DollarSign} />
+                        <TabButton id="kie_pricing" label={t('KIE 定价助手', 'KIE Pricing Assistant')} icon={Settings} />
                         <TabButton id="prompt_skills" label={t('Prompt Skills', 'Prompt Skills')} icon={List} />
                         <TabButton id="storage_usage" label={t('磁盘统计', 'Storage Usage')} icon={HardDrive} />
                         <TabButton id="llm_logs" label={t('LLM 日志', 'LLM Logs')} icon={List} />
@@ -1582,6 +2767,52 @@ const UserAdmin = () => {
 
                 {/* Content Area */}
                 <div className="bg-[#18181b] rounded-xl border border-gray-800 p-6 min-h-[500px]">
+
+                    {/* CONFIG SYNC TAB */}
+                    {activeTab === 'config_sync' && (
+                        <div className="bg-white/5 border border-white/10 rounded-xl p-6 max-w-4xl space-y-5">
+                            <div>
+                                <h2 className="text-xl font-bold mb-2 flex items-center gap-2 text-white">
+                                    <Database className="text-primary" /> {t('研发/部署配置同步', 'Dev/Deploy Config Sync')}
+                                </h2>
+                                <p className="text-sm text-gray-300">
+                                    {t('导出将打包 system api、供应商密钥池、计费规则、SMTP、微信支付配置；导入会全量覆盖，保证与研发环境一致。', 'Export packages system API, provider key pools, billing rules, SMTP, and WeChat Pay configs. Import performs full replace to keep deployment identical to dev.')}
+                                </p>
+                            </div>
+
+                            <input
+                                ref={systemConfigSyncImportInputRef}
+                                type="file"
+                                accept="application/json,.json"
+                                className="hidden"
+                                onChange={handleImportSystemConfigSyncBundleFile}
+                            />
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <button
+                                    onClick={handleExportSystemConfigSyncBundle}
+                                    disabled={isSystemConfigSyncExporting || isSystemConfigSyncImporting}
+                                    className="bg-gray-700 hover:bg-gray-600 text-white px-4 py-3 rounded-lg flex items-center justify-center gap-2 disabled:opacity-50"
+                                >
+                                    <Download size={16} />
+                                    {isSystemConfigSyncExporting ? t('导出中...', 'Exporting...') : t('导出统一同步包', 'Export Sync Bundle')}
+                                </button>
+
+                                <button
+                                    onClick={handleOpenImportSystemConfigSyncBundle}
+                                    disabled={isSystemConfigSyncImporting || isSystemConfigSyncExporting}
+                                    className="bg-primary hover:opacity-90 text-black px-4 py-3 rounded-lg font-bold flex items-center justify-center gap-2 disabled:opacity-50"
+                                >
+                                    <Upload size={16} />
+                                    {isSystemConfigSyncImporting ? t('导入中...', 'Importing...') : t('导入并全量同步', 'Import & Full Sync')}
+                                </button>
+                            </div>
+
+                            <div className="text-xs text-amber-200 bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+                                {t('注意：导入会覆盖部署环境的目标配置表，建议先在部署环境导出备份。', 'Note: import overwrites target config tables in deployment. Export a backup from deployment first.')}
+                            </div>
+                        </div>
+                    )}
                     
                     {/* PAYMENT TAB */}
                     {activeTab === 'payment' && (
@@ -1650,7 +2881,8 @@ const UserAdmin = () => {
                                         <div>
                                             <label className="block text-xs uppercase font-bold text-gray-500 mb-1">{t('API V3 密钥', 'API V3 Key')}</label>
                                             <input 
-                                                type="password" 
+                                                type="password"
+                                                autoComplete="off"
                                                 value={paymentConfig.api_v3_key}
                                                 onChange={(e) => setPaymentConfig({...paymentConfig, api_v3_key: e.target.value})}
                                                 className="w-full bg-black/40 border border-gray-700 rounded p-2.5 text-sm focus:border-primary outline-none focus:ring-1 focus:ring-primary"
@@ -1774,6 +3006,7 @@ const UserAdmin = () => {
                                             <label className="block text-xs uppercase font-bold text-gray-500 mb-1">SMTP Password / App Password</label>
                                             <input
                                                 type="password"
+                                                autoComplete="off"
                                                 value={smtpConfig.password}
                                                 onChange={(e) => setSmtpConfig({...smtpConfig, password: e.target.value})}
                                                 className="w-full bg-black/40 border border-gray-700 rounded p-2.5 text-sm focus:border-primary outline-none focus:ring-1 focus:ring-primary"
@@ -2141,6 +3374,13 @@ const UserAdmin = () => {
                     {activeTab === 'pricing' && (
                         <div>
                             <div className="space-y-4">
+                                <div className="rounded-lg border border-red-500/40 bg-red-500/10 p-4">
+                                    <h3 className="text-xl font-extrabold tracking-wide text-red-200">{t('超级用户计费控制台', 'Superuser Billing Console')}</h3>
+                                    <p className="text-xs text-red-100/80 mt-1">
+                                        {t('此模块仅用于平台级计费策略配置，不面向普通用户。', 'This module is for platform-level billing policy only and is not exposed to regular users.')}
+                                    </p>
+                                </div>
+
                                 <div className="bg-black/30 border border-white/10 rounded-lg p-4">
                                     <h3 className="text-lg font-bold mb-2">{t('功能定价（积分）', 'Feature Pricing (Credits)')}</h3>
                                     <p className="text-xs text-gray-400 mb-3">
@@ -2298,6 +3538,118 @@ const UserAdmin = () => {
                                         </button>
                                         <button
                                             onClick={handleResetDefaultApiPricingRows}
+                                            className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded"
+                                        >
+                                            {t('重置草稿', 'Reset Draft')}
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div className="bg-black/30 border border-white/10 rounded-lg p-4">
+                                    <h3 className="text-lg font-bold mb-2">{t('按内容类型兜底定价', 'Content-Type Fallback Pricing')}</h3>
+                                    <p className="text-xs text-gray-400 mb-3">
+                                        {t('当未命中细粒度规则时，可按文本/图片/视频内容类型兜底。策略支持手动配置、按平均价、按最高价。', 'When no granular rule matches, fallback can be applied by content type (text/image/video). Strategy supports manual values, average price, or highest price.')}
+                                    </p>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+                                        <label className="flex items-center gap-2 text-xs text-gray-300">
+                                            <input
+                                                type="checkbox"
+                                                checked={!!contentFallbackPricing?.enabled}
+                                                onChange={(e) => setContentFallbackPricing((prev) => ({
+                                                    ...(prev || {}),
+                                                    enabled: e.target.checked,
+                                                }))}
+                                            />
+                                            {t('启用内容兜底', 'Enable content fallback')}
+                                        </label>
+
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-xs text-gray-400">{t('策略', 'Strategy')}</span>
+                                            <select
+                                                value={contentFallbackPricing?.strategy || 'manual'}
+                                                onChange={(e) => setContentFallbackPricing((prev) => ({
+                                                    ...(prev || {}),
+                                                    strategy: e.target.value,
+                                                }))}
+                                                className="bg-gray-900 border border-gray-700 rounded p-2 text-xs text-gray-200"
+                                            >
+                                                <option value="manual">{t('手动', 'Manual')}</option>
+                                                <option value="average">{t('平均价', 'Average')}</option>
+                                                <option value="highest">{t('最高价', 'Highest')}</option>
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full text-xs border-collapse">
+                                            <thead>
+                                                <tr className="border-b border-white/10 text-gray-400">
+                                                    <th className="text-left p-2">{t('内容类型', 'Content Type')}</th>
+                                                    <th className="text-left p-2">unit_type</th>
+                                                    <th className="text-left p-2">cost</th>
+                                                    <th className="text-left p-2">cost_input</th>
+                                                    <th className="text-left p-2">cost_output</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {contentFallbackRows.map((row) => (
+                                                    <tr key={row.id} className="border-b border-white/5">
+                                                        <td className="p-2 text-gray-200 font-medium uppercase">{row.content_type}</td>
+                                                        <td className="p-2">
+                                                            <select
+                                                                value={row.unit_type}
+                                                                onChange={(e) => handleContentFallbackRowChange(row.id, 'unit_type', e.target.value)}
+                                                                className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-xs text-gray-200"
+                                                            >
+                                                                <option value="per_call">per_call</option>
+                                                                <option value="per_second">per_second</option>
+                                                                <option value="per_minute">per_minute</option>
+                                                                <option value="per_token">per_token</option>
+                                                                <option value="per_1k_tokens">per_1k_tokens</option>
+                                                                <option value="per_million_tokens">per_million_tokens</option>
+                                                            </select>
+                                                        </td>
+                                                        <td className="p-2">
+                                                            <input
+                                                                value={row.cost}
+                                                                onChange={(e) => handleContentFallbackRowChange(row.id, 'cost', e.target.value)}
+                                                                inputMode="numeric"
+                                                                className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-xs text-gray-200"
+                                                            />
+                                                        </td>
+                                                        <td className="p-2">
+                                                            <input
+                                                                value={row.cost_input}
+                                                                onChange={(e) => handleContentFallbackRowChange(row.id, 'cost_input', e.target.value)}
+                                                                inputMode="numeric"
+                                                                className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-xs text-gray-200"
+                                                            />
+                                                        </td>
+                                                        <td className="p-2">
+                                                            <input
+                                                                value={row.cost_output}
+                                                                onChange={(e) => handleContentFallbackRowChange(row.id, 'cost_output', e.target.value)}
+                                                                inputMode="numeric"
+                                                                className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-xs text-gray-200"
+                                                            />
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+
+                                    <div className="mt-3 flex items-center gap-2">
+                                        <button
+                                            onClick={handleSaveDefaultApiPricing}
+                                            disabled={isDefaultApiPricingSaving}
+                                            className="bg-primary hover:bg-primary/90 text-white px-3 py-1 rounded disabled:opacity-50"
+                                        >
+                                            {isDefaultApiPricingSaving ? t('保存中...', 'Saving...') : t('保存内容兜底策略', 'Save Content Fallback')}
+                                        </button>
+                                        <button
+                                            onClick={handleResetContentFallbackRows}
                                             className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded"
                                         >
                                             {t('重置草稿', 'Reset Draft')}
@@ -2523,7 +3875,69 @@ const UserAdmin = () => {
                                     >
                                         <RefreshCw size={16} /> {t('刷新', 'Refresh')}
                                     </button>
+                                    <button
+                                        onClick={handleCheckMissingBillingRuleApis}
+                                        disabled={isMissingBillingRuleCheckLoading}
+                                        className="bg-indigo-700 hover:bg-indigo-600 text-white px-3 py-1 rounded flex items-center gap-2 disabled:opacity-50"
+                                        title={t('检查哪些 System API 没有对应计费规则', 'Check which System APIs are missing billing rules')}
+                                    >
+                                        <List size={16} /> {isMissingBillingRuleCheckLoading ? t('检查中...', 'Checking...') : t('检查缺失规则 API', 'Check Missing-Rule APIs')}
+                                    </button>
                                 </div>
+                            </div>
+
+                            {systemApiEditToast && (
+                                <div className="rounded border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-xs text-sky-200">
+                                    {systemApiEditToast}
+                                </div>
+                            )}
+
+                            <div className="border border-indigo-500/30 rounded-lg p-4 bg-indigo-500/5 space-y-2">
+                                <div className="flex items-center justify-between gap-2">
+                                    <div className="text-sm font-semibold text-indigo-200">
+                                        {t('未关联计费规则的 System API（已排除弃用和停用）', 'System APIs Missing Billing Rules (Deprecated and Inactive Excluded)')}
+                                    </div>
+                                    <div className="text-xs text-indigo-100/80">
+                                        {t('共', 'Total')} {missingBillingRuleApiRows.length} {t('条', 'items')}
+                                    </div>
+                                </div>
+                                {isMissingBillingRuleCheckLoading ? (
+                                    <div className="text-xs text-gray-300">{t('检查中...', 'Checking...')}</div>
+                                ) : (
+                                    <div className="overflow-x-auto max-h-[220px] border border-indigo-400/20 rounded">
+                                        <table className="w-full text-xs min-w-[680px]">
+                                            <thead className="bg-indigo-500/10 text-indigo-100 sticky top-0">
+                                                <tr>
+                                                    <th className="text-left p-2">ID</th>
+                                                    <th className="text-left p-2">{t('类别', 'Category')}</th>
+                                                    <th className="text-left p-2">{t('提供方', 'Provider')}</th>
+                                                    <th className="text-left p-2">{t('模型', 'Model')}</th>
+                                                    <th className="text-left p-2">{t('基础模型', 'Base Model')}</th>
+                                                    <th className="text-left p-2">{t('名称', 'Name')}</th>
+                                                    <th className="text-left p-2">{t('类别默认', 'Category Default')}</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {missingBillingRuleApiRows.map((row) => (
+                                                    <tr key={`missing-billing-${row.id}`} className="border-t border-indigo-400/20">
+                                                        <td className="p-2">{row.id}</td>
+                                                        <td className="p-2">{row.category || '-'}</td>
+                                                        <td className="p-2">{row.provider || '-'}</td>
+                                                        <td className="p-2">{row.model || '-'}</td>
+                                                        <td className="p-2">{row.base_model || '-'}</td>
+                                                        <td className="p-2">{row.name || '-'}</td>
+                                                        <td className="p-2">{row.is_active ? t('是', 'Yes') : t('否', 'No')}</td>
+                                                    </tr>
+                                                ))}
+                                                {missingBillingRuleApiRows.length === 0 && (
+                                                    <tr className="border-t border-indigo-400/20">
+                                                        <td className="p-3 text-indigo-100/80" colSpan={7}>{t('暂无缺失项，请点击“检查缺失规则 API”执行检测。', 'No missing items yet. Click "Check Missing-Rule APIs" to run detection.')}</td>
+                                                    </tr>
+                                                )}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                )}
                             </div>
 
                             {isSystemApiLoading ? (
@@ -2532,77 +3946,97 @@ const UserAdmin = () => {
                                 <div className="space-y-4">
                                     <div className="border border-emerald-500/30 rounded-lg p-4 bg-emerald-500/5 space-y-3">
                                         <div className="flex items-center justify-between gap-2">
-                                            <h4 className="text-sm font-bold text-emerald-200">{t('供应商统一密钥池（独立配置区）', 'Provider Unified Key Pool (Standalone)')}</h4>
-                                            <span className="text-[11px] text-emerald-300">{t('模型配置不再编辑密钥', 'Model editor no longer edits keys')}</span>
+                                            <h4 className="text-sm font-bold text-emerald-200">{t('供应商密钥池 CRUD（provider_key_pool）', 'Provider Key Pool CRUD (provider_key_pool)')}</h4>
+                                            <button onClick={fetchProviderKeyPools} className="text-xs text-emerald-300 hover:text-emerald-100 flex items-center gap-1"><RefreshCw size={12} /> {t('刷新', 'Refresh')}</button>
                                         </div>
 
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                            <div>
-                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('供应商', 'Provider')}</label>
-                                                <select
-                                                    value={systemApiKeyProvider}
-                                                    onChange={(e) => setSystemApiKeyProvider(e.target.value)}
-                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
-                                                >
-                                                    <option value="">{t('请选择供应商', 'Select Provider')}</option>
-                                                    {allSystemApiProviders.map((provider) => (
-                                                        <option key={provider} value={provider}>{provider}</option>
-                                                    ))}
-                                                </select>
-                                            </div>
-                                            <div>
-                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('密钥调度策略', 'Key Dispatch Strategy')}</label>
-                                                <select
-                                                    value={providerKeyStrategy}
-                                                    onChange={(e) => setProviderKeyStrategy(e.target.value)}
-                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
-                                                >
-                                                    <option value="random">{t('随机', 'Random')}</option>
-                                                    <option value="round_robin">{t('轮询', 'Round Robin')}</option>
-                                                    <option value="weighted">{t('权重随机', 'Weighted Random')}</option>
-                                                </select>
-                                            </div>
-                                        </div>
+                                        {isProviderKeyPoolLoading ? (
+                                            <div className="text-xs text-gray-400">{t('加载中...', 'Loading...')}</div>
+                                        ) : (
+                                            <>
+                                                <div className="overflow-x-auto">
+                                                    <table className="w-full text-xs">
+                                                        <thead>
+                                                            <tr className="text-gray-400 border-b border-white/10">
+                                                                <th className="text-left py-1.5 px-2">ID</th>
+                                                                <th className="text-left py-1.5 px-2">Provider</th>
+                                                                <th className="text-left py-1.5 px-2">{t('密钥数', 'Keys')}</th>
+                                                                <th className="text-left py-1.5 px-2">{t('策略', 'Strategy')}</th>
+                                                                <th className="text-left py-1.5 px-2">{t('更新时间', 'Updated')}</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {providerKeyPoolRows.map((row) => (
+                                                                <tr key={row.id}
+                                                                    className={`border-b border-white/5 cursor-pointer hover:bg-white/5 ${String(row.id) === String(selectedKeyPoolId) ? 'bg-emerald-500/10' : ''}`}
+                                                                    onClick={() => setSelectedKeyPoolId(String(row.id))}
+                                                                >
+                                                                    <td className="py-1.5 px-2">{row.id}</td>
+                                                                    <td className="py-1.5 px-2 font-mono">{row.provider}</td>
+                                                                    <td className="py-1.5 px-2">{Array.isArray(row.api_keys) ? row.api_keys.length : 0}</td>
+                                                                    <td className="py-1.5 px-2">{row.strategy || 'random'}</td>
+                                                                    <td className="py-1.5 px-2 text-gray-500">{row.updated_at || '-'}</td>
+                                                                </tr>
+                                                            ))}
+                                                            {providerKeyPoolRows.length === 0 && (
+                                                                <tr><td colSpan={5} className="py-3 px-2 text-center text-gray-500">{t('暂无数据', 'No data')}</td></tr>
+                                                            )}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
 
-                                        <div>
-                                            <label className="block text-xs uppercase text-gray-400 mb-1">{t('密钥池（多 key，按行或逗号分隔）', 'Key Pool (multi-key, newline/comma separated)')}</label>
-                                            <textarea
-                                                value={providerKeysText}
-                                                onChange={(e) => setProviderKeysText(e.target.value)}
-                                                rows={4}
-                                                className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm font-mono"
-                                                placeholder="sk-key-1\nsk-key-2\nsk-key-3"
-                                            />
-                                        </div>
-
-                                        {providerKeyStrategy === 'weighted' && (
-                                            <div>
-                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('权重（与 key 顺序对应）', 'Weights (same order as keys)')}</label>
-                                                <textarea
-                                                    value={providerKeyWeightsText}
-                                                    onChange={(e) => setProviderKeyWeightsText(e.target.value)}
-                                                    rows={3}
-                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm font-mono"
-                                                    placeholder="1\n3\n1"
-                                                />
-                                            </div>
+                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                                                    <div>
+                                                        <label className="block text-xs uppercase text-gray-400 mb-1">Provider</label>
+                                                        <input
+                                                            value={keyPoolForm.provider}
+                                                            onChange={(e) => setKeyPoolForm(f => ({ ...f, provider: e.target.value }))}
+                                                            className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm font-mono"
+                                                            placeholder="e.g. openai"
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-xs uppercase text-gray-400 mb-1">{t('策略', 'Strategy')}</label>
+                                                        <select
+                                                            value={keyPoolForm.strategy}
+                                                            onChange={(e) => setKeyPoolForm(f => ({ ...f, strategy: e.target.value }))}
+                                                            className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                        >
+                                                            <option value="random">{t('随机', 'Random')}</option>
+                                                            <option value="round_robin">{t('轮询', 'Round Robin')}</option>
+                                                            <option value="weighted">{t('权重随机', 'Weighted Random')}</option>
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs uppercase text-gray-400 mb-1">{t('密钥池（按行或逗号分隔）', 'API Keys (newline/comma separated)')}</label>
+                                                    <textarea
+                                                        value={keyPoolForm.api_keys}
+                                                        onChange={(e) => setKeyPoolForm(f => ({ ...f, api_keys: e.target.value }))}
+                                                        rows={4}
+                                                        className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm font-mono"
+                                                        placeholder={"sk-key-1\nsk-key-2"}
+                                                    />
+                                                </div>
+                                                {keyPoolForm.strategy === 'weighted' && (
+                                                    <div>
+                                                        <label className="block text-xs uppercase text-gray-400 mb-1">{t('权重（与 key 顺序对应）', 'Weights (same order as keys)')}</label>
+                                                        <textarea
+                                                            value={keyPoolForm.weights}
+                                                            onChange={(e) => setKeyPoolForm(f => ({ ...f, weights: e.target.value }))}
+                                                            rows={3}
+                                                            className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm font-mono"
+                                                            placeholder={"1\n3\n1"}
+                                                        />
+                                                    </div>
+                                                )}
+                                                <div className="flex items-center gap-2">
+                                                    <button onClick={handleCreateKeyPool} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded text-xs flex items-center gap-1"><Plus size={12} /> {t('新建', 'Create')}</button>
+                                                    <button onClick={handleUpdateKeyPool} disabled={!selectedKeyPoolId} className="px-3 py-1.5 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-bold rounded text-xs flex items-center gap-1"><Edit2 size={12} /> {t('更新', 'Update')}</button>
+                                                    <button onClick={handleDeleteKeyPool} disabled={!selectedKeyPoolId} className="px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white font-bold rounded text-xs flex items-center gap-1"><Trash2 size={12} /> {t('删除', 'Delete')}</button>
+                                                </div>
+                                            </>
                                         )}
-
-                                        <div className="text-[11px] text-gray-400">
-                                            {t('对同一 provider 的所有模型统一生效；模型配置仅引用所属供应商密钥。', 'Applies to all models under the same provider; model settings only read provider keys.')}
-                                        </div>
-                                        <div className="text-[11px] text-gray-500">
-                                            {t('当前服务端记录', 'Server snapshot')}: {providerKeysMeta.key_count || 0} {t('个密钥', 'keys')} {providerKeysMeta.keys_masked?.length ? `(${providerKeysMeta.keys_masked.slice(0, 3).join(', ')}${providerKeysMeta.keys_masked.length > 3 ? ', ...' : ''})` : ''}
-                                        </div>
-                                        <div>
-                                            <button
-                                                onClick={handleSaveProviderKeys}
-                                                disabled={isProviderKeysSaving || !systemApiKeyProvider}
-                                                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold rounded text-xs"
-                                            >
-                                                {isProviderKeysSaving ? t('保存中...', 'Saving...') : t('保存供应商密钥池', 'Save Provider Key Pool')}
-                                            </button>
-                                        </div>
                                     </div>
 
                                     <div className="flex flex-col gap-4">
@@ -2665,6 +4099,31 @@ const UserAdmin = () => {
                                             <span className="text-gray-400">{t('列表排序', 'List Order')}</span>
                                             <div className="flex items-center gap-2">
                                                 <button
+                                                    onClick={() => {
+                                                        setIsSystemApiEditing(true);
+                                                        setSelectedSystemApiId('');
+                                                        showSystemApiEditToast(t('已进入新建 API 编辑', 'Entered new API editor'));
+                                                    }}
+                                                    className="px-2.5 py-1 rounded border border-emerald-500/40 text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20"
+                                                    title={t('新建 System API 配置', 'Create a new System API setting')}
+                                                >
+                                                    {t('新建 API', 'New API')}
+                                                </button>
+                                                <button
+                                                    onClick={() => {
+                                                        if (!selectedSystemApiId) {
+                                                            alert(t('请先选择一条 API 配置', 'Select a System API setting first'));
+                                                            return;
+                                                        }
+                                                        setIsSystemApiEditing(true);
+                                                        showSystemApiEditToast(t('已进入 API 编辑模式', 'Entered API edit mode'));
+                                                    }}
+                                                    className="px-2.5 py-1 rounded border border-sky-500/40 text-sky-300 bg-sky-500/10 hover:bg-sky-500/20"
+                                                    title={t('编辑当前选中项', 'Edit selected item')}
+                                                >
+                                                    {t('编辑选中', 'Edit Selected')}
+                                                </button>
+                                                <button
                                                     onClick={() => handleBatchToggleProviderDeprecated(true)}
                                                     className="px-2.5 py-1 rounded border border-red-500/40 text-red-300 bg-red-500/10 hover:bg-red-500/20"
                                                     title={t('按当前供应商筛选批量弃用（可叠加类别筛选）', 'Batch deprecate current provider filter (category filter optional)')}
@@ -2686,6 +4145,10 @@ const UserAdmin = () => {
                                                     {systemApiSortMode === 'priority' ? t('当前：按优先级', 'Current: By Priority') : t('当前：默认顺序', 'Current: Default Order')}
                                                 </button>
                                             </div>
+                                        </div>
+
+                                        <div className="text-xs text-gray-400">
+                                            {t('共', 'Total')} {systemApiRows.length} {t('条，当前显示', ', showing')} {visibleSystemApiRows.length} {t('条', 'items')}
                                         </div>
 
                                         <label className="text-xs uppercase text-gray-400">{t('选择已有设置', 'Select Existing Setting')}</label>
@@ -2710,12 +4173,14 @@ const UserAdmin = () => {
                                                         <th className="text-left p-2 whitespace-nowrap">{t('类别', 'Category')}</th>
                                                         <th className="text-left p-2 whitespace-nowrap">{t('提供方', 'Provider')}</th>
                                                         <th className="text-left p-2 whitespace-nowrap">{t('模型', 'Model')}</th>
+                                                        <th className="text-left p-2 whitespace-nowrap">{t('基础模型', 'Base Model')}</th>
                                                         <th className="text-left p-2 whitespace-nowrap">{t('名称', 'Name')}</th>
                                                         <th className="text-left p-2 whitespace-nowrap">{t('Base URL', 'Base URL')}</th>
                                                         <th className="text-left p-2 whitespace-nowrap">{t('模态', 'Modality')}</th>
+                                                        <th className="text-left p-2 whitespace-nowrap">{t('标签', 'Tags')}</th>
                                                         <th className="text-left p-2 whitespace-nowrap">{t('弃用', 'Deprecated')}</th>
                                                         <th className="text-left p-2 whitespace-nowrap">{t('智能策略', 'Smart Strategy')}</th>
-                                                        <th className="text-left p-2 whitespace-nowrap">{t('启用', 'Active')}</th>
+                                                        <th className="text-left p-2 whitespace-nowrap">{t('类别默认', 'Category Default')}</th>
                                                         <th className="text-left p-2 whitespace-nowrap">{t('操作', 'Actions')}</th>
                                                     </tr>
                                                 </thead>
@@ -2724,15 +4189,22 @@ const UserAdmin = () => {
                                                         <tr
                                                             key={row.id}
                                                             onClick={() => setSelectedSystemApiId(String(row.id))}
+                                                            onDoubleClick={() => {
+                                                                setSelectedSystemApiId(String(row.id));
+                                                                setIsSystemApiEditing(true);
+                                                                showSystemApiEditToast(t('已进入 API 编辑模式', 'Entered API edit mode'));
+                                                            }}
                                                             className={`border-t border-white/10 cursor-pointer ${String(selectedSystemApiId) === String(row.id) ? 'bg-primary/10' : 'hover:bg-white/5'}`}
                                                         >
                                                             <td className="p-2">{row.id}</td>
                                                             <td className="p-2">{row.category}</td>
                                                             <td className="p-2">{row.provider}</td>
                                                             <td className="p-2 max-w-[220px] truncate" title={row.model || '-'}>{row.model || '-'}</td>
+                                                            <td className="p-2 max-w-[220px] truncate" title={row.base_model || '-'}>{row.base_model || '-'}</td>
                                                             <td className="p-2 max-w-[160px] truncate" title={row.name || '-'}>{row.name || '-'}</td>
                                                             <td className="p-2 max-w-[200px] truncate" title={row.base_url || '-'}>{row.base_url || '-'}</td>
-                                                            <td className="p-2 max-w-[160px] truncate" title={row.modality || '-'}>{row.modality || '-'}</td>
+                                                            <td className="p-2 max-w-[160px] truncate" title={row.modality ? (row.modality.generation_modes || []).join(', ') : '-'}>{row.modality ? (row.modality.generation_modes || []).join(', ') : '-'}</td>
+                                                            <td className="p-2 max-w-[120px] truncate" title={Array.isArray(row.tags) ? row.tags.join(', ') : '-'}>{Array.isArray(row.tags) && row.tags.length > 0 ? row.tags.join(', ') : '-'}</td>
                                                             <td className="p-2">
                                                                 {isSystemApiDeprecated(row) ? (
                                                                     <span className="px-1.5 py-0.5 rounded bg-red-500/20 text-red-300 border border-red-500/30">{t('已弃用', 'Deprecated')}</span>
@@ -2758,7 +4230,7 @@ const UserAdmin = () => {
                                                                     )}
                                                                 </div>
                                                             </td>
-                                                            <td className="p-2">{row.is_active ? t('是', 'Yes') : t('否', 'No')}</td>
+                                                            <td className="p-2">{row.is_active ? t('默认', 'Default') : t('否', 'No')}</td>
                                                             <td className="p-2">
                                                                 <button
                                                                     onClick={(e) => {
@@ -2767,7 +4239,7 @@ const UserAdmin = () => {
                                                                     }}
                                                                     className={`px-2 py-0.5 rounded border text-[11px] ${isSystemApiDeprecated(row) ? 'border-emerald-500/40 text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20' : 'border-red-500/40 text-red-300 bg-red-500/10 hover:bg-red-500/20'}`}
                                                                 >
-                                                                    {isSystemApiDeprecated(row) ? t('启用', 'Enable') : t('弃用', 'Deprecate')}
+                                                                    {isSystemApiDeprecated(row) ? t('取消弃用', 'Undeprecate') : t('弃用', 'Deprecate')}
                                                                 </button>
                                                             </td>
                                                         </tr>
@@ -2784,7 +4256,261 @@ const UserAdmin = () => {
                                         </div>
                                     </div>
 
-                                    <div className="border border-white/10 rounded-lg p-4 bg-black/20 space-y-3">
+                                    {false && (
+                                    <div className="border border-sky-500/30 rounded-lg p-4 bg-sky-500/5 space-y-3">
+                                        <div className="flex items-center justify-between gap-2">
+                                            <h4 className="text-sm font-bold text-sky-200">{t('定价规则 CRUD（按模型）', 'Pricing Rule CRUD (per model)')}</h4>
+                                            <button
+                                                onClick={() => fetchBillingRulesForSystemApi(selectedSystemApiId)}
+                                                disabled={isBillingRuleLoading || !selectedSystemApiId}
+                                                className="text-xs text-sky-300 hover:text-sky-100 flex items-center gap-1 disabled:opacity-50"
+                                            >
+                                                <RefreshCw size={12} /> {t('刷新', 'Refresh')}
+                                            </button>
+                                        </div>
+
+                                        {!selectedSystemApiId ? (
+                                            <div className="text-xs text-gray-400">{t('请先在上方选择一个 System API 配置。', 'Select a System API setting above first.')}</div>
+                                        ) : (
+                                            <>
+                                                <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
+                                                    <input
+                                                        value={billingRuleFilterKeyword}
+                                                        onChange={(e) => setBillingRuleFilterKeyword(e.target.value)}
+                                                        placeholder={t('关键词（名称/描述/模式）', 'Keyword (name/description/mode)')}
+                                                        className="md:col-span-2 bg-black/40 border border-gray-700 rounded p-2 text-xs"
+                                                    />
+                                                    <select
+                                                        value={billingRuleFilterStatus}
+                                                        onChange={(e) => setBillingRuleFilterStatus(e.target.value)}
+                                                        className="bg-black/40 border border-gray-700 rounded p-2 text-xs"
+                                                    >
+                                                        <option value="all">{t('全部状态', 'All Status')}</option>
+                                                        <option value="active">{t('启用', 'Active')}</option>
+                                                        <option value="inactive">{t('停用', 'Inactive')}</option>
+                                                    </select>
+                                                    <select
+                                                        value={billingRuleFilterTarget}
+                                                        onChange={(e) => setBillingRuleFilterTarget(e.target.value)}
+                                                        className="bg-black/40 border border-gray-700 rounded p-2 text-xs"
+                                                    >
+                                                        <option value="all">{t('全部目标', 'All Targets')}</option>
+                                                        <option value="text">Text</option>
+                                                        <option value="image">Image</option>
+                                                        <option value="video">Video</option>
+                                                    </select>
+                                                    <select
+                                                        value={billingRuleFilterUnitType}
+                                                        onChange={(e) => setBillingRuleFilterUnitType(e.target.value)}
+                                                        className="bg-black/40 border border-gray-700 rounded p-2 text-xs"
+                                                    >
+                                                        <option value="all">{t('全部计费单位', 'All Units')}</option>
+                                                        <option value="per_call">per_call</option>
+                                                        <option value="per_second">per_second</option>
+                                                        <option value="per_minute">per_minute</option>
+                                                        <option value="per_token">per_token</option>
+                                                        <option value="per_1k_tokens">per_1k_tokens</option>
+                                                        <option value="per_million_tokens">per_million_tokens</option>
+                                                    </select>
+                                                </div>
+
+                                                {isBillingRuleLoading ? (
+                                                    <div className="text-xs text-gray-400">{t('定价规则加载中...', 'Loading pricing rules...')}</div>
+                                                ) : (
+                                                    <div className="space-y-2">
+                                                        <div className="flex items-center justify-between gap-2 text-xs text-gray-400">
+                                                            <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={allFilteredBillingRuleIds.length > 0 && selectedFilteredBillingRuleCount === allFilteredBillingRuleIds.length}
+                                                                    onChange={(e) => toggleSelectAllFilteredBillingRules(e.target.checked)}
+                                                                />
+                                                                <span>{t('全选当前筛选结果', 'Select all filtered')}</span>
+                                                            </label>
+                                                            <span>{t(`已选 ${selectedBillingRuleIds.length} 条`, `${selectedBillingRuleIds.length} selected`)}</span>
+                                                        </div>
+                                                    <div className="overflow-x-auto max-h-[260px] border border-white/10 rounded">
+                                                        <table className="w-full text-xs min-w-[760px]">
+                                                            <thead className="bg-white/5 text-gray-400 sticky top-0">
+                                                                <tr>
+                                                                    <th className="text-left p-2 w-8">
+                                                                        <input
+                                                                            type="checkbox"
+                                                                            checked={allFilteredBillingRuleIds.length > 0 && selectedFilteredBillingRuleCount === allFilteredBillingRuleIds.length}
+                                                                            onChange={(e) => toggleSelectAllFilteredBillingRules(e.target.checked)}
+                                                                        />
+                                                                    </th>
+                                                                    <th className="text-left p-2">ID</th>
+                                                                    <th className="text-left p-2">{t('名称', 'Name')}</th>
+                                                                    <th className="text-left p-2">{t('状态', 'Status')}</th>
+                                                                    <th className="text-left p-2">{t('优先级', 'Priority')}</th>
+                                                                    <th className="text-left p-2">{t('目标', 'Targets')}</th>
+                                                                    <th className="text-left p-2">{t('条件', 'Dimensions')}</th>
+                                                                    <th className="text-left p-2">{t('计费', 'Pricing')}</th>
+                                                                    <th className="text-left p-2">{t('更新时间', 'Updated')}</th>
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody>
+                                                                {filteredBillingRuleRows.map((row) => {
+                                                                    const targets = [
+                                                                        row?.applies_to_text ? 'T' : null,
+                                                                        row?.applies_to_image ? 'I' : null,
+                                                                        row?.applies_to_video ? 'V' : null,
+                                                                    ].filter(Boolean).join('/');
+                                                                    const dims = [
+                                                                        row?.generation_mode ? `mode:${row.generation_mode}` : null,
+                                                                        row?.input_format ? `in:${row.input_format}` : null,
+                                                                        row?.output_format ? `out:${row.output_format}` : null,
+                                                                    ].filter(Boolean).join(' | ');
+                                                                    return (
+                                                                        <tr
+                                                                            key={row.id}
+                                                                            onClick={() => setSelectedBillingRuleId(String(row.id))}
+                                                                            className={`border-t border-white/10 cursor-pointer ${String(selectedBillingRuleId) === String(row.id) ? 'bg-sky-500/10' : 'hover:bg-white/5'}`}
+                                                                        >
+                                                                            <td className="p-2" onClick={(e) => e.stopPropagation()}>
+                                                                                <input
+                                                                                    type="checkbox"
+                                                                                    checked={selectedBillingRuleIdSet.has(Number(row.id))}
+                                                                                    onChange={(e) => toggleBillingRuleSelection(row.id, e.target.checked)}
+                                                                                />
+                                                                            </td>
+                                                                            <td className="p-2">{row.id}</td>
+                                                                            <td className="p-2 max-w-[200px] truncate" title={row.name || '-'}>{row.name || '-'}</td>
+                                                                            <td className="p-2">{row.is_active ? t('启用', 'Active') : t('停用', 'Inactive')}</td>
+                                                                            <td className="p-2">{row.priority ?? 0}</td>
+                                                                            <td className="p-2">{targets || '-'}</td>
+                                                                            <td className="p-2 max-w-[260px] truncate" title={dims || '-'}>{dims || '-'}</td>
+                                                                            <td className="p-2">{row.billing_unit_type || 'per_call'} / {toNonNegativeInt(row.billing_cost ?? 0)}</td>
+                                                                            <td className="p-2 text-gray-500">{row.updated_at || '-'}</td>
+                                                                        </tr>
+                                                                    );
+                                                                })}
+                                                                {filteredBillingRuleRows.length === 0 && (
+                                                                    <tr className="border-t border-white/10">
+                                                                        <td className="p-3 text-gray-400" colSpan={9}>{t('无匹配规则', 'No matching rules')}</td>
+                                                                    </tr>
+                                                                )}
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+                                                    </div>
+                                                )}
+
+                                                <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                                                    <div>
+                                                        <label className="block text-xs uppercase text-gray-400 mb-1">{t('名称', 'Name')}</label>
+                                                        <input value={billingRuleForm.name} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, name: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-xs uppercase text-gray-400 mb-1">{t('优先级', 'Priority')}</label>
+                                                        <input type="number" value={billingRuleForm.priority} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, priority: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-xs uppercase text-gray-400 mb-1">{t('计费单位', 'Unit')}</label>
+                                                        <select value={billingRuleForm.billing_unit_type} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, billing_unit_type: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs">
+                                                            <option value="per_call">per_call</option>
+                                                            <option value="per_second">per_second</option>
+                                                            <option value="per_minute">per_minute</option>
+                                                            <option value="per_token">per_token</option>
+                                                            <option value="per_1k_tokens">per_1k_tokens</option>
+                                                            <option value="per_million_tokens">per_million_tokens</option>
+                                                        </select>
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-xs uppercase text-gray-400 mb-1">{t('状态', 'Status')}</label>
+                                                        <select value={billingRuleForm.is_active ? 'active' : 'inactive'} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, is_active: e.target.value === 'active' }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs">
+                                                            <option value="active">{t('启用', 'Active')}</option>
+                                                            <option value="inactive">{t('停用', 'Inactive')}</option>
+                                                        </select>
+                                                    </div>
+                                                    <div className="md:col-span-2">
+                                                        <label className="block text-xs uppercase text-gray-400 mb-1">{t('描述', 'Description')}</label>
+                                                        <input value={billingRuleForm.description} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, description: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-xs uppercase text-gray-400 mb-1">{t('匹配模式', 'Mode')}</label>
+                                                        <input value={billingRuleForm.generation_mode} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, generation_mode: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" placeholder="t2i / i2i / ..." />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-xs uppercase text-gray-400 mb-1">{t('音频要求', 'Has Audio')}</label>
+                                                        <select value={billingRuleForm.has_audio} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, has_audio: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs">
+                                                            <option value="any">Any</option>
+                                                            <option value="true">true</option>
+                                                            <option value="false">false</option>
+                                                        </select>
+                                                    </div>
+                                                </div>
+
+                                                <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
+                                                    <input type="number" placeholder="cost" value={billingRuleForm.billing_cost} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, billing_cost: e.target.value }))} className="bg-black/40 border border-gray-700 rounded p-2 text-xs" />
+                                                    <input type="number" placeholder="cost_input" value={billingRuleForm.billing_cost_input} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, billing_cost_input: e.target.value }))} className="bg-black/40 border border-gray-700 rounded p-2 text-xs" />
+                                                    <input type="number" placeholder="cost_output" value={billingRuleForm.billing_cost_output} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, billing_cost_output: e.target.value }))} className="bg-black/40 border border-gray-700 rounded p-2 text-xs" />
+                                                    <input type="number" placeholder="total_tokens_min" value={billingRuleForm.total_tokens_min} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, total_tokens_min: e.target.value }))} className="bg-black/40 border border-gray-700 rounded p-2 text-xs" />
+                                                    <input type="number" placeholder="total_tokens_max" value={billingRuleForm.total_tokens_max} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, total_tokens_max: e.target.value }))} className="bg-black/40 border border-gray-700 rounded p-2 text-xs" />
+                                                    <input type="number" placeholder="image_count_min" value={billingRuleForm.image_count_min} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, image_count_min: e.target.value }))} className="bg-black/40 border border-gray-700 rounded p-2 text-xs" />
+                                                </div>
+
+                                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                                    <label className="flex items-center gap-2 text-xs text-gray-300">
+                                                        <input type="checkbox" checked={!!billingRuleForm.applies_to_text} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, applies_to_text: e.target.checked }))} /> Text
+                                                    </label>
+                                                    <label className="flex items-center gap-2 text-xs text-gray-300">
+                                                        <input type="checkbox" checked={!!billingRuleForm.applies_to_image} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, applies_to_image: e.target.checked }))} /> Image
+                                                    </label>
+                                                    <label className="flex items-center gap-2 text-xs text-gray-300">
+                                                        <input type="checkbox" checked={!!billingRuleForm.applies_to_video} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, applies_to_video: e.target.checked }))} /> Video
+                                                    </label>
+                                                </div>
+
+                                                <div>
+                                                    <label className="block text-xs uppercase text-gray-400 mb-1">extra_conditions (JSON object)</label>
+                                                    <textarea
+                                                        rows={3}
+                                                        value={billingRuleForm.extra_conditions_text}
+                                                        onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, extra_conditions_text: e.target.value }))}
+                                                        className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs font-mono"
+                                                    />
+                                                </div>
+
+                                                <div className="flex flex-wrap gap-2 pt-2 border-t border-white/10">
+                                                    <button onClick={handleCreateBillingRule} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded text-xs flex items-center gap-1"><Plus size={12} /> {t('新建规则', 'Create Rule')}</button>
+                                                    <button onClick={handleUpdateBillingRule} disabled={!selectedBillingRuleId} className="px-3 py-1.5 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-bold rounded text-xs flex items-center gap-1"><Edit2 size={12} /> {t('更新规则', 'Update Rule')}</button>
+                                                    <button onClick={handleDeleteBillingRule} disabled={!selectedBillingRuleId && selectedBillingRuleIds.length === 0} className="px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white font-bold rounded text-xs flex items-center gap-1"><Trash2 size={12} /> {selectedBillingRuleIds.length > 1 ? t('批量删除规则', 'Delete Selected') : t('删除规则', 'Delete Rule')}</button>
+                                                    <button onClick={() => { setSelectedBillingRuleId(''); setBillingRuleForm(createEmptyBillingRuleForm()); }} className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white rounded text-xs">{t('清空表单', 'Clear Form')}</button>
+                                                </div>
+                                            </>
+                                        )}
+                                    </div>
+                                    )}
+
+                                    {!isSystemApiEditing && (
+                                        <div className="border border-white/10 rounded-lg p-4 bg-black/20 text-sm text-gray-300">
+                                            {t('先在上方列表中双击一条记录进行编辑，或点击“新建 API”。', 'Double-click an item in the list above to edit, or click "New API".')}
+                                        </div>
+                                    )}
+
+                                    {isSystemApiEditing && (
+                                    <div
+                                        className="fixed inset-0 z-50 bg-black/60 backdrop-blur-[1px] flex items-center justify-center p-4"
+                                        onClick={() => setIsSystemApiEditing(false)}
+                                    >
+                                    <div
+                                        className="w-full max-w-5xl max-h-[88vh] overflow-y-auto border border-white/15 rounded-xl p-4 bg-[#0d0f14] space-y-3 shadow-2xl"
+                                        onClick={(e) => e.stopPropagation()}
+                                    >
+                                        <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-2">
+                                            <h4 className="text-sm font-bold text-sky-200">
+                                                {selectedSystemApiId ? t('编辑 System API', 'Edit System API') : t('新建 System API', 'Create System API')}
+                                            </h4>
+                                            <button
+                                                onClick={() => setIsSystemApiEditing(false)}
+                                                className="px-2.5 py-1 rounded bg-gray-700 hover:bg-gray-600 text-white text-xs"
+                                            >
+                                                {t('关闭', 'Close')}
+                                            </button>
+                                        </div>
+
                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                             <div>
                                                 <label className="block text-xs uppercase text-gray-400 mb-1">{t('名称', 'Name')}</label>
@@ -2804,6 +4530,8 @@ const UserAdmin = () => {
                                                     <option value="LLM">{t('大语言模型', 'LLM')}</option>
                                                     <option value="Image">{t('图片', 'Image')}</option>
                                                     <option value="Video">{t('视频', 'Video')}</option>
+                                                    <option value="Voice">{t('语音', 'Voice')}</option>
+                                                    <option value="Music">{t('音乐', 'Music')}</option>
                                                     <option value="Vision">{t('视觉', 'Vision')}</option>
                                                     <option value="Tools">{t('工具', 'Tools')}</option>
                                                 </select>
@@ -2824,8 +4552,26 @@ const UserAdmin = () => {
                                                     className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
                                                 />
                                             </div>
+                                            <div>
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('基础模型', 'Base Model')}</label>
+                                                <input
+                                                    value={systemApiForm.base_model}
+                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, base_model: e.target.value }))}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                    placeholder={t('用于归类同一基础模型', 'Used to group same base model')}
+                                                />
+                                            </div>
                                             <div className="md:col-span-2">
-                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('端点', 'Endpoint')}</label>
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">API Key</label>
+                                                <input
+                                                    value={systemApiForm.api_key}
+                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, api_key: e.target.value }))}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm font-mono"
+                                                    placeholder={t('可选', 'Optional')}
+                                                />
+                                            </div>
+                                            <div className="md:col-span-2">
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('端点', 'Base URL')}</label>
                                                 <input
                                                     value={systemApiForm.base_url}
                                                     onChange={(e) => setSystemApiForm((prev) => ({ ...prev, base_url: e.target.value }))}
@@ -2833,18 +4579,48 @@ const UserAdmin = () => {
                                                 />
                                             </div>
                                             <div className="md:col-span-2">
-                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('回调 WebHook', 'WebHook')}</label>
-                                                <input
-                                                    value={systemApiForm.webHook}
-                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, webHook: e.target.value }))}
-                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('配置 (JSON)', 'Config (JSON)')}</label>
+                                                <textarea
+                                                    value={systemApiForm.config}
+                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, config: e.target.value }))}
+                                                    rows={3}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm font-mono"
+                                                    placeholder='{"webHook":"", "smart_priority": 100}'
+                                                />
+                                            </div>
+                                            <div className="md:col-span-2">
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('模态 (JSON)', 'Modality (JSON)')}</label>
+                                                <textarea
+                                                    value={systemApiForm.modality}
+                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, modality: e.target.value }))}
+                                                    rows={2}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm font-mono"
+                                                    placeholder='{"generation_modes": ["t2i"]}'
                                                 />
                                             </div>
                                             <div>
-                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('API 计费单位', 'API Billing Unit')}</label>
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('标签', 'Tags')}</label>
+                                                <input
+                                                    value={systemApiForm.tags}
+                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, tags: e.target.value }))}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                    placeholder={t('逗号分隔 或 JSON 数组', 'Comma-separated or JSON array')}
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('供应商信息 (JSON)', 'Supplier Info (JSON)')}</label>
+                                                <input
+                                                    value={systemApiForm.supplier_info}
+                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, supplier_info: e.target.value }))}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm font-mono"
+                                                    placeholder='{}'
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('计费单位', 'Billing Unit')}</label>
                                                 <select
-                                                    value={systemApiForm.api_unit_type}
-                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, api_unit_type: e.target.value }))}
+                                                    value={systemApiForm.billing_unit_type}
+                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, billing_unit_type: e.target.value }))}
                                                     className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
                                                 >
                                                     <option value="per_call">per_call</option>
@@ -2856,73 +4632,55 @@ const UserAdmin = () => {
                                                 </select>
                                             </div>
                                             <div>
-                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('API 成本（基础）', 'API Cost (Base)')}</label>
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('计费成本（基础）', 'Billing Cost')}</label>
                                                 <input
                                                     type="number"
                                                     min="0"
-                                                    value={systemApiForm.api_cost}
-                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, api_cost: e.target.value }))}
+                                                    value={systemApiForm.billing_cost}
+                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, billing_cost: e.target.value }))}
                                                     className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
                                                 />
                                             </div>
                                             <div>
-                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('API 成本（输入）', 'API Cost (Input)')}</label>
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('计费成本（输入）', 'Billing Cost Input')}</label>
                                                 <input
                                                     type="number"
                                                     min="0"
-                                                    value={systemApiForm.api_cost_input}
-                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, api_cost_input: e.target.value }))}
+                                                    value={systemApiForm.billing_cost_input}
+                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, billing_cost_input: e.target.value }))}
                                                     className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
                                                 />
                                             </div>
                                             <div>
-                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('API 成本（输出）', 'API Cost (Output)')}</label>
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('计费成本（输出）', 'Billing Cost Output')}</label>
                                                 <input
                                                     type="number"
                                                     min="0"
-                                                    value={systemApiForm.api_cost_output}
-                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, api_cost_output: e.target.value }))}
+                                                    value={systemApiForm.billing_cost_output}
+                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, billing_cost_output: e.target.value }))}
                                                     className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
                                                 />
                                             </div>
-                                            <div>
-                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('智能路由优先级（越小越优先）', 'Smart Priority (lower first)')}</label>
-                                                <input
-                                                    type="number"
-                                                    value={systemApiForm.smart_priority}
-                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, smart_priority: e.target.value }))}
-                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
-                                                />
-                                            </div>
-                                            <div>
-                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('重试上限（触发回退前）', 'Retry Limit (before fallback)')}</label>
-                                                <input
-                                                    type="number"
-                                                    min="1"
-                                                    value={systemApiForm.smart_retry_limit}
-                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, smart_retry_limit: e.target.value }))}
-                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
-                                                />
-                                            </div>
-                                            <label className="md:col-span-2 flex items-center gap-2 text-xs text-gray-300 bg-white/5 border border-white/10 rounded p-2">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={!!systemApiForm.smart_multi_ref_default}
-                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, smart_multi_ref_default: e.target.checked }))}
-                                                />
-                                                {t('设为“多参考图（>4）”临时默认 API', 'Use as temporary default API for multi-ref image (>4)')}
-                                            </label>
                                         </div>
 
-                                        <label className="flex items-center gap-2 text-xs text-gray-400">
-                                            <input
-                                                type="checkbox"
-                                                checked={!!systemApiForm.is_active}
-                                                onChange={(e) => setSystemApiForm((prev) => ({ ...prev, is_active: e.target.checked }))}
-                                            />
-                                            {t('将该项设为此类别的激活配置', 'Set active for this category')}
-                                        </label>
-
+                                        <div className="flex items-center gap-4">
+                                            <label className="flex items-center gap-2 text-xs text-gray-400">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={!!systemApiForm.is_active}
+                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, is_active: e.target.checked }))}
+                                                />
+                                                {t('类别默认', 'Category Default')}
+                                            </label>
+                                            <label className="flex items-center gap-2 text-xs text-gray-400">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={!!systemApiForm.deprecated}
+                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, deprecated: e.target.checked }))}
+                                                />
+                                                {t('已弃用', 'Deprecated')}
+                                            </label>
+                                        </div>
                                         <div className="flex flex-wrap gap-2 pt-2 border-t border-white/10">
                                             <button
                                                 onClick={handleCreateSystemApiSetting}
@@ -2944,9 +4702,586 @@ const UserAdmin = () => {
                                             >
                                                 {t('删除', 'Delete')}
                                             </button>
+                                            <button
+                                                onClick={() => setIsSystemApiEditing(false)}
+                                                className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white font-bold rounded"
+                                            >
+                                                {t('完成编辑', 'Done Editing')}
+                                            </button>
                                         </div>
                                     </div>
                                     </div>
+                                    )}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* PRICING RULES TAB */}
+                    {activeTab === 'pricing_rules' && (
+                        <div className="space-y-4">
+                            <div className="flex items-center justify-between gap-2">
+                                <h3 className="text-lg font-bold">{t('计费规则 CRUD（独立页）', 'Pricing Rule CRUD (Dedicated Tab)')}</h3>
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        onClick={fetchSystemApiManageRows}
+                                        className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded flex items-center gap-2"
+                                    >
+                                        <RefreshCw size={16} /> {t('刷新 API 列表', 'Refresh API List')}
+                                    </button>
+                                    <button
+                                        onClick={() => fetchBillingRulesForSystemApi(selectedSystemApiId)}
+                                        disabled={isBillingRuleLoading}
+                                        className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded flex items-center gap-2 disabled:opacity-50"
+                                    >
+                                        <RefreshCw size={16} /> {t('刷新规则', 'Refresh Rules')}
+                                    </button>
+                                    <button
+                                        onClick={handleBatchResetBillingRuleChargeMultiplier}
+                                        disabled={isBatchResetMultiplierLoading}
+                                        className="bg-amber-700 hover:bg-amber-600 text-white px-3 py-1 rounded flex items-center gap-2 disabled:opacity-50"
+                                    >
+                                        <RefreshCw size={16} /> {isBatchResetMultiplierLoading ? t('重置中...', 'Resetting...') : t('批量重置倍率', 'Batch Reset Multiplier')}
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="text-xs text-gray-400">
+                                {t('共', 'Total')} {billingRuleRows.length} {t('条，当前显示', ', showing')} {filteredBillingRuleRows.length} {t('条', 'items')}
+                            </div>
+
+                            {billingRuleEditToast && (
+                                <div className="rounded border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
+                                    {billingRuleEditToast}
+                                </div>
+                            )}
+
+                            <div className="border border-white/10 rounded-lg p-4 bg-black/20 space-y-3">
+                                <label className="text-xs uppercase text-gray-400">{t('筛选 System API 模型', 'Filter by System API Model')}</label>
+                                <select
+                                    value={selectedSystemApiId}
+                                    onChange={(e) => {
+                                        setSelectedSystemApiId(e.target.value);
+                                        setIsBillingRuleEditing(false);
+                                    }}
+                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                >
+                                    <option value="">{t('全部 API（默认）', 'All APIs (Default)')}</option>
+                                    {systemApiRows.map((row) => (
+                                        <option key={row.id} value={row.id}>
+                                            [{row.category}] {row.provider} / {row.model || '-'} (ID:{row.id})
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div className="border border-sky-500/30 rounded-lg p-4 bg-sky-500/5 space-y-3">
+                                <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
+                                    <input
+                                        value={billingRuleFilterKeyword}
+                                        onChange={(e) => setBillingRuleFilterKeyword(e.target.value)}
+                                        placeholder={t('关键词（名称/描述/模式）', 'Keyword (name/description/mode)')}
+                                        className="md:col-span-2 bg-black/40 border border-gray-700 rounded p-2 text-xs"
+                                    />
+                                    <select value={billingRuleFilterStatus} onChange={(e) => setBillingRuleFilterStatus(e.target.value)} className="bg-black/40 border border-gray-700 rounded p-2 text-xs">
+                                        <option value="all">{t('全部状态', 'All Status')}</option>
+                                        <option value="active">{t('启用', 'Active')}</option>
+                                        <option value="inactive">{t('停用', 'Inactive')}</option>
+                                    </select>
+                                    <select value={billingRuleFilterTarget} onChange={(e) => setBillingRuleFilterTarget(e.target.value)} className="bg-black/40 border border-gray-700 rounded p-2 text-xs">
+                                        <option value="all">{t('全部目标', 'All Targets')}</option>
+                                        <option value="text">Text</option>
+                                        <option value="image">Image</option>
+                                        <option value="video">Video</option>
+                                    </select>
+                                    <select value={billingRuleFilterUnitType} onChange={(e) => setBillingRuleFilterUnitType(e.target.value)} className="bg-black/40 border border-gray-700 rounded p-2 text-xs">
+                                        <option value="all">{t('全部计费单位', 'All Units')}</option>
+                                        <option value="per_call">per_call</option>
+                                        <option value="per_second">per_second</option>
+                                        <option value="per_minute">per_minute</option>
+                                        <option value="per_token">per_token</option>
+                                        <option value="per_1k_tokens">per_1k_tokens</option>
+                                        <option value="per_million_tokens">per_million_tokens</option>
+                                    </select>
+                                </div>
+
+                                {isBillingRuleLoading ? (
+                                    <div className="text-xs text-gray-400">{t('定价规则加载中...', 'Loading pricing rules...')}</div>
+                                ) : (
+                                    <div className="overflow-x-auto max-h-[320px] border border-white/10 rounded">
+                                        <table className="w-full text-xs min-w-[760px]">
+                                            <thead className="bg-white/5 text-gray-400 sticky top-0">
+                                                <tr>
+                                                    <th className="text-left p-2">ID</th>
+                                                    <th className="text-left p-2">API</th>
+                                                    <th className="text-left p-2">{t('名称', 'Name')}</th>
+                                                    <th className="text-left p-2">{t('状态', 'Status')}</th>
+                                                    <th className="text-left p-2">{t('优先级', 'Priority')}</th>
+                                                    <th className="text-left p-2">{t('目标', 'Targets')}</th>
+                                                    <th className="text-left p-2">{t('计费', 'Pricing')}</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {filteredBillingRuleRows.map((row) => {
+                                                    const targets = [
+                                                        row?.applies_to_text ? 'T' : null,
+                                                        row?.applies_to_image ? 'I' : null,
+                                                        row?.applies_to_video ? 'V' : null,
+                                                    ].filter(Boolean).join('/');
+                                                    const apiRow = systemApiRows.find((api) => Number(api?.id) === Number(row?.system_api_id));
+                                                    const apiLabel = apiRow ? `[${apiRow.category}] ${apiRow.provider}/${apiRow.model || '-'}` : `ID:${row?.system_api_id || '-'}`;
+                                                    return (
+                                                        <tr
+                                                            key={row.id}
+                                                            onClick={() => setSelectedBillingRuleId(String(row.id))}
+                                                            onDoubleClick={() => {
+                                                                setSelectedBillingRuleId(String(row.id));
+                                                                setIsBillingRuleEditing(true);
+                                                                showBillingRuleEditToast(t('已进入规则编辑模式', 'Entered rule edit mode'));
+                                                            }}
+                                                            className={`border-t border-white/10 cursor-pointer ${String(selectedBillingRuleId) === String(row.id) ? 'bg-sky-500/10' : 'hover:bg-white/5'}`}
+                                                        >
+                                                            <td className="p-2">{row.id}</td>
+                                                            <td className="p-2 max-w-[260px] truncate" title={apiLabel}>{apiLabel}</td>
+                                                            <td className="p-2">{row.name || '-'}</td>
+                                                            <td className="p-2">{row.is_active ? t('启用', 'Active') : t('停用', 'Inactive')}</td>
+                                                            <td className="p-2">{row.priority ?? 0}</td>
+                                                            <td className="p-2">{targets || '-'}</td>
+                                                            <td className="p-2">{row.billing_unit_type || 'per_call'} / {toNonNegativeInt(row.billing_cost ?? 0)} x{toRuleChargeMultiplier(row?.charge_multiplier, 2).toFixed(2)}</td>
+                                                        </tr>
+                                                    );
+                                                })}
+                                                {filteredBillingRuleRows.length === 0 && (
+                                                    <tr className="border-t border-white/10">
+                                                        <td className="p-3 text-gray-400" colSpan={7}>{t('无匹配规则', 'No matching rules')}</td>
+                                                    </tr>
+                                                )}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                )}
+
+                                <div className="flex flex-wrap gap-2">
+                                    <button
+                                        onClick={() => {
+                                            if (!selectedSystemApiId) {
+                                                alert(t('请先选择一个 System API', 'Select a System API first'));
+                                                return;
+                                            }
+                                            setSelectedBillingRuleId('');
+                                            setBillingRuleForm(createEmptyBillingRuleForm());
+                                            setIsBillingRuleEditing(true);
+                                            showBillingRuleEditToast(t('已进入新建规则编辑', 'Entered new rule editor'));
+                                        }}
+                                        className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded text-xs"
+                                    >
+                                        {t('新建规则', 'New Rule')}
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            if (!selectedBillingRuleId) {
+                                                alert(t('请先双击一条规则', 'Double-click a rule first'));
+                                                return;
+                                            }
+                                            setIsBillingRuleEditing(true);
+                                            showBillingRuleEditToast(t('已进入规则编辑模式', 'Entered rule edit mode'));
+                                        }}
+                                        className="px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-white font-bold rounded text-xs"
+                                    >
+                                        {t('编辑选中', 'Edit Selected')}
+                                    </button>
+                                </div>
+                            </div>
+
+                            {!isBillingRuleEditing && (
+                                <div className="border border-white/10 rounded-lg p-4 bg-black/20 text-sm text-gray-300">
+                                    {t('先在列表中双击一条规则进行编辑，或点击“新建规则”。', 'Double-click a rule in the list to edit, or click "New Rule".')}
+                                </div>
+                            )}
+
+                            {isBillingRuleEditing && (
+                            <div
+                                className="fixed inset-0 z-50 bg-black/60 backdrop-blur-[1px] flex items-center justify-center p-4"
+                                onClick={() => setIsBillingRuleEditing(false)}
+                            >
+                            <div
+                                className="w-full max-w-4xl max-h-[88vh] overflow-y-auto border border-white/15 rounded-xl p-4 bg-[#0d0f14] space-y-3 shadow-2xl"
+                                onClick={(e) => e.stopPropagation()}
+                            >
+                                <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-2">
+                                    <h4 className="text-sm font-bold text-sky-200">
+                                        {selectedBillingRuleId ? t('编辑计费规则', 'Edit Pricing Rule') : t('新建计费规则', 'Create Pricing Rule')}
+                                    </h4>
+                                    <button
+                                        onClick={() => setIsBillingRuleEditing(false)}
+                                        className="px-2.5 py-1 rounded bg-gray-700 hover:bg-gray-600 text-white text-xs"
+                                    >
+                                        {t('关闭', 'Close')}
+                                    </button>
+                                </div>
+
+                                <div className="text-xs text-gray-400">
+                                    {t('绑定 API', 'Bound API')}: {selectedBillingRuleApiLabel}
+                                </div>
+
+                                {selectedBillingRuleRow && (
+                                    <div className="border border-white/10 rounded-lg p-3 bg-black/20 space-y-2">
+                                        <div className="grid grid-cols-1 md:grid-cols-4 gap-2 text-xs">
+                                            <div><span className="text-gray-400">Rule ID:</span> <span className="text-white">{selectedBillingRuleRow.id}</span></div>
+                                            <div><span className="text-gray-400">System API ID:</span> <span className="text-white">{selectedBillingRuleRow.system_api_id || '-'}</span></div>
+                                            <div><span className="text-gray-400">Created:</span> <span className="text-white">{selectedBillingRuleRow.created_at || '-'}</span></div>
+                                            <div><span className="text-gray-400">Updated:</span> <span className="text-white">{selectedBillingRuleRow.updated_at || '-'}</span></div>
+                                        </div>
+                                        <div>
+                                            <div className="text-[11px] uppercase tracking-wide text-gray-400 mb-1">{t('当前规则完整信息', 'Current Rule Full Payload')}</div>
+                                            <pre className="max-h-44 overflow-auto bg-black/40 border border-gray-700 rounded p-2 text-[11px] text-gray-200 whitespace-pre-wrap break-all font-mono">
+{JSON.stringify(selectedBillingRuleRow, null, 2)}
+                                            </pre>
+                                        </div>
+                                    </div>
+                                )}
+
+                                <details open className="border border-white/10 rounded-lg p-3 bg-black/20">
+                                    <summary className="cursor-pointer text-xs text-sky-200 font-semibold">{t('基础信息', 'Basic')}</summary>
+                                    <div className="mt-3 grid grid-cols-1 md:grid-cols-4 gap-2">
+                                        <RuleField label="name">
+                                            <input value={billingRuleForm.name} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, name: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" />
+                                        </RuleField>
+                                        <RuleField label="description">
+                                            <input value={billingRuleForm.description} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, description: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" />
+                                        </RuleField>
+                                        <RuleField label="priority">
+                                            <input type="number" value={billingRuleForm.priority} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, priority: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" />
+                                        </RuleField>
+                                        <RuleField label="is_active">
+                                            <select value={billingRuleForm.is_active ? 'active' : 'inactive'} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, is_active: e.target.value === 'active' }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs">
+                                                <option value="active">{t('启用', 'Active')}</option>
+                                                <option value="inactive">{t('停用', 'Inactive')}</option>
+                                            </select>
+                                        </RuleField>
+                                    </div>
+                                </details>
+
+                                <details open className="border border-white/10 rounded-lg p-3 bg-black/20">
+                                    <summary className="cursor-pointer text-xs text-sky-200 font-semibold">{t('匹配条件', 'Matching')}</summary>
+                                    <div className="mt-3 grid grid-cols-1 md:grid-cols-4 gap-2">
+                                        <RuleField label="generation_mode">
+                                            <input value={billingRuleForm.generation_mode} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, generation_mode: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" />
+                                        </RuleField>
+                                        <RuleField label="input_format">
+                                            <input value={billingRuleForm.input_format} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, input_format: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" />
+                                        </RuleField>
+                                        <RuleField label="output_format">
+                                            <input value={billingRuleForm.output_format} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, output_format: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" />
+                                        </RuleField>
+                                        <RuleField label="has_audio">
+                                            <select value={billingRuleForm.has_audio} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, has_audio: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs">
+                                                <option value="any">any</option>
+                                                <option value="true">true</option>
+                                                <option value="false">false</option>
+                                            </select>
+                                        </RuleField>
+                                    </div>
+                                    <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
+                                        <label className="flex items-center gap-2 text-xs text-gray-300"><input type="checkbox" checked={!!billingRuleForm.applies_to_text} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, applies_to_text: e.target.checked }))} /> Text</label>
+                                        <label className="flex items-center gap-2 text-xs text-gray-300"><input type="checkbox" checked={!!billingRuleForm.applies_to_image} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, applies_to_image: e.target.checked }))} /> Image</label>
+                                        <label className="flex items-center gap-2 text-xs text-gray-300"><input type="checkbox" checked={!!billingRuleForm.applies_to_video} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, applies_to_video: e.target.checked }))} /> Video</label>
+                                    </div>
+                                </details>
+
+                                <details open className="border border-white/10 rounded-lg p-3 bg-black/20">
+                                    <summary className="cursor-pointer text-xs text-sky-200 font-semibold">{t('计费参数', 'Pricing')}</summary>
+                                    <div className="mt-3 grid grid-cols-1 md:grid-cols-4 gap-2">
+                                        <RuleField label="billing_unit_type">
+                                            <select value={billingRuleForm.billing_unit_type} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, billing_unit_type: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs">
+                                                <option value="per_call">per_call</option>
+                                                <option value="per_second">per_second</option>
+                                                <option value="per_minute">per_minute</option>
+                                                <option value="per_token">per_token</option>
+                                                <option value="per_1k_tokens">per_1k_tokens</option>
+                                                <option value="per_million_tokens">per_million_tokens</option>
+                                            </select>
+                                        </RuleField>
+                                        <RuleField label="billing_cost"><input type="number" value={billingRuleForm.billing_cost} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, billing_cost: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
+                                        <RuleField label="billing_cost_input"><input type="number" value={billingRuleForm.billing_cost_input} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, billing_cost_input: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
+                                        <RuleField label="billing_cost_output"><input type="number" value={billingRuleForm.billing_cost_output} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, billing_cost_output: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
+                                        <RuleField label="charge_multiplier"><input type="number" step="0.01" value={billingRuleForm.charge_multiplier} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, charge_multiplier: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
+                                    </div>
+                                </details>
+
+                                <details className="border border-white/10 rounded-lg p-3 bg-black/20">
+                                    <summary className="cursor-pointer text-xs text-sky-200 font-semibold">{t('文本维度', 'Text Dimensions')}</summary>
+                                    <div className="mt-3 grid grid-cols-2 md:grid-cols-6 gap-2">
+                                        <RuleField label="input_tokens_min"><input type="number" value={billingRuleForm.input_tokens_min} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, input_tokens_min: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
+                                        <RuleField label="input_tokens_max"><input type="number" value={billingRuleForm.input_tokens_max} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, input_tokens_max: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
+                                        <RuleField label="output_tokens_min"><input type="number" value={billingRuleForm.output_tokens_min} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, output_tokens_min: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
+                                        <RuleField label="output_tokens_max"><input type="number" value={billingRuleForm.output_tokens_max} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, output_tokens_max: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
+                                        <RuleField label="total_tokens_min"><input type="number" value={billingRuleForm.total_tokens_min} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, total_tokens_min: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
+                                        <RuleField label="total_tokens_max"><input type="number" value={billingRuleForm.total_tokens_max} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, total_tokens_max: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
+                                    </div>
+                                </details>
+
+                                <details className="border border-white/10 rounded-lg p-3 bg-black/20">
+                                    <summary className="cursor-pointer text-xs text-sky-200 font-semibold">{t('图像维度', 'Image Dimensions')}</summary>
+                                    <div className="mt-3 grid grid-cols-2 md:grid-cols-6 gap-2">
+                                        <RuleField label="image_count_min"><input type="number" value={billingRuleForm.image_count_min} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, image_count_min: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
+                                        <RuleField label="image_count_max"><input type="number" value={billingRuleForm.image_count_max} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, image_count_max: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
+                                        <RuleField label="width_min"><input type="number" value={billingRuleForm.width_min} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, width_min: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
+                                        <RuleField label="width_max"><input type="number" value={billingRuleForm.width_max} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, width_max: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
+                                        <RuleField label="height_min"><input type="number" value={billingRuleForm.height_min} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, height_min: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
+                                        <RuleField label="height_max"><input type="number" value={billingRuleForm.height_max} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, height_max: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
+                                        <RuleField label="pixels_min"><input type="number" value={billingRuleForm.pixels_min} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, pixels_min: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
+                                        <RuleField label="pixels_max"><input type="number" value={billingRuleForm.pixels_max} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, pixels_max: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
+                                    </div>
+                                </details>
+
+                                <details className="border border-white/10 rounded-lg p-3 bg-black/20">
+                                    <summary className="cursor-pointer text-xs text-sky-200 font-semibold">{t('视频维度', 'Video Dimensions')}</summary>
+                                    <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2">
+                                        <RuleField label="duration_seconds_min"><input type="number" step="0.1" value={billingRuleForm.duration_seconds_min} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, duration_seconds_min: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
+                                        <RuleField label="duration_seconds_max"><input type="number" step="0.1" value={billingRuleForm.duration_seconds_max} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, duration_seconds_max: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
+                                        <RuleField label="fps_min"><input type="number" step="0.1" value={billingRuleForm.fps_min} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, fps_min: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
+                                        <RuleField label="fps_max"><input type="number" step="0.1" value={billingRuleForm.fps_max} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, fps_max: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
+                                    </div>
+                                </details>
+
+                                <details className="border border-white/10 rounded-lg p-3 bg-black/20">
+                                    <summary className="cursor-pointer text-xs text-sky-200 font-semibold">{t('扩展条件', 'Extra Conditions')}</summary>
+                                    <div className="mt-3">
+                                        <label className="block text-xs text-gray-400 mb-1">extra_conditions (JSON)</label>
+                                        <textarea
+                                            rows={3}
+                                            value={billingRuleForm.extra_conditions_text}
+                                            onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, extra_conditions_text: e.target.value }))}
+                                            className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs font-mono"
+                                        />
+                                    </div>
+                                </details>
+
+                                <div className="flex flex-wrap gap-2 pt-2 border-t border-white/10">
+                                    <button onClick={handleCreateBillingRule} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded text-xs">{t('创建', 'Create')}</button>
+                                    <button onClick={handleUpdateBillingRule} disabled={!selectedBillingRuleId} className="px-3 py-1.5 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-bold rounded text-xs">{t('更新', 'Update')}</button>
+                                    <button onClick={handleDeleteBillingRule} disabled={!selectedBillingRuleId && selectedBillingRuleIds.length === 0} className="px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white font-bold rounded text-xs">{selectedBillingRuleIds.length > 1 ? t('批量删除', 'Delete Selected') : t('删除', 'Delete')}</button>
+                                    <button onClick={() => setBillingRuleForm(createEmptyBillingRuleForm())} className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white font-bold rounded text-xs">{t('清空表单', 'Clear Form')}</button>
+                                    <button onClick={() => setIsBillingRuleEditing(false)} className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white font-bold rounded text-xs">{t('完成编辑', 'Done Editing')}</button>
+                                </div>
+                            </div>
+                            </div>
+                            )}
+                        </div>
+                    )}
+
+                    {activeTab === 'kie_pricing' && (
+                        <div className="space-y-4">
+                            <div className="flex flex-col md:flex-row md:items-end gap-3">
+                                <div className="flex-1">
+                                    <label className="block text-xs uppercase text-gray-400 mb-1">{t('定价页面 URL', 'Pricing page URL')}</label>
+                                    <input
+                                        value={kiePricingUrl}
+                                        onChange={(e) => setKiePricingUrl(e.target.value)}
+                                        className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                        placeholder="https://kie.ai/zh-CN/pricing"
+                                    />
+                                </div>
+                                <div className="w-full md:w-56">
+                                    <label className="block text-xs uppercase text-gray-400 mb-1">{t('Provider 过滤', 'Provider Filter')}</label>
+                                    <input
+                                        value={kiePricingProviderFilter}
+                                        onChange={(e) => setKiePricingProviderFilter(e.target.value)}
+                                        className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                        placeholder="kie"
+                                    />
+                                </div>
+                                <button
+                                    onClick={handleConfirmManualKiePricing}
+                                    disabled={isKiePricingLoading || !String(kiePricingManualText || '').trim()}
+                                    className="px-3 py-2 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold rounded text-sm"
+                                >
+                                    {t('1) 确认输入内容', '1) Confirm Input')}
+                                </button>
+                                <button
+                                    onClick={() => handleRunKiePricingAssistant(false)}
+                                    disabled={isKiePricingLoading || !isKiePricingConfirmed}
+                                    className="px-3 py-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-bold rounded text-sm"
+                                >
+                                    {isKiePricingLoading ? t('生成中...', 'Generating...') : t('2) 生成规则建议', '2) Generate Suggestions')}
+                                </button>
+                                <button
+                                    onClick={() => handleRunKiePricingAssistant(true)}
+                                    disabled={isKiePricingLoading || !isKiePricingConfirmed}
+                                    className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold rounded text-sm"
+                                >
+                                    {selectedKieSuggestionIds.length > 0
+                                        ? t('3) 应用选中基础规则', '3) Apply Selected Base Rules')
+                                        : t('3) 生成并应用基础规则', '3) Generate and Apply Base Rules')}
+                                </button>
+                            </div>
+
+                            <div className="text-xs text-gray-400 border border-white/10 rounded p-3 bg-black/20">
+                                {t('流程：手工从 KIE 页面复制内容粘贴到下方，确认后再进行模型匹配与规则生成。后端会拒绝未确认内容。', 'Flow: manually paste pricing content copied from KIE page below, confirm, then run model matching and rule generation. Backend rejects unconfirmed content.')}
+                            </div>
+
+                            <div className="space-y-2 border border-white/10 rounded p-3 bg-black/20">
+                                <div className="flex flex-wrap gap-4 text-xs text-gray-300">
+                                    <span>{t('确认状态', 'Confirm Status')}: <span className={isKiePricingConfirmed ? 'text-emerald-300' : 'text-amber-300'}>{isKiePricingConfirmed ? t('已确认', 'Confirmed') : t('未确认', 'Unconfirmed')}</span></span>
+                                    <span>{t('内容长度', 'Content Length')}: <span className="text-white">{String(kiePricingManualText || '').trim().length}</span></span>
+                                </div>
+                                <div>
+                                    <label className="block text-xs uppercase text-gray-400 mb-1">{t('手工粘贴定价文本', 'Paste Pricing Text Manually')}</label>
+                                    <textarea
+                                        rows={10}
+                                        value={kiePricingManualText}
+                                        onChange={(e) => setKiePricingManualText(e.target.value)}
+                                        className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs font-mono"
+                                        placeholder={t('请从 KIE 定价页面复制需要分析的文本后粘贴到这里。', 'Paste the KIE pricing content to analyze here.')}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs uppercase text-gray-400 mb-1">{t('可选：表格 JSON 数组', 'Optional: Tables JSON Array')}</label>
+                                    <textarea
+                                        rows={3}
+                                        value={kiePricingManualTablesText}
+                                        onChange={(e) => setKiePricingManualTablesText(e.target.value)}
+                                        className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs font-mono"
+                                        placeholder="[]"
+                                    />
+                                </div>
+                            </div>
+
+                            {kiePricingResult && (
+                                <div className="space-y-3">
+                                    <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
+                                        <div className="border border-white/10 rounded p-2 bg-black/20"><span className="text-gray-400">URL</span><div className="text-white break-all">{kiePricingResult.url || '-'}</div></div>
+                                        <div className="border border-white/10 rounded p-2 bg-black/20"><span className="text-gray-400">{t('KIE 模型数', 'KIE Models')}</span><div className="text-white">{Number(kiePricingResult.system_model_count || 0)}</div></div>
+                                        <div className="border border-white/10 rounded p-2 bg-black/20"><span className="text-gray-400">{t('建议数', 'Suggestions')}</span><div className="text-white">{Number(kiePricingResult.suggestion_count || 0)}</div></div>
+                                        <div className="border border-white/10 rounded p-2 bg-black/20"><span className="text-gray-400">{t('应用数', 'Applied')}</span><div className="text-white">{Number(kiePricingResult.applied_count || 0)}</div></div>
+                                        <div className="border border-white/10 rounded p-2 bg-black/20"><span className="text-gray-400">Provider</span><div className="text-white">{kiePricingResult.provider_filter || '-'}</div></div>
+                                    </div>
+
+                                    <div className="text-xs text-gray-400 border border-white/10 rounded p-2 bg-black/20">
+                                        {t('写入状态', 'Apply Status')}: <span className="text-white">{String(kiePricingResult.apply_status || 'not_requested')}</span>
+                                        {String(kiePricingResult.apply_message || '').trim() && (
+                                            <span className="text-sky-300">{` | ${String(kiePricingResult.apply_message || '').trim()}`}</span>
+                                        )}
+                                        {Array.isArray(kiePricingResult.applied_system_api_ids) && kiePricingResult.applied_system_api_ids.length > 0 && (
+                                            <span className="text-emerald-300">{` | ids: ${kiePricingResult.applied_system_api_ids.join(',')}`}</span>
+                                        )}
+                                    </div>
+
+                                    <div className="text-xs text-amber-300 border border-amber-500/30 rounded p-2 bg-amber-500/5">
+                                        {t('可点击每行“编辑”按钮，在弹出框里修改单位/成本，点击第 3 步时将按修改值写入数据库。', 'Click Edit on each row to modify unit/cost in popup. Step 3 will write edited values to database.')}
+                                    </div>
+
+                                    {Array.isArray(kiePricingResult.apply_receipts) && kiePricingResult.apply_receipts.length > 0 && (
+                                        <div className="text-xs text-gray-300 border border-emerald-500/30 rounded p-2 bg-emerald-500/5">
+                                            <div className="text-emerald-300 mb-1">{t('写入回执', 'Apply Receipts')}</div>
+                                            <div className="space-y-1">
+                                                {kiePricingResult.apply_receipts.map((r, idx) => (
+                                                    <div key={`apply-receipt-${idx}`} className="font-mono break-all">
+                                                        {`system_api_id=${Number(r?.system_api_id || 0)} | base_rule_id=${Number(r?.base_rule_id || 0)} | action=${String(r?.action || 'upserted')}`}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    <div className="overflow-x-auto border border-white/10 rounded">
+                                        <table className="w-full text-xs min-w-[960px]">
+                                            <thead className="bg-white/5 text-gray-300">
+                                                <tr>
+                                                    <th className="text-left p-2 w-8">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={Array.isArray(kiePricingResult?.matches) && kiePricingResult.matches.length > 0 && selectedKieSuggestionIds.length === kiePricingResult.matches.length}
+                                                            onChange={(e) => toggleAllKieSuggestions(e.target.checked)}
+                                                        />
+                                                    </th>
+                                                    <th className="text-left p-2">system_api_id</th>
+                                                    <th className="text-left p-2">provider</th>
+                                                    <th className="text-left p-2">category</th>
+                                                    <th className="text-left p-2">model</th>
+                                                    <th className="text-left p-2">{t('来源模型', 'Source Model')}</th>
+                                                    <th className="text-left p-2">{t('单位', 'Unit')}</th>
+                                                    <th className="text-left p-2">cost</th>
+                                                    <th className="text-left p-2">cost_input</th>
+                                                    <th className="text-left p-2">cost_output</th>
+                                                    <th className="text-left p-2">granular</th>
+                                                    <th className="text-left p-2">{t('置信度', 'Confidence')}</th>
+                                                    <th className="text-left p-2">{t('操作', 'Actions')}</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {(Array.isArray(kiePricingResult.matches) ? kiePricingResult.matches : []).map((row, idx) => (
+                                                    <tr key={`kie-match-${idx}`} className="border-t border-white/10">
+                                                        <td className="p-2">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={(selectedKieSuggestionIds || []).some((x) => Number(x) === Number(row.system_api_id))}
+                                                                onChange={(e) => toggleKieSuggestionSelection(row.system_api_id, e.target.checked)}
+                                                            />
+                                                        </td>
+                                                        <td className="p-2">{row.system_api_id}</td>
+                                                        <td className="p-2">{row.provider || '-'}</td>
+                                                        <td className="p-2">{row.category || '-'}</td>
+                                                        <td className="p-2 max-w-[220px] truncate" title={row.model || '-'}>{row.model || '-'}</td>
+                                                        <td className="p-2 max-w-[220px] truncate" title={row.source_model_name || '-'}>{row.source_model_name || '-'}</td>
+                                                        <td className="p-2">{normalizeApiPricingUnitType(row?.base_rule?.billing_unit_type)}</td>
+                                                        <td className="p-2">{toNonNegativeInt(row?.base_rule?.billing_cost ?? 0)}</td>
+                                                        <td className="p-2">{toNonNegativeInt(row?.base_rule?.billing_cost_input ?? 0)}</td>
+                                                        <td className="p-2">{toNonNegativeInt(row?.base_rule?.billing_cost_output ?? 0)}</td>
+                                                        <td className="p-2">
+                                                            {Array.isArray(row?.granular_rules) && row.granular_rules.length > 0 ? (
+                                                                <details>
+                                                                    <summary className="cursor-pointer text-sky-300">{`${row.granular_rules.length} rules`}</summary>
+                                                                    <div className="mt-1 space-y-1 max-w-[260px]">
+                                                                        {row.granular_rules.map((gr, grIdx) => (
+                                                                            <div key={`gr-${idx}-${grIdx}`} className="text-[11px] text-gray-300 break-all">
+                                                                                {formatKieGranularRuleSummary(gr)}
+                                                                            </div>
+                                                                        ))}
+                                                                    </div>
+                                                                </details>
+                                                            ) : (
+                                                                <span className="text-gray-500">-</span>
+                                                            )}
+                                                        </td>
+                                                        <td className="p-2">{Number(row?.confidence || 0).toFixed(2)}</td>
+                                                        <td className="p-2">
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => openKieSuggestionEditor(idx)}
+                                                                className="px-2 py-1 bg-sky-700 hover:bg-sky-600 text-white rounded text-[11px]"
+                                                            >
+                                                                {t('编辑', 'Edit')}
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                                {(!Array.isArray(kiePricingResult.matches) || kiePricingResult.matches.length === 0) && (
+                                                    <tr className="border-t border-white/10">
+                                                        <td colSpan={13} className="p-3 text-gray-400">{t('没有生成匹配建议', 'No matching suggestions generated')}</td>
+                                                    </tr>
+                                                )}
+                                            </tbody>
+                                        </table>
+                                    </div>
+
+                                    <div className="text-xs text-gray-400">
+                                        {t('已选择', 'Selected')}: {selectedKieSuggestionIds.length}
+                                    </div>
+
+                                    <div className="text-xs text-gray-400 border border-white/10 rounded p-2 bg-black/20">
+                                        {t('Tables 解析状态', 'Tables Parse Status')}: <span className="text-white">{String(kiePricingResult.tables_parse_status || 'none')}</span>
+                                        {String(kiePricingResult.tables_parse_warning || '').trim() && (
+                                            <span className="text-amber-300">{` | ${String(kiePricingResult.tables_parse_warning || '').trim()}`}</span>
+                                        )}
+                                    </div>
+
+                                    <details className="border border-white/10 rounded p-3 bg-black/20">
+                                        <summary className="cursor-pointer text-xs text-gray-300">{t('查看原始 LLM 输出', 'View raw LLM output')}</summary>
+                                        <pre className="mt-2 text-xs text-gray-300 whitespace-pre-wrap break-all">{String(kiePricingResult.llm_raw || '') || '-'}</pre>
+                                    </details>
                                 </div>
                             )}
                         </div>
@@ -3131,6 +5466,237 @@ const UserAdmin = () => {
 
                 </div>
             </main>
+
+            {isKieSuggestionEditOpen && (
+                <div
+                    className="fixed inset-0 z-50 bg-black/60 backdrop-blur-[1px] flex items-center justify-center p-4"
+                    onClick={closeKieSuggestionEditor}
+                >
+                    <div
+                        className="w-full max-w-5xl max-h-[86vh] overflow-y-auto border border-white/15 rounded-xl p-4 bg-[#0d0f14] space-y-3 shadow-2xl"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-2">
+                            <h4 className="text-sm font-bold text-sky-200">{t('编辑 KIE 建议规则', 'Edit KIE Suggested Rule')}</h4>
+                            <button
+                                onClick={closeKieSuggestionEditor}
+                                className="px-2.5 py-1 rounded bg-gray-700 hover:bg-gray-600 text-white text-xs"
+                            >
+                                {t('关闭', 'Close')}
+                            </button>
+                        </div>
+
+                        <div className="text-xs text-gray-300 space-y-1">
+                            <div>system_api_id: <span className="text-white">{editingKieSuggestionMeta.system_api_id || '-'}</span></div>
+                            <div className="truncate" title={editingKieSuggestionMeta.model || '-'}>model: <span className="text-white">{editingKieSuggestionMeta.model || '-'}</span></div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                            <div className="md:col-span-2">
+                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('目标 System API', 'Target System API')}</label>
+                                <select
+                                    value={kieSuggestionEditForm.target_system_api_id}
+                                    onChange={(e) => setKieSuggestionEditForm((prev) => ({ ...prev, target_system_api_id: e.target.value }))}
+                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs"
+                                >
+                                    <option value="">{t('请选择', 'Please select')}</option>
+                                    {(Array.isArray(systemApiRows) ? systemApiRows : []).map((apiRow) => {
+                                        const apiId = Number(apiRow?.id || 0);
+                                        if (apiId <= 0) return null;
+                                        const label = `${apiId} | ${String(apiRow?.provider || '-')} | ${String(apiRow?.category || '-')} | ${String(apiRow?.model || '-')}`;
+                                        return (
+                                            <option key={`kie-target-api-${apiId}`} value={String(apiId)}>{label}</option>
+                                        );
+                                    })}
+                                </select>
+                            </div>
+                            <div className="md:col-span-2">
+                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('单位', 'Unit')}</label>
+                                <select
+                                    value={kieSuggestionEditForm.billing_unit_type}
+                                    onChange={(e) => setKieSuggestionEditForm((prev) => ({ ...prev, billing_unit_type: e.target.value }))}
+                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs"
+                                >
+                                    <option value="per_call">per_call</option>
+                                    <option value="per_second">per_second</option>
+                                    <option value="per_minute">per_minute</option>
+                                    <option value="per_token">per_token</option>
+                                    <option value="per_1k_tokens">per_1k_tokens</option>
+                                    <option value="per_million_tokens">per_million_tokens</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-xs uppercase text-gray-400 mb-1">cost</label>
+                                <input
+                                    type="number"
+                                    min={0}
+                                    step={1}
+                                    value={kieSuggestionEditForm.billing_cost}
+                                    onChange={(e) => setKieSuggestionEditForm((prev) => ({ ...prev, billing_cost: e.target.value }))}
+                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs uppercase text-gray-400 mb-1">cost_input</label>
+                                <input
+                                    type="number"
+                                    min={0}
+                                    step={1}
+                                    value={kieSuggestionEditForm.billing_cost_input}
+                                    onChange={(e) => setKieSuggestionEditForm((prev) => ({ ...prev, billing_cost_input: e.target.value }))}
+                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs uppercase text-gray-400 mb-1">cost_output</label>
+                                <input
+                                    type="number"
+                                    min={0}
+                                    step={1}
+                                    value={kieSuggestionEditForm.billing_cost_output}
+                                    onChange={(e) => setKieSuggestionEditForm((prev) => ({ ...prev, billing_cost_output: e.target.value }))}
+                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="border border-white/10 rounded-lg p-3 bg-black/20 space-y-2">
+                            <div className="flex items-center justify-between gap-2">
+                                <div className="text-xs uppercase text-gray-400">{t('细分规则 (Granular Rules)', 'Granular Rules')}</div>
+                                <button
+                                    type="button"
+                                    onClick={addKieGranularRuleForEdit}
+                                    className="px-2 py-1 bg-emerald-700 hover:bg-emerald-600 text-white rounded text-[11px]"
+                                >
+                                    {t('新增分档', 'Add Tier')}
+                                </button>
+                            </div>
+
+                            {(Array.isArray(kieSuggestionEditForm?.granular_rules) ? kieSuggestionEditForm.granular_rules : []).length === 0 && (
+                                <div className="text-xs text-gray-500">{t('当前没有 granular 规则，可点击“新增分档”。', 'No granular rules yet. Click Add Tier.')}</div>
+                            )}
+
+                            {(Array.isArray(kieSuggestionEditForm?.granular_rules) ? kieSuggestionEditForm.granular_rules : []).map((gr, grIdx) => (
+                                <div key={`kie-gr-edit-${grIdx}`} className="border border-white/10 rounded p-2 bg-black/30 space-y-2">
+                                    <div className="flex items-center justify-between gap-2">
+                                        <div className="text-xs text-sky-300">{`#${grIdx + 1}`}</div>
+                                        <button
+                                            type="button"
+                                            onClick={() => removeKieGranularRuleForEdit(grIdx)}
+                                            className="px-2 py-1 bg-rose-700 hover:bg-rose-600 text-white rounded text-[11px]"
+                                        >
+                                            {t('删除', 'Delete')}
+                                        </button>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                                        <div className="md:col-span-2">
+                                            <label className="block text-[11px] uppercase text-gray-400 mb-1">name</label>
+                                            <input
+                                                value={gr?.name || ''}
+                                                onChange={(e) => updateKieGranularRuleForEdit(grIdx, 'name', e.target.value)}
+                                                className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-[11px] uppercase text-gray-400 mb-1">unit</label>
+                                            <select
+                                                value={normalizeApiPricingUnitType(gr?.billing_unit_type)}
+                                                onChange={(e) => updateKieGranularRuleForEdit(grIdx, 'billing_unit_type', e.target.value)}
+                                                className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs"
+                                            >
+                                                <option value="per_call">per_call</option>
+                                                <option value="per_second">per_second</option>
+                                                <option value="per_minute">per_minute</option>
+                                                <option value="per_token">per_token</option>
+                                                <option value="per_1k_tokens">per_1k_tokens</option>
+                                                <option value="per_million_tokens">per_million_tokens</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-[11px] uppercase text-gray-400 mb-1">priority</label>
+                                            <input
+                                                type="number"
+                                                min={0}
+                                                step={1}
+                                                value={gr?.priority ?? ''}
+                                                onChange={(e) => updateKieGranularRuleForEdit(grIdx, 'priority', e.target.value)}
+                                                className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs"
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-[11px] uppercase text-gray-400 mb-1">cost</label>
+                                            <input type="number" min={0} step={1} value={gr?.billing_cost ?? ''} onChange={(e) => updateKieGranularRuleForEdit(grIdx, 'billing_cost', e.target.value)} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-[11px] uppercase text-gray-400 mb-1">cost_input</label>
+                                            <input type="number" min={0} step={1} value={gr?.billing_cost_input ?? ''} onChange={(e) => updateKieGranularRuleForEdit(grIdx, 'billing_cost_input', e.target.value)} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-[11px] uppercase text-gray-400 mb-1">cost_output</label>
+                                            <input type="number" min={0} step={1} value={gr?.billing_cost_output ?? ''} onChange={(e) => updateKieGranularRuleForEdit(grIdx, 'billing_cost_output', e.target.value)} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" />
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-[11px] uppercase text-gray-400 mb-1">generation_mode</label>
+                                            <input value={gr?.generation_mode || ''} onChange={(e) => updateKieGranularRuleForEdit(grIdx, 'generation_mode', e.target.value)} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-[11px] uppercase text-gray-400 mb-1">input_format</label>
+                                            <input value={gr?.input_format || ''} onChange={(e) => updateKieGranularRuleForEdit(grIdx, 'input_format', e.target.value)} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-[11px] uppercase text-gray-400 mb-1">output_format</label>
+                                            <input value={gr?.output_format || ''} onChange={(e) => updateKieGranularRuleForEdit(grIdx, 'output_format', e.target.value)} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" />
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-[11px] uppercase text-gray-400 mb-1">width_min</label>
+                                            <input type="number" min={0} step={1} value={gr?.width_min ?? ''} onChange={(e) => updateKieGranularRuleForEdit(grIdx, 'width_min', e.target.value)} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-[11px] uppercase text-gray-400 mb-1">width_max</label>
+                                            <input type="number" min={0} step={1} value={gr?.width_max ?? ''} onChange={(e) => updateKieGranularRuleForEdit(grIdx, 'width_max', e.target.value)} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-[11px] uppercase text-gray-400 mb-1">height_min</label>
+                                            <input type="number" min={0} step={1} value={gr?.height_min ?? ''} onChange={(e) => updateKieGranularRuleForEdit(grIdx, 'height_min', e.target.value)} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-[11px] uppercase text-gray-400 mb-1">height_max</label>
+                                            <input type="number" min={0} step={1} value={gr?.height_max ?? ''} onChange={(e) => updateKieGranularRuleForEdit(grIdx, 'height_max', e.target.value)} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-[11px] uppercase text-gray-400 mb-1">pixels_min</label>
+                                            <input type="number" min={0} step={1} value={gr?.pixels_min ?? ''} onChange={(e) => updateKieGranularRuleForEdit(grIdx, 'pixels_min', e.target.value)} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-[11px] uppercase text-gray-400 mb-1">pixels_max</label>
+                                            <input type="number" min={0} step={1} value={gr?.pixels_max ?? ''} onChange={(e) => updateKieGranularRuleForEdit(grIdx, 'pixels_max', e.target.value)} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" />
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+
+                        <div className="flex justify-end gap-2 pt-2">
+                            <button
+                                onClick={closeKieSuggestionEditor}
+                                className="px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-white text-xs"
+                            >
+                                {t('取消', 'Cancel')}
+                            </button>
+                            <button
+                                onClick={saveKieSuggestionEditor}
+                                className="px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold"
+                            >
+                                {t('保存修改', 'Save Changes')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Credit Modal */}
             {creditEditUser && (

@@ -15198,7 +15198,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                 <button
                                     onClick={() => {
                                         const returnTo = encodeURIComponent(`${window.location.pathname}${window.location.search}${window.location.hash}`);
-                                        window.location.assign(`/settings?tab=api-settings&return_to=${returnTo}`);
+                                        window.location.assign(`/settings?tab=default-api-activation&return_to=${returnTo}`);
                                     }}
                                     className="p-2 hover:bg-white/10 text-white rounded-lg border border-white/10 transition-colors"
                                     title={t('打开生成设置', 'Open Generation Settings')}
@@ -18033,7 +18033,7 @@ const Editor = ({
                                     sessionStorage.setItem(PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY, JSON.stringify(snapshot));
                                 } catch (e) {}
                                 const returnTo = encodeURIComponent(`${window.location.pathname}${window.location.search}${window.location.hash}`);
-                                window.location.assign(`/settings?tab=api-settings&return_to=${returnTo}`);
+                                window.location.assign(`/settings?tab=default-api-activation&return_to=${returnTo}`);
                             });
                         }}
                         className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors"

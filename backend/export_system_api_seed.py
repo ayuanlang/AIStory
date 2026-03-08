@@ -35,9 +35,6 @@ def main():
         items = []
         for row in rows:
             config = dict(row.config or {})
-            # Strip secret key pools — keys are managed on the server
-            config.pop("provider_api_keys", None)
-            config.pop("provider_api_key_weights", None)
             items.append({
                 "name": row.name,
                 "category": row.category,

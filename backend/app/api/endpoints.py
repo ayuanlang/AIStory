@@ -1,5 +1,6 @@
 
 from fastapi import APIRouter, Depends, HTTPException, Body, Request, Query
+from fastapi.responses import StreamingResponse
 import logging
 import smtplib
 from email.message import EmailMessage
@@ -7,7 +8,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
 from sqlalchemy import or_, and_
 from app.db.session import get_db, SessionLocal
-from app.models.all_models import Project, ProjectShare, User, Episode, Scene, Shot, Entity, Asset, APISetting, SystemAPISetting, ScriptSegment, PricingRule, TransactionHistory
+from app.models.all_models import Project, ProjectShare, User, Episode, Scene, Shot, Entity, Asset, APISetting, SystemAPISetting, ScriptSegment, TransactionHistory, SMTPSystemConfig, WechatPayConfig
 from app.schemas.agent import AgentRequest, AgentResponse, AnalyzeSceneRequest
 from app.services.agent_service import agent_service
 from app.services.billing_service import billing_service
@@ -940,7 +941,57 @@ def _resolve_effective_api_setting_meta(
     active_count = user_setting_query.count()
     setting = user_setting_query.order_by(APISetting.id.desc()).first()
     if not setting:
-        return None, "no_active_user_setting", {"active_count": active_count, "category": resolved_category}
+        category_defaults = db.query(SystemAPISetting).filter(
+            SystemAPISetting.category == resolved_category,
+            SystemAPISetting.is_active == True,
+        ).order_by(SystemAPISetting.id.desc()).all()
+
+        for system_default in category_defaults:
+            if _is_system_setting_deprecated(system_default.config, system_default.deprecated):
+                continue
+            return system_default, "system_category_default", {
+                "active_count": active_count,
+                "category": resolved_category,
+                "category_default_id": int(system_default.id),
+            }
+
+        return None, "no_active_user_setting_or_category_default", {
+            "active_count": active_count,
+            "category": resolved_category,
+        }
+
+    cfg = _safe_json_dict(getattr(setting, "config", None))
+    selected_system_setting_id = _safe_int(cfg.get("use_system_setting_id"), 0)
+    if selected_system_setting_id > 0:
+        system_by_id = db.query(SystemAPISetting).filter(SystemAPISetting.id == selected_system_setting_id).first()
+        if not system_by_id:
+            return None, "system_setting_id_not_found", {
+                "active_count": active_count,
+                "marker_id": setting.id,
+                "category": resolved_category,
+                "use_system_setting_id": selected_system_setting_id,
+            }
+        if str(system_by_id.category or "").strip() != resolved_category:
+            return None, "system_setting_id_category_mismatch", {
+                "active_count": active_count,
+                "marker_id": setting.id,
+                "category": resolved_category,
+                "use_system_setting_id": selected_system_setting_id,
+                "resolved_category": str(system_by_id.category or "").strip(),
+            }
+        if _is_system_setting_deprecated(system_by_id.config, system_by_id.deprecated):
+            return None, "system_setting_deprecated", {
+                "active_count": active_count,
+                "marker_id": setting.id,
+                "category": resolved_category,
+                "use_system_setting_id": selected_system_setting_id,
+            }
+        return system_by_id, "system_by_user_setting_id", {
+            "active_count": active_count,
+            "marker_id": setting.id,
+            "category": resolved_category,
+            "use_system_setting_id": selected_system_setting_id,
+        }
 
     target_provider = str(setting.provider or "").strip()
     target_model = str(setting.model or "").strip()
@@ -1013,7 +1064,7 @@ def _seed_default_system_settings_for_user(db: Session, user_id: int) -> None:
 
     active_system_rows = db.query(SystemAPISetting).filter(
         SystemAPISetting.is_active == True,
-        SystemAPISetting.category != "System_Payment",
+        ~SystemAPISetting.category.like("System_%"),
     ).order_by(SystemAPISetting.category.asc(), SystemAPISetting.id.desc()).all()
 
     if not active_system_rows:
@@ -1029,8 +1080,10 @@ def _seed_default_system_settings_for_user(db: Session, user_id: int) -> None:
         chosen_by_category[category] = row
 
     for category, system_setting in chosen_by_category.items():
-        marker_config = dict(system_setting.config or {})
-        marker_config["selection_source"] = "system"
+        marker_config = {
+            "selection_source": "system",
+            "use_system_setting_id": int(system_setting.id),
+        }
         selected_setting_id: Optional[int] = None
 
         user_setting = db.query(APISetting).filter(
@@ -1041,7 +1094,7 @@ def _seed_default_system_settings_for_user(db: Session, user_id: int) -> None:
         if user_setting:
             user_setting.name = user_setting.name or f"Use System {system_setting.provider}"
             user_setting.provider = system_setting.provider
-            user_setting.base_url = system_setting.base_url
+            user_setting.base_url = ""
             user_setting.model = system_setting.model
             user_setting.config = marker_config
             user_setting.api_key = ""
@@ -1054,7 +1107,7 @@ def _seed_default_system_settings_for_user(db: Session, user_id: int) -> None:
                 category=system_setting.category,
                 provider=system_setting.provider,
                 api_key="",
-                base_url=system_setting.base_url,
+                base_url="",
                 model=system_setting.model,
                 config=marker_config,
                 is_active=True,
@@ -1786,6 +1839,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         result_parts: List[str] = []
         segments_meta: List[Dict[str, Any]] = []
         usage_total: Dict[str, Any] = {}
+        resolved_llm_routing: Dict[str, Any] = {}
         finish_reason = None
         continuation_stopped_by_max_segments = False
         provider_limit_hints: List[str] = []
@@ -1818,6 +1872,9 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             system_only_messages = []
         for seg_idx in range(1, max_segments + 1):
             llm_resp = await llm_service.chat_completion_with_fallback(current_messages, config)
+            current_routing = _extract_llm_routing_metadata(llm_resp)
+            if current_routing:
+                resolved_llm_routing = current_routing
             raw_part = llm_resp.get("raw_content")
             if not isinstance(raw_part, str):
                 raw_part = llm_resp.get("content", "") or ""
@@ -1932,6 +1989,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             actual_details = {"item": "scene_analysis"}
             if usage:
                 actual_details.update(usage)
+            _apply_llm_routing_to_billing_details(actual_details, resolved_llm_routing)
             # Normalize common usage keys
             if "prompt_tokens" in actual_details and "input_tokens" not in actual_details:
                 actual_details["input_tokens"] = actual_details.get("prompt_tokens", 0)
@@ -1942,6 +2000,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             details = {"item": "scene_analysis"}
             if usage:
                 details.update(usage)
+            _apply_llm_routing_to_billing_details(details, resolved_llm_routing)
             # Normalize usage keys for token-based calculation if provider returns OpenAI-style usage
             if "prompt_tokens" in details and "input_tokens" not in details:
                 details["input_tokens"] = details.get("prompt_tokens", 0)
@@ -2209,27 +2268,30 @@ async def translate_text(
                 "completion_tokens": completion_tokens,
                 "total_tokens": total_tokens,
             }
+            _apply_llm_routing_to_billing_details(actual_details, llm_resp)
             billing_service.settle_reservation(db, reservation_tx.id, actual_details)
         else:
+            deduct_details = {
+                "item": "translate",
+                "request_id": request_id,
+                "from_lang": from_lang,
+                "to_lang": to_lang,
+                "chars": len(text),
+                "translated_chars": len(dst),
+                "input_tokens": prompt_tokens,
+                "output_tokens": completion_tokens,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+            }
+            _apply_llm_routing_to_billing_details(deduct_details, llm_resp)
             billing_service.deduct_credits(
                 db,
                 current_user.id,
                 "llm_chat",
                 provider,
                 model,
-                {
-                    "item": "translate",
-                    "request_id": request_id,
-                    "from_lang": from_lang,
-                    "to_lang": to_lang,
-                    "chars": len(text),
-                    "translated_chars": len(dst),
-                    "input_tokens": prompt_tokens,
-                    "output_tokens": completion_tokens,
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": completion_tokens,
-                    "total_tokens": total_tokens,
-                }
+                deduct_details
             )
 
         elapsed_ms = int((datetime.utcnow() - started_at).total_seconds() * 1000)
@@ -2521,15 +2583,15 @@ async def process_system_management_agent_command(
     if not bool(getattr(current_user, "is_superuser", False)):
         raise HTTPException(status_code=403, detail="Only superuser can use system management AI agent")
 
-    resolved_llm_config = agent_service.get_system_default_llm_config(current_user.id, category="LLM")
+    resolved_llm_config = agent_service.get_active_llm_config(current_user.id, category="LLM")
     if not resolved_llm_config or not resolved_llm_config.get("api_key"):
-        raise HTTPException(status_code=400, detail="No active system default LLM API config found in Settings (System API / category=LLM).")
+        raise HTTPException(status_code=400, detail="No active LLM API config found. Please check your LLM settings.")
 
     provider = resolved_llm_config.get("provider")
     model = resolved_llm_config.get("model")
     resolved_cfg_meta = resolved_llm_config.get("config") if isinstance(resolved_llm_config.get("config"), dict) else {}
     logger.info(
-        "[agent.system_management.command] resolved_system_llm | user_id=%s provider=%s model=%s setting_id=%s source=%s category=%s",
+        "[agent.system_management.command] resolved_llm | user_id=%s provider=%s model=%s setting_id=%s source=%s category=%s",
         current_user.id,
         provider,
         model,
@@ -2601,6 +2663,120 @@ async def process_system_management_agent_command(
                 pass
         billing_service.log_failed_transaction(db, current_user.id, "llm_chat", provider, model, str(e))
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Agent Streaming (SSE) ---
+
+async def _sse_event_generator(events_gen):
+    """Wrap an async generator of dicts into SSE-formatted text lines."""
+    import json as _json
+    try:
+        async for event in events_gen:
+            if event is None:
+                continue
+            event_type = event.get("type", "message")
+            data = _json.dumps(event, ensure_ascii=False, default=str)
+            yield f"event: {event_type}\ndata: {data}\n\n"
+    except Exception as exc:
+        logger.error("SSE generator error: %s", exc)
+        err = _json.dumps({"type": "error", "message": str(exc)}, ensure_ascii=False)
+        yield f"event: error\ndata: {err}\n\n"
+
+
+@router.post("/agent/command/stream")
+async def stream_agent_command(
+    request: AgentRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    print(f"[STREAM-DEBUG] === stream_agent_command entered === query={request.query[:80] if request.query else 'N/A'}, user={current_user.id}")
+    project_id = request.project_id or request.context.get("projectId")
+    if project_id:
+        _require_project_access(db, int(project_id), current_user)
+
+    resolved_llm_config = agent_service.get_active_llm_config(current_user.id, category="LLM")
+    if not resolved_llm_config or not resolved_llm_config.get("api_key"):
+        raise HTTPException(status_code=400, detail="No active LLM API config found. Please check your LLM settings.")
+
+    provider = resolved_llm_config.get("provider")
+    model = resolved_llm_config.get("model")
+
+    merged_context = dict(request.context or {})
+    merged_context["agent_mode"] = "project"
+    merged_context["auth"] = {
+        "user_id": current_user.id,
+        "is_superuser": bool(getattr(current_user, "is_superuser", False)),
+        "is_authorized": bool(getattr(current_user, "is_authorized", False)),
+        "username": getattr(current_user, "username", None),
+    }
+
+    request_for_agent = request.copy(update={
+        "llm_config": resolved_llm_config,
+        "context": merged_context,
+    })
+
+    # Billing: simple deduction (streaming cannot easily do reservation/settlement)
+    billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+    print(f"[STREAM-DEBUG] endpoint: billing OK, calling stream_process_command, provider={provider}, model={model}")
+
+    async def _generate():
+        print(f"[STREAM-DEBUG] _generate() started iterating stream_process_command")
+        try:
+            async for event in agent_service.stream_process_command(request_for_agent, db, current_user):
+                if event.get("type") == "heartbeat":
+                    yield event
+                    continue
+                print(f"[STREAM-DEBUG] endpoint yielding event: type={event.get('type')}, content_len={len(str(event.get('content','')))}, keys={list(event.keys())}")
+                yield event
+            # Billing deduction after successful completion
+            billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model,
+                                           {"item": "agent_intent_stream", "query": (request.query or "")[:80]})
+        except Exception as e:
+            logger.error("stream_agent_command error: %s", e)
+            billing_service.log_failed_transaction(db, current_user.id, "llm_chat", provider, model, str(e))
+            yield {"type": "error", "message": str(e)}
+
+    return StreamingResponse(
+        _sse_event_generator(_generate()),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/agent/system-management/command/stream")
+async def stream_system_management_agent_command(
+    request: AgentRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not bool(getattr(current_user, "is_superuser", False)):
+        raise HTTPException(status_code=403, detail="Only superuser can use system management AI agent")
+
+    resolved_llm_config = agent_service.get_active_llm_config(current_user.id, category="LLM")
+    if not resolved_llm_config or not resolved_llm_config.get("api_key"):
+        raise HTTPException(status_code=400, detail="No active LLM API config found. Please check your LLM settings.")
+
+    provider = resolved_llm_config.get("provider")
+    model = resolved_llm_config.get("model")
+
+    billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+
+    async def _generate():
+        try:
+            async for event in agent_service.stream_process_system_management_command(request, db, current_user):
+                yield event
+            billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model,
+                                           {"item": "system_agent_intent_stream", "query": (request.query or "")[:80]})
+        except Exception as e:
+            logger.error("stream_system_management_agent_command error: %s", e)
+            billing_service.log_failed_transaction(db, current_user.id, "llm_chat", provider, model, str(e))
+            yield {"type": "error", "message": str(e)}
+
+    return StreamingResponse(
+        _sse_event_generator(_generate()),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # --- Projects ---
@@ -2892,7 +3068,8 @@ async def generate_markdown_with_retry(
     llm_config: Optional[Dict[str, Any]],
     strict_markdown: bool = True,
     require_h1: bool = True,
-) -> str:
+    return_meta: bool = False,
+) -> Any:
     def _is_prohibited_marker(text: str) -> bool:
         if not text:
             return False
@@ -2918,6 +3095,7 @@ async def generate_markdown_with_retry(
         cleaned = sanitize_llm_markdown_output(raw)
         finish_reason = str(resp.get("finish_reason") or "")
         usage = resp.get("usage") or {}
+        routing_meta = _extract_llm_routing_metadata(resp)
         logger.info(
             f"[generate_markdown_with_retry] tag={tag} raw_len={len(raw)} clean_len={len(cleaned)} "
             f"finish_reason={finish_reason or '-'} usage={usage} is_error_like={_looks_like_error_text(cleaned)}"
@@ -2926,8 +3104,19 @@ async def generate_markdown_with_retry(
             "tag": tag,
             "finish_reason": finish_reason,
             "usage": usage,
+            "routing_metadata": routing_meta,
             "raw_len": len(raw),
             "clean_len": len(cleaned),
+        }
+
+    def _result_payload(content: str, meta: Optional[Dict[str, Any]]) -> Any:
+        if not return_meta:
+            return content
+        return {
+            "content": content,
+            "usage": ((meta or {}).get("usage") if isinstance(meta, dict) else {}) or {},
+            "routing_metadata": ((meta or {}).get("routing_metadata") if isinstance(meta, dict) else {}) or {},
+            "finish_reason": ((meta or {}).get("finish_reason") if isinstance(meta, dict) else None),
         }
 
     def _is_truncated(meta: Optional[Dict[str, Any]]) -> bool:
@@ -2947,11 +3136,11 @@ async def generate_markdown_with_retry(
         if _is_truncated(meta_1):
             raise RuntimeError("LLM output appears truncated (finish_reason=length) in non-strict mode")
         if content_1 and not _looks_like_error_text(content_1):
-            return content_1
+            return _result_payload(content_1, meta_1)
         raise RuntimeError("LLM returned empty/error content in non-strict mode")
 
     if content_1 and not _looks_like_error_text(content_1) and is_valid_markdown_output(content_1, require_h1=require_h1) and not _is_truncated(meta_1):
-        return content_1
+        return _result_payload(content_1, meta_1)
 
     retry_sys_prompt = (
         f"{sys_prompt}\n\n"
@@ -2971,7 +3160,7 @@ async def generate_markdown_with_retry(
         logger.error("[generate_markdown_with_retry] provider returned PROHIBITED_CONTENT on strict retry")
         raise RuntimeError("LLM content blocked by provider (PROHIBITED_CONTENT)")
     if content_2 and not _looks_like_error_text(content_2) and is_valid_markdown_output(content_2, require_h1=require_h1) and not _is_truncated(meta_2):
-        return content_2
+        return _result_payload(content_2, meta_2)
 
     fallback_sys_prompt = (
         f"{sys_prompt}\n\n"
@@ -2999,7 +3188,7 @@ async def generate_markdown_with_retry(
         if require_h1 and not content_3.lstrip().startswith("#"):
             content_3 = "# Episode Script Draft\n\n" + content_3
         if is_valid_markdown_output(content_3, require_h1=require_h1) and not _is_truncated(meta_3):
-            return content_3
+            return _result_payload(content_3, meta_3)
 
     diagnostics = {
         "initial_finish_reason": meta_1.get("finish_reason"),
@@ -3226,17 +3415,82 @@ async def generate_project_story_dna_global(
         raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")
     provider = llm_config.get("provider") if llm_config else None
     model = llm_config.get("model") if llm_config else None
-    billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+    reservation_tx = None
+    if billing_service.is_token_pricing(db, "llm_chat", provider, model):
+        est = billing_service.estimate_input_output_tokens_from_messages(
+            [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            output_ratio=1.5,
+        )
+        reservation_tx = billing_service.reserve_credits(
+            db,
+            current_user.id,
+            "llm_chat",
+            provider,
+            model,
+            {
+                "item": "story_generator_global",
+                "estimation_method": "prompt_tokens_ratio",
+                "estimated_output_ratio": 1.5,
+                "input_tokens": est.get("input_tokens", 0),
+                "output_tokens": est.get("output_tokens", 0),
+                "total_tokens": est.get("total_tokens", 0),
+            },
+        )
+    else:
+        billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
 
-    generated_md = await generate_markdown_with_retry(
-        user_prompt=user_prompt,
-        sys_prompt=sys_prompt,
-        llm_config=llm_config,
-        strict_markdown=(req.strict_markdown is not False),
-        require_h1=True,
-    )
+    try:
+        generated_payload = await generate_markdown_with_retry(
+            user_prompt=user_prompt,
+            sys_prompt=sys_prompt,
+            llm_config=llm_config,
+            strict_markdown=(req.strict_markdown is not False),
+            require_h1=True,
+            return_meta=True,
+        )
+    except Exception as e:
+        if reservation_tx:
+            billing_service.cancel_reservation(db, reservation_tx.id, str(e))
+        raise
+
+    generated_md = str((generated_payload or {}).get("content") or "").strip()
+    usage = (generated_payload or {}).get("usage") if isinstance(generated_payload, dict) else {}
     if not generated_md:
         raise HTTPException(status_code=500, detail="LLM returned empty content")
+
+    if not usage:
+        usage = billing_service.estimate_input_output_tokens_from_messages(
+            [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_prompt},
+                {"role": "assistant", "content": generated_md},
+            ],
+            output_ratio=1.0,
+        )
+    settle_details = {
+        "item": "story_generator_global",
+        "prompt_tokens": int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0),
+        "completion_tokens": int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0),
+        "total_tokens": int(
+            usage.get(
+                "total_tokens",
+                int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0)
+                + int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0),
+            )
+            or 0
+        ),
+    }
+    settle_details["input_tokens"] = settle_details["prompt_tokens"]
+    settle_details["output_tokens"] = settle_details["completion_tokens"]
+    _apply_llm_routing_to_billing_details(settle_details, generated_payload)
+
+    if reservation_tx:
+        billing_service.settle_reservation(db, reservation_tx.id, settle_details)
+    else:
+        billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, settle_details)
 
     extracted_constraints = parse_global_style_constraints(generated_md)
 
@@ -3639,7 +3893,32 @@ async def analyze_project_novel_to_story_generator_fields(
         resolved_id,
         resolved_source,
     )
-    billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+    reservation_tx = None
+    if billing_service.is_token_pricing(db, "llm_chat", provider, model):
+        est = billing_service.estimate_input_output_tokens_from_messages(
+            [
+                {"role": "system", "content": sys_prompt_template},
+                {"role": "user", "content": user_prompt},
+            ],
+            output_ratio=1.5,
+        )
+        reservation_tx = billing_service.reserve_credits(
+            db,
+            current_user.id,
+            "llm_chat",
+            provider,
+            model,
+            {
+                "item": "analyze_novel",
+                "estimation_method": "prompt_tokens_ratio",
+                "estimated_output_ratio": 1.5,
+                "input_tokens": est.get("input_tokens", 0),
+                "output_tokens": est.get("output_tokens", 0),
+                "total_tokens": est.get("total_tokens", 0),
+            },
+        )
+    else:
+        billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
 
     # Keep compatibility with prompt template variable while still passing text in user prompt.
     try:
@@ -3647,10 +3926,50 @@ async def analyze_project_novel_to_story_generator_fields(
     except Exception:
         sys_prompt = sys_prompt_template
 
-    resp = await llm_service.generate_content_with_fallback(user_prompt, sys_prompt, llm_config)
+    try:
+        resp = await llm_service.generate_content_with_fallback(user_prompt, sys_prompt, llm_config)
+    except Exception as e:
+        if reservation_tx:
+            billing_service.cancel_reservation(db, reservation_tx.id, str(e))
+        raise
+
     raw = (resp.get("content") or "").strip()
     if not raw:
+        if reservation_tx:
+            billing_service.cancel_reservation(db, reservation_tx.id, "LLM returned empty content")
         raise HTTPException(status_code=500, detail="LLM returned empty content")
+
+    usage = resp.get("usage") or {}
+    if not usage:
+        usage = billing_service.estimate_input_output_tokens_from_messages(
+            [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_prompt},
+                {"role": "assistant", "content": raw},
+            ],
+            output_ratio=1.0,
+        )
+    billing_details = {
+        "item": "analyze_novel",
+        "prompt_tokens": int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0),
+        "completion_tokens": int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0),
+        "total_tokens": int(
+            usage.get(
+                "total_tokens",
+                int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0)
+                + int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0),
+            )
+            or 0
+        ),
+    }
+    billing_details["input_tokens"] = billing_details["prompt_tokens"]
+    billing_details["output_tokens"] = billing_details["completion_tokens"]
+    _apply_llm_routing_to_billing_details(billing_details, resp)
+
+    if reservation_tx:
+        billing_service.settle_reservation(db, reservation_tx.id, billing_details)
+    else:
+        billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, billing_details)
 
     content = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
     content = content.replace("```json", "").replace("```", "").strip()
@@ -4251,12 +4570,76 @@ async def generate_project_character_profile(
     llm_config = agent_service.get_active_llm_config(current_user.id)
     provider = llm_config.get("provider") if llm_config else None
     model = llm_config.get("model") if llm_config else None
-    billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+    reservation_tx = None
+    if billing_service.is_token_pricing(db, "llm_chat", provider, model):
+        est = billing_service.estimate_input_output_tokens_from_messages(
+            [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            output_ratio=1.5,
+        )
+        reservation_tx = billing_service.reserve_credits(
+            db,
+            current_user.id,
+            "llm_chat",
+            provider,
+            model,
+            {
+                "item": "character_profile_project_generate",
+                "estimation_method": "prompt_tokens_ratio",
+                "estimated_output_ratio": 1.5,
+                "input_tokens": est.get("input_tokens", 0),
+                "output_tokens": est.get("output_tokens", 0),
+                "total_tokens": est.get("total_tokens", 0),
+            },
+        )
+    else:
+        billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
 
-    resp = await llm_service.generate_content_with_fallback(user_prompt, sys_prompt, llm_config)
+    try:
+        resp = await llm_service.generate_content_with_fallback(user_prompt, sys_prompt, llm_config)
+    except Exception as e:
+        if reservation_tx:
+            billing_service.cancel_reservation(db, reservation_tx.id, str(e))
+        raise
+
     description_md = (resp.get("content") or "").strip()
     if not description_md:
+        if reservation_tx:
+            billing_service.cancel_reservation(db, reservation_tx.id, "LLM returned empty content")
         raise HTTPException(status_code=500, detail="LLM returned empty content")
+
+    usage = resp.get("usage") or {}
+    if not usage:
+        usage = billing_service.estimate_input_output_tokens_from_messages(
+            [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_prompt},
+                {"role": "assistant", "content": description_md},
+            ],
+            output_ratio=1.0,
+        )
+    details = {
+        "item": "character_profile_project_generate",
+        "prompt_tokens": int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0),
+        "completion_tokens": int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0),
+        "total_tokens": int(
+            usage.get(
+                "total_tokens",
+                int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0)
+                + int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0),
+            )
+            or 0
+        ),
+    }
+    details["input_tokens"] = details["prompt_tokens"]
+    details["output_tokens"] = details["completion_tokens"]
+    _apply_llm_routing_to_billing_details(details, resp)
+    if reservation_tx:
+        billing_service.settle_reservation(db, reservation_tx.id, details)
+    else:
+        billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, details)
 
     now_iso = datetime.utcnow().isoformat()
     gi = dict(project.global_info or {})
@@ -4591,12 +4974,76 @@ async def generate_episode_character_profile(
     llm_config = agent_service.get_active_llm_config(current_user.id)
     provider = llm_config.get("provider") if llm_config else None
     model = llm_config.get("model") if llm_config else None
-    billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+    reservation_tx = None
+    if billing_service.is_token_pricing(db, "llm_chat", provider, model):
+        est = billing_service.estimate_input_output_tokens_from_messages(
+            [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            output_ratio=1.5,
+        )
+        reservation_tx = billing_service.reserve_credits(
+            db,
+            current_user.id,
+            "llm_chat",
+            provider,
+            model,
+            {
+                "item": "character_profile_episode_generate",
+                "estimation_method": "prompt_tokens_ratio",
+                "estimated_output_ratio": 1.5,
+                "input_tokens": est.get("input_tokens", 0),
+                "output_tokens": est.get("output_tokens", 0),
+                "total_tokens": est.get("total_tokens", 0),
+            },
+        )
+    else:
+        billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
 
-    resp = await llm_service.generate_content_with_fallback(user_prompt, sys_prompt, llm_config)
+    try:
+        resp = await llm_service.generate_content_with_fallback(user_prompt, sys_prompt, llm_config)
+    except Exception as e:
+        if reservation_tx:
+            billing_service.cancel_reservation(db, reservation_tx.id, str(e))
+        raise
+
     description_md = (resp.get("content") or "").strip()
     if not description_md:
+        if reservation_tx:
+            billing_service.cancel_reservation(db, reservation_tx.id, "LLM returned empty content")
         raise HTTPException(status_code=500, detail="LLM returned empty content")
+
+    usage = resp.get("usage") or {}
+    if not usage:
+        usage = billing_service.estimate_input_output_tokens_from_messages(
+            [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_prompt},
+                {"role": "assistant", "content": description_md},
+            ],
+            output_ratio=1.0,
+        )
+    details = {
+        "item": "character_profile_episode_generate",
+        "prompt_tokens": int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0),
+        "completion_tokens": int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0),
+        "total_tokens": int(
+            usage.get(
+                "total_tokens",
+                int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0)
+                + int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0),
+            )
+            or 0
+        ),
+    }
+    details["input_tokens"] = details["prompt_tokens"]
+    details["output_tokens"] = details["completion_tokens"]
+    _apply_llm_routing_to_billing_details(details, resp)
+    if reservation_tx:
+        billing_service.settle_reservation(db, reservation_tx.id, details)
+    else:
+        billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, details)
 
     now_iso = datetime.utcnow().isoformat()
     profiles = list(episode.character_profiles or [])
@@ -4733,17 +5180,83 @@ async def generate_episode_story_dna(
     llm_config = agent_service.get_active_llm_config(current_user.id)
     provider = llm_config.get("provider") if llm_config else None
     model = llm_config.get("model") if llm_config else None
-    billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+    reservation_tx = None
+    item_name = f"story_generator_{mode}"
+    if billing_service.is_token_pricing(db, "llm_chat", provider, model):
+        est = billing_service.estimate_input_output_tokens_from_messages(
+            [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            output_ratio=1.5,
+        )
+        reservation_tx = billing_service.reserve_credits(
+            db,
+            current_user.id,
+            "llm_chat",
+            provider,
+            model,
+            {
+                "item": item_name,
+                "estimation_method": "prompt_tokens_ratio",
+                "estimated_output_ratio": 1.5,
+                "input_tokens": est.get("input_tokens", 0),
+                "output_tokens": est.get("output_tokens", 0),
+                "total_tokens": est.get("total_tokens", 0),
+            },
+        )
+    else:
+        billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
 
-    generated_md = await generate_markdown_with_retry(
-        user_prompt=user_prompt,
-        sys_prompt=sys_prompt,
-        llm_config=llm_config,
-        strict_markdown=(req.strict_markdown is not False),
-        require_h1=True,
-    )
+    try:
+        generated_payload = await generate_markdown_with_retry(
+            user_prompt=user_prompt,
+            sys_prompt=sys_prompt,
+            llm_config=llm_config,
+            strict_markdown=(req.strict_markdown is not False),
+            require_h1=True,
+            return_meta=True,
+        )
+    except Exception as e:
+        if reservation_tx:
+            billing_service.cancel_reservation(db, reservation_tx.id, str(e))
+        raise
+
+    generated_md = str((generated_payload or {}).get("content") or "").strip()
     if not generated_md:
         raise HTTPException(status_code=500, detail="LLM returned empty content")
+
+    usage = (generated_payload or {}).get("usage") if isinstance(generated_payload, dict) else {}
+    if not usage:
+        usage = billing_service.estimate_input_output_tokens_from_messages(
+            [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_prompt},
+                {"role": "assistant", "content": generated_md},
+            ],
+            output_ratio=1.0,
+        )
+    billing_details = {
+        "item": item_name,
+        "prompt_tokens": int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0),
+        "completion_tokens": int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0),
+        "total_tokens": int(
+            usage.get(
+                "total_tokens",
+                int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0)
+                + int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0),
+            )
+            or 0
+        ),
+    }
+    billing_details["input_tokens"] = billing_details["prompt_tokens"]
+    billing_details["output_tokens"] = billing_details["completion_tokens"]
+    _apply_llm_routing_to_billing_details(billing_details, generated_payload)
+
+    if reservation_tx:
+        billing_service.settle_reservation(db, reservation_tx.id, billing_details)
+    else:
+        billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, billing_details)
 
     # Persist both output and the inputs that produced it.
     try:
@@ -4875,12 +5388,76 @@ async def generate_episode_scenes_from_story(
     llm_config = agent_service.get_active_llm_config(current_user.id)
     provider = llm_config.get("provider") if llm_config else None
     model = llm_config.get("model") if llm_config else None
-    billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+    reservation_tx = None
+    if billing_service.is_token_pricing(db, "llm_chat", provider, model):
+        est = billing_service.estimate_input_output_tokens_from_messages(
+            [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            output_ratio=1.5,
+        )
+        reservation_tx = billing_service.reserve_credits(
+            db,
+            current_user.id,
+            "llm_chat",
+            provider,
+            model,
+            {
+                "item": "script_generator_scenes",
+                "estimation_method": "prompt_tokens_ratio",
+                "estimated_output_ratio": 1.5,
+                "input_tokens": est.get("input_tokens", 0),
+                "output_tokens": est.get("output_tokens", 0),
+                "total_tokens": est.get("total_tokens", 0),
+            },
+        )
+    else:
+        billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
 
-    resp = await llm_service.generate_content_with_fallback(user_prompt, sys_prompt, llm_config)
+    try:
+        resp = await llm_service.generate_content_with_fallback(user_prompt, sys_prompt, llm_config)
+    except Exception as e:
+        if reservation_tx:
+            billing_service.cancel_reservation(db, reservation_tx.id, str(e))
+        raise
+
     raw = (resp.get("content") or "").strip()
     if not raw:
+        if reservation_tx:
+            billing_service.cancel_reservation(db, reservation_tx.id, "LLM returned empty content")
         raise HTTPException(status_code=500, detail="LLM returned empty content")
+
+    usage = resp.get("usage") or {}
+    if not usage:
+        usage = billing_service.estimate_input_output_tokens_from_messages(
+            [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_prompt},
+                {"role": "assistant", "content": raw},
+            ],
+            output_ratio=1.0,
+        )
+    billing_details = {
+        "item": "script_generator_scenes",
+        "prompt_tokens": int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0),
+        "completion_tokens": int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0),
+        "total_tokens": int(
+            usage.get(
+                "total_tokens",
+                int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0)
+                + int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0),
+            )
+            or 0
+        ),
+    }
+    billing_details["input_tokens"] = billing_details["prompt_tokens"]
+    billing_details["output_tokens"] = billing_details["completion_tokens"]
+    _apply_llm_routing_to_billing_details(billing_details, resp)
+    if reservation_tx:
+        billing_service.settle_reservation(db, reservation_tx.id, billing_details)
+    else:
+        billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, billing_details)
 
     # Parse strict JSON (strip fences if model ignored instruction)
     content = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
@@ -5485,8 +6062,7 @@ async def generate_project_episode_scripts_from_global_framework(
             _persist_run_status(run_status)
             continue
 
-        # Balance check per call (may raise 402)
-        billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+        reservation_tx = None
 
         constraints_block = ""
         if constraints_obj:
@@ -5517,6 +6093,34 @@ async def generate_project_episode_scripts_from_global_framework(
         except Exception:
             sys_prompt_episode = sys_prompt
 
+        if billing_service.is_token_pricing(db, "llm_chat", provider, model):
+            est = billing_service.estimate_input_output_tokens_from_messages(
+                [
+                    {"role": "system", "content": sys_prompt_episode},
+                    {"role": "user", "content": user_prompt},
+                ],
+                output_ratio=1.5,
+            )
+            reservation_tx = billing_service.reserve_credits(
+                db,
+                current_user.id,
+                "llm_chat",
+                provider,
+                model,
+                {
+                    "item": "generate_episode_script",
+                    "episode_id": ep.id,
+                    "episode_number": idx,
+                    "estimation_method": "prompt_tokens_ratio",
+                    "estimated_output_ratio": 1.5,
+                    "input_tokens": est.get("input_tokens", 0),
+                    "output_tokens": est.get("output_tokens", 0),
+                    "total_tokens": est.get("total_tokens", 0),
+                },
+            )
+        else:
+            billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+
         try:
             logger.info(
                 f"[generate_episode_scripts] GENERATE episode_number={idx} episode_id={ep.id} title={ep.title!r}"
@@ -5526,15 +6130,51 @@ async def generate_project_episode_scripts_from_global_framework(
                 f"user_prompt_len={len(user_prompt)} sys_prompt_len={len(sys_prompt_episode)} "
                 f"has_constraints_block={bool(constraints_block)} has_relationships_block={bool(relationships_block)}"
             )
-            content = await generate_markdown_with_retry(
+            generated_payload = await generate_markdown_with_retry(
                 user_prompt=user_prompt,
                 sys_prompt=sys_prompt_episode,
                 llm_config=llm_config,
                 strict_markdown=(req.strict_markdown is not False),
                 require_h1=True,
+                return_meta=True,
             )
+            content = str((generated_payload or {}).get("content") or "").strip()
             if not content:
                 raise RuntimeError("LLM returned empty content")
+
+            usage = (generated_payload or {}).get("usage") if isinstance(generated_payload, dict) else {}
+            if not usage:
+                usage = billing_service.estimate_input_output_tokens_from_messages(
+                    [
+                        {"role": "system", "content": sys_prompt_episode},
+                        {"role": "user", "content": user_prompt},
+                        {"role": "assistant", "content": content},
+                    ],
+                    output_ratio=1.0,
+                )
+            billing_details = {
+                "item": "generate_episode_script",
+                "episode_id": ep.id,
+                "episode_number": idx,
+                "prompt_tokens": int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0),
+                "completion_tokens": int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0),
+                "total_tokens": int(
+                    usage.get(
+                        "total_tokens",
+                        int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0)
+                        + int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0),
+                    )
+                    or 0
+                ),
+            }
+            billing_details["input_tokens"] = billing_details["prompt_tokens"]
+            billing_details["output_tokens"] = billing_details["completion_tokens"]
+            _apply_llm_routing_to_billing_details(billing_details, generated_payload)
+
+            if reservation_tx:
+                billing_service.settle_reservation(db, reservation_tx.id, billing_details)
+            else:
+                billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, billing_details)
 
             ep.script_content = content
             ei = dict(ep.episode_info or {})
@@ -5579,8 +6219,12 @@ async def generate_project_episode_scripts_from_global_framework(
             })
             _persist_run_status(run_status)
         except HTTPException:
+            if reservation_tx:
+                billing_service.cancel_reservation(db, reservation_tx.id, "episode generation HTTPException")
             raise
         except Exception as e:
+            if reservation_tx:
+                billing_service.cancel_reservation(db, reservation_tx.id, str(e))
             logger.exception(f"[generate_episode_scripts] FAILED episode_number={idx} episode_id={ep.id} error={e}")
             _safe_log_episode("GENERATE_EPISODE_SCRIPT_FAILED", {
                 "project_id": project_id,
@@ -7217,6 +7861,7 @@ async def ai_generate_shots(
             actual_details = {"item": "generate_shots"}
             if usage:
                 actual_details.update(usage)
+            _apply_llm_routing_to_billing_details(actual_details, response_dict)
             if "prompt_tokens" in actual_details and "input_tokens" not in actual_details:
                 actual_details["input_tokens"] = actual_details.get("prompt_tokens", 0)
             if "completion_tokens" in actual_details and "output_tokens" not in actual_details:
@@ -7230,6 +7875,7 @@ async def ai_generate_shots(
             details = {"item": "generate_shots"}
             if usage:
                 details.update(usage)
+            _apply_llm_routing_to_billing_details(details, response_dict)
             if "prompt_tokens" in details and "input_tokens" not in details:
                 details["input_tokens"] = details.get("prompt_tokens", 0)
             if "completion_tokens" in details and "output_tokens" not in details:
@@ -8070,13 +8716,17 @@ async def generate_sora_character(
             actual_details = {"item": "sora_create_character"}
             if usage:
                 actual_details.update(usage)
+            _apply_llm_routing_to_billing_details(actual_details, response)
             if "prompt_tokens" in actual_details and "input_tokens" not in actual_details:
                 actual_details["input_tokens"] = actual_details.get("prompt_tokens", 0)
             if "completion_tokens" in actual_details and "output_tokens" not in actual_details:
                 actual_details["output_tokens"] = actual_details.get("completion_tokens", 0)
             billing_service.settle_reservation(db, reservation_tx.id, actual_details)
         else:
-            billing_service.deduct_credits(db, current_user.id, "video_gen", provider, model, usage)
+            deduct_details = dict(usage or {})
+            deduct_details["item"] = "sora_create_character"
+            _apply_llm_routing_to_billing_details(deduct_details, response)
+            billing_service.deduct_credits(db, current_user.id, "video_gen", provider, model, deduct_details)
 
         # Save result (maybe a character ID returned in content?)
         # If content is JSON
@@ -8195,23 +8845,21 @@ def _resolve_runtime_smtp_config() -> Dict[str, Any]:
 
     db = SessionLocal()
     try:
-        setting = db.query(APISetting).filter(
-            APISetting.category == "System_Email",
-            APISetting.provider == "smtp",
-        ).first()
+        setting = db.query(SMTPSystemConfig).filter(
+            SMTPSystemConfig.is_active == True,
+        ).order_by(SMTPSystemConfig.id.desc()).first()
         if setting:
-            cfg = setting.config or {}
-            config["host"] = str(cfg.get("host", config["host"]) or "").strip()
+            config["host"] = str(setting.host or config["host"] or "").strip()
             try:
-                config["port"] = int(cfg.get("port") or config["port"])
+                config["port"] = int(setting.port or config["port"])
             except Exception:
                 pass
-            config["username"] = str(cfg.get("username", config["username"]) or "").strip()
-            config["password"] = str(setting.api_key or config["password"] or "").strip()
-            config["use_ssl"] = bool(cfg.get("use_ssl", config["use_ssl"]))
-            config["use_tls"] = bool(cfg.get("use_tls", config["use_tls"]))
-            config["from_email"] = str(cfg.get("from_email", config["from_email"]) or "").strip()
-            config["frontend_base_url"] = str(cfg.get("frontend_base_url", config["frontend_base_url"]) or "").strip()
+            config["username"] = str(setting.username or config["username"] or "").strip()
+            config["password"] = str(setting.password or config["password"] or "").strip()
+            config["use_ssl"] = bool(setting.use_ssl)
+            config["use_tls"] = bool(setting.use_tls)
+            config["from_email"] = str(setting.from_email or config["from_email"] or "").strip()
+            config["frontend_base_url"] = str(setting.frontend_base_url or config["frontend_base_url"] or "").strip()
     except Exception as e:
         logger.warning("Failed to load runtime SMTP config from DB, fallback to env: %s", e)
     finally:
@@ -9782,7 +10430,7 @@ def rebind_shot_media_from_assets(
 
 
 
-from app.schemas.billing import PricingRuleCreate, PricingRuleUpdate, PricingRuleOut, TransactionOut, FeaturePricingUpdate, FeaturePricingOut, DefaultApiPricingUpdate, DefaultApiPricingOut
+from app.schemas.billing import TransactionOut, FeaturePricingUpdate, FeaturePricingOut, DefaultApiPricingUpdate, DefaultApiPricingOut
 from app.models.all_models import RechargePlan, PaymentOrder
 import uuid
 import io
@@ -9873,10 +10521,10 @@ def _parse_iso_datetime_safe(value: Any) -> Optional[datetime]:
 
 
 def _resolve_maintenance_config_raw(db: Session) -> Dict[str, Any]:
-    setting = db.query(APISetting).filter(
-        APISetting.category == _MAINTENANCE_CATEGORY,
-        APISetting.provider == _MAINTENANCE_PROVIDER,
-    ).first()
+    setting = db.query(SystemAPISetting).filter(
+        SystemAPISetting.category == _MAINTENANCE_CATEGORY,
+        SystemAPISetting.provider == _MAINTENANCE_PROVIDER,
+    ).order_by(SystemAPISetting.id.desc()).first()
 
     cfg = dict(setting.config or {}) if setting else {}
     enabled = bool(cfg.get("enabled", False))
@@ -9895,6 +10543,34 @@ def _resolve_maintenance_config_raw(db: Session) -> Dict[str, Any]:
         "message": message,
     }
 
+
+def _get_active_wechat_config(db: Session) -> Optional[WechatPayConfig]:
+    return db.query(WechatPayConfig).filter(
+        WechatPayConfig.is_active == True,
+    ).order_by(WechatPayConfig.id.desc()).first()
+
+
+def _wechat_config_to_dict(row: Optional[WechatPayConfig]) -> Dict[str, Any]:
+    if not row:
+        return {
+            "mchid": "",
+            "appid": "",
+            "api_v3_key": "",
+            "cert_serial_no": "",
+            "private_key": "",
+            "notify_url": "",
+            "use_mock": True,
+        }
+    return {
+        "mchid": str(row.mchid or "").strip(),
+        "appid": str(row.appid or "").strip(),
+        "api_v3_key": str(row.api_v3_key or "").strip(),
+        "cert_serial_no": str(row.cert_serial_no or "").strip(),
+        "private_key": str(row.private_key or ""),
+        "notify_url": str(row.notify_url or "").strip(),
+        "use_mock": bool(row.use_mock),
+    }
+
 @router.get("/admin/payment-config", response_model=PaymentConfig)
 def get_payment_config(
     current_user: User = Depends(get_current_user),
@@ -9903,23 +10579,18 @@ def get_payment_config(
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Not authorized")
         
-    setting = db.query(APISetting).filter(
-        APISetting.category == "System_Payment",
-        APISetting.provider == "wechat_pay"
-    ).first()
-    
+    setting = _get_active_wechat_config(db)
     if not setting:
         return PaymentConfig()
-        
-    config = setting.config or {}
+
     return PaymentConfig(
-        mchid=config.get("mchid", ""),
-        appid=config.get("appid", ""),
-        api_v3_key=setting.api_key or "",
-        cert_serial_no=config.get("cert_serial_no", ""),
-        private_key=config.get("private_key", ""),
-        notify_url=config.get("notify_url", ""),
-        use_mock=config.get("use_mock", True)
+        mchid=str(setting.mchid or ""),
+        appid=str(setting.appid or ""),
+        api_v3_key=str(setting.api_v3_key or ""),
+        cert_serial_no=str(setting.cert_serial_no or ""),
+        private_key=str(setting.private_key or ""),
+        notify_url=str(setting.notify_url or ""),
+        use_mock=bool(setting.use_mock),
     )
 
 @router.post("/admin/payment-config", response_model=PaymentConfig)
@@ -9931,30 +10602,24 @@ def update_payment_config(
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Not authorized")
         
-    setting = db.query(APISetting).filter(
-        APISetting.category == "System_Payment",
-        APISetting.provider == "wechat_pay"
-    ).first()
+    setting = _get_active_wechat_config(db)
     
     if not setting:
-        setting = APISetting(
-            user_id=current_user.id, # Associate with admin
-            category="System_Payment",
-            provider="wechat_pay",
-            name="WeChat Pay System Config",
-            is_active=True
+        setting = WechatPayConfig(
+            is_active=True,
+            created_at=datetime.utcnow().isoformat(),
+            updated_at=datetime.utcnow().isoformat(),
         )
         db.add(setting)
-    
-    setting.api_key = idx.api_v3_key
-    setting.config = {
-        "mchid": idx.mchid,
-        "appid": idx.appid,
-        "cert_serial_no": idx.cert_serial_no,
-        "private_key": idx.private_key,
-        "notify_url": idx.notify_url,
-        "use_mock": idx.use_mock
-    }
+
+    setting.mchid = str(idx.mchid or "").strip()
+    setting.appid = str(idx.appid or "").strip()
+    setting.api_v3_key = str(idx.api_v3_key or "").strip()
+    setting.cert_serial_no = str(idx.cert_serial_no or "").strip()
+    setting.private_key = str(idx.private_key or "")
+    setting.notify_url = str(idx.notify_url or "").strip()
+    setting.use_mock = bool(idx.use_mock)
+    setting.updated_at = datetime.utcnow().isoformat()
     
     db.commit()
     db.refresh(setting)
@@ -9981,10 +10646,9 @@ def get_smtp_config(
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Not authorized")
 
-    setting = db.query(APISetting).filter(
-        APISetting.category == "System_Email",
-        APISetting.provider == "smtp"
-    ).first()
+    setting = db.query(SMTPSystemConfig).filter(
+        SMTPSystemConfig.is_active == True,
+    ).order_by(SMTPSystemConfig.id.desc()).first()
 
     if not setting:
         return SMTPConfig(
@@ -9998,16 +10662,15 @@ def get_smtp_config(
             frontend_base_url=str(settings.FRONTEND_BASE_URL or "").strip(),
         )
 
-    config = setting.config or {}
     return SMTPConfig(
-        host=str(config.get("host", "") or "").strip(),
-        port=int(config.get("port") or 587),
-        username=str(config.get("username", "") or "").strip(),
-        password=setting.api_key or "",
-        use_ssl=bool(config.get("use_ssl", False)),
-        use_tls=bool(config.get("use_tls", True)),
-        from_email=str(config.get("from_email", "") or "").strip(),
-        frontend_base_url=str(config.get("frontend_base_url", "") or "").strip(),
+        host=str(setting.host or "").strip(),
+        port=int(setting.port or 587),
+        username=str(setting.username or "").strip(),
+        password=str(setting.password or ""),
+        use_ssl=bool(setting.use_ssl),
+        use_tls=bool(setting.use_tls),
+        from_email=str(setting.from_email or "").strip(),
+        frontend_base_url=str(setting.frontend_base_url or "").strip(),
     )
 
 
@@ -10020,31 +10683,27 @@ def update_smtp_config(
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Not authorized")
 
-    setting = db.query(APISetting).filter(
-        APISetting.category == "System_Email",
-        APISetting.provider == "smtp"
-    ).first()
+    setting = db.query(SMTPSystemConfig).filter(
+        SMTPSystemConfig.is_active == True,
+    ).order_by(SMTPSystemConfig.id.desc()).first()
 
     if not setting:
-        setting = APISetting(
-            user_id=current_user.id,
-            category="System_Email",
-            provider="smtp",
-            name="SMTP System Config",
+        setting = SMTPSystemConfig(
             is_active=True,
+            created_at=datetime.utcnow().isoformat(),
+            updated_at=datetime.utcnow().isoformat(),
         )
         db.add(setting)
 
-    setting.api_key = str(idx.password or "")
-    setting.config = {
-        "host": str(idx.host or "").strip(),
-        "port": int(idx.port or 587),
-        "username": str(idx.username or "").strip(),
-        "use_ssl": bool(idx.use_ssl),
-        "use_tls": bool(idx.use_tls),
-        "from_email": str(idx.from_email or "").strip(),
-        "frontend_base_url": str(idx.frontend_base_url or "").strip(),
-    }
+    setting.host = str(idx.host or "").strip()
+    setting.port = int(idx.port or 587)
+    setting.username = str(idx.username or "").strip()
+    setting.password = str(idx.password or "")
+    setting.use_ssl = bool(idx.use_ssl)
+    setting.use_tls = bool(idx.use_tls)
+    setting.from_email = str(idx.from_email or "").strip()
+    setting.frontend_base_url = str(idx.frontend_base_url or "").strip()
+    setting.updated_at = datetime.utcnow().isoformat()
 
     db.commit()
     db.refresh(setting)
@@ -10183,17 +10842,17 @@ def update_maintenance_config(
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Not authorized")
 
-    setting = db.query(APISetting).filter(
-        APISetting.category == _MAINTENANCE_CATEGORY,
-        APISetting.provider == _MAINTENANCE_PROVIDER
-    ).first()
+    setting = db.query(SystemAPISetting).filter(
+        SystemAPISetting.category == _MAINTENANCE_CATEGORY,
+        SystemAPISetting.provider == _MAINTENANCE_PROVIDER
+    ).order_by(SystemAPISetting.id.desc()).first()
 
     if not setting:
-        setting = APISetting(
-            user_id=current_user.id,
+        setting = SystemAPISetting(
             category=_MAINTENANCE_CATEGORY,
             provider=_MAINTENANCE_PROVIDER,
             name="System Maintenance Config",
+            model="maintenance_mode_config",
             is_active=True,
         )
         db.add(setting)
@@ -10394,38 +11053,13 @@ def create_recharge_order(
     if req.amount <= 0:
         raise HTTPException(status_code=400, detail="Amount must be positive")
 
-    # Load System Payment Config
-    # Explicitly look for the system user's config or global config
-    # Assuming user_id=None or user_id=3 (system) or just find ANY row for System_Payment
-    all_settings = db.query(APISetting).filter(
-        APISetting.category == "System_Payment",
-        APISetting.provider == "wechat_pay"
-    ).all()
-    
-    setting = None
-    if all_settings:
-        # Prefer the one with active settings
-        setting = all_settings[0] # Simply take the first one found
-        logger.info(f"Found System Payment Settings: ID={setting.id}, Provider={setting.provider}")
-    else:
-        logger.warning("No System Payment Settings found in DB query!")
-
+    setting = _get_active_wechat_config(db)
     if setting:
-        conf = setting.config or {}
-        # log what we found
-        logger.info(f"Loading Config: mchid={conf.get('mchid')}, use_mock={conf.get('use_mock')}")
-        
-        payment_service.update_config({
-            "mchid": conf.get("mchid"),
-            "appid": conf.get("appid"),
-            "api_v3_key": setting.api_key,
-            "cert_serial_no": conf.get("cert_serial_no"),
-            "private_key": conf.get("private_key"),
-            "notify_url": conf.get("notify_url"),
-            "use_mock": conf.get("use_mock", True)
-        })
+        cfg = _wechat_config_to_dict(setting)
+        logger.info("Loading WeChat config from dedicated table: use_mock=%s", cfg.get("use_mock"))
+        payment_service.update_config(cfg)
     else:
-        # Default to Mock if no config found
+        logger.warning("No active WeChat config found in dedicated table. Use mock mode.")
         payment_service.update_config({"use_mock": True})
 
     # Find applicable plan
@@ -10528,23 +11162,9 @@ async def wechat_notify(request: Request, db: Session = Depends(get_db)):
     WeChat Pay Callback
     """
     try:
-        # Load Config First
-        setting = db.query(APISetting).filter(
-            APISetting.category == "System_Payment",
-            APISetting.provider == "wechat_pay"
-        ).first()
-        
+        setting = _get_active_wechat_config(db)
         if setting:
-            conf = setting.config or {}
-            payment_service.update_config({
-                "mchid": conf.get("mchid"),
-                "appid": conf.get("appid"),
-                "api_v3_key": setting.api_key,
-                "cert_serial_no": conf.get("cert_serial_no"),
-                "private_key": conf.get("private_key"),
-                "notify_url": conf.get("notify_url"),
-                "use_mock": conf.get("use_mock", True)
-            })
+            payment_service.update_config(_wechat_config_to_dict(setting))
         else:
             logger.warning("Notification received but no Payment Config found. Assuming Mock or Invalid.")
             # If no config, we can't verify signature.
@@ -10655,41 +11275,6 @@ def mock_pay_order(
 
 # --- Billing Management ---
 
-def _validate_pricing_rule_token_costs(rule: PricingRule):
-    token_unit_types = {"per_token", "per_1k_tokens", "per_million_tokens"}
-    if rule.unit_type in token_unit_types:
-        if rule.cost_input is None or rule.cost_output is None or rule.cost_input <= 0 or rule.cost_output <= 0:
-            raise HTTPException(
-                status_code=422,
-                detail="For token unit types, both cost_input and cost_output must be configured (> 0)."
-            )
-
-@router.get("/billing/rules", response_model=List[PricingRuleOut])
-def get_pricing_rules(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    raise HTTPException(status_code=410, detail="Legacy pricing rules are disabled. Use feature pricing + system API pricing.")
-
-@router.post("/billing/rules", response_model=PricingRuleOut)
-def create_pricing_rule(
-    rule_in: PricingRuleCreate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    raise HTTPException(status_code=410, detail="Legacy pricing rules are disabled. Use feature pricing + system API pricing.")
-
-@router.post("/billing/rules/sync", response_model=List[PricingRuleOut])
-def sync_pricing_rules(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """
-    Sync system API Settings into Pricing Rules.
-    If a provider/model exists in system settings but not in pricing rules, add it.
-    """
-    raise HTTPException(status_code=410, detail="Legacy pricing rules are disabled. Use feature pricing + system API pricing.")
-
 
 @router.get("/billing/options")
 def get_billing_options(
@@ -10792,6 +11377,7 @@ def get_billing_default_api_pricing(
     return DefaultApiPricingOut(
         default_api_pricing=billing_service.get_default_api_pricing_map(db),
         recommended_default_api_pricing=billing_service.get_recommended_default_api_pricing_map(),
+        content_fallback_pricing=billing_service.get_content_fallback_pricing(db),
     )
 
 
@@ -10805,9 +11391,14 @@ def update_billing_default_api_pricing(
         raise HTTPException(status_code=403, detail="Not authorized")
 
     saved = billing_service.set_default_api_pricing_map(db, payload.default_api_pricing or {})
+    if payload.content_fallback_pricing is None:
+        fallback_saved = billing_service.get_content_fallback_pricing(db)
+    else:
+        fallback_saved = billing_service.set_content_fallback_pricing(db, payload.content_fallback_pricing or {})
     return DefaultApiPricingOut(
         default_api_pricing=saved,
         recommended_default_api_pricing=billing_service.get_recommended_default_api_pricing_map(),
+        content_fallback_pricing=fallback_saved,
     )
 
 
@@ -10839,23 +11430,6 @@ def get_billing_taxonomy_preview(
         "sourceCategoriesByTaskType": source_categories_by_task_type,
         "taskTypesBySourceCategory": task_types_by_source_category,
     }
-
-@router.put("/billing/rules/{rule_id}", response_model=PricingRuleOut)
-def update_pricing_rule(
-    rule_id: int,
-    rule_in: PricingRuleUpdate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    raise HTTPException(status_code=410, detail="Legacy pricing rules are disabled. Use feature pricing + system API pricing.")
-
-@router.delete("/billing/rules/{rule_id}")
-def delete_pricing_rule(
-    rule_id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    raise HTTPException(status_code=410, detail="Legacy pricing rules are disabled. Use feature pricing + system API pricing.")
 
 @router.get("/billing/transactions", response_model=List[TransactionOut])
 def get_transactions(
@@ -11306,6 +11880,57 @@ def _extract_provider_model_from_result(result: Any, req: Any) -> Tuple[Optional
     return provider, model
 
 
+def _extract_llm_routing_metadata(payload: Any) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+
+    routing_meta = payload.get("routing_metadata") if isinstance(payload.get("routing_metadata"), dict) else {}
+    smart_meta = payload.get("smart_routing") if isinstance(payload.get("smart_routing"), dict) else {}
+
+    provider = str(
+        routing_meta.get("provider")
+        or payload.get("provider")
+        or ""
+    ).strip() or None
+    model = str(
+        routing_meta.get("model")
+        or payload.get("model")
+        or ""
+    ).strip() or None
+
+    system_api_id_raw = (
+        routing_meta.get("system_api_id")
+        if routing_meta.get("system_api_id") is not None
+        else payload.get("system_api_id")
+    )
+    if system_api_id_raw is None:
+        system_api_id_raw = smart_meta.get("system_api_id")
+    try:
+        system_api_id = int(system_api_id_raw) if system_api_id_raw is not None else None
+    except Exception:
+        system_api_id = None
+
+    metadata: Dict[str, Any] = {}
+    if provider:
+        metadata["provider"] = provider
+    if model:
+        metadata["model"] = model
+    if system_api_id is not None:
+        metadata["system_api_id"] = system_api_id
+    if smart_meta:
+        metadata["smart_routing"] = smart_meta
+    return metadata
+
+
+def _apply_llm_routing_to_billing_details(details: Dict[str, Any], payload: Any) -> None:
+    if not isinstance(details, dict):
+        return
+    routing = _extract_llm_routing_metadata(payload)
+    if not routing:
+        return
+    details.update(routing)
+
+
 def _resolve_latest_asset_provider_model(
     db: Session,
     user_id: int,
@@ -11667,6 +12292,22 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
     except asyncio.CancelledError:
         raise
     except HTTPException:
+        # Keep an auditable failure record for submit-based async jobs.
+        try:
+            billing_service.log_failed_transaction(
+                db,
+                current_user.id,
+                "image_gen",
+                req.provider,
+                req.model,
+                "HTTPException in image generation pipeline",
+                details={
+                    "status": "FAILED",
+                    "failure_stage": "image_generate_http_exception",
+                },
+            )
+        except Exception:
+            logger.exception("Failed to log image_gen HTTPException transaction")
         raise
     except Exception as e:
         billing_service.log_failed_transaction(db, current_user.id, "image_gen", req.provider, req.model, str(e))
@@ -11794,6 +12435,8 @@ async def _dispatch_generation_callback(kind: str, callback_url: str, job: Dict[
 async def _run_generate_image_job(job_id: str, user_id: int, req_payload: Dict[str, Any]) -> None:
     db = SessionLocal()
     callback_url = _resolve_callback_url_from_payload(req_payload)
+    req_provider = str(req_payload.get("provider") or "").strip() or None
+    req_model = str(req_payload.get("model") or "").strip() or None
     try:
         user = db.query(User).filter(User.id == user_id).first()
         if not user:
@@ -11819,6 +12462,22 @@ async def _run_generate_image_job(job_id: str, user_id: int, req_payload: Dict[s
             error=None,
         )
     except asyncio.TimeoutError:
+        try:
+            billing_service.log_failed_transaction(
+                db,
+                user_id,
+                "image_gen",
+                req_provider,
+                req_model,
+                f"Image job timeout after {IMAGE_JOB_MAX_RUNNING_SECONDS}s",
+                details={
+                    "status": "FAILED",
+                    "failure_stage": "image_job_timeout",
+                    "job_id": job_id,
+                },
+            )
+        except Exception:
+            logger.exception("Failed to log timed-out image job transaction | job_id=%s user_id=%s", job_id, user_id)
         _set_image_job(
             job_id,
             status="failed",
@@ -11826,6 +12485,22 @@ async def _run_generate_image_job(job_id: str, user_id: int, req_payload: Dict[s
             error=f"image job timed out after {IMAGE_JOB_MAX_RUNNING_SECONDS}s",
         )
     except asyncio.CancelledError:
+        try:
+            billing_service.log_failed_transaction(
+                db,
+                user_id,
+                "image_gen",
+                req_provider,
+                req_model,
+                "Image job cancelled",
+                details={
+                    "status": "FAILED",
+                    "failure_stage": "image_job_cancelled",
+                    "job_id": job_id,
+                },
+            )
+        except Exception:
+            logger.exception("Failed to log cancelled image job transaction | job_id=%s user_id=%s", job_id, user_id)
         _set_image_job(
             job_id,
             status="canceled",
@@ -12270,13 +12945,34 @@ async def generate_video_endpoint(
 
 async def _run_generate_video(req: VideoGenerationRequest, current_user: User, db: Session):
     reservation_tx = None
+    _is_token_billing = billing_service.is_token_pricing(db, "video_gen", req.provider, req.model)
+    _video_token_cfg = {}
+    _estimated_tokens = 0
 
     try:
-        reserve_details = {
-            "duration": req.duration,
-            "duration_seconds": req.duration,
-            "billing_mode": "RESERVE",
-        }
+        if _is_token_billing:
+            _video_token_cfg = billing_service.resolve_video_token_config(db, req.provider, req.model)
+            est_duration = max(5, int(req.duration or 5)) if (req.duration and req.duration > 0) else 5
+            _estimated_tokens = billing_service.estimate_video_output_tokens(
+                width=_video_token_cfg.get("default_width", 1280),
+                height=_video_token_cfg.get("default_height", 720),
+                fps=_video_token_cfg.get("default_fps", 24),
+                duration_seconds=est_duration,
+                draft_token_coefficient=_video_token_cfg.get("draft_token_coefficient", 1.0),
+            )
+            reserve_details = {
+                "output_tokens": _estimated_tokens,
+                "total_tokens": _estimated_tokens,
+                "billing_mode": "RESERVE",
+                "estimation_method": "video_token_formula",
+                "estimated_duration": est_duration,
+            }
+        else:
+            reserve_details = {
+                "duration": req.duration,
+                "duration_seconds": req.duration,
+                "billing_mode": "RESERVE",
+            }
         reservation_tx = billing_service.reserve_credits(
             db,
             current_user.id,
@@ -12412,14 +13108,66 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
             _bind_generated_media_to_shot(db, current_user, req, result.get("url"))
 
         if reservation_tx:
-            billing_service.settle_reservation(
-                db,
-                reservation_tx.id,
-                {
+            final_meta = result.get("metadata") if isinstance(result, dict) else {}
+            final_meta = final_meta if isinstance(final_meta, dict) else {}
+            smart_meta = final_meta.get("smart_routing") if isinstance(final_meta.get("smart_routing"), dict) else {}
+
+            final_provider = str(
+                final_meta.get("provider")
+                or smart_meta.get("provider")
+                or req.provider
+                or ""
+            ).strip()
+            final_model = str(
+                final_meta.get("model")
+                or smart_meta.get("model")
+                or req.model
+                or ""
+            ).strip()
+            final_system_api_id_raw = (
+                final_meta.get("system_api_id")
+                if final_meta.get("system_api_id") is not None
+                else smart_meta.get("system_api_id")
+            )
+            try:
+                final_system_api_id = int(final_system_api_id_raw) if final_system_api_id_raw is not None else None
+            except Exception:
+                final_system_api_id = None
+
+            if _is_token_billing:
+                # Extract actual token usage from API response if available
+                raw_resp = (result.get("metadata") or {}).get("raw") or {}
+                usage = raw_resp.get("usage") or {}
+                actual_tokens = int(usage.get("total_tokens") or usage.get("output_tokens") or 0)
+                if actual_tokens <= 0:
+                    actual_tokens = _estimated_tokens  # fallback to estimate
+                settle_details = {
+                    "output_tokens": actual_tokens,
+                    "total_tokens": actual_tokens,
+                    "status": "SETTLED",
+                    "billing_mode": "ACTUAL",
+                    "token_source": "api_usage" if int(usage.get("total_tokens", 0) or 0) > 0 else "estimate",
+                }
+            else:
+                settle_details = {
                     "duration": req.duration,
                     "duration_seconds": req.duration,
                     "status": "SETTLED",
-                },
+                }
+
+            if final_provider:
+                settle_details["provider"] = final_provider
+            if final_model:
+                settle_details["model"] = final_model
+            if final_system_api_id is not None:
+                settle_details["system_api_id"] = final_system_api_id
+            if smart_meta:
+                settle_details["smart_routing"] = smart_meta
+
+            billing_service.settle_reservation(
+                db,
+                reservation_tx.id,
+                settle_details,
             )
             reservation_tx = None
 
@@ -14959,6 +15707,23 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
         
         result_content = llm_response.get("content", "")
         usage = llm_response.get("usage", {})
+        effective_llm_response: Dict[str, Any] = llm_response
+
+        def _merge_usage_metrics(base_usage: Dict[str, Any], delta_usage: Dict[str, Any]) -> Dict[str, Any]:
+            merged = dict(base_usage or {})
+            if not isinstance(delta_usage, dict):
+                return merged
+            additive_keys = ("prompt_tokens", "completion_tokens", "total_tokens", "input_tokens", "output_tokens")
+            for key in additive_keys:
+                if key in delta_usage:
+                    try:
+                        merged[key] = int(merged.get(key, 0) or 0) + int(delta_usage.get(key, 0) or 0)
+                    except Exception:
+                        pass
+            for key, value in delta_usage.items():
+                if key not in merged:
+                    merged[key] = value
+            return merged
         
         logger.info(f"LLM Reply Length: {len(result_content)}. Usage: {usage}")
         
@@ -15024,6 +15789,8 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
                 repaired_data = _extract_first_json_payload(repair_text)
                 if repaired_data is not None:
                     data = repaired_data
+                    usage = _merge_usage_metrics(usage, (repair_response or {}).get("usage", {}) or {})
+                    effective_llm_response = repair_response or effective_llm_response
                     logger.info("Entity analysis JSON parse recovered via repair retry.")
                 else:
                     repair_preview = repair_text[:300].replace("\n", " ")
@@ -15107,6 +15874,7 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
         billing_details = {"item": "entity_image_analysis", "entity_id": entity.id}
         if usage:
             billing_details.update(usage)
+        _apply_llm_routing_to_billing_details(billing_details, effective_llm_response)
         if "prompt_tokens" in billing_details and "input_tokens" not in billing_details:
             billing_details["input_tokens"] = billing_details.get("prompt_tokens", 0)
         if "completion_tokens" in billing_details and "output_tokens" not in billing_details:

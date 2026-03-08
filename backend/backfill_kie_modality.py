@@ -1,11 +1,12 @@
-"""Backfill modality column for all KIE models in system_api_settings."""
+"""Backfill modality column for all KIE models in system_api_settings (JSON format v2)."""
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
 
 from app.db.session import SessionLocal
 from app.models.all_models import SystemAPISetting
+from app.services.modality_utils import migrate_legacy_modality_string
 
-# model -> modality mapping
+# model -> modality mapping (legacy string values, auto-converted to JSON)
 MODALITY_MAP = {
     # Image — text-to-image
     "seedream/4.5-text-to-image": "text-to-image",
@@ -17,6 +18,7 @@ MODALITY_MAP = {
     "qwen/text-to-image": "text-to-image",
     "flux-2/pro-text-to-image": "text-to-image",
     "flux-2/flex-text-to-image": "text-to-image",
+    "gpt-image/1-5-text-to-image": "text-to-image",
     "gpt-image/1.5-text-to-image": "text-to-image",
     "ideogram/character": "text-to-image",
 
@@ -29,6 +31,7 @@ MODALITY_MAP = {
     "qwen/image-edit": "image-to-image",
     "flux-2/pro-image-to-image": "image-to-image",
     "flux-2/flex-image-to-image": "image-to-image",
+    "gpt-image/1-5-image-to-image": "image-to-image",
     "gpt-image/1.5-image-to-image": "image-to-image",
     "topaz/image-upscale": "image-to-image",
     "recraft/remove-background": "image-to-image",
@@ -123,7 +126,7 @@ def main():
         for row in rows:
             model_key = (row.model or "").strip()
             if model_key in MODALITY_MAP:
-                new_val = MODALITY_MAP[model_key]
+                new_val = migrate_legacy_modality_string(MODALITY_MAP[model_key])
                 if row.modality != new_val:
                     row.modality = new_val
                     updated += 1

@@ -103,6 +103,17 @@ if not is_sqlite:
 
 engine = create_engine(settings.DATABASE_URL, **engine_kwargs)
 
+# Enable WAL mode for SQLite to allow concurrent read/write access.
+# Without WAL, a long-lived read transaction (e.g. streaming SSE) holds a
+# SHARED lock that blocks ALL write operations from other connections.
+if is_sqlite:
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_wal(dbapi_conn, connection_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=5000")
+        cursor.close()
+
 # Invalidate connections on disconnect errors so the pool discards them
 @event.listens_for(engine, "handle_error")
 def _handle_db_error(context):
