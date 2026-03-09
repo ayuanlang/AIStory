@@ -226,6 +226,9 @@ function App() {
           </ErrorBoundary>
           <GlobalMessageHost />
           <LogPanel />
+          <div className="fixed bottom-3 right-8 z-[120] rounded-md border border-white/10 bg-black/40 px-3 py-1.5 text-[11px] text-white/85 backdrop-blur-sm">
+            {tUI(appUiLang, '研发公司：厦门浪迹星科技有限公司', 'R&D: Xiamen Langjixing Technology Co., Ltd.')}
+          </div>
         </div>
       </Router>
     </LogProvider>

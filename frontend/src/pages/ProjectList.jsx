@@ -30,7 +30,10 @@ import {
     Shield,
     Share2,
     X,
-    Loader2
+    Loader2,
+    ChevronsLeft,
+    ChevronsRight,
+    Info
 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
@@ -204,6 +207,21 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [shareTargetUser, setShareTargetUser] = useState('');
     const [shareLoading, setShareLoading] = useState(false);
     const [shareSubmitting, setShareSubmitting] = useState(false);
+    const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
+        try {
+            return localStorage.getItem('project_list.sidebar.collapsed') === '1';
+        } catch {
+            return false;
+        }
+    });
+
+    useEffect(() => {
+        try {
+            localStorage.setItem('project_list.sidebar.collapsed', isSidebarCollapsed ? '1' : '0');
+        } catch {
+            // ignore localStorage failures
+        }
+    }, [isSidebarCollapsed]);
     
     useEffect(() => {
         // Fetch User Info to check admin status
@@ -524,9 +542,10 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                 ? 'bg-primary text-primary-foreground' 
                 : 'text-muted-foreground hover:bg-secondary/50 hover:text-foreground'
             } ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+            title={label}
         >
             <Icon className="w-5 h-5" />
-            {label}
+            {!isSidebarCollapsed && label}
         </button>
     );
 
@@ -555,11 +574,36 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                 </div>
             )}
             {/* Sidebar */}
-            <aside className="w-64 border-r bg-card/30 flex flex-col p-6">
-                <div className="flex items-center gap-2 mb-10 px-2">
+            <aside className={`${isSidebarCollapsed ? 'w-20 p-3' : 'w-64 p-6'} border-r bg-card/30 flex flex-col transition-all duration-300`}>
+                <div className={`flex items-center ${isSidebarCollapsed ? 'justify-center' : 'justify-between'} mb-6 px-1`}>
+                    <div className={`flex items-center gap-2 ${isSidebarCollapsed ? 'justify-center' : ''}`}>
                     <img src="/woola-transparent.png?v=4" alt="Woola AI story" className="w-8 h-8 object-contain" />
-                    <span className="text-xl font-bold tracking-tight">Woola AI story</span>
+                        {!isSidebarCollapsed && <span className="text-xl font-bold tracking-tight">Woola AI story</span>}
+                    </div>
+                    {!isSidebarCollapsed && (
+                        <button
+                            type="button"
+                            onClick={() => setIsSidebarCollapsed(true)}
+                            title={t('收起侧边栏', 'Collapse sidebar')}
+                            className="p-2 rounded-lg text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors"
+                        >
+                            <ChevronsLeft className="w-4 h-4" />
+                        </button>
+                    )}
                 </div>
+
+                {isSidebarCollapsed && (
+                    <div className="mb-6 flex justify-center">
+                        <button
+                            type="button"
+                            onClick={() => setIsSidebarCollapsed(false)}
+                            title={t('展开侧边栏', 'Expand sidebar')}
+                            className="p-2 rounded-lg text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors"
+                        >
+                            <ChevronsRight className="w-4 h-4" />
+                        </button>
+                    </div>
+                )}
 
                 <div className="space-y-2 flex-1">
                     <SidebarItem id="projects" icon={Folder} label={t('我的项目', 'My Projects')} />
@@ -570,16 +614,18 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                             <button 
                                 onClick={() => trackMenuAction('project_list.admin.system_logs', t('系统日志', 'System Logs'), () => navigate('/admin/logs'))}
                                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-muted-foreground hover:bg-secondary/50 hover:text-foreground`}
+                                title={t('系统日志', 'System Logs')}
                             >
                                 <Activity className="w-5 h-5" />
-                                {t('系统日志', 'System Logs')}
+                                {!isSidebarCollapsed && t('系统日志', 'System Logs')}
                             </button>
                             <button 
                                 onClick={() => trackMenuAction('project_list.admin.user_admin', t('管理面板', 'Admin Panel'), () => navigate('/admin/users'))}
                                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-muted-foreground hover:bg-secondary/50 hover:text-foreground`}
+                                title={t('管理面板', 'Admin Panel')}
                             >
                                 <Shield className="w-5 h-5 text-red-500" />
-                                {t('管理面板', 'Admin Panel')}
+                                {!isSidebarCollapsed && t('管理面板', 'Admin Panel')}
                             </button>
                         </>
                     )}
@@ -593,14 +639,16 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                             });
                         }}
                         className="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
+                        title={t('设置', 'Settings')}
                     >
                         <Settings className="w-5 h-5" />
-                        {t('设置', 'Settings')}
+                        {!isSidebarCollapsed && t('设置', 'Settings')}
                     </button>
+                    <SidebarItem id="about" icon={Info} label={t('关于', 'About')} />
                 </div>
 
                 <div className="mt-auto border-t pt-6">
-                    <div className="flex items-center gap-3 px-2 mb-4">
+                    <div className={`flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-3'} px-2 mb-4`}>
                         <div className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center">
                             {currentUser?.avatar_url ? (
                                 <img
@@ -612,16 +660,19 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                 <User className="w-5 h-5 text-muted-foreground" />
                             )}
                         </div>
-                        <div className="flex-1 overflow-hidden">
-                            <p className="text-sm font-medium truncate">{currentUser?.full_name || currentUser?.username || t('访客用户', 'Guest User')}</p>
-                            <p className="text-xs text-muted-foreground truncate" title={currentUser?.email}>{currentUser?.email || t('无账号', 'No Account')}</p>
-                        </div>
+                        {!isSidebarCollapsed && (
+                            <div className="flex-1 overflow-hidden">
+                                <p className="text-sm font-medium truncate">{currentUser?.full_name || currentUser?.username || t('访客用户', 'Guest User')}</p>
+                                <p className="text-xs text-muted-foreground truncate" title={currentUser?.email}>{currentUser?.email || t('无账号', 'No Account')}</p>
+                            </div>
+                        )}
                     </div>
                     <button 
                         onClick={handleLogout}
-                        className="w-full flex items-center gap-2 px-2 text-sm text-muted-foreground hover:text-destructive transition-colors"
+                        className={`w-full flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-2'} px-2 text-sm text-muted-foreground hover:text-destructive transition-colors`}
+                        title={t('退出登录', 'Sign Out')}
                     >
-                        <LogOut className="w-4 h-4" /> {t('退出登录', 'Sign Out')}
+                        <LogOut className="w-4 h-4" /> {!isSidebarCollapsed && t('退出登录', 'Sign Out')}
                     </button>
                 </div>
             </aside>
@@ -633,12 +684,13 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                     <header className="flex justify-between items-center">
                         <div>
                             <h1 className="text-3xl font-bold tracking-tight capitalize">
-                                {activeTab === 'projects' ? t('我的项目', 'My Projects') : activeTab}
+                                {activeTab === 'projects' ? t('我的项目', 'My Projects') : activeTab === 'assets' ? t('素材库', 'Assets Library') : activeTab === 'settings' ? t('设置', 'Settings') : activeTab === 'about' ? t('关于', 'About') : activeTab}
                             </h1>
                             <p className="text-muted-foreground mt-1">
                                 {activeTab === 'projects' && t('管理和编辑你的分镜脚本。', 'Manage and edit your storyboard scripts.')}
                                 {activeTab === 'assets' && t('管理你生成的角色和场景素材。', 'Manage your generated characters and scenes.')}
                                 {activeTab === 'settings' && t('管理你的账户偏好设置。', 'Manage your account preferences.')}
+                                {activeTab === 'about' && t('了解产品定位与支持方式。', 'Learn about the product and support channels.')}
                             </p>
                         </div>
                         {activeTab === 'projects' && (
@@ -887,6 +939,35 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                            <div className="h-full bg-card/30 rounded-3xl border border-white/5 overflow-hidden">
                                 <SettingsPage />
                            </div>
+                        )}
+
+                        {activeTab === 'about' && (
+                            <div className="bg-card/30 rounded-3xl border border-white/5 p-8 md:p-10">
+                                <h2 className="text-2xl font-bold mb-4">{t('关于 Woola AI story', 'About Woola AI story')}</h2>
+                                <p className="text-muted-foreground leading-relaxed mb-4">
+                                    {t(
+                                        'Woola AI story 是一款面向影视与广告创作团队的 AI 分镜协作平台，帮助你把剧本、角色、场景与镜头计划串联为可执行的制作流程。',
+                                        'Woola AI story is an AI storyboard collaboration platform for film and creative teams, turning scripts, characters, scenes, and shot plans into an executable production workflow.'
+                                    )}
+                                </p>
+                                <p className="text-muted-foreground leading-relaxed mb-6">
+                                    {t(
+                                        '你可以在这里完成剧本分析、镜头拆解、素材生成与项目协同，减少沟通成本并加快从创意到交付的速度。',
+                                        'You can run script analysis, shot breakdown, asset generation, and project collaboration here to reduce communication cost and speed up delivery from idea to final output.'
+                                    )}
+                                </p>
+                                <div className="rounded-xl border border-white/10 bg-background/50 p-4">
+                                    <div className="text-sm text-muted-foreground mb-1">{t('研发公司', 'R&D Company')}</div>
+                                    <div className="mb-3">{t('厦门浪迹星科技有限公司', 'Xiamen Langjixing Technology Co., Ltd.')}</div>
+                                    <div className="text-sm text-muted-foreground mb-1">{t('支持邮箱', 'Support Email')}</div>
+                                    <a
+                                        href="mailto:metawave@126.com"
+                                        className="text-primary hover:underline break-all"
+                                    >
+                                        metawave@126.com
+                                    </a>
+                                </div>
+                            </div>
                         )}
                     </div>
                 </div>

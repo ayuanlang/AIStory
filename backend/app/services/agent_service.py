@@ -1346,20 +1346,8 @@ Output ONLY the JSON object now."""
                     media_tokens = ["/draw", "/video", "image2video", "video-synthesis", "generations/tasks"]
                     return not any(token in endpoint for token in media_tokens)
 
-                active_user_setting = session.query(APISetting).filter(
-                    APISetting.user_id == user_id,
-                    APISetting.category == resolved_category,
-                    APISetting.is_active == True
-                ).order_by(APISetting.id.desc()).first()
-
-                if not active_user_setting:
-                    logger.warning(
-                        "No active user api setting found, falling back to system active config | user_id=%s category=%s",
-                        user_id,
-                        resolved_category,
-                    )
-                    # ---- fallback: pick active system config for this category ----
-                    # iterate candidates to find first usable one
+                def _resolve_system_default_fallback(selection_source: str) -> Dict[str, Any]:
+                    # Prefer active system setting in the same category when user setting is missing or unusable.
                     sys_candidates = session.query(SystemAPISetting).filter(
                         SystemAPISetting.category == resolved_category,
                         SystemAPISetting.is_active == True,
@@ -1374,38 +1362,59 @@ Output ONLY the JSON object now."""
                         sys_fallback = cand
                         break
 
-                    if sys_fallback:
-                        from app.api.settings import DEFAULTS
-                        default = DEFAULTS.get(sys_fallback.provider, {})
-                        merged_config = dict(sys_fallback.config or default.get("config", {}) or {})
-                        merged_config["__resolved_setting_id"] = sys_fallback.id
-                        merged_config["__resolved_source"] = f"system_fallback:{sys_fallback.provider}/{sys_fallback.model}->{sys_fallback.id}"
-                        merged_config["__resolved_category"] = resolved_category
-                        merged_config["__selection_source"] = "system_fallback_no_user_setting"
-                        merged_config["__resolved_user_id"] = user_id
-
-                        logger.info(
-                            "Resolved active API config via system fallback | user_id=%s category=%s setting_id=%s provider=%s model=%s",
-                            user_id, resolved_category, sys_fallback.id, sys_fallback.provider, sys_fallback.model,
+                    if not sys_fallback:
+                        logger.warning(
+                            "No usable system fallback config found | user_id=%s category=%s source=%s",
+                            user_id,
+                            resolved_category,
+                            selection_source,
                         )
-                        return {
-                            "provider": sys_fallback.provider,
-                            "api_key": self._pick_runtime_api_key(
-                                sys_fallback.config,
-                                sys_fallback.api_key,
-                                session=session,
-                                provider_name=sys_fallback.provider,
-                            ),
-                            "base_url": sys_fallback.base_url or default.get("base_url"),
-                            "model": sys_fallback.model or default.get("model"),
-                            "config": merged_config,
-                        }
+                        return {}
 
-                    logger.warning(
-                        "No usable system fallback config either | user_id=%s category=%s",
-                        user_id, resolved_category,
+                    from app.api.settings import DEFAULTS
+                    default = DEFAULTS.get(sys_fallback.provider, {})
+                    merged_config = dict(sys_fallback.config or default.get("config", {}) or {})
+                    merged_config["__resolved_setting_id"] = sys_fallback.id
+                    merged_config["__resolved_source"] = f"system_fallback:{sys_fallback.provider}/{sys_fallback.model}->{sys_fallback.id}"
+                    merged_config["__resolved_category"] = resolved_category
+                    merged_config["__selection_source"] = selection_source
+                    merged_config["__resolved_user_id"] = user_id
+
+                    logger.info(
+                        "Resolved active API config via system fallback | user_id=%s category=%s source=%s setting_id=%s provider=%s model=%s",
+                        user_id,
+                        resolved_category,
+                        selection_source,
+                        sys_fallback.id,
+                        sys_fallback.provider,
+                        sys_fallback.model,
                     )
-                    return {}
+                    return {
+                        "provider": sys_fallback.provider,
+                        "api_key": self._pick_runtime_api_key(
+                            sys_fallback.config,
+                            sys_fallback.api_key,
+                            session=session,
+                            provider_name=sys_fallback.provider,
+                        ),
+                        "base_url": sys_fallback.base_url or default.get("base_url"),
+                        "model": sys_fallback.model or default.get("model"),
+                        "config": merged_config,
+                    }
+
+                active_user_setting = session.query(APISetting).filter(
+                    APISetting.user_id == user_id,
+                    APISetting.category == resolved_category,
+                    APISetting.is_active == True
+                ).order_by(APISetting.id.desc()).first()
+
+                if not active_user_setting:
+                    logger.warning(
+                        "No active user api setting found, falling back to system active config | user_id=%s category=%s",
+                        user_id,
+                        resolved_category,
+                    )
+                    return _resolve_system_default_fallback("system_fallback_no_user_setting")
 
                 selected: Optional[SystemAPISetting] = None
                 selected_source = "none"
@@ -1442,7 +1451,7 @@ Output ONLY the JSON object now."""
                             selected.model,
                             selected.id,
                         )
-                        return {}
+                        return _resolve_system_default_fallback("system_fallback_selected_deprecated")
                     if not _is_endpoint_compatible(selected.config or {}):
                         logger.warning(
                             "Skipping incompatible %s setting | user_id=%s setting_id=%s provider=%s model=%s endpoint=%s",
@@ -1454,6 +1463,9 @@ Output ONLY the JSON object now."""
                             (selected.config or {}).get("endpoint"),
                         )
                         selected = None
+
+                if not selected:
+                    return _resolve_system_default_fallback("system_fallback_selected_missing_or_incompatible")
 
                 if selected:
                     from app.api.settings import DEFAULTS

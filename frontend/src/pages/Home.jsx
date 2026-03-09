@@ -9,6 +9,7 @@ import { getUiLang, tUI } from '../lib/uiLang';
 const Home = () => {
     const uiLang = getUiLang();
     const t = (zh, en) => tUI(uiLang, zh, en);
+    const currentYear = new Date().getFullYear();
     return (
         <div className="min-h-screen flex flex-col font-sans bg-background text-foreground overflow-hidden selection:bg-primary/20">
             <Navbar />
@@ -60,7 +61,8 @@ const Home = () => {
             </main>
             
             <footer className="relative z-10 py-6 text-center text-sm text-muted-foreground">
-                <p>&copy; 2024 Woola AI story. {t('版权所有。', 'All rights reserved.')}</p>
+                <p>&copy; {currentYear} Woola AI story. {t('版权所有。', 'All rights reserved.')}</p>
+                <p className="mt-1">{t('研发公司：厦门浪迹星科技有限公司', 'R&D Company: Xiamen Langjixing Technology Co., Ltd.')}</p>
             </footer>
         </div>
     );
