@@ -1933,6 +1933,9 @@ export const updateBillingDefaultApiPricing = async (defaultApiPricing, contentF
     }
     return (await api.put('/billing/default-api-pricing', payload)).data;
 };
+export const getAdminUsersPage = async (page = 1, pageSize = 20) => (
+    await api.get(`/users/page?page=${encodeURIComponent(page)}&page_size=${encodeURIComponent(pageSize)}`)
+).data;
 export const getAgentToolPolicy = async () => (await api.get('/settings/system/agent/tools-policy')).data;
 export const updateAgentToolPolicy = async (payload = {}) => (await api.put('/settings/system/agent/tools-policy', payload || {})).data;
 export const getSystemAIAssistantAnalyze = async (payload = {}) => (await api.post('/settings/system/ai-assistant/analyze', payload || {})).data;

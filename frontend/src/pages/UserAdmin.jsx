@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, getAdminLlmLogFiles, getAdminLlmLogView, getAdminStorageUsage, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, generateKiePricingRulesManage, applyKiePricingRulesManage } from '../services/api';
+import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, getAdminLlmLogFiles, getAdminLlmLogView, getAdminStorageUsage, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, generateKiePricingRulesManage, applyKiePricingRulesManage, getAdminUsersPage } from '../services/api';
 import Footer from '../components/Footer';
 import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive, Database } from 'lucide-react';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
@@ -2417,17 +2417,40 @@ const UserAdmin = () => {
     // Credit Edit State
     const [creditEditUser, setCreditEditUser] = useState(null);
     const [creditAmount, setCreditAmount] = useState(0);
+    const [usersPage, setUsersPage] = useState(1);
+    const [usersPageSize, setUsersPageSize] = useState(20);
+    const [usersTotal, setUsersTotal] = useState(0);
+    const [userEditModal, setUserEditModal] = useState(null);
+    const [isSavingUserEditModal, setIsSavingUserEditModal] = useState(false);
 
-    const fetchAllData = async () => {
+    const totalPages = Math.max(1, Math.ceil((Number(usersTotal) || 0) / Math.max(1, Number(usersPageSize) || 1)));
+
+    const toUserEditDraft = (user) => ({
+        id: user?.id,
+        username: String(user?.username || ''),
+        email: String(user?.email || ''),
+        full_name: String(user?.full_name || ''),
+        is_active: !!user?.is_active,
+        account_status: Number(user?.account_status ?? 1),
+        email_verified: !!user?.email_verified,
+        is_authorized: !!user?.is_authorized,
+        is_system: !!user?.is_system,
+        is_superuser: !!user?.is_superuser,
+    });
+
+    const fetchAllData = async (nextPage = usersPage, nextPageSize = usersPageSize) => {
         setLoading(true);
         try {
             const [usersRes] = await Promise.allSettled([
-                api.get('/users'),
+                getAdminUsersPage(nextPage, nextPageSize),
             ]);
 
             if (usersRes.status === 'fulfilled') {
-                const fetchedUsers = usersRes.value.data;
+                const fetchedUsers = Array.isArray(usersRes.value?.items) ? usersRes.value.items : [];
                 setUsers(fetchedUsers);
+                setUsersTotal(Number(usersRes.value?.total || 0));
+                setUsersPage(Number(usersRes.value?.page || nextPage));
+                setUsersPageSize(Number(usersRes.value?.page_size || nextPageSize));
                 
                 // Extract System User Settings to populate Model Options
                 const systemUsers = fetchedUsers.filter(u => u.is_system);
@@ -2637,14 +2660,41 @@ const UserAdmin = () => {
         try {
             await updateUserCredits(creditEditUser.id, parseInt(creditAmount), 'set'); // or 'add' logic if UI supports it
             setCreditEditUser(null);
-            fetchAllData();
+            fetchAllData(usersPage, usersPageSize);
         } catch (e) { alert(e.message); }
+    };
+
+    const handleSaveUserModal = async () => {
+        if (!userEditModal?.id) return;
+        try {
+            setIsSavingUserEditModal(true);
+            const payload = {
+                username: String(userEditModal.username || '').trim(),
+                email: String(userEditModal.email || '').trim(),
+                full_name: String(userEditModal.full_name || '').trim(),
+                is_active: !!userEditModal.is_active,
+                account_status: Number(userEditModal.account_status ?? 1),
+                email_verified: !!userEditModal.email_verified,
+                is_authorized: !!userEditModal.is_authorized,
+                is_system: !!userEditModal.is_system,
+                is_superuser: !!userEditModal.is_superuser,
+            };
+            await updateUser(userEditModal.id, payload);
+            setUserEditModal(null);
+        } finally {
+            setIsSavingUserEditModal(false);
+        }
     };
 
     // Initial Fetch
     useEffect(() => {
-        fetchAllData();
+        fetchAllData(usersPage, usersPageSize);
     }, []);
+
+    useEffect(() => {
+        if (activeTab !== 'users') return;
+        fetchAllData(usersPage, usersPageSize);
+    }, [activeTab, usersPage, usersPageSize]);
 
     // Helper Components
     const TabButton = ({ id, label, icon: Icon }) => (
@@ -2695,8 +2745,8 @@ const UserAdmin = () => {
     const updateUser = async (userId, data) => {
         try {
             const response = await api.put(`/users/${userId}`, data);
-            setUsers(users.map(u => u.id === userId ? { ...u, ...response.data } : u));
-            if (data.is_system) fetchAllData();
+            setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, ...response.data } : u)));
+            if (data.is_system !== undefined) fetchAllData(usersPage, usersPageSize);
         } catch (e) {
             alert(e.message || t('更新失败', 'Update failed'));
         }
@@ -3256,7 +3306,44 @@ const UserAdmin = () => {
 
                     {/* USERS TAB */}
                     {activeTab === 'users' && (
-                        <div className="overflow-x-auto">
+                        <div>
+                            <div className="mb-3 flex flex-wrap items-center justify-between gap-3 text-sm text-gray-300">
+                                <div>
+                                    {t('用户总量', 'Total Users')}: <span className="font-semibold text-white">{usersTotal}</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <span>{t('每页', 'Per Page')}</span>
+                                    <select
+                                        className="bg-black/30 border border-gray-700 rounded px-2 py-1 text-xs"
+                                        value={usersPageSize}
+                                        onChange={(e) => {
+                                            const nextSize = Number(e.target.value || 20);
+                                            setUsersPage(1);
+                                            setUsersPageSize(nextSize);
+                                        }}
+                                    >
+                                        {[10, 20, 50, 100].map((size) => (
+                                            <option key={size} value={size}>{size}</option>
+                                        ))}
+                                    </select>
+                                    <button
+                                        className="px-2 py-1 rounded bg-white/10 hover:bg-white/20 disabled:opacity-50"
+                                        disabled={usersPage <= 1}
+                                        onClick={() => setUsersPage((prev) => Math.max(1, prev - 1))}
+                                    >
+                                        {t('上一页', 'Prev')}
+                                    </button>
+                                    <span>{usersPage} / {totalPages}</span>
+                                    <button
+                                        className="px-2 py-1 rounded bg-white/10 hover:bg-white/20 disabled:opacity-50"
+                                        disabled={usersPage >= totalPages}
+                                        onClick={() => setUsersPage((prev) => Math.min(totalPages, prev + 1))}
+                                    >
+                                        {t('下一页', 'Next')}
+                                    </button>
+                                </div>
+                            </div>
+                            <div className="overflow-x-auto">
                             <table className="w-full text-left border-collapse">
                                 <thead>
                                     <tr className="border-b border-gray-800 text-gray-400 text-sm">
@@ -3274,7 +3361,12 @@ const UserAdmin = () => {
                                 </thead>
                                 <tbody>
                                     {users.map(user => (
-                                        <tr key={user.id} className="border-b border-gray-800/50 hover:bg-gray-800/50">
+                                        <tr
+                                            key={user.id}
+                                            className="border-b border-gray-800/50 hover:bg-gray-800/50"
+                                            onDoubleClick={() => setUserEditModal(toUserEditDraft(user))}
+                                            title={t('双击可快速编辑该用户', 'Double-click to edit this user quickly')}
+                                        >
                                             <td className="p-3">
                                                 <input
                                                     className="w-full bg-black/30 border border-gray-700 rounded px-2 py-1 text-sm"
@@ -3367,6 +3459,7 @@ const UserAdmin = () => {
                                     ))}
                                 </tbody>
                             </table>
+                            </div>
                         </div>
                     )}
 
@@ -5713,6 +5806,34 @@ const UserAdmin = () => {
                         <div className="flex justify-end gap-2">
                                 <button onClick={() => setCreditEditUser(null)} className="px-4 py-2 hover:bg-gray-800 rounded">{t('取消', 'Cancel')}</button>
                                 <button onClick={handleUpdateCredits} className="px-4 py-2 bg-green-600 hover:bg-green-500 text-white font-bold rounded">{t('更新余额', 'Update Balance')}</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* User Edit Modal */}
+            {userEditModal && (
+                <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50" onClick={() => setUserEditModal(null)}>
+                    <div className="bg-gray-900 border border-gray-700 p-6 rounded-xl w-full max-w-2xl" onClick={(e) => e.stopPropagation()}>
+                        <h3 className="text-xl font-bold mb-4">{t('编辑用户', 'Edit User')} #{userEditModal.id}</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <input className="bg-black/30 border border-gray-700 rounded px-3 py-2 text-sm" value={userEditModal.username} placeholder={t('用户名', 'Username')} onChange={(e) => setUserEditModal((p) => ({ ...p, username: e.target.value }))} />
+                            <input className="bg-black/30 border border-gray-700 rounded px-3 py-2 text-sm" value={userEditModal.email} placeholder={t('邮箱', 'Email')} onChange={(e) => setUserEditModal((p) => ({ ...p, email: e.target.value }))} />
+                            <input className="md:col-span-2 bg-black/30 border border-gray-700 rounded px-3 py-2 text-sm" value={userEditModal.full_name} placeholder={t('姓名', 'Full Name')} onChange={(e) => setUserEditModal((p) => ({ ...p, full_name: e.target.value }))} />
+                            <select className="bg-black/30 border border-gray-700 rounded px-3 py-2 text-sm" value={userEditModal.account_status} onChange={(e) => setUserEditModal((p) => ({ ...p, account_status: Number(e.target.value) }))}>
+                                <option value={1}>{t('正常', 'Active')}</option>
+                                <option value={0}>{t('禁用', 'Disabled')}</option>
+                                <option value={-1}>{t('待邮箱校验', 'Pending Verify')}</option>
+                            </select>
+                            <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={!!userEditModal.is_active} onChange={(e) => setUserEditModal((p) => ({ ...p, is_active: e.target.checked }))} />{t('启用', 'Active')}</label>
+                            <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={!!userEditModal.email_verified} onChange={(e) => setUserEditModal((p) => ({ ...p, email_verified: e.target.checked }))} />{t('邮箱已验证', 'Email Verified')}</label>
+                            <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={!!userEditModal.is_authorized} onChange={(e) => setUserEditModal((p) => ({ ...p, is_authorized: e.target.checked }))} />{t('授权', 'Authorized')}</label>
+                            <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={!!userEditModal.is_system} onChange={(e) => setUserEditModal((p) => ({ ...p, is_system: e.target.checked }))} />{t('系统密钥提供方', 'System Key Provider')}</label>
+                            <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={!!userEditModal.is_superuser} onChange={(e) => setUserEditModal((p) => ({ ...p, is_superuser: e.target.checked }))} />{t('超级管理员', 'Superuser')}</label>
+                        </div>
+                        <div className="mt-6 flex justify-end gap-2">
+                            <button onClick={() => setUserEditModal(null)} className="px-4 py-2 hover:bg-gray-800 rounded">{t('取消', 'Cancel')}</button>
+                            <button onClick={handleSaveUserModal} disabled={isSavingUserEditModal} className="px-4 py-2 bg-primary hover:bg-primary/90 text-white font-bold rounded disabled:opacity-50">{isSavingUserEditModal ? t('保存中...', 'Saving...') : t('保存', 'Save')}</button>
                         </div>
                     </div>
                 </div>

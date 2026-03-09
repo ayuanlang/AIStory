@@ -8820,6 +8820,13 @@ class UserOut(BaseModel):
         from_attributes = True
 
 
+class UserPageOut(BaseModel):
+    items: List[UserOut]
+    total: int
+    page: int
+    page_size: int
+
+
 def _is_valid_email_format(email: str) -> bool:
     raw = (email or "").strip()
     if not raw:
@@ -12866,6 +12873,36 @@ def get_users(
         raise HTTPException(status_code=403, detail="Not enough permissions")
     users = db.query(User).offset(skip).limit(limit).all()
     return users
+
+
+@router.get("/users/page", response_model=UserPageOut)
+def get_users_page(
+    page: int = 1,
+    page_size: int = 20,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+
+    safe_page = max(int(page or 1), 1)
+    safe_page_size = max(1, min(int(page_size or 20), 200))
+    skip = (safe_page - 1) * safe_page_size
+
+    total = int(db.query(User).count())
+    items = (
+        db.query(User)
+        .order_by(User.id.asc())
+        .offset(skip)
+        .limit(safe_page_size)
+        .all()
+    )
+    return {
+        "items": items,
+        "total": total,
+        "page": safe_page,
+        "page_size": safe_page_size,
+    }
 
 @router.put("/users/{user_id}", response_model=UserOut)
 def update_user(
