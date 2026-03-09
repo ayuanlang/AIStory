@@ -191,8 +191,6 @@ import {
     updateSceneLatestAIResult,
     getSceneLatestAIResult,
     generateEpisodeCharacterProfile,
-    generateEpisodeStory,
-    saveEpisodeStoryGeneratorInput,
     generateEpisodeScenes,
     generateProjectEpisodeScripts,
     getProjectEpisodeScriptsStatus,
@@ -2991,26 +2989,8 @@ const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'en' }) =
             language: "英文 / English",
             borrowed_films: ["King Kong (2005)", "Joker (2019)", "The Truman Show"],
             notes: ""
-        },
-        story_dna_episode_md: "",
-        story_dna_episode_number: 1,
+        }
     });
-
-    const [episodeStoryInput, setEpisodeStoryInput] = useState({
-        episode_number: 1,
-        background: "",
-        setup: "",
-        development: "",
-        turning_points: "",
-        climax: "",
-        resolution: "",
-        suspense: "",
-        foreshadowing: "",
-        extra_notes: "",
-    });
-    const [isGeneratingEpisodeStory, setIsGeneratingEpisodeStory] = useState(false);
-    const episodeStoryAutosaveTimerRef = useRef(null);
-    const skipNextEpisodeStoryAutosaveRef = useRef(true);
 
     useEffect(() => {
         if (episode) {
@@ -3021,10 +3001,7 @@ const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'en' }) =
                  e_global_info: {
                      ...info.e_global_info, // default structure
                      ...(loaded.e_global_info || {}), // loaded data
-                 }
-                 ,
-                 story_dna_episode_md: loaded.story_dna_episode_md || info.story_dna_episode_md || "",
-                 story_dna_episode_number: loaded.story_dna_episode_number || info.story_dna_episode_number || 1,
+                 },
              };
 
              // Deep merge tech_params if they exist
@@ -3048,101 +3025,8 @@ const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'en' }) =
              }
              
              setInfo(merged);
-
-             // Restore Story Generator (Episode) draft inputs (if previously saved)
-             if (loaded.story_generator_episode_input && typeof loaded.story_generator_episode_input === 'object') {
-                 const draft = loaded.story_generator_episode_input;
-                 const draftEpisodeNumber = draft.episode_number ?? loaded.story_dna_episode_number ?? 1;
-                 setEpisodeStoryInput(prev => ({
-                     ...prev,
-                     ...draft,
-                     episode_number: draftEpisodeNumber,
-                 }));
-             } else {
-                 // best-effort default for generator episode_number from stored field
-                 const epNum = loaded.story_dna_episode_number || 1;
-                 setEpisodeStoryInput(prev => ({ ...prev, episode_number: epNum }));
-             }
-
-             // Avoid immediately auto-saving right after hydration
-             skipNextEpisodeStoryAutosaveRef.current = true;
         }
     }, [episode]);
-
-    // Auto-save Episode Story Generator draft inputs (debounced)
-    useEffect(() => {
-        if (!episode?.id) return;
-
-        if (skipNextEpisodeStoryAutosaveRef.current) {
-            skipNextEpisodeStoryAutosaveRef.current = false;
-            return;
-        }
-
-        if (episodeStoryAutosaveTimerRef.current) {
-            clearTimeout(episodeStoryAutosaveTimerRef.current);
-        }
-
-        episodeStoryAutosaveTimerRef.current = setTimeout(async () => {
-            try {
-                const payload = {
-                    mode: 'episode',
-                    episode_number: Number(episodeStoryInput.episode_number || 0) || undefined,
-                    background: episodeStoryInput.background,
-                    setup: episodeStoryInput.setup,
-                    development: episodeStoryInput.development,
-                    turning_points: episodeStoryInput.turning_points,
-                    climax: episodeStoryInput.climax,
-                    resolution: episodeStoryInput.resolution,
-                    suspense: episodeStoryInput.suspense,
-                    foreshadowing: episodeStoryInput.foreshadowing,
-                    extra_notes: episodeStoryInput.extra_notes,
-                };
-                await saveEpisodeStoryGeneratorInput(episode.id, payload);
-            } catch (e) {
-                // Silent failure: avoid interrupting typing UX
-                console.error('[Episode Story Generator] Auto-save failed:', e);
-            }
-        }, 800);
-
-        return () => {
-            if (episodeStoryAutosaveTimerRef.current) {
-                clearTimeout(episodeStoryAutosaveTimerRef.current);
-            }
-        };
-    }, [episode?.id, episodeStoryInput]);
-
-    const handleGenerateEpisodeStory = async () => {
-        if (!episode?.id) return;
-        setIsGeneratingEpisodeStory(true);
-        try {
-            const payload = {
-                mode: 'episode',
-                episode_number: Number(episodeStoryInput.episode_number || 0),
-                background: episodeStoryInput.background,
-                setup: episodeStoryInput.setup,
-                development: episodeStoryInput.development,
-                turning_points: episodeStoryInput.turning_points,
-                climax: episodeStoryInput.climax,
-                resolution: episodeStoryInput.resolution,
-                suspense: episodeStoryInput.suspense,
-                foreshadowing: episodeStoryInput.foreshadowing,
-                extra_notes: episodeStoryInput.extra_notes,
-            };
-            const updatedEpisode = await generateEpisodeStory(episode.id, payload);
-            const updatedInfo = updatedEpisode?.episode_info || {};
-            setInfo(prev => ({
-                ...prev,
-                story_dna_episode_md: updatedInfo.story_dna_episode_md || prev.story_dna_episode_md,
-                story_dna_episode_number: updatedInfo.story_dna_episode_number || prev.story_dna_episode_number,
-            }));
-            alert('Episode story outline generated and saved to Ep. Info.');
-        } catch (e) {
-            console.error(e);
-            alert(`Failed to generate episode story: ${e.message}`);
-        } finally {
-            setIsGeneratingEpisodeStory(false);
-        }
-    };
 
     const handleSave = async () => {
         try {
@@ -3416,127 +3300,6 @@ const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'en' }) =
                     </div>
                  </div>
 
-                 {/* Story Generator (Episode) */}
-                 <div className="bg-card border border-white/10 p-6 rounded-xl space-y-4 xl:col-span-2">
-                    <div className="flex items-center justify-between gap-3">
-                        <h3 className="text-lg font-semibold text-primary">{t('故事生成器（分集 / Ep. Info）', 'Story Generator (Episode / Ep. Info)')}</h3>
-                        <button
-                            onClick={handleGenerateEpisodeStory}
-                            disabled={isGeneratingEpisodeStory}
-                            className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${isGeneratingEpisodeStory ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
-                            title={t('生成分集大纲（开场/发展/转折/高潮/结局/悬念）', 'Generate an episode outline (setup/development/turning points/climax/resolution/suspense)')}
-                        >
-                            {isGeneratingEpisodeStory ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('生成中...', 'Generating...')}</> : <><Sparkles className="w-4 h-4" /> {t('生成分集大纲', 'Generate Episode Outline')}</>}
-                        </button>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div>
-                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('分集编号', 'Episode Number')}</label>
-                            <input
-                                type="number"
-                                min="1"
-                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full"
-                                value={episodeStoryInput.episode_number}
-                                onChange={(e) => setEpisodeStoryInput(prev => ({ ...prev, episode_number: e.target.value }))}
-                                placeholder={t('例如：1', 'e.g. 1')}
-                            />
-                        </div>
-                        <div>
-                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('伏笔 / 回收', 'Foreshadowing / Payoffs')}</label>
-                            <input
-                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full"
-                                value={episodeStoryInput.foreshadowing}
-                                onChange={(e) => setEpisodeStoryInput(prev => ({ ...prev, foreshadowing: e.target.value }))}
-                                placeholder={t('伏笔、揭示与回收目标', 'Seeds, reveals, payoff targets')}
-                            />
-                        </div>
-
-                        <div className="sm:col-span-2">
-                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('背景 / 世界观（本集聚焦）', 'Background / World (Episode focus)')}</label>
-                            <textarea
-                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
-                                value={episodeStoryInput.background}
-                                onChange={(e) => setEpisodeStoryInput(prev => ({ ...prev, background: e.target.value }))}
-                                placeholder={t('本集最关键的世界与背景信息', 'Context that matters specifically for this episode')}
-                            />
-                        </div>
-
-                        <div className="sm:col-span-2">
-                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('开场', 'Setup')}</label>
-                            <textarea
-                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
-                                value={episodeStoryInput.setup}
-                                onChange={(e) => setEpisodeStoryInput(prev => ({ ...prev, setup: e.target.value }))}
-                                placeholder={t('预告/开场钩子、诱因事件、不可回头点', 'Teaser/opening hook, inciting incident, point-of-no-return')}
-                            />
-                        </div>
-                        <div className="sm:col-span-2">
-                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('发展', 'Development')}</label>
-                            <textarea
-                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
-                                value={episodeStoryInput.development}
-                                onChange={(e) => setEpisodeStoryInput(prev => ({ ...prev, development: e.target.value }))}
-                                placeholder={t('升级、揭示、中点反转', 'Escalation, reveals, midpoint reversal')}
-                            />
-                        </div>
-                        <div className="sm:col-span-2">
-                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('转折点', 'Turning Points')}</label>
-                            <textarea
-                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
-                                value={episodeStoryInput.turning_points}
-                                onChange={(e) => setEpisodeStoryInput(prev => ({ ...prev, turning_points: e.target.value }))}
-                                placeholder={t('第二转折、低谷、最终计划', 'Second turn, low point, final plan')}
-                            />
-                        </div>
-                        <div className="sm:col-span-2">
-                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('高潮', 'Climax')}</label>
-                            <textarea
-                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
-                                value={episodeStoryInput.climax}
-                                onChange={(e) => setEpisodeStoryInput(prev => ({ ...prev, climax: e.target.value }))}
-                                placeholder={t('对抗、关键选择、代价', 'Confrontation, key choice, cost')}
-                            />
-                        </div>
-                        <div className="sm:col-span-2">
-                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('结局回收', 'Resolution')}</label>
-                            <textarea
-                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
-                                value={episodeStoryInput.resolution}
-                                onChange={(e) => setEpisodeStoryInput(prev => ({ ...prev, resolution: e.target.value }))}
-                                placeholder={t('收束、角色状态变化', 'Wrap-up, character state change')}
-                            />
-                        </div>
-                        <div className="sm:col-span-2">
-                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('悬念 / 结尾钩子', 'Suspense / End Hook')}</label>
-                            <textarea
-                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
-                                value={episodeStoryInput.suspense}
-                                onChange={(e) => setEpisodeStoryInput(prev => ({ ...prev, suspense: e.target.value }))}
-                                placeholder={t('悬念点、新问题、下一集威胁', 'Cliffhanger, new question, next-episode threat')}
-                            />
-                        </div>
-                        <div className="sm:col-span-2">
-                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('额外说明', 'Extra Notes')}</label>
-                            <textarea
-                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
-                                value={episodeStoryInput.extra_notes}
-                                onChange={(e) => setEpisodeStoryInput(prev => ({ ...prev, extra_notes: e.target.value }))}
-                                placeholder={t('约束、反转偏好、节奏', 'Constraints, twist preference, pacing')}
-                            />
-                        </div>
-                    </div>
-
-                    <div>
-                        <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('已生成分集大纲（Markdown）', 'Generated Episode Outline (Markdown)')}</label>
-                        <textarea
-                            className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-48 resize-none"
-                            value={info.story_dna_episode_md || ''}
-                            onChange={(e) => setInfo(prev => ({ ...prev, story_dna_episode_md: e.target.value }))}
-                            placeholder={t('（生成后，分集大纲会显示在这里。你可以编辑后保存修改。）', '(After generation, the episode outline will appear here. You can edit it and Save Changes.)')}
-                        />
-                    </div>
-                 </div>
             </div>
         </div>
     );

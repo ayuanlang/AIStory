@@ -12255,6 +12255,13 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
         result_meta = result.get("metadata") if isinstance(result, dict) else {}
         if not isinstance(result_meta, dict):
             result_meta = {}
+        billing_provider = str(result_meta.get("provider") or req.provider or "").strip() or None
+        billing_model = str(result_meta.get("model") or req.model or "").strip() or None
+        billing_system_api_id = result_meta.get("system_api_id")
+        try:
+            billing_system_api_id = int(billing_system_api_id) if billing_system_api_id is not None else None
+        except Exception:
+            billing_system_api_id = None
         _log_shot_submit_debug(
             "image_submit_result",
             req,
@@ -12274,7 +12281,7 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
              
              # Log full error for image gen
              logger.error(f"[GenerateImage] Failed: {detail}")
-             billing_service.log_failed_transaction(db, current_user.id, "image_gen", req.provider, req.model, detail)
+             billing_service.log_failed_transaction(db, current_user.id, "image_gen", billing_provider, billing_model, detail)
              
              raise HTTPException(status_code=400, detail=detail)
 
@@ -12287,7 +12294,22 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
         )
 
         # Billing Deduct
-        billing_service.deduct_credits(db, current_user.id, "image_gen", req.provider, req.model, {"item": "image"})
+        billing_service.deduct_credits(
+            db,
+            current_user.id,
+            "image_gen",
+            billing_provider,
+            billing_model,
+            {
+                "item": "image",
+                "provider": billing_provider,
+                "model": billing_model,
+                "system_api_id": billing_system_api_id,
+                "resolved_provider": billing_provider,
+                "resolved_model": billing_model,
+                "resolved_system_api_id": billing_system_api_id,
+            },
+        )
         
         # Register Asset
         if result.get("url"):

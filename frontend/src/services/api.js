@@ -754,17 +754,6 @@ export const updateProjectCharacterProfiles = async (projectId, character_profil
     return response.data;
 }
 
-// Episode Story Generator (Global/Episode)
-export const generateEpisodeStory = async (episodeId, payload) => {
-    return await asyncLLMPost(`/episodes/${episodeId}/story_generator`, payload);
-}
-
-// Episode Story Generator draft input persistence (no LLM call)
-export const saveEpisodeStoryGeneratorInput = async (episodeId, payload) => {
-    const response = await api.put(`/episodes/${episodeId}/story_generator/input`, payload);
-    return response.data;
-}
-
 export const generateEpisodeScenes = async (episodeId, payload) => {
     return await asyncLLMPost(`/episodes/${episodeId}/script_generator/scenes`, payload);
 }

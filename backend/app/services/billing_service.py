@@ -1046,8 +1046,8 @@ class BillingService:
             forced_system_api_id = None
 
         feature_cost = BillingService._resolve_feature_cost(db, task_type, details)
-        api_cfg = BillingService._resolve_api_pricing_config(db, task_type, provider_text, model_text)
-        api_cost_fallback = BillingService._estimate_api_cost_from_config(api_cfg, usage)
+        api_pricing_source = "default_api_pricing"
+        api_pricing_source_detail: Dict[str, Any] = {}
 
         mode = BillingService._task_type_to_mode(task_type)
         system_row = None
@@ -1058,6 +1058,27 @@ class BillingService:
         if system_row:
             provider_text = str(getattr(system_row, "provider", "") or provider_text).strip()
             model_text = str(getattr(system_row, "model", "") or model_text).strip()
+
+        # Billing order: system API billing rules -> system API base rule -> generic default pricing.
+        if system_row:
+            base_rule = BillingService._get_base_billing_rule(db, int(system_row.id))
+            if base_rule:
+                api_cfg = BillingService._billing_from_rule(base_rule)
+                api_pricing_source = "system_api_base_rule"
+                api_pricing_source_detail = {
+                    "base_rule_id": int(getattr(base_rule, "id", 0) or 0),
+                    "base_rule_name": str(getattr(base_rule, "name", "") or ""),
+                }
+            else:
+                api_cfg = BillingService._resolve_api_pricing_config(db, task_type, provider_text, model_text)
+                api_pricing_source = "default_api_pricing"
+                api_pricing_source_detail = {"reason": "system_api_has_no_base_rule"}
+        else:
+            api_cfg = BillingService._resolve_api_pricing_config(db, task_type, provider_text, model_text)
+            api_pricing_source = "default_api_pricing"
+            api_pricing_source_detail = {"reason": "system_api_not_resolved"}
+
+        api_cost_fallback = BillingService._estimate_api_cost_from_config(api_cfg, usage)
 
         matched_rule_ids: List[int] = []
         selected_rule_id = None
@@ -1089,6 +1110,12 @@ class BillingService:
                 selected_rule_name = str(getattr(selected_rule, "name", "") or "")
                 selected_api_cfg = dict(best["pricing"].get("config") or api_cfg)
                 selected_api_cost = int(best["pricing"].get("cost") or 0)
+                api_pricing_source = "system_api_billing_rule"
+                api_pricing_source_detail = {
+                    "rule_id": int(selected_rule_id),
+                    "rule_name": selected_rule_name,
+                    "priority": int(getattr(selected_rule, "priority", 0) or 0),
+                }
                 selected_rule_detail = BillingService._serialize_rule_for_audit(
                     selected_rule,
                     pricing=best.get("pricing"),
@@ -1096,6 +1123,8 @@ class BillingService:
                 )
             elif phase == "settle" and reserved_cost_fallback is not None:
                 selected_api_cost = int(max(0, reserved_cost_fallback))
+                api_pricing_source = "settlement_reserved_cost_fallback"
+                api_pricing_source_detail = {"reason": "no_rule_matched_use_reserved_cost"}
 
         used_reserved_fallback = bool(
             phase == "settle"
@@ -1118,16 +1147,48 @@ class BillingService:
             minimum_charge_delta = int(min_charge - total_cost)
             total_cost = int(min_charge)
 
+        resolved_provider = str(provider_text or "").strip() or None
+        resolved_model = str(model_text or "").strip() or None
+        rule_selection_status = "matched" if selected_rule_id is not None else "not_matched"
+        if selected_rule_id is not None:
+            rule_selection_reason = "matched_active_rule"
+        elif system_row is None:
+            rule_selection_reason = "system_api_not_resolved"
+        elif rule_match_count <= 0:
+            rule_selection_reason = "no_rule_matched"
+        else:
+            rule_selection_reason = "rule_not_selected"
+
+        audit_summary = {
+            "api": {
+                "system_api_id": int(system_row.id) if system_row else None,
+                "provider": resolved_provider,
+                "model": resolved_model,
+                "pricing_source": api_pricing_source,
+            },
+            "rule": {
+                "matched_rule_id": selected_rule_id,
+                "matched_rule_name": selected_rule_name,
+                "match_count": int(rule_match_count),
+                "status": rule_selection_status,
+                "reason": rule_selection_reason,
+            },
+        }
+
         return {
             "task_type": task_type,
             "provider": provider_text,
             "model": model_text,
+            "resolved_provider": resolved_provider,
+            "resolved_model": resolved_model,
             "phase": phase,
             "feature_cost": int(feature_cost),
             "api_cost": int(selected_api_cost),
             "total_cost": int(total_cost),
             "api_pricing": selected_api_cfg,
             "fallback_api_cost": int(api_cost_fallback),
+            "api_pricing_source": api_pricing_source,
+            "api_pricing_source_detail": api_pricing_source_detail,
             "system_api_id": int(system_row.id) if system_row else None,
             "matched_rule_id": selected_rule_id,
             "matched_rule_name": selected_rule_name,
@@ -1135,6 +1196,9 @@ class BillingService:
             "matched_rule_details": matched_rule_details,
             "selected_rule_detail": selected_rule_detail,
             "rule_match_count": int(rule_match_count),
+            "rule_selection_status": rule_selection_status,
+            "rule_selection_reason": rule_selection_reason,
+            "audit_summary": audit_summary,
             "usage_metadata": usage,
             "minimum_charge": {
                 "enabled": min_charge > 0,
@@ -1158,21 +1222,38 @@ class BillingService:
 
     @staticmethod
     def _build_billing_trace(breakdown: Dict[str, Any], *, task_type: str, provider: Optional[str], model: Optional[str], phase: str) -> Dict[str, Any]:
+        resolved_provider = str(
+            breakdown.get("resolved_provider")
+            or breakdown.get("provider")
+            or provider
+            or ""
+        ).strip() or None
+        resolved_model = str(
+            breakdown.get("resolved_model")
+            or breakdown.get("model")
+            or model
+            or ""
+        ).strip() or None
         return {
             "task_type": str(task_type or "").strip(),
-            "provider": str(provider or "").strip() or None,
-            "model": str(model or "").strip() or None,
+            "provider": resolved_provider,
+            "model": resolved_model,
             "phase": str(phase or "").strip() or None,
             "system_api_ref": breakdown.get("system_api_ref") or {},
             "system_api_id": breakdown.get("system_api_id"),
+            "api_pricing_source": breakdown.get("api_pricing_source"),
+            "api_pricing_source_detail": breakdown.get("api_pricing_source_detail") or {},
             "matched_rule_id": breakdown.get("matched_rule_id"),
             "matched_rule_name": breakdown.get("matched_rule_name"),
             "matched_rule_ids": breakdown.get("matched_rule_ids") or [],
             "rule_match_count": int(breakdown.get("rule_match_count") or 0),
+            "rule_selection_status": breakdown.get("rule_selection_status"),
+            "rule_selection_reason": breakdown.get("rule_selection_reason"),
             "selected_rule_detail": breakdown.get("selected_rule_detail"),
             "matched_rule_details": breakdown.get("matched_rule_details") or [],
             "usage_metadata": breakdown.get("usage_metadata") or {},
             "minimum_charge": breakdown.get("minimum_charge") or {},
+            "audit_summary": breakdown.get("audit_summary") or {},
         }
 
     @staticmethod
@@ -1395,28 +1476,40 @@ class BillingService:
         )
         reserved_cost = int(reserve_breakdown.get("total_cost") or 0)
         BillingService.check_can_proceed(user, reserved_cost)
+        resolved_provider = reserve_breakdown.get("resolved_provider") or provider
+        resolved_model = reserve_breakdown.get("resolved_model") or model
 
         reserve_details.update({
+            "resolved_provider": reserve_breakdown.get("resolved_provider"),
+            "resolved_model": reserve_breakdown.get("resolved_model"),
             "billing_breakdown": {
                 "feature_cost": int(reserve_breakdown.get("feature_cost") or 0),
                 "api_cost": int(reserve_breakdown.get("api_cost") or 0),
                 "total_cost": int(reserve_breakdown.get("total_cost") or 0),
+                "resolved_provider": reserve_breakdown.get("resolved_provider"),
+                "resolved_model": reserve_breakdown.get("resolved_model"),
+                "api_pricing_source": reserve_breakdown.get("api_pricing_source"),
+                "api_pricing_source_detail": reserve_breakdown.get("api_pricing_source_detail") or {},
                 "system_api_id": reserve_breakdown.get("system_api_id"),
                 "matched_rule_id": reserve_breakdown.get("matched_rule_id"),
+                "matched_rule_name": reserve_breakdown.get("matched_rule_name"),
                 "matched_rule_ids": reserve_breakdown.get("matched_rule_ids") or [],
                 "matched_rule_details": reserve_breakdown.get("matched_rule_details") or [],
                 "selected_rule_detail": reserve_breakdown.get("selected_rule_detail"),
                 "rule_match_count": int(reserve_breakdown.get("rule_match_count") or 0),
+                "rule_selection_status": reserve_breakdown.get("rule_selection_status"),
+                "rule_selection_reason": reserve_breakdown.get("rule_selection_reason"),
                 "minimum_charge": reserve_breakdown.get("minimum_charge") or {},
                 "phase": "reserve",
                 "system_api_ref": reserve_breakdown.get("system_api_ref") or {},
+                "audit_summary": reserve_breakdown.get("audit_summary") or {},
             },
             "usage_metadata": reserve_breakdown.get("usage_metadata") or {},
             "billing_trace": BillingService._build_billing_trace(
                 reserve_breakdown,
                 task_type=task_type,
-                provider=provider,
-                model=model,
+                provider=resolved_provider,
+                model=resolved_model,
                 phase="reserve",
             ),
         })
@@ -1428,8 +1521,8 @@ class BillingService:
             amount=-reserved_cost,
             balance_after=user.credits or 0,
             task_type=task_type,
-            provider=provider,
-            model=model,
+            provider=resolved_provider,
+            model=resolved_model,
             details=reserve_details
         )
         db.add(tx)
@@ -1439,8 +1532,8 @@ class BillingService:
             user_id=user_id,
             stage="RESERVED",
             task_type=task_type,
-            provider=provider,
-            model=model,
+            provider=resolved_provider,
+            model=resolved_model,
             transaction_id=tx.id,
             reservation_tx_id=tx.id,
             system_api_id=reserve_breakdown.get("system_api_id"),
@@ -1709,6 +1802,10 @@ class BillingService:
                 "feature_cost": int(breakdown.get("feature_cost") or 0),
                 "api_cost": int(breakdown.get("api_cost") or 0),
                 "fallback_api_cost": int(breakdown.get("fallback_api_cost") or 0),
+                "resolved_provider": breakdown.get("resolved_provider"),
+                "resolved_model": breakdown.get("resolved_model"),
+                "api_pricing_source": breakdown.get("api_pricing_source"),
+                "api_pricing_source_detail": breakdown.get("api_pricing_source_detail") or {},
                 "system_api_id": breakdown.get("system_api_id"),
                 "matched_rule_id": breakdown.get("matched_rule_id"),
                 "matched_rule_name": breakdown.get("matched_rule_name"),
@@ -1716,11 +1813,14 @@ class BillingService:
                 "matched_rule_details": breakdown.get("matched_rule_details") or [],
                 "selected_rule_detail": breakdown.get("selected_rule_detail"),
                 "rule_match_count": int(breakdown.get("rule_match_count") or 0),
+                "rule_selection_status": breakdown.get("rule_selection_status"),
+                "rule_selection_reason": breakdown.get("rule_selection_reason"),
                 "minimum_charge": breakdown.get("minimum_charge") or {},
                 "used_reserved_fallback": bool(breakdown.get("used_reserved_fallback")),
                 "settlement_fallback_reason": breakdown.get("settlement_fallback_reason"),
                 "system_api_ref": breakdown.get("system_api_ref") or {},
                 "phase": "settle",
+                "audit_summary": breakdown.get("audit_summary") or {},
             },
             "usage_metadata": breakdown.get("usage_metadata") or {},
             "billing_trace": BillingService._build_billing_trace(
@@ -1890,6 +1990,10 @@ class BillingService:
             "api_cost": int(breakdown.get("api_cost") or 0),
             "fallback_api_cost": int(breakdown.get("fallback_api_cost") or 0),
             "total_cost": int(breakdown.get("total_cost") or 0),
+            "resolved_provider": breakdown.get("resolved_provider"),
+            "resolved_model": breakdown.get("resolved_model"),
+            "api_pricing_source": breakdown.get("api_pricing_source"),
+            "api_pricing_source_detail": breakdown.get("api_pricing_source_detail") or {},
             "system_api_id": breakdown.get("system_api_id"),
             "matched_rule_id": breakdown.get("matched_rule_id"),
             "matched_rule_name": breakdown.get("matched_rule_name"),
@@ -1897,9 +2001,12 @@ class BillingService:
             "matched_rule_details": breakdown.get("matched_rule_details") or [],
             "selected_rule_detail": breakdown.get("selected_rule_detail"),
             "rule_match_count": int(breakdown.get("rule_match_count") or 0),
+            "rule_selection_status": breakdown.get("rule_selection_status"),
+            "rule_selection_reason": breakdown.get("rule_selection_reason"),
             "minimum_charge": breakdown.get("minimum_charge") or {},
             "phase": "direct_deduct",
             "system_api_ref": breakdown.get("system_api_ref") or {},
+            "audit_summary": breakdown.get("audit_summary") or {},
         }
         tx_details["usage_metadata"] = breakdown.get("usage_metadata") or {}
         tx_details["billing_trace"] = BillingService._build_billing_trace(

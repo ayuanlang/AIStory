@@ -1738,12 +1738,6 @@ const Settings = () => {
                                                                         <div className="text-muted-foreground">{t('模型', 'Model')}</div>
                                                                         <div className="font-mono break-all flex flex-wrap items-center gap-2">
                                                                             <span>{row.model || '-'}</span>
-                                                                            <span className={`text-[10px] px-1.5 py-0.5 rounded border ${row.deprecated ? 'border-red-500/30 text-red-300 bg-red-500/10' : 'border-green-500/30 text-green-300 bg-green-500/10'}`}>
-                                                                                {row.deprecated ? t('弃用状态：已弃用', 'Deprecated: Yes') : t('弃用状态：未弃用', 'Deprecated: No')}
-                                                                            </span>
-                                                                            <span className={`text-[10px] px-1.5 py-0.5 rounded border ${row.is_active ? 'border-emerald-500/30 text-emerald-300 bg-emerald-500/10' : 'border-gray-500/30 text-gray-300 bg-gray-500/10'}`}>
-                                                                                {row.is_active ? t('启用状态：启用中', 'Activation: Active') : t('启用状态：未启用', 'Activation: Inactive')}
-                                                                            </span>
                                                                         </div>
                                                                     </div>
                                                                     <div className="md:col-span-2 flex md:justify-end">
