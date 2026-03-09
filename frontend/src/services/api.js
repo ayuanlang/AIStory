@@ -54,20 +54,47 @@ api.interceptors.response.use(
 
 const LLM_POLL_INTERVAL = 2500;   // ms between polls
 const LLM_POLL_TIMEOUT  = 600000; // 10 min max wait
+const LLM_TASK_NOT_FOUND_GRACE_MS = 12000; // tolerate short eventual-consistency lag
 
-async function pollTask(taskId, { interval = LLM_POLL_INTERVAL, timeout = LLM_POLL_TIMEOUT } = {}) {
+const isTaskNotFoundPollingError = (error) => {
+        const status = Number(error?.response?.status || 0);
+        if (status !== 404) return false;
+        const detail = String(error?.response?.data?.detail || '').trim().toLowerCase();
+        return detail.includes('task not found');
+};
+
+async function pollTask(taskId, {
+    interval = LLM_POLL_INTERVAL,
+    timeout = LLM_POLL_TIMEOUT,
+    baseURL = undefined,
+    notFoundGraceMs = LLM_TASK_NOT_FOUND_GRACE_MS,
+} = {}) {
   const deadline = Date.now() + timeout;
+    let notFoundSince = 0;
   while (Date.now() < deadline) {
-    const res = await api.get(`/tasks/${taskId}`);
-    const info = res.data;
-    if (info.status === 'completed') return info.result;
-    if (info.status === 'failed') {
-      const err = new Error(info.error || 'Task failed');
-      err.errorCode = info.error_code || 500;
-      err.response = { status: info.error_code || 500, data: { detail: info.error } };
-      throw err;
+        try {
+            const res = await api.get(`/tasks/${taskId}`, baseURL ? { baseURL } : undefined);
+            notFoundSince = 0;
+            const info = res.data;
+            if (info.status === 'completed') return info.result;
+            if (info.status === 'failed') {
+                const err = new Error(info.error || 'Task failed');
+                err.errorCode = info.error_code || 500;
+                err.response = { status: info.error_code || 500, data: { detail: info.error } };
+                throw err;
+            }
+            await new Promise(r => setTimeout(r, interval));
+        } catch (error) {
+            if (isTaskNotFoundPollingError(error)) {
+                const now = Date.now();
+                if (!notFoundSince) notFoundSince = now;
+                if ((now - notFoundSince) <= Math.max(0, Number(notFoundGraceMs || 0))) {
+                    await new Promise(r => setTimeout(r, Math.min(interval, 1500)));
+                    continue;
+                }
+            }
+            throw error;
     }
-    await new Promise(r => setTimeout(r, interval));
   }
   throw new Error('LLM task polling timed out');
 }
@@ -80,7 +107,12 @@ async function asyncLLMPost(url, data, config = {}) {
   const sep = url.includes('?') ? '&' : '?';
   const res = await api.post(`${url}${sep}async_mode=1`, data, config);
   if (res.data && res.data.task_id && res.data.async) {
-    return await pollTask(res.data.task_id, config.pollOptions);
+        const submitBaseURL = res?.config?.baseURL || api.defaults.baseURL;
+        return await pollTask(res.data.task_id, {
+            ...(config.pollOptions || {}),
+            // Keep polling on the same backend host that created the task.
+            baseURL: (config.pollOptions && config.pollOptions.baseURL) || submitBaseURL,
+        });
   }
   return res.data;
 }
@@ -122,13 +154,14 @@ const releaseVideoStatusSlot = () => {
     }
 };
 
-const fetchVideoJobStatusLimited = async (jobId) => {
+const fetchVideoJobStatusLimited = async (jobId, { baseURL } = {}) => {
     const stableJobId = String(jobId || '').trim();
     if (!stableJobId) {
         throw new Error('Missing video job id');
     }
 
-    const existing = videoStatusSingleFlight.get(stableJobId);
+    const singleFlightKey = `${String(baseURL || '')}::${stableJobId}`;
+    const existing = videoStatusSingleFlight.get(singleFlightKey);
     if (existing) {
         return existing;
     }
@@ -136,18 +169,21 @@ const fetchVideoJobStatusLimited = async (jobId) => {
     const pending = (async () => {
         await acquireVideoStatusSlot();
         try {
-            const response = await api.get(`/generate/video/jobs/${stableJobId}`);
+            const response = await api.get(
+                `/generate/video/jobs/${stableJobId}`,
+                baseURL ? { baseURL } : undefined
+            );
             return response?.data || {};
         } finally {
             releaseVideoStatusSlot();
         }
     })();
 
-    videoStatusSingleFlight.set(stableJobId, pending);
+    videoStatusSingleFlight.set(singleFlightKey, pending);
     try {
         return await pending;
     } finally {
-        videoStatusSingleFlight.delete(stableJobId);
+        videoStatusSingleFlight.delete(singleFlightKey);
     }
 };
 
@@ -1048,14 +1084,20 @@ const pollGenerationCallbackUntilDone = async (
     throw new Error(`${kind} generation timed out while waiting callback result`);
 };
 
-const pollImageJobUntilDone = async (jobId, { timeoutMs = 10 * 60 * 1000, pollIntervalMs = 2000, cancelledRef } = {}) => {
+const pollImageJobUntilDone = async (
+    jobId,
+    { timeoutMs = 10 * 60 * 1000, pollIntervalMs = 2000, cancelledRef, baseURL } = {}
+) => {
     const start = Date.now();
     let intervalMs = Math.max(1500, Number(pollIntervalMs || 2000));
     const maxIntervalMs = 3000;
     while (Date.now() - start < timeoutMs) {
         if (cancelledRef?.current) throw new Error('Image job polling cancelled');
         try {
-            const response = await api.get(`/generate/image/jobs/${jobId}`);
+            const response = await api.get(
+                `/generate/image/jobs/${jobId}`,
+                baseURL ? { baseURL } : undefined
+            );
             const data = response?.data || {};
             const status = String(data.status || '').toLowerCase();
 
@@ -1081,14 +1123,17 @@ const pollImageJobUntilDone = async (jobId, { timeoutMs = 10 * 60 * 1000, pollIn
     throw new Error('Image generation timed out while polling job status');
 };
 
-const pollVideoJobUntilDone = async (jobId, { timeoutMs = VIDEO_JOB_TIMEOUT_MS_DEFAULT, pollIntervalMs = 2500, cancelledRef } = {}) => {
+const pollVideoJobUntilDone = async (
+    jobId,
+    { timeoutMs = VIDEO_JOB_TIMEOUT_MS_DEFAULT, pollIntervalMs = 2500, cancelledRef, baseURL } = {}
+) => {
     const start = Date.now();
     let intervalMs = Math.max(2000, Number(pollIntervalMs || 2500));
     const maxIntervalMs = 5000;
     while (Date.now() - start < timeoutMs) {
         if (cancelledRef?.current) throw new Error('Video job polling cancelled');
         try {
-            const data = await fetchVideoJobStatusLimited(jobId);
+            const data = await fetchVideoJobStatusLimited(jobId, { baseURL });
             const status = String(data.status || '').toLowerCase();
 
             if (status === 'succeeded') {
@@ -1113,8 +1158,8 @@ const pollVideoJobUntilDone = async (jobId, { timeoutMs = VIDEO_JOB_TIMEOUT_MS_D
     throw new Error('Video generation timed out while polling job status');
 };
 
-export const getVideoGenerationJobStatus = async (jobId) => {
-    return await fetchVideoJobStatusLimited(jobId);
+export const getVideoGenerationJobStatus = async (jobId, options = {}) => {
+    return await fetchVideoJobStatusLimited(jobId, options);
 };
 
 export const getGenerationJobPool = async (params = {}) => {
@@ -1188,6 +1233,7 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
     if (!jobId) {
         throw new Error('Missing image job_id from submit response');
     }
+    const submitBaseURL = submitResp?.config?.baseURL || api.defaults.baseURL;
     if (typeof on_job_created === 'function') {
         try {
             on_job_created(jobId);
@@ -1217,6 +1263,7 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
                     timeoutMs: effectiveTimeoutMs,
                     pollIntervalMs: effectivePollMs,
                     cancelledRef,
+                    baseURL: submitBaseURL,
                 })),
             ]);
         } catch (anyErr) {
@@ -1227,6 +1274,7 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
         result = await pollImageJobUntilDone(jobId, {
             timeoutMs: Number(job_timeout_ms || 10 * 60 * 1000),
             pollIntervalMs: Number(job_poll_interval_ms || 2000),
+            baseURL: submitBaseURL,
         });
     }
 
@@ -1297,6 +1345,7 @@ export const generateVideo = async (prompt, provider = null, ref_image_url = nul
     if (!jobId) {
         throw new Error('Missing video job_id from submit response');
     }
+    const submitBaseURL = submitResp?.config?.baseURL || api.defaults.baseURL;
     if (typeof on_job_created === 'function') {
         try {
             on_job_created(jobId);
@@ -1326,6 +1375,7 @@ export const generateVideo = async (prompt, provider = null, ref_image_url = nul
                     timeoutMs: effectiveTimeoutMs,
                     pollIntervalMs: effectivePollMs,
                     cancelledRef,
+                    baseURL: submitBaseURL,
                 })),
             ]);
         } catch (anyErr) {
@@ -1336,6 +1386,7 @@ export const generateVideo = async (prompt, provider = null, ref_image_url = nul
         result = await pollVideoJobUntilDone(jobId, {
             timeoutMs: normalizeVideoJobTimeoutMs(job_timeout_ms),
             pollIntervalMs: Number(job_poll_interval_ms || 2500),
+            baseURL: submitBaseURL,
         });
     }
 
