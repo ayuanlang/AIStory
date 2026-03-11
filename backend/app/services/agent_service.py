@@ -23,6 +23,8 @@ from app.models.all_models import APISetting, SystemAPISetting, Entity, User, Pr
 from app.core.config import settings
 from app.services.billing_service import billing_service
 from app.services.tool_billing_taxonomy_service import tool_billing_taxonomy_service
+from app.services.system_default_api_service import get_task_default_system_setting
+from app.core.time_utils import now_bj_iso
 from sqlalchemy.orm import Session
 from sqlalchemy import cast, String
 # from app.db.session import db as legacy_db 
@@ -1347,11 +1349,17 @@ Output ONLY the JSON object now."""
                     return not any(token in endpoint for token in media_tokens)
 
                 def _resolve_system_default_fallback(selection_source: str) -> Dict[str, Any]:
-                    # Prefer active system setting in the same category when user setting is missing or unusable.
-                    sys_candidates = session.query(SystemAPISetting).filter(
+                    # Prefer task-default system setting in the same category when user setting is missing or unusable.
+                    sys_candidates: List[SystemAPISetting] = []
+                    default_row = get_task_default_system_setting(session, resolved_category)
+                    if default_row:
+                        sys_candidates.append(default_row)
+
+                    extra_rows = session.query(SystemAPISetting).filter(
                         SystemAPISetting.category == resolved_category,
-                        SystemAPISetting.is_active == True,
+                        SystemAPISetting.id != (int(default_row.id) if default_row else -1),
                     ).order_by(SystemAPISetting.id.desc()).all()
+                    sys_candidates.extend(extra_rows)
 
                     sys_fallback = None
                     for cand in sys_candidates:
@@ -1516,10 +1524,8 @@ Output ONLY the JSON object now."""
                         return self._normalize_api_keys(record.api_keys)
                     return []
 
-                selected = session.query(SystemAPISetting).filter(
-                    SystemAPISetting.category == resolved_category,
-                    SystemAPISetting.is_active == True,
-                ).order_by(SystemAPISetting.id.desc()).first()
+                default_row = get_task_default_system_setting(session, resolved_category)
+                selected = default_row
 
                 def _runtime_key(setting: Optional[SystemAPISetting]) -> str:
                     if not setting:
@@ -1550,7 +1556,6 @@ Output ONLY the JSON object now."""
                 if not _is_usable(selected):
                     candidates = session.query(SystemAPISetting).filter(
                         SystemAPISetting.category == resolved_category,
-                        SystemAPISetting.is_active == True,
                     ).order_by(SystemAPISetting.id.desc()).all()
 
                     for cand in candidates[:10]:
@@ -1607,7 +1612,6 @@ Output ONLY the JSON object now."""
             with SessionLocal() as session:
                 rows = session.query(SystemAPISetting).filter(
                     SystemAPISetting.category == category,
-                    SystemAPISetting.is_active == True,
                 ).order_by(SystemAPISetting.id.desc()).all()
 
                 from app.api.settings import DEFAULTS
@@ -1854,7 +1858,7 @@ Output ONLY the JSON object now."""
         applies_to_video = category == "video"
 
         base_rule = self._get_base_billing_rule(session, int(row.id))
-        now_iso = datetime.utcnow().isoformat()
+        now_iso = now_bj_iso()
         if base_rule:
             extra = self._safe_json_dict(getattr(base_rule, "extra_conditions", {}))
             extra["rule_kind"] = self._BASE_BILLING_RULE_KIND
@@ -3003,7 +3007,7 @@ Output ONLY the JSON object now."""
                     ),
                 }
 
-            now_iso = datetime.utcnow().isoformat()
+            now_iso = now_bj_iso()
             billing = {
                 "unit_type": unit_type,
                 "cost": cost,
@@ -3042,7 +3046,7 @@ Output ONLY the JSON object now."""
                 priority_val = self._safe_optional_int(params.get("priority"))
                 priority = priority_val if priority_val is not None else 0
                 is_rule_active = self._safe_optional_bool(params.get("is_active"))
-                now_rule_iso = datetime.utcnow().isoformat()
+                now_rule_iso = now_bj_iso()
 
                 if matched_rule:
                     matched_rule.name = rule_name
@@ -3840,7 +3844,7 @@ Output ONLY the JSON object now."""
                 updated = True
 
             if updated:
-                project.updated_at = datetime.utcnow().isoformat()
+                project.updated_at = now_bj_iso()
                 db.add(project)
                 db.commit()
                 db.refresh(project)
@@ -3987,8 +3991,8 @@ Output ONLY the JSON object now."""
             try:
                 with SessionLocal() as session:
                     q = session.query(SystemAPISetting).filter(
-                        SystemAPISetting.is_active == True,
                         SystemAPISetting.deprecated != True,
+                        ~SystemAPISetting.category.like("System_%"),
                     )
                     if category_filter:
                         q = q.filter(SystemAPISetting.category.ilike(f"%{category_filter}%"))

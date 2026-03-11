@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, getAdminLlmLogFiles, getAdminLlmLogView, getAdminStorageUsage, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, generateKiePricingRulesManage, applyKiePricingRulesManage, getAdminUsersPage } from '../services/api';
+import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, getAdminLlmLogFiles, getAdminLlmLogView, getAdminStorageUsage, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, generateKiePricingRulesManage, applyKiePricingRulesManage, getAdminUsersPage, aiAssistantAnalyzeSupplierFeatures, aiAssistantApplySupplierFeatures } from '../services/api';
 import Footer from '../components/Footer';
 import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive, Database } from 'lucide-react';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
@@ -101,6 +101,16 @@ const UserAdmin = () => {
     const [isKiePricingLoading, setIsKiePricingLoading] = useState(false);
     const [isKiePricingConfirmed, setIsKiePricingConfirmed] = useState(false);
     const [kiePricingResult, setKiePricingResult] = useState(null);
+    const [supplierFeatureProvider, setSupplierFeatureProvider] = useState('');
+    const [supplierFeatureUrlsText, setSupplierFeatureUrlsText] = useState('');
+    const [supplierFeatureKeywords, setSupplierFeatureKeywords] = useState('');
+    const [supplierFeatureUserSupplement, setSupplierFeatureUserSupplement] = useState('');
+    const [isSupplierFeatureAnalyzing, setIsSupplierFeatureAnalyzing] = useState(false);
+    const [isSupplierFeatureApplying, setIsSupplierFeatureApplying] = useState(false);
+    const [supplierFeatureResult, setSupplierFeatureResult] = useState(null);
+    const [selectedSupplierFeatureModelKeys, setSelectedSupplierFeatureModelKeys] = useState([]);
+    const [selectedSupplierTargetApiIds, setSelectedSupplierTargetApiIds] = useState([]);
+    const [supplierFeatureFilterMode, setSupplierFeatureFilterMode] = useState('all');
     const [selectedKieSuggestionIds, setSelectedKieSuggestionIds] = useState([]);
     const [isKieSuggestionEditOpen, setIsKieSuggestionEditOpen] = useState(false);
     const [editingKieSuggestionIndex, setEditingKieSuggestionIndex] = useState(-1);
@@ -170,7 +180,11 @@ const UserAdmin = () => {
     const [providerKeyPoolRows, setProviderKeyPoolRows] = useState([]);
     const [isProviderKeyPoolLoading, setIsProviderKeyPoolLoading] = useState(false);
     const [selectedKeyPoolId, setSelectedKeyPoolId] = useState('');
-    const [keyPoolForm, setKeyPoolForm] = useState({ provider: '', api_keys: '', strategy: 'random', weights: '' });
+    const [keyPoolForm, setKeyPoolForm] = useState({ provider: '', api_keys: '', strategy: 'random', weights: '', intro_url: '' });
+    const [taskDefaultApiRows, setTaskDefaultApiRows] = useState([]);
+    const [isTaskDefaultApiLoading, setIsTaskDefaultApiLoading] = useState(false);
+    const [selectedTaskDefaultCategory, setSelectedTaskDefaultCategory] = useState('');
+    const [taskDefaultForm, setTaskDefaultForm] = useState({ task_category: 'LLM', system_api_id: '' });
     const [systemApiForm, setSystemApiForm] = useState({
         name: '',
         category: 'LLM',
@@ -183,8 +197,34 @@ const UserAdmin = () => {
         is_active: false,
         deprecated: false,
         tags: '',
-        modality: '',
-        supplier_info: '',
+        generation_modes: '',
+        input_formats: '',
+        output_format: '',
+        supported_resolutions: '',
+        aspect_ratios: '',
+        max_images_per_call: '',
+        reference_image_limit: '',
+        reference_video_limit: '',
+        durations_seconds: '',
+        max_duration: '',
+        fps_options: '',
+        has_audio: 'any',
+        mode_values: '',
+        text_capabilities: '{}',
+        image_capabilities: '{}',
+        video_capabilities: '{}',
+        digital_human_capabilities: '{}',
+        voice_capabilities: '{}',
+        music_capabilities: '{}',
+        pricing_unit: '',
+        token_billing_supported: 'any',
+        input_token_price: '',
+        output_token_price: '',
+        per_resolution_price_map: '{}',
+        per_duration_price_map: '{}',
+        has_tiered_pricing: 'any',
+        free_quota: '',
+        currency: '',
         billing_unit_type: 'per_call',
         billing_cost: '0',
         billing_cost_input: '0',
@@ -216,6 +256,214 @@ const UserAdmin = () => {
     const showBillingRuleEditToast = (text) => {
         setBillingRuleEditToast(String(text || '').trim());
         setTimeout(() => setBillingRuleEditToast(''), 1800);
+    };
+
+    const supplierFeatureModelKey = (item = {}) => {
+        const category = String(item?.category || '').trim().toLowerCase();
+        const model = String(item?.model || '').trim().toLowerCase();
+        return `${category}::${model}`;
+    };
+
+    const supplierTargetApiKey = (row = {}) => {
+        const category = String(row?.category || '').trim().toLowerCase();
+        const model = String(row?.model || '').trim().toLowerCase();
+        return `${category}::${model}`;
+    };
+
+    const toggleSupplierTargetApiId = (id, checked) => {
+        const normalized = Number(id || 0);
+        if (!Number.isFinite(normalized) || normalized <= 0) return;
+        setSelectedSupplierTargetApiIds((prev) => {
+            const has = prev.includes(normalized);
+            if (checked && !has) return [...prev, normalized];
+            if (!checked && has) return prev.filter((item) => item !== normalized);
+            return prev;
+        });
+    };
+
+    const handleAnalyzeSupplierFeatures = async () => {
+        const selectedTargetRows = systemApiRows.filter((row) => selectedSupplierTargetApiIds.includes(Number(row?.id || 0)));
+        const inferredProvider = selectedTargetRows.length > 0 ? String(selectedTargetRows[0]?.provider || '').trim() : '';
+        const provider = String(supplierFeatureProvider || inferredProvider || '').trim();
+        const urls = String(supplierFeatureUrlsText || '')
+            .split(/\r?\n/)
+            .map((s) => String(s || '').trim())
+            .filter(Boolean);
+        const keywords = String(supplierFeatureKeywords || '')
+            .split(/[\n,，]/)
+            .map((s) => String(s || '').trim())
+            .filter(Boolean);
+        const userSupplement = String(supplierFeatureUserSupplement || '').trim();
+
+        if (!provider) {
+            alert(t('请填写供应商 provider 或先勾选系统 API', 'Please input provider or select system APIs first'));
+            return;
+        }
+        // URL / selected APIs are optional now; backend supports auto-research fallback mode.
+
+        try {
+            setIsSupplierFeatureAnalyzing(true);
+            const result = await aiAssistantAnalyzeSupplierFeatures({
+                provider,
+                source_urls: urls,
+                selected_system_api_ids: selectedSupplierTargetApiIds,
+                include_provider_intro_url: true,
+                search_keywords: keywords,
+                user_supplement: userSupplement || null,
+                save_to_db: false,
+                create_missing_models: true,
+                max_length: 40000,
+                max_pages: 6,
+            });
+            const parsedResult = result || null;
+            setSupplierFeatureResult(parsedResult);
+            const modelKeys = Array.isArray(parsedResult?.models)
+                ? parsedResult.models.map((item) => supplierFeatureModelKey(item)).filter(Boolean)
+                : [];
+            setSelectedSupplierFeatureModelKeys(modelKeys);
+            alert(t('供应商特征分析完成，请勾选并保存到数据库', 'Supplier feature analysis completed. Select rows and save to DB.'));
+        } catch (e) {
+            alert(e?.response?.data?.detail || e.message || t('供应商特征分析失败', 'Supplier feature analysis failed'));
+        } finally {
+            setIsSupplierFeatureAnalyzing(false);
+        }
+    };
+
+    const handleToggleSupplierFeatureModelKey = (key) => {
+        const normalized = String(key || '').trim();
+        if (!normalized) return;
+        setSelectedSupplierFeatureModelKeys((prev) => {
+            if (prev.includes(normalized)) {
+                return prev.filter((item) => item !== normalized);
+            }
+            return [...prev, normalized];
+        });
+    };
+
+    const getSupplierCapabilitySections = (item = {}) => {
+        const sections = [
+            { key: 'text_capabilities', label: t('文本能力', 'Text') },
+            { key: 'image_capabilities', label: t('图像能力', 'Image') },
+            { key: 'video_capabilities', label: t('视频能力', 'Video') },
+            { key: 'digital_human_capabilities', label: t('数字人能力', 'DigitalHuman') },
+            { key: 'voice_capabilities', label: t('配音能力', 'Voice') },
+            { key: 'music_capabilities', label: t('音乐能力', 'Music') },
+        ];
+        return sections.filter((section) => {
+            const value = item?.[section.key];
+            return value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0;
+        });
+    };
+
+    const toPrettyFeatureJson = (obj) => {
+        try {
+            return JSON.stringify(obj || {}, null, 2);
+        } catch (_) {
+            return String(obj || '');
+        }
+    };
+
+    const hasFeatureObject = (item, key) => {
+        const value = item?.[key];
+        return !!(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0);
+    };
+
+    const isMissingCoreSupplierFields = (item = {}) => {
+        const hasMode = Array.isArray(item?.generation_modes) && item.generation_modes.length > 0;
+        const hasAnyCoreCapability = [
+            'text_capabilities',
+            'image_capabilities',
+            'video_capabilities',
+            'digital_human_capabilities',
+            'voice_capabilities',
+            'music_capabilities',
+        ].some((key) => hasFeatureObject(item, key));
+        return !hasMode || !hasAnyCoreCapability;
+    };
+
+    const isMissingVoiceMusicFields = (item = {}) => {
+        return !hasFeatureObject(item, 'voice_capabilities') || !hasFeatureObject(item, 'music_capabilities');
+    };
+
+    const isMissingBillingHints = (item = {}) => {
+        const keys = [
+            'text_capabilities',
+            'image_capabilities',
+            'video_capabilities',
+            'digital_human_capabilities',
+            'voice_capabilities',
+            'music_capabilities',
+        ];
+        for (const key of keys) {
+            const obj = item?.[key];
+            if (!obj || typeof obj !== 'object' || Array.isArray(obj)) continue;
+            if (
+                obj.pricing_unit !== undefined
+                || obj.token_billing_supported !== undefined
+                || obj.input_token_price !== undefined
+                || obj.output_token_price !== undefined
+                || obj.per_resolution_price_map !== undefined
+                || obj.per_duration_price_map !== undefined
+                || obj.currency !== undefined
+            ) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    const getFilteredSupplierModels = () => {
+        const models = Array.isArray(supplierFeatureResult?.models) ? supplierFeatureResult.models : [];
+        if (supplierFeatureFilterMode === 'all') return models;
+        if (supplierFeatureFilterMode === 'missing_voice_music') {
+            return models.filter((item) => isMissingVoiceMusicFields(item));
+        }
+        if (supplierFeatureFilterMode === 'missing_core') {
+            return models.filter((item) => isMissingCoreSupplierFields(item));
+        }
+        if (supplierFeatureFilterMode === 'missing_billing') {
+            return models.filter((item) => isMissingBillingHints(item));
+        }
+        return models;
+    };
+
+    const handleApplySupplierFeatures = async () => {
+        const provider = String(supplierFeatureResult?.provider || supplierFeatureProvider || '').trim();
+        const models = Array.isArray(supplierFeatureResult?.models) ? supplierFeatureResult.models : [];
+        const selectedSet = new Set(selectedSupplierFeatureModelKeys || []);
+        const selectedModels = models.filter((item) => selectedSet.has(supplierFeatureModelKey(item)));
+
+        if (!provider) {
+            alert(t('缺少 provider 信息，请先分析', 'Missing provider. Please run analysis first.'));
+            return;
+        }
+        if (selectedModels.length === 0) {
+            alert(t('请至少勾选一个模型后再保存', 'Please select at least one model before saving.'));
+            return;
+        }
+
+        try {
+            setIsSupplierFeatureApplying(true);
+            const applyResult = await aiAssistantApplySupplierFeatures({
+                provider,
+                models: selectedModels,
+                create_missing_models: true,
+            });
+            setSupplierFeatureResult((prev) => {
+                if (!prev) return prev;
+                return {
+                    ...prev,
+                    saved_created: Number(applyResult?.saved_created || 0),
+                    saved_updated: Number(applyResult?.saved_updated || 0),
+                };
+            });
+            await fetchSystemApiManageRows();
+            alert(t('已保存选中模型特征', 'Selected model features saved'));
+        } catch (e) {
+            alert(e?.response?.data?.detail || e.message || t('保存选中模型失败', 'Failed to save selected models'));
+        } finally {
+            setIsSupplierFeatureApplying(false);
+        }
     };
 
     // ... existing code ...
@@ -610,7 +858,7 @@ const UserAdmin = () => {
     };
 
     useEffect(() => {
-        if (activeTab === 'system_api' || activeTab === 'pricing_rules') {
+        if (activeTab === 'system_api' || activeTab === 'pricing_rules' || activeTab === 'supplier_ops') {
             fetchSystemApiManageRows();
         }
     }, [activeTab]);
@@ -1453,8 +1701,34 @@ const UserAdmin = () => {
                 is_active: false,
                 deprecated: false,
                 tags: '',
-                modality: '',
-                supplier_info: '',
+                generation_modes: '',
+                input_formats: '',
+                output_format: '',
+                supported_resolutions: '',
+                aspect_ratios: '',
+                max_images_per_call: '',
+                reference_image_limit: '',
+                reference_video_limit: '',
+                durations_seconds: '',
+                max_duration: '',
+                fps_options: '',
+                has_audio: 'any',
+                mode_values: '',
+                text_capabilities: '{}',
+                image_capabilities: '{}',
+                video_capabilities: '{}',
+                digital_human_capabilities: '{}',
+                voice_capabilities: '{}',
+                music_capabilities: '{}',
+                pricing_unit: '',
+                token_billing_supported: 'any',
+                input_token_price: '',
+                output_token_price: '',
+                per_resolution_price_map: '{}',
+                per_duration_price_map: '{}',
+                has_tiered_pricing: 'any',
+                free_quota: '',
+                currency: '',
                 billing_unit_type: 'per_call',
                 billing_cost: '0',
                 billing_cost_input: '0',
@@ -1477,8 +1751,34 @@ const UserAdmin = () => {
             is_active: !!row.is_active,
             deprecated: !!row.deprecated,
             tags: Array.isArray(row.tags) ? row.tags.join(', ') : safeJsonStr(row.tags),
-            modality: safeJsonStr(row.modality),
-            supplier_info: safeJsonStr(row.supplier_info),
+            generation_modes: Array.isArray(row.generation_modes) ? row.generation_modes.join(', ') : '',
+            input_formats: Array.isArray(row.input_formats) ? row.input_formats.join(', ') : '',
+            output_format: String(row.output_format || ''),
+            supported_resolutions: Array.isArray(row.supported_resolutions) ? row.supported_resolutions.join(', ') : '',
+            aspect_ratios: Array.isArray(row.aspect_ratios) ? row.aspect_ratios.join(', ') : '',
+            max_images_per_call: row.max_images_per_call === null || row.max_images_per_call === undefined ? '' : String(row.max_images_per_call),
+            reference_image_limit: String(row.reference_image_limit || ''),
+            reference_video_limit: String(row.reference_video_limit || ''),
+            durations_seconds: Array.isArray(row.durations_seconds) ? row.durations_seconds.join(', ') : '',
+            max_duration: row.max_duration === null || row.max_duration === undefined ? '' : String(row.max_duration),
+            fps_options: Array.isArray(row.fps_options) ? row.fps_options.join(', ') : '',
+            has_audio: row.has_audio === true ? 'true' : (row.has_audio === false ? 'false' : 'any'),
+            mode_values: Array.isArray(row.mode_values) ? row.mode_values.join(', ') : '',
+            text_capabilities: safeJsonStr(row.text_capabilities) || '{}',
+            image_capabilities: safeJsonStr(row.image_capabilities) || '{}',
+            video_capabilities: safeJsonStr(row.video_capabilities) || '{}',
+            digital_human_capabilities: safeJsonStr(row.digital_human_capabilities) || '{}',
+            voice_capabilities: safeJsonStr(row.voice_capabilities) || '{}',
+            music_capabilities: safeJsonStr(row.music_capabilities) || '{}',
+            pricing_unit: String(row.pricing_unit || ''),
+            token_billing_supported: row.token_billing_supported === true ? 'true' : (row.token_billing_supported === false ? 'false' : 'any'),
+            input_token_price: row.input_token_price === null || row.input_token_price === undefined ? '' : String(row.input_token_price),
+            output_token_price: row.output_token_price === null || row.output_token_price === undefined ? '' : String(row.output_token_price),
+            per_resolution_price_map: safeJsonStr(row.per_resolution_price_map) || '{}',
+            per_duration_price_map: safeJsonStr(row.per_duration_price_map) || '{}',
+            has_tiered_pricing: row.has_tiered_pricing === true ? 'true' : (row.has_tiered_pricing === false ? 'false' : 'any'),
+            free_quota: String(row.free_quota || ''),
+            currency: String(row.currency || ''),
             billing_unit_type: pricing.unit_type,
             billing_cost: String(pricing.cost),
             billing_cost_input: String(pricing.cost_input),
@@ -1638,6 +1938,25 @@ const UserAdmin = () => {
         try { return JSON.parse(trimmed); } catch { return undefined; }
     };
 
+    const parseJsonObjectFieldSafe = (text) => {
+        const parsed = parseJsonFieldSafe(text);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+        return parsed;
+    };
+
+    const parseCsvArrayField = (text) => {
+        const trimmed = String(text || '').trim();
+        if (!trimmed) return undefined;
+        return trimmed.split(',').map((s) => String(s || '').trim()).filter(Boolean);
+    };
+
+    const parseCsvNumberArrayField = (text) => {
+        const arr = parseCsvArrayField(text);
+        if (!arr || arr.length === 0) return undefined;
+        const out = arr.map((x) => Number(x)).filter((n) => Number.isFinite(n));
+        return out.length > 0 ? out : undefined;
+    };
+
     const parseTagsField = (text) => {
         const trimmed = String(text || '').trim();
         if (!trimmed) return undefined;
@@ -1668,8 +1987,34 @@ const UserAdmin = () => {
                 config: parseJsonFieldSafe(systemApiForm.config) || {},
                 is_active: !!systemApiForm.is_active,
                 tags: parseTagsField(systemApiForm.tags),
-                modality: parseJsonFieldSafe(systemApiForm.modality),
-                supplier_info: parseJsonFieldSafe(systemApiForm.supplier_info),
+                generation_modes: parseCsvArrayField(systemApiForm.generation_modes),
+                input_formats: parseCsvArrayField(systemApiForm.input_formats),
+                output_format: toNullableText(systemApiForm.output_format),
+                supported_resolutions: parseCsvArrayField(systemApiForm.supported_resolutions),
+                aspect_ratios: parseCsvArrayField(systemApiForm.aspect_ratios),
+                max_images_per_call: toNullableInt(systemApiForm.max_images_per_call),
+                reference_image_limit: toNullableText(systemApiForm.reference_image_limit),
+                reference_video_limit: toNullableText(systemApiForm.reference_video_limit),
+                durations_seconds: parseCsvNumberArrayField(systemApiForm.durations_seconds),
+                max_duration: toNullableInt(systemApiForm.max_duration),
+                fps_options: parseCsvNumberArrayField(systemApiForm.fps_options),
+                has_audio: toNullableBool(systemApiForm.has_audio),
+                mode_values: parseCsvArrayField(systemApiForm.mode_values),
+                text_capabilities: parseJsonObjectFieldSafe(systemApiForm.text_capabilities),
+                image_capabilities: parseJsonObjectFieldSafe(systemApiForm.image_capabilities),
+                video_capabilities: parseJsonObjectFieldSafe(systemApiForm.video_capabilities),
+                digital_human_capabilities: parseJsonObjectFieldSafe(systemApiForm.digital_human_capabilities),
+                voice_capabilities: parseJsonObjectFieldSafe(systemApiForm.voice_capabilities),
+                music_capabilities: parseJsonObjectFieldSafe(systemApiForm.music_capabilities),
+                pricing_unit: toNullableText(systemApiForm.pricing_unit),
+                token_billing_supported: toNullableBool(systemApiForm.token_billing_supported),
+                input_token_price: toNullableFloat(systemApiForm.input_token_price),
+                output_token_price: toNullableFloat(systemApiForm.output_token_price),
+                per_resolution_price_map: parseJsonObjectFieldSafe(systemApiForm.per_resolution_price_map),
+                per_duration_price_map: parseJsonObjectFieldSafe(systemApiForm.per_duration_price_map),
+                has_tiered_pricing: toNullableBool(systemApiForm.has_tiered_pricing),
+                free_quota: toNullableText(systemApiForm.free_quota),
+                currency: toNullableText(systemApiForm.currency),
                 billing_unit_type: normalizeApiPricingUnitType(systemApiForm.billing_unit_type),
                 billing_cost: toNonNegativeInt(systemApiForm.billing_cost),
                 billing_cost_input: toNonNegativeInt(systemApiForm.billing_cost_input),
@@ -1699,8 +2044,34 @@ const UserAdmin = () => {
                 config: parseJsonFieldSafe(systemApiForm.config) || {},
                 is_active: !!systemApiForm.is_active,
                 tags: parseTagsField(systemApiForm.tags),
-                modality: parseJsonFieldSafe(systemApiForm.modality),
-                supplier_info: parseJsonFieldSafe(systemApiForm.supplier_info),
+                generation_modes: parseCsvArrayField(systemApiForm.generation_modes),
+                input_formats: parseCsvArrayField(systemApiForm.input_formats),
+                output_format: toNullableText(systemApiForm.output_format),
+                supported_resolutions: parseCsvArrayField(systemApiForm.supported_resolutions),
+                aspect_ratios: parseCsvArrayField(systemApiForm.aspect_ratios),
+                max_images_per_call: toNullableInt(systemApiForm.max_images_per_call),
+                reference_image_limit: toNullableText(systemApiForm.reference_image_limit),
+                reference_video_limit: toNullableText(systemApiForm.reference_video_limit),
+                durations_seconds: parseCsvNumberArrayField(systemApiForm.durations_seconds),
+                max_duration: toNullableInt(systemApiForm.max_duration),
+                fps_options: parseCsvNumberArrayField(systemApiForm.fps_options),
+                has_audio: toNullableBool(systemApiForm.has_audio),
+                mode_values: parseCsvArrayField(systemApiForm.mode_values),
+                text_capabilities: parseJsonObjectFieldSafe(systemApiForm.text_capabilities),
+                image_capabilities: parseJsonObjectFieldSafe(systemApiForm.image_capabilities),
+                video_capabilities: parseJsonObjectFieldSafe(systemApiForm.video_capabilities),
+                digital_human_capabilities: parseJsonObjectFieldSafe(systemApiForm.digital_human_capabilities),
+                voice_capabilities: parseJsonObjectFieldSafe(systemApiForm.voice_capabilities),
+                music_capabilities: parseJsonObjectFieldSafe(systemApiForm.music_capabilities),
+                pricing_unit: toNullableText(systemApiForm.pricing_unit),
+                token_billing_supported: toNullableBool(systemApiForm.token_billing_supported),
+                input_token_price: toNullableFloat(systemApiForm.input_token_price),
+                output_token_price: toNullableFloat(systemApiForm.output_token_price),
+                per_resolution_price_map: parseJsonObjectFieldSafe(systemApiForm.per_resolution_price_map),
+                per_duration_price_map: parseJsonObjectFieldSafe(systemApiForm.per_duration_price_map),
+                has_tiered_pricing: toNullableBool(systemApiForm.has_tiered_pricing),
+                free_quota: toNullableText(systemApiForm.free_quota),
+                currency: toNullableText(systemApiForm.currency),
                 billing_unit_type: normalizeApiPricingUnitType(systemApiForm.billing_unit_type),
                 billing_cost: toNonNegativeInt(systemApiForm.billing_cost),
                 billing_cost_input: toNonNegativeInt(systemApiForm.billing_cost_input),
@@ -1842,15 +2213,35 @@ const UserAdmin = () => {
         }
     };
 
+    const fetchTaskDefaultApis = async () => {
+        setIsTaskDefaultApiLoading(true);
+        try {
+            const rows = await listTaskDefaultApisManage();
+            const normalized = Array.isArray(rows) ? rows : [];
+            setTaskDefaultApiRows(normalized);
+            if (!selectedTaskDefaultCategory && normalized.length > 0) {
+                setSelectedTaskDefaultCategory(String(normalized[0].task_category || ''));
+            }
+        } catch (e) {
+            console.error('Failed to load task default APIs', e);
+            setTaskDefaultApiRows([]);
+        } finally {
+            setIsTaskDefaultApiLoading(false);
+        }
+    };
+
     useEffect(() => {
-        if (activeTab === 'system_api') {
+        if (activeTab === 'system_api' || activeTab === 'supplier_ops') {
             fetchProviderKeyPools();
+            if (activeTab === 'system_api') {
+                fetchTaskDefaultApis();
+            }
         }
     }, [activeTab]);
 
     useEffect(() => {
         if (!selectedKeyPoolId) {
-            setKeyPoolForm({ provider: '', api_keys: '', strategy: 'random', weights: '' });
+            setKeyPoolForm({ provider: '', api_keys: '', strategy: 'random', weights: '', intro_url: '' });
             return;
         }
         const row = providerKeyPoolRows.find((r) => String(r.id) === String(selectedKeyPoolId));
@@ -1860,8 +2251,38 @@ const UserAdmin = () => {
             api_keys: Array.isArray(row.api_keys) ? row.api_keys.join('\n') : '',
             strategy: row.strategy || 'random',
             weights: Array.isArray(row.weights) && row.weights.length ? row.weights.join('\n') : '',
+            intro_url: row.intro_url || '',
         });
     }, [selectedKeyPoolId, providerKeyPoolRows]);
+
+    useEffect(() => {
+        if (!selectedTaskDefaultCategory) {
+            return;
+        }
+        const row = taskDefaultApiRows.find((item) => String(item?.task_category || '') === String(selectedTaskDefaultCategory));
+        if (!row) {
+            return;
+        }
+        setTaskDefaultForm({
+            task_category: String(row.task_category || '').trim() || 'LLM',
+            system_api_id: String(row.system_api_id || ''),
+        });
+    }, [selectedTaskDefaultCategory, taskDefaultApiRows]);
+
+    useEffect(() => {
+        const normalizedProvider = String(supplierFeatureProvider || '').trim().toLowerCase();
+        const allowedIdSet = new Set(
+            systemApiRows
+                .filter((row) => {
+                    if (String(row?.category || '').startsWith('System_')) return false;
+                    if (!normalizedProvider) return true;
+                    return String(row?.provider || '').trim().toLowerCase() === normalizedProvider;
+                })
+                .map((row) => Number(row?.id || 0))
+                .filter((id) => Number.isFinite(id) && id > 0)
+        );
+        setSelectedSupplierTargetApiIds((prev) => prev.filter((id) => allowedIdSet.has(id)));
+    }, [supplierFeatureProvider, systemApiRows]);
 
     const handleCreateKeyPool = async () => {
         const provider = String(keyPoolForm.provider || '').trim();
@@ -1869,7 +2290,13 @@ const UserAdmin = () => {
         const keys = String(keyPoolForm.api_keys || '').split(/\r?\n|,/).map(s => s.trim()).filter(Boolean);
         const weights = String(keyPoolForm.weights || '').split(/\r?\n|,/).map(s => Number(s.trim())).filter(n => Number.isFinite(n) && n > 0);
         try {
-            await createProviderKeyPool({ provider, api_keys: keys, strategy: keyPoolForm.strategy || 'random', weights: keyPoolForm.strategy === 'weighted' ? weights : undefined });
+            await createProviderKeyPool({
+                provider,
+                api_keys: keys,
+                strategy: keyPoolForm.strategy || 'random',
+                weights: keyPoolForm.strategy === 'weighted' ? weights : undefined,
+                intro_url: String(keyPoolForm.intro_url || '').trim() || undefined,
+            });
             await fetchProviderKeyPools();
             setSelectedKeyPoolId('');
             alert(t('已创建', 'Created'));
@@ -1886,6 +2313,7 @@ const UserAdmin = () => {
                 api_keys: keys,
                 strategy: keyPoolForm.strategy || 'random',
                 weights: keyPoolForm.strategy === 'weighted' ? weights : undefined,
+                intro_url: String(keyPoolForm.intro_url || '').trim() || undefined,
             });
             await fetchProviderKeyPools();
             alert(t('已更新', 'Updated'));
@@ -1901,6 +2329,67 @@ const UserAdmin = () => {
             await fetchProviderKeyPools();
             alert(t('已删除', 'Deleted'));
         } catch (e) { alert(e?.response?.data?.detail || e.message || 'Failed'); }
+    };
+
+    const handleCreateTaskDefaultApi = async () => {
+        const taskCategory = String(taskDefaultForm.task_category || '').trim();
+        const systemApiId = Number(taskDefaultForm.system_api_id || 0);
+        if (!taskCategory) {
+            alert(t('task_category 不能为空', 'task_category is required'));
+            return;
+        }
+        if (!Number.isFinite(systemApiId) || systemApiId <= 0) {
+            alert(t('请先选择有效的 system_api_id', 'Please select a valid system_api_id'));
+            return;
+        }
+        try {
+            await createTaskDefaultApiManage({ task_category: taskCategory, system_api_id: systemApiId });
+            await Promise.all([fetchTaskDefaultApis(), fetchSystemApiManageRows()]);
+            setSelectedTaskDefaultCategory(taskCategory.toUpperCase());
+            alert(t('默认 API 映射已创建', 'Default API mapping created'));
+        } catch (e) {
+            alert(e?.response?.data?.detail || e.message || t('创建默认 API 映射失败', 'Failed to create default API mapping'));
+        }
+    };
+
+    const handleUpdateTaskDefaultApi = async () => {
+        const taskCategory = String(taskDefaultForm.task_category || '').trim();
+        const systemApiId = Number(taskDefaultForm.system_api_id || 0);
+        if (!taskCategory) {
+            alert(t('task_category 不能为空', 'task_category is required'));
+            return;
+        }
+        if (!Number.isFinite(systemApiId) || systemApiId <= 0) {
+            alert(t('请先选择有效的 system_api_id', 'Please select a valid system_api_id'));
+            return;
+        }
+        try {
+            await updateTaskDefaultApiManage(taskCategory, { system_api_id: systemApiId });
+            await Promise.all([fetchTaskDefaultApis(), fetchSystemApiManageRows()]);
+            setSelectedTaskDefaultCategory(taskCategory.toUpperCase());
+            alert(t('默认 API 映射已更新', 'Default API mapping updated'));
+        } catch (e) {
+            alert(e?.response?.data?.detail || e.message || t('更新默认 API 映射失败', 'Failed to update default API mapping'));
+        }
+    };
+
+    const handleDeleteTaskDefaultApi = async () => {
+        const taskCategory = String(taskDefaultForm.task_category || '').trim();
+        if (!taskCategory) {
+            alert(t('task_category 不能为空', 'task_category is required'));
+            return;
+        }
+        if (!await confirmUiMessage(t('确认删除该类别默认 API 映射？', 'Delete this category default API mapping?'))) {
+            return;
+        }
+        try {
+            await deleteTaskDefaultApiManage(taskCategory);
+            await Promise.all([fetchTaskDefaultApis(), fetchSystemApiManageRows()]);
+            setSelectedTaskDefaultCategory('');
+            alert(t('默认 API 映射已删除', 'Default API mapping deleted'));
+        } catch (e) {
+            alert(e?.response?.data?.detail || e.message || t('删除默认 API 映射失败', 'Failed to delete default API mapping'));
+        }
     };
 
     const handleExportSystemApiSettings = async () => {
@@ -2228,6 +2717,28 @@ const UserAdmin = () => {
         const date = new Date(raw);
         if (Number.isNaN(date.getTime())) return '';
         return date.toISOString();
+    };
+
+    const formatAdminDateTime = (value) => {
+        const raw = String(value || '').trim();
+        if (!raw) return '-';
+
+        // Normalize backend timestamps for browser Date parsing:
+        // - keep explicit timezone (Z or +08:00)
+        // - append Z only when timezone is missing
+        // - trim microseconds to milliseconds for better cross-browser compatibility
+        let normalized = raw;
+        const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(normalized);
+        if (!hasTimezone) {
+            normalized = `${normalized}Z`;
+        }
+        normalized = normalized.replace(/\.(\d{3})\d+(?=(?:Z|[+-]\d{2}:?\d{2})$)/i, '.$1');
+
+        const parsed = new Date(normalized);
+        if (Number.isNaN(parsed.getTime())) {
+            return raw;
+        }
+        return parsed.toLocaleString();
     };
 
     const fetchMaintenanceConfig = async () => {
@@ -2806,6 +3317,7 @@ const UserAdmin = () => {
                         <TabButton id="system_api" label={t('系统 API', 'System API')} icon={Key} />
                         <TabButton id="config_sync" label={t('配置同步', 'Config Sync')} icon={Database} />
                         <TabButton id="pricing_rules" label={t('计费规则', 'Pricing Rules')} icon={DollarSign} />
+                        <TabButton id="supplier_ops" label={t('供应商运营', 'Supplier Ops')} icon={Settings} />
                         <TabButton id="kie_pricing" label={t('KIE 定价助手', 'KIE Pricing Assistant')} icon={Settings} />
                         <TabButton id="prompt_skills" label={t('Prompt Skills', 'Prompt Skills')} icon={List} />
                         <TabButton id="storage_usage" label={t('磁盘统计', 'Storage Usage')} icon={HardDrive} />
@@ -3875,7 +4387,7 @@ const UserAdmin = () => {
                                         {transactions.map(t => (
                                             <tr key={t.id} className="border-b border-gray-800/50 hover:bg-gray-800/50">
                                                 <td className="p-3 text-gray-400">
-                                                    {new Date(t.created_at.endsWith('Z') ? t.created_at : t.created_at + 'Z').toLocaleString()}
+                                                    {formatAdminDateTime(t.created_at)}
                                                 </td>
                                                 <td className="p-3">{t.user_id}</td>
                                                 <td className="p-3"><span className="bg-gray-800 px-2 py-0.5 rounded text-xs uppercase text-gray-300">{t.task_type}</span></td>
@@ -3961,6 +4473,18 @@ const UserAdmin = () => {
                                         title={t('按供应商+密钥池+模型导出', 'Export by provider + key pool + models')}
                                     >
                                         <Download size={16} /> {isSystemProviderBundleExporting ? t('供应商导出中...', 'Provider Exporting...') : t('导出供应商', 'Export Providers')}
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            const section = document.getElementById('task-default-api-mapping-crud');
+                                            if (section) {
+                                                section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                                            }
+                                        }}
+                                        className="bg-cyan-700 hover:bg-cyan-600 text-white px-3 py-1 rounded flex items-center gap-2"
+                                        title={t('快速跳转到类别默认 API 映射 CRUD 区块', 'Jump to category default API mapping CRUD section')}
+                                    >
+                                        <List size={16} /> {t('默认 API 映射', 'Default API Mapping')}
                                     </button>
                                     <button
                                         onClick={fetchSystemApiManageRows}
@@ -4055,6 +4579,7 @@ const UserAdmin = () => {
                                                                 <th className="text-left py-1.5 px-2">Provider</th>
                                                                 <th className="text-left py-1.5 px-2">{t('密钥数', 'Keys')}</th>
                                                                 <th className="text-left py-1.5 px-2">{t('策略', 'Strategy')}</th>
+                                                                <th className="text-left py-1.5 px-2">{t('介绍 URL', 'Intro URL')}</th>
                                                                 <th className="text-left py-1.5 px-2">{t('更新时间', 'Updated')}</th>
                                                             </tr>
                                                         </thead>
@@ -4068,11 +4593,12 @@ const UserAdmin = () => {
                                                                     <td className="py-1.5 px-2 font-mono">{row.provider}</td>
                                                                     <td className="py-1.5 px-2">{Array.isArray(row.api_keys) ? row.api_keys.length : 0}</td>
                                                                     <td className="py-1.5 px-2">{row.strategy || 'random'}</td>
+                                                                    <td className="py-1.5 px-2 max-w-[220px] truncate" title={row.intro_url || '-'}>{row.intro_url || '-'}</td>
                                                                     <td className="py-1.5 px-2 text-gray-500">{row.updated_at || '-'}</td>
                                                                 </tr>
                                                             ))}
                                                             {providerKeyPoolRows.length === 0 && (
-                                                                <tr><td colSpan={5} className="py-3 px-2 text-center text-gray-500">{t('暂无数据', 'No data')}</td></tr>
+                                                                <tr><td colSpan={6} className="py-3 px-2 text-center text-gray-500">{t('暂无数据', 'No data')}</td></tr>
                                                             )}
                                                         </tbody>
                                                     </table>
@@ -4102,6 +4628,15 @@ const UserAdmin = () => {
                                                     </div>
                                                 </div>
                                                 <div>
+                                                    <label className="block text-xs uppercase text-gray-400 mb-1">{t('供应商介绍 URL', 'Provider Intro URL')}</label>
+                                                    <input
+                                                        value={keyPoolForm.intro_url}
+                                                        onChange={(e) => setKeyPoolForm(f => ({ ...f, intro_url: e.target.value }))}
+                                                        className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                        placeholder="https://example.com/provider-docs"
+                                                    />
+                                                </div>
+                                                <div>
                                                     <label className="block text-xs uppercase text-gray-400 mb-1">{t('密钥池（按行或逗号分隔）', 'API Keys (newline/comma separated)')}</label>
                                                     <textarea
                                                         value={keyPoolForm.api_keys}
@@ -4127,6 +4662,92 @@ const UserAdmin = () => {
                                                     <button onClick={handleCreateKeyPool} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded text-xs flex items-center gap-1"><Plus size={12} /> {t('新建', 'Create')}</button>
                                                     <button onClick={handleUpdateKeyPool} disabled={!selectedKeyPoolId} className="px-3 py-1.5 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-bold rounded text-xs flex items-center gap-1"><Edit2 size={12} /> {t('更新', 'Update')}</button>
                                                     <button onClick={handleDeleteKeyPool} disabled={!selectedKeyPoolId} className="px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white font-bold rounded text-xs flex items-center gap-1"><Trash2 size={12} /> {t('删除', 'Delete')}</button>
+                                                </div>
+                                            </>
+                                        )}
+                                    </div>
+
+                                    <div id="task-default-api-mapping-crud" className="border border-cyan-500/30 rounded-lg p-4 bg-cyan-500/5 space-y-3">
+                                        <div className="flex items-center justify-between gap-2">
+                                            <h4 className="text-sm font-bold text-cyan-200">{t('类别默认 API 映射 CRUD', 'Category Default API Mapping CRUD')}</h4>
+                                            <button
+                                                onClick={fetchTaskDefaultApis}
+                                                disabled={isTaskDefaultApiLoading}
+                                                className="text-xs text-cyan-300 hover:text-cyan-100 flex items-center gap-1 disabled:opacity-50"
+                                            >
+                                                <RefreshCw size={12} /> {t('刷新', 'Refresh')}
+                                            </button>
+                                        </div>
+
+                                        {isTaskDefaultApiLoading ? (
+                                            <div className="text-xs text-gray-400">{t('加载中...', 'Loading...')}</div>
+                                        ) : (
+                                            <>
+                                                <div className="overflow-x-auto border border-cyan-500/20 rounded max-h-44">
+                                                    <table className="w-full text-xs">
+                                                        <thead className="bg-cyan-500/10 text-cyan-100 sticky top-0">
+                                                            <tr>
+                                                                <th className="text-left py-1.5 px-2">task_category</th>
+                                                                <th className="text-left py-1.5 px-2">system_api_id</th>
+                                                                <th className="text-left py-1.5 px-2">{t('目标 API', 'Target API')}</th>
+                                                                <th className="text-left py-1.5 px-2">{t('更新时间', 'Updated')}</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {taskDefaultApiRows.map((row) => (
+                                                                <tr
+                                                                    key={`task-default-${row.task_category}`}
+                                                                    className={`border-t border-cyan-500/20 cursor-pointer hover:bg-white/5 ${String(selectedTaskDefaultCategory) === String(row.task_category) ? 'bg-cyan-500/10' : ''}`}
+                                                                    onClick={() => setSelectedTaskDefaultCategory(String(row.task_category || ''))}
+                                                                >
+                                                                    <td className="py-1.5 px-2 font-mono">{row.task_category}</td>
+                                                                    <td className="py-1.5 px-2">{row.system_api_id}</td>
+                                                                    <td className="py-1.5 px-2">{`[${row.system_api_category || '-'}] ${row.system_api_provider || '-'} / ${row.system_api_model || '-'}`}</td>
+                                                                    <td className="py-1.5 px-2 text-gray-500">{row.updated_at || '-'}</td>
+                                                                </tr>
+                                                            ))}
+                                                            {taskDefaultApiRows.length === 0 && (
+                                                                <tr>
+                                                                    <td colSpan={4} className="py-3 px-2 text-center text-gray-500">{t('暂无映射记录', 'No mapping records')}</td>
+                                                                </tr>
+                                                            )}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+
+                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                    <div>
+                                                        <label className="block text-xs uppercase text-gray-400 mb-1">task_category</label>
+                                                        <input
+                                                            value={taskDefaultForm.task_category}
+                                                            onChange={(e) => setTaskDefaultForm((prev) => ({ ...prev, task_category: e.target.value }))}
+                                                            className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm font-mono"
+                                                            placeholder="LLM / IMAGE / VIDEO / DIGITAL_HUMAN / VOICE / MUSIC"
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-xs uppercase text-gray-400 mb-1">system_api_id</label>
+                                                        <select
+                                                            value={taskDefaultForm.system_api_id}
+                                                            onChange={(e) => setTaskDefaultForm((prev) => ({ ...prev, system_api_id: e.target.value }))}
+                                                            className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                        >
+                                                            <option value="">{t('请选择目标 System API', 'Select target System API')}</option>
+                                                            {systemApiRows
+                                                                .filter((row) => !String(row?.category || '').startsWith('System_'))
+                                                                .map((row) => (
+                                                                    <option key={`task-default-target-${row.id}`} value={row.id}>
+                                                                        {`#${row.id} [${row.category || '-'}] ${row.provider || '-'} / ${row.model || '-'}`}
+                                                                    </option>
+                                                                ))}
+                                                        </select>
+                                                    </div>
+                                                </div>
+
+                                                <div className="flex items-center gap-2">
+                                                    <button onClick={handleCreateTaskDefaultApi} className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded text-xs flex items-center gap-1"><Plus size={12} /> {t('新建', 'Create')}</button>
+                                                    <button onClick={handleUpdateTaskDefaultApi} className="px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-white font-bold rounded text-xs flex items-center gap-1"><Edit2 size={12} /> {t('更新', 'Update')}</button>
+                                                    <button onClick={handleDeleteTaskDefaultApi} className="px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white font-bold rounded text-xs flex items-center gap-1"><Trash2 size={12} /> {t('删除', 'Delete')}</button>
                                                 </div>
                                             </>
                                         )}
@@ -4296,7 +4917,7 @@ const UserAdmin = () => {
                                                             <td className="p-2 max-w-[220px] truncate" title={row.base_model || '-'}>{row.base_model || '-'}</td>
                                                             <td className="p-2 max-w-[160px] truncate" title={row.name || '-'}>{row.name || '-'}</td>
                                                             <td className="p-2 max-w-[200px] truncate" title={row.base_url || '-'}>{row.base_url || '-'}</td>
-                                                            <td className="p-2 max-w-[160px] truncate" title={row.modality ? (row.modality.generation_modes || []).join(', ') : '-'}>{row.modality ? (row.modality.generation_modes || []).join(', ') : '-'}</td>
+                                                            <td className="p-2 max-w-[160px] truncate" title={Array.isArray(row.generation_modes) ? row.generation_modes.join(', ') : '-'}>{Array.isArray(row.generation_modes) ? row.generation_modes.join(', ') : '-'}</td>
                                                             <td className="p-2 max-w-[120px] truncate" title={Array.isArray(row.tags) ? row.tags.join(', ') : '-'}>{Array.isArray(row.tags) && row.tags.length > 0 ? row.tags.join(', ') : '-'}</td>
                                                             <td className="p-2">
                                                                 {isSystemApiDeprecated(row) ? (
@@ -4623,10 +5244,9 @@ const UserAdmin = () => {
                                                     <option value="LLM">{t('大语言模型', 'LLM')}</option>
                                                     <option value="Image">{t('图片', 'Image')}</option>
                                                     <option value="Video">{t('视频', 'Video')}</option>
+                                                    <option value="DigitalHuman">{t('数字人', 'DigitalHuman')}</option>
                                                     <option value="Voice">{t('语音', 'Voice')}</option>
                                                     <option value="Music">{t('音乐', 'Music')}</option>
-                                                    <option value="Vision">{t('视觉', 'Vision')}</option>
-                                                    <option value="Tools">{t('工具', 'Tools')}</option>
                                                 </select>
                                             </div>
                                             <div>
@@ -4681,15 +5301,69 @@ const UserAdmin = () => {
                                                     placeholder='{"webHook":"", "smart_priority": 100}'
                                                 />
                                             </div>
-                                            <div className="md:col-span-2">
-                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('模态 (JSON)', 'Modality (JSON)')}</label>
-                                                <textarea
-                                                    value={systemApiForm.modality}
-                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, modality: e.target.value }))}
-                                                    rows={2}
-                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm font-mono"
-                                                    placeholder='{"generation_modes": ["t2i"]}'
-                                                />
+                                            <div className="md:col-span-2 border border-white/10 rounded p-3 space-y-2 bg-white/5">
+                                                <div className="text-xs font-semibold text-cyan-200">{t('通用模态字段', 'Generic Modality Fields')}</div>
+                                                <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                                                    <div><label className="block text-xs uppercase text-gray-400 mb-1">generation_modes</label><input value={systemApiForm.generation_modes} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, generation_modes: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="t2i,i2i,t2v" /></div>
+                                                    <div><label className="block text-xs uppercase text-gray-400 mb-1">input_formats</label><input value={systemApiForm.input_formats} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, input_formats: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="text,image,audio" /></div>
+                                                    <div><label className="block text-xs uppercase text-gray-400 mb-1">output_format</label><input value={systemApiForm.output_format} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, output_format: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="image/video/audio/text" /></div>
+                                                    <div><label className="block text-xs uppercase text-gray-400 mb-1">supported_resolutions</label><input value={systemApiForm.supported_resolutions} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, supported_resolutions: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="1280x720,4k" /></div>
+                                                    <div><label className="block text-xs uppercase text-gray-400 mb-1">aspect_ratios</label><input value={systemApiForm.aspect_ratios} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, aspect_ratios: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="16:9,9:16,1:1" /></div>
+                                                    <div><label className="block text-xs uppercase text-gray-400 mb-1">mode_values</label><input value={systemApiForm.mode_values} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, mode_values: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="std,pro,fast" /></div>
+                                                    <div><label className="block text-xs uppercase text-gray-400 mb-1">max_images_per_call</label><input type="number" min="0" value={systemApiForm.max_images_per_call} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, max_images_per_call: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="1" /></div>
+                                                    <div><label className="block text-xs uppercase text-gray-400 mb-1">reference_image_limit</label><input value={systemApiForm.reference_image_limit} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, reference_image_limit: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="1-2 images" /></div>
+                                                    <div><label className="block text-xs uppercase text-gray-400 mb-1">reference_video_limit</label><input value={systemApiForm.reference_video_limit} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, reference_video_limit: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="1 video" /></div>
+                                                    <div><label className="block text-xs uppercase text-gray-400 mb-1">durations_seconds</label><input value={systemApiForm.durations_seconds} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, durations_seconds: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="3,5,10" /></div>
+                                                    <div><label className="block text-xs uppercase text-gray-400 mb-1">max_duration</label><input type="number" min="0" value={systemApiForm.max_duration} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, max_duration: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="10" /></div>
+                                                    <div><label className="block text-xs uppercase text-gray-400 mb-1">fps_options</label><input value={systemApiForm.fps_options} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, fps_options: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="24,30,60" /></div>
+                                                </div>
+                                                <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                                                    <div>
+                                                        <label className="block text-xs uppercase text-gray-400 mb-1">has_audio</label>
+                                                        <select value={systemApiForm.has_audio} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, has_audio: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm">
+                                                            <option value="any">any</option>
+                                                            <option value="true">true</option>
+                                                            <option value="false">false</option>
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div className="md:col-span-2 border border-white/10 rounded p-3 space-y-2 bg-white/5">
+                                                <div className="text-xs font-semibold text-emerald-200">{t('类别能力字段（JSON对象）', 'Category Capability Fields (JSON object)')}</div>
+                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                                    <textarea rows={3} value={systemApiForm.text_capabilities} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, text_capabilities: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs font-mono" placeholder='text_capabilities: {"supports_chat":true}' />
+                                                    <textarea rows={3} value={systemApiForm.image_capabilities} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, image_capabilities: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs font-mono" placeholder='image_capabilities: {}' />
+                                                    <textarea rows={3} value={systemApiForm.video_capabilities} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, video_capabilities: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs font-mono" placeholder='video_capabilities: {}' />
+                                                    <textarea rows={3} value={systemApiForm.digital_human_capabilities} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, digital_human_capabilities: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs font-mono" placeholder='digital_human_capabilities: {}' />
+                                                    <textarea rows={3} value={systemApiForm.voice_capabilities} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, voice_capabilities: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs font-mono" placeholder='voice_capabilities: {}' />
+                                                    <textarea rows={3} value={systemApiForm.music_capabilities} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, music_capabilities: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs font-mono" placeholder='music_capabilities: {}' />
+                                                </div>
+                                            </div>
+                                            <div className="md:col-span-2 border border-white/10 rounded p-3 space-y-2 bg-white/5">
+                                                <div className="text-xs font-semibold text-amber-200">{t('供应商计费线索（宽表字段）', 'Supplier Billing Hints (Wide Columns)')}</div>
+                                                <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                                                    <input value={systemApiForm.pricing_unit} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, pricing_unit: e.target.value }))} className="bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="pricing_unit" />
+                                                    <input type="number" value={systemApiForm.input_token_price} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, input_token_price: e.target.value }))} className="bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="input_token_price" />
+                                                    <input type="number" value={systemApiForm.output_token_price} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, output_token_price: e.target.value }))} className="bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="output_token_price" />
+                                                    <input value={systemApiForm.free_quota} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, free_quota: e.target.value }))} className="bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="free_quota" />
+                                                    <input value={systemApiForm.currency} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, currency: e.target.value }))} className="bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="currency" />
+                                                    <div className="grid grid-cols-2 gap-2">
+                                                        <select value={systemApiForm.token_billing_supported} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, token_billing_supported: e.target.value }))} className="bg-black/40 border border-gray-700 rounded p-2 text-sm">
+                                                            <option value="any">token billing:any</option>
+                                                            <option value="true">token billing:true</option>
+                                                            <option value="false">token billing:false</option>
+                                                        </select>
+                                                        <select value={systemApiForm.has_tiered_pricing} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, has_tiered_pricing: e.target.value }))} className="bg-black/40 border border-gray-700 rounded p-2 text-sm">
+                                                            <option value="any">tiered:any</option>
+                                                            <option value="true">tiered:true</option>
+                                                            <option value="false">tiered:false</option>
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                                    <textarea rows={3} value={systemApiForm.per_resolution_price_map} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, per_resolution_price_map: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs font-mono" placeholder='per_resolution_price_map: {"1920x1080":100}' />
+                                                    <textarea rows={3} value={systemApiForm.per_duration_price_map} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, per_duration_price_map: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs font-mono" placeholder='per_duration_price_map: {"5":100}' />
+                                                </div>
                                             </div>
                                             <div>
                                                 <label className="block text-xs uppercase text-gray-400 mb-1">{t('标签', 'Tags')}</label>
@@ -4698,15 +5372,6 @@ const UserAdmin = () => {
                                                     onChange={(e) => setSystemApiForm((prev) => ({ ...prev, tags: e.target.value }))}
                                                     className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
                                                     placeholder={t('逗号分隔 或 JSON 数组', 'Comma-separated or JSON array')}
-                                                />
-                                            </div>
-                                            <div>
-                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('供应商信息 (JSON)', 'Supplier Info (JSON)')}</label>
-                                                <input
-                                                    value={systemApiForm.supplier_info}
-                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, supplier_info: e.target.value }))}
-                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm font-mono"
-                                                    placeholder='{}'
                                                 />
                                             </div>
                                             <div>
@@ -5165,8 +5830,253 @@ const UserAdmin = () => {
                         </div>
                     )}
 
+                    {activeTab === 'supplier_ops' && (
+                        <div className="space-y-4">
+                            <div className="border border-cyan-500/20 rounded p-3 bg-cyan-500/5 space-y-3">
+                                <div className="text-sm font-bold text-cyan-200">{t('供应商 API 特征分析', 'Supplier API Feature Analysis')}</div>
+                                <div className="text-xs text-cyan-100/80">
+                                    {t('通过来源页面抓取 + LLM 结构化分析，提取并写入模型特征（分辨率、画幅比、时长、参考图限制、基础模型、mode 等）。', 'Use source-page fetch + LLM structured analysis to extract and persist model features (resolution, aspect ratio, duration, reference-image limits, base model, generation modes, etc.).')}
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                    <div>
+                                        <label className="block text-xs uppercase text-gray-300 mb-1">provider</label>
+                                        <input
+                                            value={supplierFeatureProvider}
+                                            onChange={(e) => setSupplierFeatureProvider(e.target.value)}
+                                            className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                            placeholder="grsai / kie / volcengine"
+                                        />
+                                    </div>
+                                    <div className="md:col-span-2">
+                                        <label className="block text-xs uppercase text-gray-300 mb-1">{t('关键词（逗号分隔）', 'Keywords (comma-separated)')}</label>
+                                        <input
+                                            value={supplierFeatureKeywords}
+                                            onChange={(e) => setSupplierFeatureKeywords(e.target.value)}
+                                            className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                            placeholder="resolution, aspect ratio, duration, t2i, i2v, digital human"
+                                        />
+                                    </div>
+                                </div>
+                                {(() => {
+                                    const normalizedProvider = String(supplierFeatureProvider || '').trim().toLowerCase();
+                                    const candidateRows = systemApiRows.filter((row) => {
+                                        if (String(row?.category || '').startsWith('System_')) return false;
+                                        if (!normalizedProvider) return true;
+                                        return String(row?.provider || '').trim().toLowerCase() === normalizedProvider;
+                                    });
+                                    const candidateIds = candidateRows
+                                        .map((row) => Number(row?.id || 0))
+                                        .filter((id) => Number.isFinite(id) && id > 0);
+                                    const selectedInCandidate = candidateIds.filter((id) => selectedSupplierTargetApiIds.includes(id));
+                                    const allChecked = candidateIds.length > 0 && selectedInCandidate.length === candidateIds.length;
+                                    return (
+                                        <div className="border border-cyan-500/20 rounded p-2 bg-black/20 space-y-2">
+                                            <div className="flex items-center justify-between gap-2">
+                                                <div className="text-xs text-cyan-200">{t('从 System API 选择分析目标（可多选）', 'Select System APIs for Batch Analysis (multi-select)')}</div>
+                                                <div className="flex items-center gap-2">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setSelectedSupplierTargetApiIds((prev) => {
+                                                            const keep = prev.filter((id) => !candidateIds.includes(id));
+                                                            return [...keep, ...candidateIds];
+                                                        })}
+                                                        className="px-2 py-1 text-[11px] rounded bg-cyan-700 hover:bg-cyan-600 text-white"
+                                                    >
+                                                        {t('全选当前筛选', 'Select Filtered')}
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setSelectedSupplierTargetApiIds((prev) => prev.filter((id) => !candidateIds.includes(id)))}
+                                                        className="px-2 py-1 text-[11px] rounded bg-gray-700 hover:bg-gray-600 text-white"
+                                                    >
+                                                        {t('清空当前筛选', 'Clear Filtered')}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            <div className="text-[11px] text-cyan-100/80">
+                                                {t('已选', 'Selected')}: {selectedSupplierTargetApiIds.length} | {t('当前候选', 'Candidates')}: {candidateRows.length}
+                                            </div>
+                                            <div className="max-h-48 overflow-auto border border-cyan-500/20 rounded p-2 space-y-1">
+                                                {candidateRows.length === 0 && (
+                                                    <div className="text-[11px] text-gray-400">{t('暂无可选 System API', 'No System API candidates')}</div>
+                                                )}
+                                                {candidateRows.map((row) => {
+                                                    const rowId = Number(row?.id || 0);
+                                                    const checked = selectedSupplierTargetApiIds.includes(rowId);
+                                                    return (
+                                                        <label key={`supplier-target-${rowId}`} className="flex items-center gap-2 text-[11px] text-cyan-100/90">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={checked}
+                                                                onChange={(e) => toggleSupplierTargetApiId(rowId, e.target.checked)}
+                                                            />
+                                                            <span className="font-mono">#{rowId}</span>
+                                                            <span>{`[${row.category || '-'}] ${row.provider || '-'} / ${row.model || '-'}`}</span>
+                                                        </label>
+                                                    );
+                                                })}
+                                            </div>
+                                            <label className="flex items-center gap-2 text-[11px] text-cyan-100/80">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={allChecked}
+                                                    onChange={(e) => {
+                                                        if (e.target.checked) {
+                                                            setSelectedSupplierTargetApiIds((prev) => {
+                                                                const keep = prev.filter((id) => !candidateIds.includes(id));
+                                                                return [...keep, ...candidateIds];
+                                                            });
+                                                        } else {
+                                                            setSelectedSupplierTargetApiIds((prev) => prev.filter((id) => !candidateIds.includes(id)));
+                                                        }
+                                                    }}
+                                                />
+                                                {t('全选/反选当前候选', 'Toggle all current candidates')}
+                                            </label>
+                                        </div>
+                                    );
+                                })()}
+                                <div>
+                                    <label className="block text-xs uppercase text-gray-300 mb-1">{t('来源 URL（每行一个）', 'Source URLs (one per line)')}</label>
+                                    <textarea
+                                        rows={3}
+                                        value={supplierFeatureUrlsText}
+                                        onChange={(e) => setSupplierFeatureUrlsText(e.target.value)}
+                                        className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs font-mono"
+                                        placeholder={t('https://example.com/docs/model-a\nhttps://example.com/pricing', 'https://example.com/docs/model-a\nhttps://example.com/pricing')}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs uppercase text-gray-300 mb-1">{t('用户补充信息（可为空）', 'User Supplement (optional)')}</label>
+                                    <textarea
+                                        rows={3}
+                                        value={supplierFeatureUserSupplement}
+                                        onChange={(e) => setSupplierFeatureUserSupplement(e.target.value)}
+                                        className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs"
+                                        placeholder={t('例如：重点关注 text token 计费规则、voice 的 sample rate 与 bitrate。', 'Example: Focus on text token pricing and voice sample-rate/bitrate support.')}
+                                    />
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                    <button
+                                        onClick={handleAnalyzeSupplierFeatures}
+                                        disabled={isSupplierFeatureAnalyzing}
+                                        className="px-3 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white font-bold rounded text-sm"
+                                    >
+                                        {isSupplierFeatureAnalyzing ? t('分析中...', 'Analyzing...') : t('1) 分析并预览', '1) Analyze and Preview')}
+                                    </button>
+                                    <button
+                                        onClick={handleApplySupplierFeatures}
+                                        disabled={isSupplierFeatureApplying || !supplierFeatureResult || selectedSupplierFeatureModelKeys.length === 0}
+                                        className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold rounded text-sm"
+                                    >
+                                        {isSupplierFeatureApplying
+                                            ? t('保存中...', 'Saving...')
+                                            : t('2) 保存选中到数据库', '2) Save Selected to DB')}
+                                    </button>
+                                </div>
+                                {supplierFeatureResult && (
+                                    <div className="text-xs text-cyan-100/90 border border-cyan-500/30 rounded p-2 bg-black/20 space-y-1">
+                                        <div>{`provider: ${supplierFeatureResult.provider || '-'}`}</div>
+                                        <div>{`${t('分析页面数', 'Analyzed Pages')}: ${Number(supplierFeatureResult.analyzed_url_count || 0)}`}</div>
+                                        <div>{`${t('选中系统 API 数', 'Selected System APIs')}: ${Number(supplierFeatureResult.selected_system_api_count || 0)}`}</div>
+                                        <div>{`${t('模型条数', 'Models')}: ${Array.isArray(supplierFeatureResult.models) ? supplierFeatureResult.models.length : 0}`}</div>
+                                        <div>{`${t('新增', 'Created')}: ${Number(supplierFeatureResult.saved_created || 0)} | ${t('更新', 'Updated')}: ${Number(supplierFeatureResult.saved_updated || 0)}`}</div>
+                                        {String(supplierFeatureResult.llm_input || '').trim() && (
+                                            <details className="mt-2 border border-cyan-500/20 rounded p-2 bg-black/30">
+                                                <summary className="cursor-pointer text-[11px] text-cyan-200 font-semibold">{t('LLM 输入', 'LLM Input')}</summary>
+                                                <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-all bg-black/40 border border-cyan-500/20 rounded p-2 text-[11px] text-cyan-100">
+{String(supplierFeatureResult.llm_input || '')}
+                                                </pre>
+                                            </details>
+                                        )}
+                                        {String(supplierFeatureResult.llm_output || supplierFeatureResult.llm_raw || '').trim() && (
+                                            <details className="mt-2 border border-cyan-500/20 rounded p-2 bg-black/30">
+                                                <summary className="cursor-pointer text-[11px] text-cyan-200 font-semibold">{t('LLM 输出', 'LLM Output')}</summary>
+                                                <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-all bg-black/40 border border-cyan-500/20 rounded p-2 text-[11px] text-cyan-100">
+{String(supplierFeatureResult.llm_output || supplierFeatureResult.llm_raw || '')}
+                                                </pre>
+                                            </details>
+                                        )}
+                                        {Array.isArray(supplierFeatureResult.models) && supplierFeatureResult.models.length > 0 && (
+                                            <div className="pt-2 space-y-1">
+                                                <div className="text-[11px] text-cyan-200/90">
+                                                    {t('勾选需要写入数据库的模型', 'Select models to save into DB')}
+                                                </div>
+                                                <div className="flex flex-wrap gap-2 pb-1">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setSupplierFeatureFilterMode('all')}
+                                                        className={`px-2 py-1 text-[11px] rounded border ${supplierFeatureFilterMode === 'all' ? 'border-cyan-300 bg-cyan-700/30 text-cyan-100' : 'border-cyan-500/30 bg-black/30 text-cyan-200/80'}`}
+                                                    >
+                                                        {t('全部', 'All')}
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setSupplierFeatureFilterMode('missing_voice_music')}
+                                                        className={`px-2 py-1 text-[11px] rounded border ${supplierFeatureFilterMode === 'missing_voice_music' ? 'border-cyan-300 bg-cyan-700/30 text-cyan-100' : 'border-cyan-500/30 bg-black/30 text-cyan-200/80'}`}
+                                                    >
+                                                        {t('缺 Voice/Music', 'Missing Voice/Music')}
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setSupplierFeatureFilterMode('missing_core')}
+                                                        className={`px-2 py-1 text-[11px] rounded border ${supplierFeatureFilterMode === 'missing_core' ? 'border-cyan-300 bg-cyan-700/30 text-cyan-100' : 'border-cyan-500/30 bg-black/30 text-cyan-200/80'}`}
+                                                    >
+                                                        {t('缺核心字段', 'Missing Core Fields')}
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setSupplierFeatureFilterMode('missing_billing')}
+                                                        className={`px-2 py-1 text-[11px] rounded border ${supplierFeatureFilterMode === 'missing_billing' ? 'border-cyan-300 bg-cyan-700/30 text-cyan-100' : 'border-cyan-500/30 bg-black/30 text-cyan-200/80'}`}
+                                                    >
+                                                        {t('缺计费线索', 'Missing Billing Hints')}
+                                                    </button>
+                                                </div>
+                                                <div className="max-h-44 overflow-auto space-y-1 pr-1">
+                                                    {getFilteredSupplierModels().map((item, idx) => {
+                                                        const rowKey = supplierFeatureModelKey(item);
+                                                        const checked = selectedSupplierFeatureModelKeys.includes(rowKey);
+                                                        const capabilitySections = getSupplierCapabilitySections(item);
+                                                        return (
+                                                            <div key={`${rowKey}-${idx}`} className="border border-cyan-500/20 rounded p-2 bg-black/20 space-y-2">
+                                                                <label className="flex items-center gap-2 text-[11px] text-cyan-100/90">
+                                                                    <input
+                                                                        type="checkbox"
+                                                                        checked={checked}
+                                                                        onChange={() => handleToggleSupplierFeatureModelKey(rowKey)}
+                                                                    />
+                                                                    <span>{`${item.category || '-'} / ${item.model || '-'}${item.base_model ? ` / base:${item.base_model}` : ''}`}</span>
+                                                                    <span className="text-cyan-300/70">{`conf:${Number(item.confidence || 0).toFixed(2)}`}</span>
+                                                                </label>
+                                                                {capabilitySections.length > 0 ? (
+                                                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                                                        {capabilitySections.map((section) => (
+                                                                            <details key={`${rowKey}-${section.key}`} className="border border-cyan-500/20 rounded p-1.5 bg-black/30">
+                                                                                <summary className="cursor-pointer text-[10px] text-cyan-200 font-semibold">{section.label}</summary>
+                                                                                <pre className="mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap break-all text-[10px] text-cyan-100/90 bg-black/40 border border-cyan-500/10 rounded p-1.5">
+{toPrettyFeatureJson(item?.[section.key])}
+                                                                                </pre>
+                                                                            </details>
+                                                                        ))}
+                                                                    </div>
+                                                                ) : (
+                                                                    <div className="text-[10px] text-cyan-300/60">{t('未提取到能力细节字段', 'No capability detail fields extracted')}</div>
+                                                                )}
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
                     {activeTab === 'kie_pricing' && (
                         <div className="space-y-4">
+
                             <div className="flex flex-col md:flex-row md:items-end gap-3">
                                 <div className="flex-1">
                                     <label className="block text-xs uppercase text-gray-400 mb-1">{t('定价页面 URL', 'Pricing page URL')}</label>
@@ -5371,9 +6281,15 @@ const UserAdmin = () => {
                                         )}
                                     </div>
 
+                                    {String(kiePricingResult.llm_input || '').trim() && (
+                                        <details className="border border-white/10 rounded p-3 bg-black/20">
+                                            <summary className="cursor-pointer text-xs text-gray-300">{t('查看 LLM 输入', 'View LLM input')}</summary>
+                                            <pre className="mt-2 text-xs text-gray-300 whitespace-pre-wrap break-all">{String(kiePricingResult.llm_input || '') || '-'}</pre>
+                                        </details>
+                                    )}
                                     <details className="border border-white/10 rounded p-3 bg-black/20">
-                                        <summary className="cursor-pointer text-xs text-gray-300">{t('查看原始 LLM 输出', 'View raw LLM output')}</summary>
-                                        <pre className="mt-2 text-xs text-gray-300 whitespace-pre-wrap break-all">{String(kiePricingResult.llm_raw || '') || '-'}</pre>
+                                        <summary className="cursor-pointer text-xs text-gray-300">{t('查看 LLM 输出', 'View LLM output')}</summary>
+                                        <pre className="mt-2 text-xs text-gray-300 whitespace-pre-wrap break-all">{String(kiePricingResult.llm_output || kiePricingResult.llm_raw || '') || '-'}</pre>
                                     </details>
                                 </div>
                             )}

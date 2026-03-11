@@ -34,6 +34,7 @@
 
 ## 与 scene_analysis 一致性硬规则
 本提示词下的资产生成规范必须与 `scene_analysis` 的资产规范一致，至少覆盖并严格执行：
+- 模板来源策略：`scene_analysis*.txt` 内嵌模板为唯一权威来源（Merged In-File）。补全过程不得依赖外部 `templates.py` 注入。
 - `0) 生图提示词清晰性`：每个实体 `generation_prompt_en` 必须显式含 `Viewpoint Anchor` + `Viewing Direction`。
 - `0.5) Imagen 兼容质量规范`：自然英文、无引擎参数、无元说明、语义顺序清晰、负向词可执行。
 - `1) Environment Prompt Template`：空场景、Base+Delta 思路、可执行空间、机位/光照/焦距与材质信息完整。

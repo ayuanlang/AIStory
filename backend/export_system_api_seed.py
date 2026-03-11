@@ -4,10 +4,11 @@ Run from backend/:
     python export_system_api_seed.py
 
 The exported file (app/data/system_api_seed.json) should be committed to git.
-On Render deploy, init_db will auto-import it to sync settings.
+This seed file is for documentation/reference only and is not auto-imported
+into runtime business data.
 """
 import sys, os, json
-from datetime import datetime, timezone
+from app.core.time_utils import now_bj_iso
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -49,7 +50,7 @@ def main():
 
         payload = {
             "version": 1,
-            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "exported_at": now_bj_iso(),
             "count": len(items),
             "items": items,
         }
@@ -65,3 +66,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -13,7 +13,7 @@
 9. 环境默认审美：未指定风格时，默认优美/大气/现代/优雅；若剧本指定风格，以剧本优先。
 10. 角色与道具默认审美：未限制时，角色镜头友好且可播出，道具精致可复现；必须保留锚定特征。
 11. 层级编码延续：`Episode ID=EPxx`，`Scene ID=EPxx_SCyy`，下游 `Shot ID=EPxx_SCyy_SHzz`；Scene 内状态必须形成 `Entry -> Exit` 闭环。
-12. 语言一致：自然语言跟随输入主语言；仅 `Episode/Scene/Shot ID`、固定结构键名、约定标签可保持既定格式，其余描述禁止中英混杂漂移；生图/生视频提示词字段统一英文（含 `generation_prompt_en`），`anchor_description` 必须英文短语。
+12. 语言一致：自然语言跟随输入主语言；仅 `Episode/Scene/Shot ID`、固定结构键名、约定标签可保持既定格式，其余描述禁止中英混杂漂移；每个实体必须同时输出 `generation_prompt_cn` 与 `generation_prompt_en` 且语义一致，`anchor_description` 必须英文短语。
 13. 基准环境统一：同一地理场地的变体依托同一 Base Reference；变体仅写 Delta，`REUSE` 必写 `None/No visual delta`。
 14. 环境命名权威：`scene_analysis.txt` 是 Environment 最终命名唯一权威；上游若提供 `environment_name` 仅作种子参考，必须在本阶段统一定稿。
 15. 名称冻结：Environment/Character/Prop 一旦定稿，下游逐字符继承，禁止任何自动改写。
@@ -232,8 +232,11 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - 单实体 `generation_prompt_en` 建议 1–4 句。
 
 ### 1) Environment Prompt Template
-`[Global Style]. {Base Environment Reference}: 【base_env_name / reference image id】. {Environment Delta}: 【only changed items; if REUSE write 'None'】. {Viewpoint Anchor}: 【exact observer placement in/around environment】. {Viewing Direction}: 【Front/Reverse/Side + facing target/vector】. {Viewpoint Setup}: 【Height/Angle/Framing】. {Composition Layers}: 【FG: elements + depth relation; MG: primary structure/subject anchor; BG: distant structure/light anchor; Primary Subject + Secondary Subject】. {Lighting Setup}: 【key/fill/back source position + quality + intensity + color temperature】. {Lens & Focus Baseline}: 【focal length family + DOF strategy】. {Grain/Noise Strategy}: 【clean digital / fine film grain / medium grain + shadow readability】. Atmosphere: 【mood keywords】. Details: 【materials, textures】. **No humans or characters present.**`
-
+- 模板已合并到本文件（Merged In-File, Authoritative）。
+- 以本文件中的 Environment/Character/Prop 模板段为唯一执行基线，不再依赖 `templates.py` 运行时注入。
+- 具体示例（仅示范写法，不可照抄值）：
+  - `generation_prompt_en` 示例：`Cinematic realistic drama style. Use ENV:[HarborOffice_Front_Mid_Night] as visual base; keep architecture and material anchors unchanged. Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint at corridor threshold, facing inward to the main desk area; Axis Side: left -> right; Background Set Change: Visible Set = [glass partition, desk lamp, wall clock], Excluded Set = [rear storage shelves as dominant backdrop]; Lighting Direction Change: key light from practical desk lamp at front-right, soft fill from corridor spill; Framing Change: medium-wide, primary subject is desk zone, secondary subject is window reflection line; Dynamic Parts State: PROP:[Door](Half-Open -> Open, reason: CHAR:[@Guard] pushes inward before entering)}. FG: door frame edge and entry mat. MG: desk cluster and task lamp as composition anchor. BG: city lights through rain-streaked glass. No humans in frame.`
+  - `generation_prompt_cn` 示例：`电影级写实剧情风格。以 ENV:[HarborOffice_Front_Mid_Night] 为视觉基底，保持建筑结构与材质锚点不变。环境增量：机位在走廊门槛处朝内看向主办公区；轴线由左侧切到右侧；可见背景包含玻璃隔断、台灯、挂钟，排除储物架成为主背景；主光来自前右侧台灯并辅以走廊溢出补光；构图为中广景，主主体为桌面工作区，次主体为窗面反射线；动态部件为 PROP:[Door] 从半开到全开（CHAR:[@Guard] 推门进入）。前景为门框与地垫，中景为桌组与台灯，后景为雨夜城市光斑。画面中不得出现人物。`
 - 变体写作必须 Delta-only；可追溯 Base；Delta 顺序必须合法。
 - 缩写映射：`CPD/AS/BG/LD/FR/DP`。
 - `generation_prompt_en` 必须写清 FG/MG/BG 三层构图，并明确 `Primary Subject`（画面主体）与 `Secondary Subject`（支撑主体）。
@@ -242,7 +245,11 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - 风格映射必须动态，真人剧避免“游戏感”。
 
 ### 2) Character Prompt Template
-`[Global Style] 6-view character sheet for 【Name】. {Viewpoint Anchor}: 【studio observer placement for sheet capture】. {Viewing Direction}: 【for each panel explicitly mark Front/Back/Side/3-4 + facing】. {Lighting Setup}: 【key/fill/rim source position + quality + intensity + color temperature】. {Lens & Focus}: 【focal length (e.g. 35mm/50mm/85mm) + depth of field strategy】. {Grain/Noise Strategy}: 【clean digital / fine film grain / medium film grain + shadow noise control】. Structure: 6-view layout (Front, Back, Side, 3/4, Close-up, Detail). Appearance: 【Age, Body Type, ethnicity】. Attire: 【Clothing details, footwear】. Anchors: 【Signature features e.g. scar, accessory】. Consistency: T-pose/Neutral pose. Background: White.`
+- 模板已合并到本文件（Merged In-File, Authoritative）。
+- 角色模板与规则在本文件内统一维护，避免外部模板漂移。
+- 具体示例（仅示范写法，不可照抄值）：
+  - `generation_prompt_en` 示例：`Realistic contemporary drama style, full-body character sheet for Lin Yue, all six panels consistent in identity and outfit. Viewpoint anchor: studio camera at chest-height, fixed distance for full-body framing with shoes fully visible. Viewing directions per panel: Front / Back / Side / 3-4 / Close-up / Detail, all aligned to one body proportion system. Lighting: soft key from front-left, balanced fill from camera axis, subtle rim from back-right; maintain natural skin texture and avoid over-smoothing. Lens and focus: 50mm baseline with controlled shallow depth on close-up panel only. Clothing: dark navy trench coat, white shirt, charcoal trousers, black leather ankle boots. Stable anchors: narrow scar under right eyebrow, silver ring on left index finger, asymmetric fringe silhouette. Background pure white, no text, no watermark.`
+  - `generation_prompt_cn` 示例：`写实现代剧情风格，林月角色六视图，六个面板必须保持同一身份与服装一致。机位锚点为胸口高度的棚拍机位，固定距离，全身入镜且鞋子完整可见。视角顺序为正面/背面/侧面/四分之三/特写/细节，统一同一套身材比例。布光为左前方柔和主光、机位轴线补光、右后方轻微轮廓光；保留自然皮肤微纹理，禁止磨皮塑料感。镜头与对焦以 50mm 为基准，仅特写面板允许浅景深。服装为深海军蓝风衣、白衬衫、炭灰长裤、黑色皮质短靴。稳定锚点为右眉下细疤、左手食指银戒、不对称刘海轮廓。纯白背景，无文字无水印。`
 
 - 全身像硬规则（Mandatory）：角色 `generation_prompt_en` 必须明确为 full-body framing，人物从头到脚完整入镜，双脚与鞋子清晰可见（shoes fully visible）。
 - 鞋子可见硬规则（Mandatory）：不得使用会裁切鞋子的构图（如 waist-up / bust shot / knee crop）作为角色资产主图；若需近景，仅可作为附加 panel，且必须保留至少一个全身含鞋 panel。
@@ -261,7 +268,11 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - 锚点仅可用稳定身份特征；禁用表情、瞬时姿态、暂态光影、机位错觉、运动模糊等。
 
 ### 3) Prop Prompt Template
-`[Global Style] Prop Asset: 【Name】. {Viewpoint Anchor}: 【exact studio/object-relative observer placement】. {Viewing Direction}: 【Front/Reverse/Side/Top or Isometric facing】. {Lighting Setup}: 【key/fill/rim source position + quality + intensity + color temperature】. {Lens & Focus}: 【focal length + DOF strategy】. {Grain/Noise Strategy}: 【clean digital / fine film grain / medium grain】. View: 【Angle e.g. Isometric/Front】. Material: 【Texture details】. Wear & Tear: 【Condition】. Background: White.`
+- 模板已合并到本文件（Merged In-File, Authoritative）。
+- 道具模板与规则在本文件内统一维护，避免外部模板漂移。
+- 具体示例（仅示范写法，不可照抄值）：
+  - `generation_prompt_en` 示例：`Photoreal prop sheet for PROP:[AntiquePocketWatch], six-view layout with strict object-only framing. Viewpoint anchor: object turntable center, camera slightly above midline. Viewing directions: Front, Back, Side, 3-4, macro Close-up, hinge Detail. Material response: brushed brass body with minor oxidation, scratched glass crystal, engraved inner lid. Lighting: controlled key from top-left, low-intensity fill from front, narrow rim from rear to separate silhouette. Lens and focus: 70mm macro for close-up panel, 50mm for structural panels, maintain texture readability in shadows. Scale reference: unobtrusive neutral stand only, no hands, no characters, no body parts. White background, high-resolution output.`
+  - `generation_prompt_cn` 示例：`写实道具六视图：PROP:[AntiquePocketWatch]，仅物体入镜。机位锚点位于转台中心，镜头略高于物体中线。视角依次为正面、背面、侧面、四分之三、微距特写、铰链细节。材质表现为拉丝黄铜并带轻微氧化，表镜有细碎划痕，内盖有雕刻纹理。布光采用左上主光、前侧低强度补光、后侧窄轮廓光，保证轮廓分离与阴影细节可读。镜头与对焦为结构面板 50mm、特写面板 70mm 微距。仅允许中性支撑底座用于比例参照，禁止人物、手部或身体部位入画。纯白背景，高分辨率输出。`
 
 - 未给定风格时注入默认道具审美回退语义。
 - 道具风格映射必须跟随剧本风格，真人剧强调真实材质与磨损。
@@ -299,15 +310,29 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 | EP01 | EP01_SC01 | 1 | {Name} | {Times} | **{Stage} (核心舞台)**: 中文描述。<br>**{Environment Context}**: 中文描述。<br>**{Layout}**: 中文描述。<br>**{Axis}**: 中文描述（含观察方向与是否跨线）。<br>**{Observer View}**: 机位站位 + 朝向 + 轴线侧（e.g., 沿轴正向看向{Stage}）。<br>**{Split Reason}**: 拆分原因。<br>**{Beats}**:<br>1. {镜头} 机位在ENV:[Bed]脚端左侧，朝向{Stage}；{空间} CHAR:[@Char A]在ENV:[Bed]右侧边缘坐姿；{角色-镜头关系} CHAR:[@Char A]位于中景偏右；{主体关系} CHAR:[@Char A]侧对CHAR:[@Char B]并看向其胸前，未接触；{动作变化过程} CHAR:[@Char A]前倾半步并抬手；-> {新状态} 与CHAR:[@Char B]近距对峙。 | {Original} | `{Env Name}` | `NEW / REUSE / VARIANT_OF` | `{Base Env Name / Ref ID}` | `仅写相对变化项；REUSE=No visual delta` | {Entry Snapshot} | {Exit Snapshot} | `CHAR:[@Char A]`, `CHAR:[@Char B]` | `PROP:[Prop]` |
 
 ### Subject Index（紧跟 Part 1，非 Markdown 表）
+- **模板锁定（Mandatory）**：Subject Index 每一行必须严格采用固定骨架，禁止改序、改键、增键、删键：
+  - 固定骨架：`subject_no=... | subject_type=... | subject_name_exact=... | script_entity_coverage=...`
+  - 固定顺序：`subject_no -> subject_type -> subject_name_exact -> script_entity_coverage`
+  - 固定分隔：仅允许 `|` 作为字段分隔；字段内不得再嵌套同级键值对。
+- **行级语法门禁（Mandatory）**：若任一行不满足上述骨架与顺序，整段 Subject Index 判无效，必须重写。
+- **注入白名单（Mandatory）**：Subject Index 仅允许出现上述 4 个字段内容，不得注入说明性文本、推理文本、补充段落或其他键名。
+- **注入黑名单（Hard Rule）**：禁止在 Subject Index 行中出现以下内容：
+  - 解释/推理话术：`because`、`reason`、`logic`、`说明`、`原因`、`推断`、`推理`。
+  - 过程控制词：`step`、`todo`、`note`、`备注`、`补充`、`建议`。
+  - 结构污染符：JSON 键包裹、YAML 列表前缀、多余括号层级、代码围栏。
 - **严禁省略 Scene Subjects（Hard Rule）**：Part 1 每个 Scene 中凡在 `{Beats}`、`Linked Characters`、`Key Props`、`Environment Name` 出现的实体，必须进入 Subject Index 与 Part 2；禁止“只写代表人物/主角”替代全量实体。
 - **出现即纳入（Mandatory）**：只要实体在任一 Scene 中被提及或可见参与（含被对视、被交互、被引用、作为环境容器），就必须计入；不得因戏份轻重、省略台词、镜头时长短而忽略。
 - **逐场闭环（Mandatory）**：每个 Scene 的实体集合必须满足：`Scene实体集合 ⊆ Subject Index ∩ Part2(JSON)`；任一差集均判无效，必须重写。
+- **逐行强制映射（Mandatory）**：`Subject Index` 的每一行都必须在 `Part 2 JSON` 中出现且仅出现一次，不得遗漏、不得合并、不得以“代表项”替代。
+- **类型一致强约束（Mandatory）**：`subject_type=character` 必须落在 `characters[]`，`subject_type=prop` 必须落在 `props[]`，`subject_type=environment` 必须落在 `environments[]`；跨类型映射一律判无效。
+- **可机审判定式（Mandatory）**：`SubjectIndexRows ⊆ Part2Rows` 且 `|SubjectIndexRows| == |MatchedRowsInPart2|`；若不成立，结果无效并必须重写。
 - **禁止代表化（Forbidden）**：禁止用“群演/其他人/若干道具/背景角色”等统称替代具体已出现实体；若剧本明确出现可识别对象，必须给出稳定实体名并保持逐字符一致。
 - **剧本实体映射必填（Mandatory）**：Subject Index 每行必须标注该 subject 覆盖了剧本中的哪个实体（人名/物名/地点名/称谓或其稳定别称），用于可审计追踪。
 - 先输出去重 Subject 列表，覆盖 Part 1 全部角色/道具/环境（使用编号列表，不得用 Markdown 表）。
 - `subject_no` 全局唯一连续（建议 `S001...`）。
 - `subject_type` 仅允许：`character/prop/environment`。
 - `subject_name_exact` 与 Part 1 实体名逐字符一致。
+- `subject_name_exact` 只允许三种包装形态：`CHAR:[@...]` / `PROP:[...]` / `ENV:[...]`；禁止裸名、禁止别名、禁止翻译替换。
 - `script_entity_coverage` 必填，写明来源剧本实体名；若同一 subject 合并多个同指实体，使用 `;` 分隔并保持可回溯。
 - 环境覆盖写法（Mandatory）：当 subject_type=`environment` 时，`script_entity_coverage` 必须可列出其覆盖的剧本场景物体（如“桌子;窗帘;墙上时钟”），用于证明“通过环境覆盖剧本实体”。
 - 环境覆盖推荐模板：`剧本实体：<场所名>；<物体1>; <物体2>; <物体3>...`（示例：`剧本实体：客厅；桌子; 沙发; 落地灯; 电视柜`）。
@@ -315,17 +340,33 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - Part 2 每个实体必须回填 `subject_no` 并与 Subject Index 一一映射。
 - 若 `subject_name_exact=CHAR:[@Name]`，则 Part 2A 的 `name/name_en` 仅做净化（移除包装），不得改写字符本体。
 
+- **示例使用强约束（Mandatory）**：
+  - 本文示例仅用于“语法形态”，不得把示例中的具体值（如 `Char A`、`Sword`、`LivingRoom...`）复制到真实输出。
+  - 示例与正文规则冲突时，以正文硬规则为准；示例不可覆盖硬规则。
+  - 真实输出必须用当前剧本实体替换全部示例占位值，且与 Part 1/Part 2 保持逐字符一致。
+  - 若发现示例值与当前项目语言/命名规则冲突，必须按项目语言与命名规则改写，禁止原样照抄。
+
 - Subject Index 输出示例（编号列表）：
   1. `subject_no=S001 | subject_type=character | subject_name_exact=CHAR:[@Char A] | script_entity_coverage=剧本实体：李明（主语“他”）`
   2. `subject_no=S002 | subject_type=prop | subject_name_exact=PROP:[Sword] | script_entity_coverage=剧本实体：长剑`
   3. `subject_no=S003 | subject_type=environment | subject_name_exact=ENV:[LivingRoom_Front_Mid_Day] | script_entity_coverage=剧本实体：<场所名=客厅>；<物体1=桌子>; <物体2=沙发>; <物体3=落地灯>; <物体4=电视柜>`
+
+- Subject Index 自检清单（输出前必须通过）：
+  1. 每行是否仅含 4 个固定字段且顺序正确。
+  2. `subject_name_exact` 是否全部可在 Part 1 命中。
+  3. `subject_no` 是否连续且无重复。
+  4. 是否不存在解释性注入文本/黑名单词。
+  5. 是否不存在示例值残留（如 `Char A`、`Sword`、`LivingRoom_Front_Mid_Day`）。
 
 ### Part 2: Entities JSON (Strict Schema)
 
 #### Part 2 共同硬约束（含 Subject 依赖关系）
 - **Scene Subjects 零遗漏硬约束（Mandatory）**：Part 2 的 `characters/props/environments` 必须完整覆盖 Part 1 所有 Scene 中已出现实体；不得只保留“核心代表项”。
 - **一致性判定口径（Mandatory）**：以 Part 1 实体出现集为主键集，逐项核对 Subject Index 与 Part 2。若存在 `Part1出现但Part2缺失`，结果无效。
+- **Subject Index 逐行回填硬约束（Mandatory）**：Subject Index 的每一行必须在 Part 2 中找到同名同类型实体（逐字符一致，类型一致）；任意一行未命中即判无效。
+- **禁止漏行与并行合并（Hard Rule）**：禁止把 Subject Index 多行合并为 Part 2 一行，或仅保留“主实体”省略其余行；必须逐行一一对应。
 - **命名一致（Mandatory）**：Part 1、Subject Index、Part 2 三处名称必须可一一映射且逐字符一致（仅允许 Part 2A `name/name_en` 去壳，不允许语义替换）。
+- **中文项目命名规则（Mandatory）**：当项目语言为中文时，Part 2 中所有实体 `name` 默认必须使用中文；仅在“明确为英文专有名词”时才允许 `name` 为英文，此时仍必须保留 `name_en`。
 - 每个实体（character / prop / environment）都必须包含：`visual_dependencies` 与 `dependency_strategy`。
 - `visual_dependencies`：
   - `[]` 表示原创主资产（无上游依赖）；
@@ -347,15 +388,16 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
   "characters": [
     {
       "subject_no": "S001",
-      "name": "Exact Name",
-      "name_en": "English Name",
-      "gender": "M/F",
-      "role": "Role",
-      "archetype": "Archetype",
-      "appearance_cn": "Chinese Desc",
-      "clothing": "Clothing Desc",
-      "action_characteristics": "Action Traits",
-      "generation_prompt_en": "[Global Style] ...",
+      "name": "林月",
+      "name_en": "Lin Yue",
+      "gender": "F",
+      "role": "Investigative Reporter",
+      "archetype": "Calm Truth Seeker",
+      "appearance_cn": "28岁，东亚女性，身高约168cm，头身比约1:7.2，脸部线条利落，眼神专注，肤质保留真实毛孔与微细纹理。",
+      "clothing": "深海军蓝风衣（中长款，哑光防泼水面料），白色衬衫，炭灰色修身长裤，黑色皮质短靴（鞋面轻微磨损）。",
+      "action_characteristics": "动作克制、重心稳定、转身幅度小、观察时先停顿后移动。",
+      "generation_prompt_cn": "写实现代剧情风格，林月六视图角色设定图，六个面板保持同一身份与服装一致。机位锚点为棚拍胸口高度固定机位，完整全身入镜且鞋子清晰可见。视角顺序为正面、背面、侧面、四分之三、面部特写、关键细节。布光为左前方柔和主光、机位轴线低强度补光、右后方轻微轮廓光，保留自然皮肤微纹理并避免磨皮塑料感。服装为深海军蓝风衣、白衬衫、炭灰长裤、黑色皮质短靴。背景纯白，无文字无水印。",
+      "generation_prompt_en": "Photoreal contemporary drama style, six-view character sheet for Lin Yue with strict identity consistency across all panels. Viewpoint anchor: fixed studio camera at chest height, full-body framing in every structural panel, shoes fully visible. Panel directions: Front, Back, Side, 3/4, facial Close-up, anchor Detail. Lighting setup: soft key from front-left, subtle fill on camera axis, gentle rim from back-right; preserve skin micro-texture and avoid waxy smoothing. Wardrobe: navy trench coat, white shirt, charcoal slim trousers, black leather ankle boots. Background pure white, no labels, no watermark.",
       "negative_prompt_en": "Style-aware negative prompt for this character (English only)",
       "anchor_description": "English visual tags only",
       "visual_dependencies": [],
@@ -374,11 +416,12 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
   "props": [
     {
       "subject_no": "S002",
-      "name": "Exact Name",
-      "name_en": "English Name",
+      "name": "古董怀表",
+      "name_en": "Antique Pocket Watch",
       "type": "held/static",
-      "description_cn": "Chinese Desc",
-      "generation_prompt_en": "[Global Style] ...",
+      "description_cn": "黄铜材质古董怀表，表壳边缘有细小磕碰，镜面有轻微划痕，内盖有雕刻纹路，可开合铰链结构完整。",
+      "generation_prompt_cn": "写实道具六视图：古董怀表，仅物体入镜。机位锚点位于转台中心，镜头略高于物体中线。视角依次为正面、背面、侧面、四分之三、微距特写、铰链细节。材质表现为拉丝黄铜与轻微氧化，镜面有细碎划痕，内盖雕刻清晰。布光采用左上主光、前侧低强度补光、后侧窄轮廓光，保证轮廓与阴影细节可读。仅允许中性支撑底座，禁止人物、手部和身体部位入画。纯白背景，高分辨率。",
+      "generation_prompt_en": "Photoreal prop sheet for Antique Pocket Watch, strict object-only six-view layout. Viewpoint anchor: camera centered on turntable, slightly above object midline. Views: Front, Back, Side, 3/4, macro Close-up, hinge Detail. Material response: brushed brass with mild oxidation, hairline scratches on crystal, engraved inner lid, readable hinge mechanics. Lighting: controlled key from top-left, low-intensity frontal fill, narrow rear rim for silhouette separation. Lens/focus baseline: 50mm for structure views, 70mm macro for close-up detail, preserve texture in shadow regions. Neutral support stand allowed, no hands, no characters, no body parts. White background, high-resolution output.",
       "negative_prompt_en": "Style-aware negative prompt for this prop (English only)",
       "anchor_description": "English visual tags only",
       "visual_dependencies": [],
@@ -397,12 +440,13 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
   "environments": [
     {
       "subject_no": "S003",
-      "name": "Exact Name",
-      "name_en": "English Name",
-      "atmosphere": "Atmosphere",
-      "visual_params": "Wide/Interior/Day",
-      "description_cn": "Chinese Desc",
-      "generation_prompt_en": "[Global Style]  ...",
+      "name": "港口办公室_正向_中景_夜",
+      "name_en": "HarborOffice_Front_Mid_Night",
+      "atmosphere": "Rainy tense night with restrained noir contrast",
+      "visual_params": "Mid/Interior/Night",
+      "description_cn": "港口办公区夜景，玻璃隔断与桌面灯形成主视觉锚点，空间可达且便于角色进出与机位移动。",
+      "generation_prompt_cn": "电影级写实剧情风格。以 HarborOffice_Front_Wide_Night 为基础参考，保持建筑结构与材质锚点不变。环境增量：机位在走廊门槛处，朝内看向主办公桌区域；轴线由左侧切换到右侧；可见背景包含玻璃隔断、台灯、挂钟，排除后部储物架成为主背景；主光来自前右侧台灯，辅以走廊冷色补光；构图为中广景，主主体为桌面工作区，次主体为窗面反射线。前景为门框与地垫，中景为桌组与台灯，后景为雨夜城市反射光。画面中不得出现人物。",
+      "generation_prompt_en": "Cinematic photoreal drama style. Use HarborOffice_Front_Wide_Night as visual base; keep architecture and material anchors unchanged. Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint at corridor threshold facing inward to main desk zone; Axis Side: left -> right; Background Set Change: Visible Set = [glass partition, desk lamp, wall clock], Excluded Set = [rear storage shelves as dominant backdrop]; Lighting Direction Change: key from front-right practical desk lamp with cool corridor spill fill; Framing Change: medium-wide, primary subject desk cluster, secondary subject window reflection line; Dynamic Parts State: None}. FG: door frame edge and entry mat. MG: desk cluster and practical lamp as composition anchor. BG: rain-streaked city reflections through glass. No humans or characters in frame.",
       "negative_prompt_en": "Style-aware negative prompt for this environment (English only)",
       "anchor_description": "English visual tags only",
       "visual_dependencies": [],
@@ -412,6 +456,28 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
       }
     }
   ]
+}
+```
+
+#### Part 2D — Project Visual Backfill JSON (Mandatory)
+- 在 Part 2C 之后，必须额外输出一个 JSON 对象：`project_visual_backfill`。
+- 该对象用于回填项目信息中的视觉字段，必须包含且仅包含以下键：
+  - `Global_Style`（字符串）
+  - `borrowed_films`（字符串数组）
+  - `tone`（字符串）
+  - `lighting`（字符串）
+- 若剧本无法可靠推断某字段，仍需保留键并给空值（空字符串或空数组），禁止省略键。
+- 该对象值必须与本次分析语义一致，不得与 Part 1/Part 2 互相冲突。
+- `borrowed_films` 中每一项必须是可读的影片名，不要拼接解释文本。
+
+```json
+{
+  "project_visual_backfill": {
+    "Global_Style": "Cinematic realism with restrained noir contrast",
+    "borrowed_films": ["Sicario", "Blade Runner 2049"],
+    "tone": "tense, restrained, melancholic",
+    "lighting": "low-key motivated practical lighting with cool shadows"
+  }
 }
 ```
 

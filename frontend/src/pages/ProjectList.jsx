@@ -39,6 +39,11 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { confirmUiMessage } from '../lib/uiMessage';
 import { getUiLang, tUI } from '../lib/uiLang';
+import {
+    PROJECT_EP_TYPE_OPTIONS,
+    PROJECT_EP_LANGUAGE_OPTIONS,
+    PROJECT_EP_BASE_POSITIONING_OPTIONS,
+} from './editor/projectOptionConfig';
 
 const cinematicImages = [
     "https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=500&q=80", // Movie theater
@@ -62,6 +67,8 @@ const getAvatarUrl = (url) => {
 
 const USER_PROFILE_UPDATED_EVENT = 'aistory.user.profile.updated';
 const PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY = 'aistory.projects.return.snapshot';
+const PROJECT_CREATE_ASPECT_RATIO_OPTIONS = ['16:9', '2.35:1', '4:3', '9:16', '1:1'];
+const PROJECT_CREATE_IMAGE_SIZE_OPTIONS = ['1K', '2K', '4K'];
 
 const sortProjectsNewestFirst = (items = []) => {
     const safeList = Array.isArray(items) ? [...items] : [];
@@ -192,6 +199,11 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [isCreating, setIsCreating] = useState(false);
     const [newTitle, setNewTitle] = useState('');
     const [newDescription, setNewDescription] = useState('');
+    const [newType, setNewType] = useState(PROJECT_EP_TYPE_OPTIONS[0] || '');
+    const [newLanguage, setNewLanguage] = useState(PROJECT_EP_LANGUAGE_OPTIONS[0] || '');
+    const [newBasePositioning, setNewBasePositioning] = useState(PROJECT_EP_BASE_POSITIONING_OPTIONS[0] || '');
+    const [newAspectRatio, setNewAspectRatio] = useState('9:16');
+    const [newImageSize, setNewImageSize] = useState('1K');
     const [activeTab, setActiveTab] = useState(initialTab);
     const [selectedProjectId, setSelectedProjectId] = useState(null);
     const [restoredEditorState, setRestoredEditorState] = useState(null);
@@ -355,15 +367,40 @@ const ProjectList = ({ initialTab = 'projects' }) => {
         }
     };
 
+    const resetCreateProjectForm = () => {
+        setNewTitle('');
+        setNewDescription('');
+        setNewType(PROJECT_EP_TYPE_OPTIONS[0] || '');
+        setNewLanguage(PROJECT_EP_LANGUAGE_OPTIONS[0] || '');
+        setNewBasePositioning(PROJECT_EP_BASE_POSITIONING_OPTIONS[0] || '');
+        setNewAspectRatio('9:16');
+        setNewImageSize('1K');
+    };
+
     const handleCreate = async () => {
         const title = String(newTitle || '').trim();
         if (!title) return;
+        const description = String(newDescription || '');
         await createProject({
             title,
-            description: String(newDescription || ''),
+            description,
+            global_info: {
+                script_title: title,
+                type: String(newType || '').trim(),
+                language: String(newLanguage || '').trim(),
+                base_positioning: String(newBasePositioning || '').trim(),
+                notes: description,
+                tech_params: {
+                    visual_standard: {
+                        aspect_ratio: String(newAspectRatio || '').trim(),
+                        image_size: String(newImageSize || '').trim(),
+                    },
+                },
+                aspect_ratio: String(newAspectRatio || '').trim(),
+                image_size: String(newImageSize || '').trim(),
+            },
         });
-        setNewTitle('');
-        setNewDescription('');
+        resetCreateProjectForm();
         setIsCreating(false);
         loadProjects();
     };
@@ -714,8 +751,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                         </div>
                                         <button 
                                             onClick={() => {
-                                                setNewTitle('');
-                                                setNewDescription('');
+                                                resetCreateProjectForm();
                                                 setIsCreating(true);
                                             }}
                                             className="flex items-center gap-2 px-5 py-2.5 bg-primary text-primary-foreground rounded-full hover:bg-primary/90 shadow-lg shadow-primary/20 transition-all hover:scale-105 font-medium"
@@ -785,7 +821,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                         className="mb-8 p-6 border bg-card rounded-2xl shadow-sm"
                                     >
                                         <label className="block text-sm font-medium mb-2">{t('项目标题', 'Project Title')}</label>
-                                        <div className="flex gap-3">
+                                        <div className="flex gap-3 mb-4">
                                             <input 
                                                 className="flex-1 px-4 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/20 outline-none" 
                                                 value={newTitle} 
@@ -796,9 +832,43 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                             <button onClick={handleCreate} className="px-6 py-2.5 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700">{t('创建', 'Create')}</button>
                                             <button onClick={() => {
                                                 setIsCreating(false);
-                                                setNewDescription('');
+                                                resetCreateProjectForm();
                                             }} className="px-6 py-2.5 bg-secondary text-secondary-foreground rounded-lg font-medium hover:bg-secondary/80">{t('取消', 'Cancel')}</button>
                                         </div>
+
+                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
+                                            <div>
+                                                <label className="block text-xs font-medium mb-1 text-muted-foreground">{t('类型', 'Type')}</label>
+                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newType} onChange={(e) => setNewType(e.target.value)}>
+                                                    {PROJECT_EP_TYPE_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-medium mb-1 text-muted-foreground">{t('语言', 'Language')}</label>
+                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newLanguage} onChange={(e) => setNewLanguage(e.target.value)}>
+                                                    {PROJECT_EP_LANGUAGE_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-medium mb-1 text-muted-foreground">{t('基础定位', 'Base Positioning')}</label>
+                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newBasePositioning} onChange={(e) => setNewBasePositioning(e.target.value)}>
+                                                    {PROJECT_EP_BASE_POSITIONING_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-medium mb-1 text-muted-foreground">{t('画幅比例', 'Aspect Ratio')}</label>
+                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newAspectRatio} onChange={(e) => setNewAspectRatio(e.target.value)}>
+                                                    {PROJECT_CREATE_ASPECT_RATIO_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-medium mb-1 text-muted-foreground">{t('图像尺寸', 'Image Size')}</label>
+                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newImageSize} onChange={(e) => setNewImageSize(e.target.value)}>
+                                                    {PROJECT_CREATE_IMAGE_SIZE_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                                                </select>
+                                            </div>
+                                        </div>
+
                                         <label className="block text-sm font-medium mt-4 mb-2">{t('项目描述（可选）', 'Project Description (Optional)')}</label>
                                         <textarea
                                             className="w-full px-4 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/20 outline-none resize-y min-h-[84px]"
@@ -821,8 +891,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                         </p>
                                         <button 
                                             onClick={() => {
-                                                setNewTitle('');
-                                                setNewDescription('');
+                                                resetCreateProjectForm();
                                                 setIsCreating(true);
                                             }}
                                             className="px-8 py-3 rounded-full bg-primary/20 border border-primary/50 text-white font-medium hover:bg-primary/30 transition-all hover:scale-105"

@@ -1,6 +1,75 @@
 # Core Entity Generation Templates
 # Shared between Scene Analysis and Single Entity Analysis to ensure consistency.
 
+# Fixed-syntax markers for bilingual prompt validation.
+# Each generated prompt should include all markers for its entity type.
+PROMPT_TEMPLATE_SYNTAX_RULES = {
+	"characters": {
+		"en_required": [
+			"[Global Style]",
+			"6-view character sheet",
+			"Structure: 6-view layout",
+			"Front",
+			"Back",
+			"Side",
+			"3/4",
+			"Close-up",
+			"Detail",
+			"Background: white",
+		],
+		"cn_required": [
+			"六视图",
+			"正面",
+			"背面",
+			"侧面",
+			"四分之三",
+			"特写",
+			"细节",
+			"背景",
+			"纯白",
+		],
+	},
+	"props": {
+		"en_required": [
+			"[Global Style] Prop:",
+			"6-view prop sheet",
+			"Structure: 6-view layout",
+			"Front",
+			"Back",
+			"Side",
+			"3/4",
+			"Close-up",
+			"Detail",
+			"Background: white",
+			"Strictly Object Only",
+		],
+		"cn_required": [
+			"道具",
+			"六视图",
+			"正面",
+			"背面",
+			"侧面",
+			"四分之三",
+			"特写",
+			"细节",
+			"仅物体",
+			"背景",
+			"纯白",
+		],
+	},
+	"environments": {
+		"en_required": [
+			"[Global Style] Viewpoint at",
+			"No people or characters in scene",
+		],
+		"cn_required": [
+			"环境",
+			"无人物",
+			"背景",
+		],
+	},
+}
+
 CHARACTER_PROMPT_TEMPLATE = """
 [Global Style], 6-view character sheet — all six views must show the same character, outfit, proportions, and anchors consistently.
 
@@ -28,7 +97,28 @@ Output: six high-resolution PNGs or a 6-panel composite; include a neutral T-pos
 """
 
 PROP_PROMPT_TEMPLATE = """
-[Global Style] Prop: 【PropName (state)】. Material: 【primary_material】; secondary materials: 【list】. Size: ~【dimensions cm or relative to reference】. Relative scale reference: 【reference_subject e.g., belt buckle, chair】. Visible details: 【surface texture, wear, markings, seams, labels】. Lighting setup: key/fill/rim 【direction + intensity + color_temp + soft/hard】. Lens & focus: 【focal length / equivalent lens + DOF strategy】. Grain/noise strategy: 【clean digital / fine film grain / medium grain】 with readable texture in shadows. Shot framing: 【view e.g., front 3/4; macro insert】. Style adaptation by script type: live-action/realistic drama must enforce physically plausible material response (metal specular, fabric fibers, roughness variation), true-to-scale wear, and avoid toy-like/plastic CGI look. anchor_description：【thumbnail_readability】. Background: white. **Strictly Object Only: No characters, no hands, no body parts visible.** Output: single object PNG with alpha; include a simple, unobtrusive scale marker (no numbers/text); End note: white background, high quality, large file, no text.
+[Global Style] Prop: 【PropName (state)】, 6-view prop sheet — all six views must show the same object identity, proportions, material response, and anchor details consistently.
+
+1. Full Front: full object front view with complete silhouette and readable major geometry.
+2. Full Back: full object rear view with seams, back panel, and structure continuity.
+3. Full Side: true side profile showing thickness/depth and contour.
+4. 3/4 View: front three-quarter view for volume and edge readability.
+5. Close-up: macro close-up of key surface/material detail (texture, wear, marking, label).
+6. Detail View: close detail of a critical anchor part (e.g., handle/joint/corner/fastener).
+
+Structure: 6-view layout (Front, Back, Side, 3/4, Close-up, Detail).
+Material: 【primary_material】; secondary materials: 【list】.
+Size: ~【dimensions cm or relative to reference】.
+Relative scale reference: 【reference_subject e.g., belt buckle, chair】.
+Visible details: 【surface texture, wear, markings, seams, labels】.
+Lighting setup: key/fill/rim 【direction + intensity + color_temp + soft/hard】.
+Lens & focus: 【focal length / equivalent lens + DOF strategy】.
+Grain/noise strategy: 【clean digital / fine film grain / medium grain】 with readable texture in shadows.
+Style adaptation by script type: live-action/realistic drama must enforce physically plausible material response (metal specular, fabric fibers, roughness variation), true-to-scale wear, and avoid toy-like/plastic CGI look.
+anchor_description：【thumbnail_readability】.
+Background: white.
+**Strictly Object Only: No characters, no hands, no body parts visible.**
+Output: six high-resolution PNGs or a 6-panel composite; include a simple, unobtrusive scale marker (no numbers/text); no labels, no captions, no watermark; End note: white background, high quality, large files, no text.
 """
 
 ENVIRONMENT_PROMPT_TEMPLATE = """

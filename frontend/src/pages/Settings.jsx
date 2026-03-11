@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useStore } from '@/lib/store';
 import { Save, Info, Upload, Download, Coins, History, Palette, CheckCircle, ArrowLeft, User, KeyRound } from 'lucide-react';
 import { API_URL } from '@/config';
-import { updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, selectSystemSetting, updateMyProfile, updateMyPassword, uploadMyAvatar, recordSystemLogAction, getAutoDownloadLocalPreference, setAutoDownloadLocalPreference } from '../services/api';
+import { updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, selectSystemSetting, updateMyProfile, updateMyPassword, uploadMyAvatar, recordSystemLogAction, getAutoDownloadLocalPreference, setAutoDownloadLocalPreference, getPromptSubmitLanguagePreference, setPromptSubmitLanguagePreference, normalizePromptSubmitLanguagePreference } from '../services/api';
 import RechargeModal from '../components/RechargeModal'; // Import RechargeModal
 import { getUiLang, setUiLang as setGlobalUiLang, tUI, UI_LANG_EVENT } from '../lib/uiLang';
 
@@ -126,6 +126,7 @@ const Settings = () => {
     const [visionModel, setVisionModel] = useState("Grsai-Vision"); // New Vision Model State
     const [promptLanguage, setPromptLanguage] = useState("mixed");
     const [autoDownloadLocal, setAutoDownloadLocal] = useState(false);
+    const [promptSubmitLanguage, setPromptSubmitLanguage] = useState(() => getPromptSubmitLanguagePreference());
 
     // State for Tool Configs (Active inputs)
     const [imgToolKey, setImgToolKey] = useState("");
@@ -181,6 +182,7 @@ const Settings = () => {
         Video: 'none',
         Vision: 'none',
     });
+    const [apiStrategyByCategory, setApiStrategyByCategory] = useState({});
 
     // Unified Top Up entry: support /settings?tab=billing and cross-app 402 redirects.
     useEffect(() => {
@@ -293,6 +295,12 @@ const Settings = () => {
             ...(generationConfig || {}),
             autoDownloadLocal: next,
         });
+    };
+
+    const handlePromptSubmitLanguageChange = (value) => {
+        const next = normalizePromptSubmitLanguagePreference(value);
+        setPromptSubmitLanguage(next);
+        setPromptSubmitLanguagePreference(next);
     };
 
     const trackMenuAction = (menuKey, menuLabel, actionFn) => {
@@ -452,6 +460,13 @@ const Settings = () => {
         }
     };
 
+    const normalizeApiStrategy = (value) => {
+        const raw = String(value || '').trim().toLowerCase();
+        if (raw === 'low_price_replace') return 'low_price_replace';
+        if (raw === 'fixed') return 'fixed';
+        return 'smart_default';
+    };
+
     const refreshActiveSettingSources = async () => {
         try {
             const all = await getSettings();
@@ -461,14 +476,17 @@ const Settings = () => {
                 Video: 'none',
                 Vision: 'none',
             };
+            const strategyMap = {};
             (all || []).forEach((item) => {
                 if (!item?.is_active || !item?.category) return;
                 const source = item?.config?.selection_source === 'system' || item?.config?.use_system_setting_id ? 'system' : 'user';
                 if (next[item.category] !== undefined) {
                     next[item.category] = source;
                 }
+                strategyMap[item.category] = normalizeApiStrategy(item?.config?.api_strategy);
             });
             setActiveSettingSources(next);
+            setApiStrategyByCategory(strategyMap);
         } catch (err) {
             console.error('Failed to refresh active setting sources', err);
         }
@@ -1144,11 +1162,12 @@ const Settings = () => {
         addLog("Generation settings & credentials saved", "success");
     };
 
-    const handleSelectSystemSetting = async (setting) => {
+    const handleSelectSystemSetting = async (setting, category) => {
         if (!setting?.id) return;
         setSelectingSystemId(setting.id);
         try {
-            const selected = await selectSystemSetting(setting.id);
+            const chosenStrategy = normalizeApiStrategy(apiStrategyByCategory?.[category]);
+            const selected = await selectSystemSetting(setting.id, chosenStrategy);
             if (selected?.category === 'LLM') {
                 const resolvedEndpoint = selected.base_url || setting.base_url || '';
                 setProvider(selected.provider || 'openai');
@@ -1163,7 +1182,7 @@ const Settings = () => {
                 });
             }
             showNotification(`System setting activated: ${selected?.provider || setting.provider} / ${selected?.model || setting.model || ''}`, 'success');
-            addLog(`Activated system API setting: ${selected?.provider || setting.provider} (${selected?.category || setting.category})`, 'success');
+            addLog(`Activated system API setting: ${selected?.provider || setting.provider} (${selected?.category || setting.category}), strategy=${chosenStrategy}`, 'success');
             await loadSystemSettingsCatalog();
             await refreshActiveSettingSources();
         } catch (err) {
@@ -1460,6 +1479,21 @@ const Settings = () => {
                     <p className="text-[11px] text-muted-foreground">
                         {t('该开关会立即保存到当前用户本地设置。', 'This toggle is saved immediately to current user local settings.')}
                     </p>
+                    <div className="space-y-2 bg-white/5 p-3 rounded-lg border border-white/10">
+                        <label className="text-sm text-white/90">{t('提示词提交语种', 'Prompt Submit Language')}</label>
+                        <select
+                            value={promptSubmitLanguage}
+                            onChange={(e) => handlePromptSubmitLanguageChange(e.target.value)}
+                            className="w-full md:w-56 p-2 rounded-md bg-white/10 border border-white/10 text-sm"
+                        >
+                            <option value="en">{t('英文', 'English')}</option>
+                            <option value="cn">{t('中文', 'Chinese')}</option>
+                            <option value="auto">{t('按界面语言', 'Follow UI Language')}</option>
+                        </select>
+                        <p className="text-[11px] text-muted-foreground">
+                            {t('该选项会立即保存到当前用户本地设置，并用于 Subject 与 Shot 的生成提交。', 'This option is saved immediately to current user local settings and applies to Subject and Shot generation submissions.')}
+                        </p>
+                    </div>
                 </div>
             </section>
             )}
@@ -1679,6 +1713,28 @@ const Settings = () => {
                                 {t('在每个类别中选择一个默认激活配置。调用时将按你当前激活项生效。', 'Pick one default active config per category. Calls will use your currently active selection.')}
                             </p>
 
+                            <div className="grid grid-cols-1 gap-3 rounded-lg border border-white/10 bg-white/5 p-3">
+                                <div className="text-xs text-muted-foreground">
+                                    {t('用户 API 激活策略：智能选择（默认）先对默认激活 API 重试 3 次，再按同类候选依次尝试 3 个；固定 API 在失败重试 3 次后结束；低价替换在失败重试 3 次后按同类同 mode 的平均价格从低到高尝试前 3 个。', 'User API activation policy: Smart default (default) retries the selected API 3 times, then tries 3 same-category fallback APIs in order; Fixed retries selected API 3 times then exits; Low-price replace retries selected API 3 times then tries top 3 lowest average-price APIs in same category and mode.')}
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                    {['Image', 'Video'].map((policyCategory) => (
+                                        <div key={`policy-${policyCategory}`} className="flex items-center gap-2">
+                                            <span className="text-xs min-w-[64px] text-muted-foreground">{policyCategory}</span>
+                                            <select
+                                                value={apiStrategyByCategory?.[policyCategory] || 'smart_default'}
+                                                onChange={(e) => setApiStrategyByCategory((prev) => ({ ...prev, [policyCategory]: normalizeApiStrategy(e.target.value) }))}
+                                                className="w-full px-2 py-1.5 rounded border border-white/15 bg-black/30 text-xs"
+                                            >
+                                                <option value="smart_default">{t('智能选择（默认 API 重试 3 次 + 同类候选 3 个）', 'Smart default (3 retries + 3 same-category fallbacks)')}</option>
+                                                <option value="fixed">{t('固定 API（失败重试 3 次后退出）', 'Fixed API (exit after 3 retries)')}</option>
+                                                <option value="low_price_replace">{t('低价替换（失败重试 3 次后按低价候选依次尝试）', 'Low-price replace (after 3 retries, try low-price candidates)')}</option>
+                                            </select>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
                             {!isSystemSettingsLoading && categorizedSystemSettings.length > 0 && (
                                 <div className="flex flex-wrap gap-2">
                                     <button
@@ -1738,6 +1794,11 @@ const Settings = () => {
                                                                         <div className="text-muted-foreground">{t('模型', 'Model')}</div>
                                                                         <div className="font-mono break-all flex flex-wrap items-center gap-2">
                                                                             <span>{row.model || '-'}</span>
+                                                                            {Number.isFinite(Number(row.avg_price_estimate)) && (
+                                                                                <span className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-400/30 bg-emerald-500/10 text-emerald-200">
+                                                                                    {t('均价估算', 'Avg')}: {Number(row.avg_price_estimate || 0)}
+                                                                                </span>
+                                                                            )}
                                                                         </div>
                                                                     </div>
                                                                     <div className="md:col-span-2 flex md:justify-end">
@@ -1745,7 +1806,7 @@ const Settings = () => {
                                                                             <button
                                                                                 onClick={(e) => {
                                                                                     e.stopPropagation();
-                                                                                    handleSelectSystemSetting(row);
+                                                                                    handleSelectSystemSetting(row, categoryBlock.category);
                                                                                 }}
                                                                                 disabled={!group.shared_key_configured || selectingSystemId === row.id || !!row.deprecated}
                                                                                 className="text-xs px-3 py-1.5 rounded border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50 disabled:cursor-not-allowed"

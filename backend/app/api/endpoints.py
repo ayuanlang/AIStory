@@ -16,8 +16,10 @@ from app.services.tool_billing_taxonomy_service import tool_billing_taxonomy_ser
 from app.core.prompts.skills_loader import get_skill_prompt_text, load_skills_registry, get_skill_meta
 from app.services.llm_service import llm_service
 from app.services.payment_service import payment_service
-from app.services.task_manager import submit as _submit_task, get_status as _get_task_status, submit_async_endpoint as _submit_async
+from app.services.task_manager import submit as _submit_task, get_status as _get_task_status, submit_async_endpoint as _submit_async, cancel as _cancel_task
+from app.services.system_default_api_service import get_task_default_system_setting
 from app.db.init_db import check_and_migrate_tables  # EMERGENCY FIX IMPORT
+from app.core.time_utils import now_bj_iso
 import os
 
 
@@ -107,10 +109,56 @@ router = APIRouter()
 media_service = MediaGenerationService()
 logger = logging.getLogger("api_logger")
 
+ANALYSIS_PROMPT_TEMPLATE_SYNTAX_RULES: Dict[str, Dict[str, List[str]]] = {
+    "characters": {
+        "en_required": [
+            "[Global Style]",
+            "6-view character sheet",
+            "Structure: 6-view layout",
+            "Front",
+            "Back",
+            "Side",
+            "3/4",
+            "Close-up",
+            "Detail",
+            "Background: white",
+        ],
+        "cn_required": ["六视图", "正面", "背面", "侧面", "四分之三", "特写", "细节", "背景", "纯白"],
+    },
+    "props": {
+        "en_required": [
+            "[Global Style] Prop:",
+            "6-view prop sheet",
+            "Structure: 6-view layout",
+            "Front",
+            "Back",
+            "Side",
+            "3/4",
+            "Close-up",
+            "Detail",
+            "Background: white",
+            "Strictly Object Only",
+        ],
+        "cn_required": ["道具", "六视图", "正面", "背面", "侧面", "四分之三", "特写", "细节", "仅物体", "背景", "纯白"],
+    },
+    "environments": {
+        "en_required": ["[Global Style] Viewpoint at", "No people or characters in scene"],
+        "cn_required": ["环境", "无人物", "背景"],
+    },
+}
+
 # ── Generic async-task polling endpoint ──────────────────────────────────
 @router.get("/tasks/{task_id}")
 def poll_task(task_id: str, current_user: User = Depends(get_current_user)):
     info = _get_task_status(task_id, user_id=current_user.id)
+    if info is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return info
+
+
+@router.post("/tasks/{task_id}/cancel")
+def cancel_task(task_id: str, current_user: User = Depends(get_current_user)):
+    info = _cancel_task(task_id, user_id=current_user.id, reason="Task canceled by user request")
     if info is None:
         raise HTTPException(status_code=404, detail="Task not found")
     return info
@@ -201,7 +249,7 @@ def _set_generation_callback_payload(ticket: str, payload: Dict[str, Any]) -> No
         GENERATION_CALLBACK_STORE[stable_ticket] = {
             "ticket": stable_ticket,
             "received_ts": time.time(),
-            "received_at": datetime.utcnow().isoformat(),
+            "received_at": now_bj_iso(),
             "payload": payload if isinstance(payload, dict) else {},
         }
 
@@ -833,7 +881,7 @@ def _log_batch_sys_event(
         "item_label": item_label,
         "result": result,
         "message": message,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": now_bj_iso(),
     }
     if isinstance(extra, dict) and extra:
         details_payload["extra"] = extra
@@ -941,14 +989,8 @@ def _resolve_effective_api_setting_meta(
     active_count = user_setting_query.count()
     setting = user_setting_query.order_by(APISetting.id.desc()).first()
     if not setting:
-        category_defaults = db.query(SystemAPISetting).filter(
-            SystemAPISetting.category == resolved_category,
-            SystemAPISetting.is_active == True,
-        ).order_by(SystemAPISetting.id.desc()).all()
-
-        for system_default in category_defaults:
-            if _is_system_setting_deprecated(system_default.config, system_default.deprecated):
-                continue
+        system_default = get_task_default_system_setting(db, resolved_category)
+        if system_default and not _is_system_setting_deprecated(system_default.config, system_default.deprecated):
             return system_default, "system_category_default", {
                 "active_count": active_count,
                 "category": resolved_category,
@@ -1062,10 +1104,12 @@ def _seed_default_system_settings_for_user(db: Session, user_id: int) -> None:
     if existing_count > 0:
         return
 
-    active_system_rows = db.query(SystemAPISetting).filter(
-        SystemAPISetting.is_active == True,
-        ~SystemAPISetting.category.like("System_%"),
-    ).order_by(SystemAPISetting.category.asc(), SystemAPISetting.id.desc()).all()
+    active_system_rows: List[SystemAPISetting] = []
+    for category in ["LLM", "Image", "Video", "Vision", "Tools", "DigitalHuman", "Voice", "Music"]:
+        row = get_task_default_system_setting(db, category)
+        if not row:
+            continue
+        active_system_rows.append(row)
 
     if not active_system_rows:
         return
@@ -1083,6 +1127,7 @@ def _seed_default_system_settings_for_user(db: Session, user_id: int) -> None:
         marker_config = {
             "selection_source": "system",
             "use_system_setting_id": int(system_setting.id),
+            "api_strategy": "smart_default",
         }
         selected_setting_id: Optional[int] = None
 
@@ -1336,11 +1381,30 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     total[k] = v
             return total
 
+        def _detect_scene_output_sections(output_text: str) -> Dict[str, Any]:
+            text = str(output_text or "")
+            checks = {
+                "part_1": re.compile(r"(?im)^\s*(?:#{1,6}\s*)?Part\s*1\b"),
+                "subject_index": re.compile(r"(?im)^\s*(?:#{1,6}\s*)?Subject\s*Index\b"),
+                "part_2": re.compile(r"(?im)^\s*(?:#{1,6}\s*)?Part\s*2\b"),
+                "final_consistency_report": re.compile(r"(?im)^\s*(?:#{1,6}\s*)?Final\s+Consistency\s+Report\b"),
+            }
+            found_sections: Dict[str, bool] = {k: bool(p.search(text)) for k, p in checks.items()}
+            missing_sections = [k for k, present in found_sections.items() if not present]
+            return {
+                "found_sections": found_sections,
+                "missing_sections": missing_sections,
+                "structure_incomplete": bool(missing_sections),
+            }
+
         def _detect_output_integrity(output_text: str, segments: List[Dict[str, Any]], final_finish_reason: Optional[str]) -> Dict[str, Any]:
             text = (output_text or "").strip()
             segment_list = segments or []
             had_length_finish = any(_is_length_finish_reason(seg.get("finish_reason")) for seg in segment_list)
             ended_with_length = _is_length_finish_reason(final_finish_reason)
+            section_meta = _detect_scene_output_sections(text)
+            missing_sections = section_meta.get("missing_sections") or []
+            structure_incomplete = bool(section_meta.get("structure_incomplete"))
 
             json_candidate = ""
             json_expected = False
@@ -1398,7 +1462,11 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     json_valid = False
                     json_error = str(parse_error)
 
-            truncation_suspected = bool(ended_with_length or (had_length_finish and json_expected and json_valid is False))
+            truncation_suspected = bool(
+                ended_with_length
+                or (had_length_finish and json_expected and json_valid is False)
+                or structure_incomplete
+            )
 
             warning_codes: List[str] = []
             warnings: List[str] = []
@@ -1416,6 +1484,14 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 warning_codes.append("ANALYSIS_JSON_INVALID")
                 warnings.append("Analysis returned invalid or incomplete JSON. Please review before applying.")
 
+            if structure_incomplete:
+                warning_codes.append("ANALYSIS_STRUCTURE_INCOMPLETE")
+                warnings.append(
+                    "Analysis output is missing required sections: "
+                    + ", ".join([str(x) for x in missing_sections])
+                    + "."
+                )
+
             return {
                 "truncation_detected": had_length_finish,
                 "truncation_suspected": truncation_suspected,
@@ -1425,6 +1501,9 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "json_error": json_error,
                 "explicit_json_response": explicit_json_response,
                 "parseable_json_block_count": parseable_json_block_count,
+                "found_sections": section_meta.get("found_sections") or {},
+                "missing_sections": missing_sections,
+                "structure_incomplete": structure_incomplete,
                 "warning_codes": warning_codes,
                 "warnings": warnings,
             }
@@ -1536,11 +1615,73 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "warnings": warnings,
             }
 
+        def _detect_prompt_template_syntax_warnings(text: str, syntax_rules: Dict[str, Any]) -> Dict[str, Any]:
+            entities_payload = _extract_entities_from_json_candidates(text)
+            warning_codes: List[str] = []
+            warnings: List[str] = []
+            mismatches: List[Dict[str, Any]] = []
+
+            for section in ("characters", "props", "environments"):
+                rules = syntax_rules.get(section) if isinstance(syntax_rules, dict) else None
+                if not isinstance(rules, dict):
+                    continue
+                en_required = [str(x).strip() for x in (rules.get("en_required") or []) if str(x).strip()]
+                cn_required = [str(x).strip() for x in (rules.get("cn_required") or []) if str(x).strip()]
+                items = entities_payload.get(section) or []
+                if not isinstance(items, list):
+                    continue
+
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    name = str(item.get("name") or item.get("name_en") or "").strip() or "(unnamed)"
+                    prompt_en = str(item.get("generation_prompt_en") or "")
+                    prompt_cn = str(item.get("generation_prompt_cn") or "")
+
+                    missing_en = [m for m in en_required if m not in prompt_en]
+                    missing_cn = [m for m in cn_required if m not in prompt_cn]
+
+                    if not prompt_en.strip() or not prompt_cn.strip() or missing_en or missing_cn:
+                        mismatches.append({
+                            "section": section,
+                            "name": name,
+                            "missing_en_markers": missing_en,
+                            "missing_cn_markers": missing_cn,
+                            "missing_generation_prompt_en": not bool(prompt_en.strip()),
+                            "missing_generation_prompt_cn": not bool(prompt_cn.strip()),
+                        })
+
+            if mismatches:
+                warning_codes.append("ANALYSIS_PROMPT_TEMPLATE_MISMATCH")
+                preview = mismatches[:8]
+                summary = "; ".join([
+                    f"{it.get('section')}:{it.get('name')}"
+                    for it in preview
+                ])
+                warnings.append(
+                    "Prompt template syntax warning: generation_prompt_cn/en must match fixed template markers for characters/props/environments. "
+                    f"Examples: {summary}"
+                )
+
+            return {
+                "checked_sections": ["characters", "props", "environments"],
+                "mismatch_count": len(mismatches),
+                "mismatches": mismatches,
+                "warning_codes": warning_codes,
+                "warnings": warnings,
+            }
+
         # Load the prompt template or use provided system_prompt
         system_instruction = ""
+        template_signature: Dict[str, Any] = {}
         
         if request.system_prompt:
             system_instruction = request.system_prompt
+            template_signature = {
+                "template_source": "inline_system_prompt",
+                "template_version": "inline@v1",
+                "template_hash_sha256": hashlib.sha256(str(system_instruction or "").encode("utf-8")).hexdigest(),
+            }
         else:
             prompt_filename = request.prompt_file or "scene_analysis.txt"
             try:
@@ -1548,33 +1689,18 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             except FileNotFoundError:
                 logger.error("Scene analysis prompt not found: %s", prompt_filename)
                 raise HTTPException(status_code=404, detail=f"Prompt file '{prompt_filename}' not found.")
-
-            # Inject Templates if using the standard scene_analysis.txt
-            if "scene_analysis.txt" in prompt_filename:
-                try:
-                    from app.core.prompts.templates import (
-                        CHARACTER_PROMPT_TEMPLATE as char_tmpl, 
-                        PROP_PROMPT_TEMPLATE as prop_tmpl, 
-                        ENVIRONMENT_PROMPT_TEMPLATE as env_tmpl
-                    )
-                    # Replace placeholders or specific sections
-                    # We will use simple string replacement or format if placeholders exist
-                    # For backward compatibility, check if placeholders exist first
-                    if "{char_prompt_template}" in system_instruction:
-                        system_instruction = system_instruction.replace("{char_prompt_template}", char_tmpl)
-                    if "{prop_prompt_template}" in system_instruction:
-                        system_instruction = system_instruction.replace("{prop_prompt_template}", prop_tmpl)
-                    if "{env_prompt_template}" in system_instruction:
-                        system_instruction = system_instruction.replace("{env_prompt_template}", env_tmpl)
-                except Exception as e:
-                    logger.warning(f"Failed to inject templates into scene analysis prompt: {e}")
+            template_signature = {
+                "template_source": f"prompt_file:{prompt_filename}",
+                "template_version": "prompt_file@v1",
+                "template_hash_sha256": hashlib.sha256(str(system_instruction or "").encode("utf-8")).hexdigest(),
+            }
 
         include_negative_prompt = getattr(request, "include_negative_prompt", True)
         if include_negative_prompt:
             system_instruction += (
                 "\n\n"
                 "# Output Hard Constraint (Negative Prompt)\n"
-                "In Part 3 JSON, every entity item (characters / props / environments) MUST include key \"negative_prompt_en\". "
+                "In Part 2 JSON, every entity item (characters / props / environments) MUST include key \"negative_prompt_en\". "
                 "Each negative_prompt_en must be English-only, style-aware, and aligned to that entity's generation_prompt_en. "
                 "For live-action realism, explicitly exclude plastic/waxy/CGI look and other realism-breaking artifacts."
             )
@@ -1648,26 +1774,142 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         user_content = f"Script to Analyze:\n\n{request.text}"
         
         if request.project_metadata:
-            meta_parts = ["Project Overview Context:"]
-            # Prioritize key fields if they exist
-            if request.project_metadata.get("script_title"):
-                meta_parts.append(f"Title: {request.project_metadata['script_title']}")
-            if request.project_metadata.get("type"):
-                meta_parts.append(f"Type: {request.project_metadata['type']}")
-            if request.project_metadata.get("tone"):
-                meta_parts.append(f"Tone: {request.project_metadata['tone']}")
-            if request.project_metadata.get("Global_Style"):
-                meta_parts.append(f"Global Style: {request.project_metadata['Global_Style']}")
-            if request.project_metadata.get("base_positioning"):
-                meta_parts.append(f"Base Positioning: {request.project_metadata['base_positioning']}")
-            if request.project_metadata.get("lighting"):
-                meta_parts.append(f"Lighting: {request.project_metadata['lighting']}")
-            if request.project_metadata.get("series_episode"):
-                meta_parts.append(f"Episode: {request.project_metadata['series_episode']}")
-             
-            # Simple dump of other fields if needed, or just rely on these key ones for the prompt
-            # Let's add all relevant fields that might influence the visual analysis
-            
+            metadata = request.project_metadata if isinstance(request.project_metadata, dict) else {}
+
+            def _norm_key(key: Any) -> str:
+                return str(key or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+            metadata_norm = {
+                _norm_key(k): v for k, v in metadata.items()
+            }
+
+            def _clean_str(value: Any) -> str:
+                text = str(value or "").strip()
+                return text
+
+            def _pick(*keys: str) -> str:
+                for key in keys:
+                    value = None
+                    if key in metadata:
+                        value = metadata.get(key)
+                    else:
+                        nk = _norm_key(key)
+                        if nk in metadata_norm:
+                            value = metadata_norm.get(nk)
+                    if value is not None:
+                        value = _clean_str(value)
+                        if value:
+                            return value
+                return ""
+
+            def _pick_arr(*keys: str) -> List[str]:
+                for key in keys:
+                    value = None
+                    if key in metadata:
+                        value = metadata.get(key)
+                    else:
+                        nk = _norm_key(key)
+                        if nk in metadata_norm:
+                            value = metadata_norm.get(nk)
+                    if value is None:
+                        continue
+                    if isinstance(value, list):
+                        normalized = [str(v or "").strip() for v in value]
+                        normalized = [v for v in normalized if v]
+                        if normalized:
+                            return normalized
+                    elif isinstance(value, str):
+                        parts = [p.strip() for p in re.split(r"[,，;；\n]", value) if p and p.strip()]
+                        if parts:
+                            return parts
+                return []
+
+            visual_standard = {}
+            tech_params = metadata.get("tech_params") if "tech_params" in metadata else metadata_norm.get("tech_params")
+            if isinstance(tech_params, dict):
+                visual_standard = tech_params.get("visual_standard") or tech_params.get("visual standard") or {}
+            if not isinstance(visual_standard, dict):
+                visual_standard = {}
+
+            visual_norm = {
+                _norm_key(k): v for k, v in visual_standard.items()
+            }
+
+            def _pick_visual(*keys: str) -> str:
+                for key in keys:
+                    value = None
+                    if key in visual_standard:
+                        value = visual_standard.get(key)
+                    else:
+                        nk = _norm_key(key)
+                        if nk in visual_norm:
+                            value = visual_norm.get(nk)
+                    if value is not None:
+                        value = _clean_str(value)
+                        if value:
+                            return value
+                for key in keys:
+                    value = None
+                    if key in metadata:
+                        value = metadata.get(key)
+                    else:
+                        nk = _norm_key(key)
+                        if nk in metadata_norm:
+                            value = metadata_norm.get(nk)
+                    if value is not None:
+                        value = _clean_str(value)
+                        if value:
+                            return value
+                return ""
+
+            project_language = _pick("language", "project_language")
+            borrowed_films = _pick_arr("borrowed_films", "borrowedFilms", "reference_films")
+
+            meta_parts = [
+                "Project Context (prepend and treat as high-priority constraints):",
+                "[Basic Info]",
+            ]
+            if _pick("script_title", "title"):
+                meta_parts.append(f"Title: {_pick('script_title', 'title')}")
+            if _pick("series_episode", "episode"):
+                meta_parts.append(f"Episode: {_pick('series_episode', 'episode')}")
+            if _pick("type"):
+                meta_parts.append(f"Type: {_pick('type')}")
+            if _pick("base_positioning"):
+                meta_parts.append(f"Base Positioning: {_pick('base_positioning')}")
+            if project_language:
+                meta_parts.append(f"Language: {project_language}")
+                if any(tag in project_language.lower() for tag in ["zh", "cn", "中文", "chinese"]):
+                    meta_parts.append("Subject Naming Rule: For this project, subject 'name' must be Chinese by default. Use English in 'name' only for explicit proper nouns that are canonically English.")
+                    meta_parts.append("Subject Prompt Rule: Every subject JSON item must include BOTH generation_prompt_cn and generation_prompt_en, and the two prompts must be semantically aligned.")
+            else:
+                meta_parts.append("Language: (empty)")
+                meta_parts.append("Language Warning: project language is empty. You MUST infer one target natural language from script context and keep all natural-language descriptions consistently in that single language.")
+
+            meta_parts.append("[Technical & Visual Parameters]")
+            if _pick_visual("aspect_ratio"):
+                meta_parts.append(f"Aspect Ratio: {_pick_visual('aspect_ratio')}")
+            if _pick_visual("image_size"):
+                meta_parts.append(f"Image Size: {_pick_visual('image_size')}")
+            if _pick_visual("horizontal_resolution"):
+                meta_parts.append(f"Horizontal Resolution: {_pick_visual('horizontal_resolution')}")
+            if _pick_visual("vertical_resolution"):
+                meta_parts.append(f"Vertical Resolution: {_pick_visual('vertical_resolution')}")
+            if _pick_visual("frame_rate"):
+                meta_parts.append(f"Frame Rate: {_pick_visual('frame_rate')}")
+            if _pick_visual("quality"):
+                meta_parts.append(f"Quality: {_pick_visual('quality')}")
+            if _pick("Global_Style"):
+                meta_parts.append(f"Global Style: {_pick('Global_Style')}")
+            if borrowed_films:
+                meta_parts.append(f"Borrowed Films: {', '.join(borrowed_films)}")
+            if _pick("tone"):
+                meta_parts.append(f"Tone: {_pick('tone')}")
+            if _pick("lighting"):
+                meta_parts.append(f"Lighting: {_pick('lighting')}")
+
+            meta_parts.append("Use this project context as first-class constraints before analyzing the script.")
+
             meta_str = "\n".join(meta_parts)
             user_content = f"{meta_str}\n\n{user_content}"
             logger.info(
@@ -1693,6 +1935,28 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
 
         reuse_subject_assets = getattr(request, "reuse_subject_assets", None) or []
         if isinstance(reuse_subject_assets, list) and len(reuse_subject_assets) > 0:
+            def _normalize_subject_type(raw_type: Any) -> str:
+                t = str(raw_type or "").strip().lower()
+                if t in {"character", "characters", "char", "人物", "角色"}:
+                    return "character"
+                if t in {"prop", "props", "道具", "物件"}:
+                    return "prop"
+                if t in {"environment", "environments", "env", "场景", "环境"}:
+                    return "environment"
+                return ""
+
+            def _format_subject_ref(name: str, normalized_type: str) -> str:
+                clean_name = str(name or "").strip()
+                if not clean_name:
+                    return ""
+                if normalized_type == "character":
+                    return f"CHAR:[@{clean_name}]"
+                if normalized_type == "prop":
+                    return f"PROP:[{clean_name}]"
+                if normalized_type == "environment":
+                    return f"ENV:[{clean_name}]"
+                return f"SUBJECT:[{clean_name}]"
+
             normalized_assets = []
             for item in reuse_subject_assets[:20]:
                 if not isinstance(item, dict):
@@ -1701,6 +1965,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 if not name:
                     continue
                 asset_type = str(item.get("type") or "").strip()
+                normalized_type = _normalize_subject_type(asset_type)
                 description = str(item.get("description") or "").strip()
                 anchor_description = str(item.get("anchor_description") or "").strip()
                 description = description[:600]
@@ -1708,6 +1973,8 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 normalized_assets.append({
                     "name": name,
                     "type": asset_type,
+                    "normalized_type": normalized_type,
+                    "subject_ref": _format_subject_ref(name, normalized_type),
                     "description": description,
                     "anchor_description": anchor_description,
                 })
@@ -1717,6 +1984,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     "Reusable Subject Assets (High Priority):",
                     "The following assets are MUST-REUSE subjects for this analysis.",
                     "Do NOT regenerate or rename them. Keep their identity and anchor traits consistent.",
+                    "When referencing these assets in Scene Subjects / Beats / JSON, use canonical syntax: CHAR:[@Name], PROP:[Name], ENV:[Name].",
                 ]
                 for asset in normalized_assets:
                     detail_parts = []
@@ -1727,7 +1995,8 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     if asset.get("anchor_description"):
                         detail_parts.append(f"anchors={asset['anchor_description']}")
                     details = " | ".join(detail_parts)
-                    lines.append(f"- [{asset['name']}] {details}".strip())
+                    subject_ref = str(asset.get("subject_ref") or "").strip() or f"SUBJECT:[{asset['name']}]"
+                    lines.append(f"- {subject_ref} (name={asset['name']}) {details}".strip())
 
                 reuse_block = "\n".join(lines)
                 user_content = f"{reuse_block}\n\n{user_content}"
@@ -1760,6 +2029,8 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             "system_prompt_tokens_est": _estimate_tokens(system_instruction or ""),
             "user_prompt_tokens_est": _estimate_tokens(user_content or ""),
         }
+        if template_signature:
+            debug_meta.update(template_signature)
 
         # Billing (task_type = analysis)
         provider = (config or {}).get("provider")
@@ -1786,7 +2057,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         else:
             billing_service.check_balance(db, current_user.id, "analysis", provider, model)
 
-        # Record max token config for diagnostics, but do not override it.
+        # Record max token config for diagnostics only.
         cfg_obj = (config or {}).get("config") or {}
         if not isinstance(cfg_obj, dict):
             cfg_obj = {}
@@ -1804,23 +2075,61 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             or _to_int(cfg_obj.get("max_output_tokens"))
         )
 
-        removed_local_cap_fields: List[str] = []
-        for cap_key in ("max_tokens", "max_completion_tokens", "max_output_tokens"):
-            if cap_key in cfg_obj:
-                removed_local_cap_fields.append(cap_key)
-                cfg_obj.pop(cap_key, None)
+        # KIE call hardening for scene analysis:
+        # 1) Remove mutually-exclusive/irrelevant options that can degrade long-form outputs.
+        # 2) Do not force max token cap; let provider/model defaults apply unless user set one.
+        provider_name = str((config or {}).get("provider") or "").strip().lower()
+        kie_removed_conflict_keys: List[str] = []
+        kie_output_cap_forced = False
+        kie_output_cap_source = "provider_default"
+        if provider_name == "kie":
+            for key in ("tools", "tool_choice", "response_format"):
+                if key in cfg_obj:
+                    cfg_obj.pop(key, None)
+                    kie_removed_conflict_keys.append(key)
+
+            # Scene analysis expects strict final-format output, not thought traces.
+            if "include_thoughts" in cfg_obj:
+                cfg_obj["include_thoughts"] = False
+
+            # Do not force an output cap for KIE scene analysis.
+            # Leave max token policy to the upstream model/provider unless user explicitly set one.
+            kie_output_cap_forced = False
+            if requested_cap > 0:
+                kie_output_cap_source = "user_configured"
 
         if (config or {}).get("config") is not cfg_obj:
             config["config"] = cfg_obj
 
-        debug_meta["config_max_tokens"] = None
-        debug_meta["config_max_completion_tokens"] = None
-        debug_meta["config_max_tokens_effective"] = None
+        debug_meta["config_max_tokens"] = cfg_obj.get("max_tokens")
+        debug_meta["config_max_completion_tokens"] = cfg_obj.get("max_completion_tokens")
+        debug_meta["config_max_tokens_effective"] = (
+            _to_int(cfg_obj.get("max_tokens"))
+            or _to_int(cfg_obj.get("max_completion_tokens"))
+            or _to_int(cfg_obj.get("max_output_tokens"))
+            or None
+        )
         debug_meta["requested_output_cap_tokens"] = requested_cap
         debug_meta["default_output_cap_applied"] = False
-        debug_meta["local_output_cap_removed"] = bool(removed_local_cap_fields)
-        if removed_local_cap_fields:
-            debug_meta["removed_local_cap_fields"] = removed_local_cap_fields
+        debug_meta["local_output_cap_removed"] = False
+        debug_meta["kie_removed_conflict_keys"] = kie_removed_conflict_keys
+        debug_meta["kie_output_cap_forced"] = kie_output_cap_forced
+        debug_meta["kie_output_cap_source"] = kie_output_cap_source
+        if provider_name == "kie" and (kie_removed_conflict_keys or kie_output_cap_forced):
+            logger.warning(
+                "[analyze_scene][kie_call_hardening] removed_keys=%s forced_cap=%s effective_max_tokens=%s",
+                kie_removed_conflict_keys,
+                kie_output_cap_forced,
+                debug_meta.get("config_max_tokens_effective"),
+            )
+        elif provider_name == "kie":
+            logger.info(
+                "[analyze_scene][kie_call_hardening] removed_keys=%s forced_cap=%s cap_source=%s effective_max_tokens=%s",
+                kie_removed_conflict_keys,
+                kie_output_cap_forced,
+                kie_output_cap_source,
+                debug_meta.get("config_max_tokens_effective"),
+            )
 
         logger.info(f"Analyzing scene for user {current_user.id} with model {config.get('model')}")
         # Auto-continue if provider truncates (finish_reason=length).
@@ -1835,6 +2144,14 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             "Return ONLY the continuation in the same format as before.\n\n"
             "SUFFIX (do not repeat):\n{suffix}"
         )
+        continuation_instruction_incomplete_tpl = (
+            "Your previous response ended before all required sections were completed. "
+            "Continue exactly from the end of the existing response. "
+            "Do NOT rewrite or repeat completed content. "
+            "You MUST complete these missing sections: {missing_sections}. "
+            "Return ONLY the continuation text in the same format.\n\n"
+            "SUFFIX (do not repeat):\n{suffix}"
+        )
 
         result_parts: List[str] = []
         segments_meta: List[Dict[str, Any]] = []
@@ -1842,7 +2159,10 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         resolved_llm_routing: Dict[str, Any] = {}
         finish_reason = None
         continuation_stopped_by_max_segments = False
+        continuation_reason_counts: Dict[str, int] = {}
+        continuation_by_structure = 0
         provider_limit_hints: List[str] = []
+        llm_fallback_warnings: List[str] = []
 
         def _dedupe_overlap(existing: str, incoming: str) -> str:
             if not existing or not incoming:
@@ -1882,11 +2202,17 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             part_finish = llm_resp.get("finish_reason")
             part_limit_hints = llm_resp.get("token_limit_hints", []) or []
             part_extraction_diag = llm_resp.get("extraction_diagnostics", {}) or {}
+            part_fallback_warnings = llm_resp.get("fallback_warnings", []) or []
             if isinstance(part_limit_hints, list):
                 for hint in part_limit_hints:
                     hint_text = str(hint or "").strip()
                     if hint_text and hint_text not in provider_limit_hints:
                         provider_limit_hints.append(hint_text)
+            if isinstance(part_fallback_warnings, list):
+                for warn in part_fallback_warnings:
+                    warn_text = str(warn or "").strip()
+                    if warn_text and warn_text not in llm_fallback_warnings:
+                        llm_fallback_warnings.append(warn_text)
 
             usage_total = _merge_usage(usage_total, part_usage)
             finish_reason = part_finish
@@ -1905,8 +2231,21 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "extraction_diagnostics": part_extraction_diag,
             })
 
+            accumulated = "".join(result_parts)
+            section_meta = _detect_scene_output_sections(accumulated)
+            missing_sections = [str(x) for x in (section_meta.get("missing_sections") or []) if str(x)]
+            continue_due_to_length = _is_length_finish_reason(part_finish)
+            continue_due_to_structure = (
+                provider_name == "kie"
+                and not continue_due_to_length
+                and bool(missing_sections)
+                and seg_idx < max_segments
+                and continuation_by_structure < 3
+                and bool(accumulated.strip())
+            )
+
             # Stop if not truncated.
-            if not _is_length_finish_reason(part_finish):
+            if not continue_due_to_length and not continue_due_to_structure:
                 break
 
             # Stop if provider returned nothing new.
@@ -1914,9 +2253,20 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 break
 
             # Ask for continuation; include only a short suffix of the accumulated output.
-            accumulated = "".join(result_parts)
             suffix = accumulated[-tail_chars:] if len(accumulated) > tail_chars else accumulated
-            continuation_instruction = continuation_instruction_tpl.format(suffix=suffix)
+            continuation_reason = "length"
+            if continue_due_to_structure:
+                continuation_by_structure += 1
+                continuation_reason = "missing_required_sections"
+                continuation_instruction = continuation_instruction_incomplete_tpl.format(
+                    missing_sections=", ".join(missing_sections),
+                    suffix=suffix,
+                )
+            else:
+                continuation_instruction = continuation_instruction_tpl.format(suffix=suffix)
+
+            continuation_reason_counts[continuation_reason] = int(continuation_reason_counts.get(continuation_reason) or 0) + 1
+
             # Continuation does not require re-sending the whole script; keep only system + tail.
             base_for_continue = system_only_messages or list(messages)
             current_messages = list(base_for_continue) + [
@@ -1930,6 +2280,27 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         result_content = "".join(result_parts)
         usage = usage_total
         integrity_meta = _detect_output_integrity(result_content, segments_meta, finish_reason)
+
+        raw_total_chars = 0
+        dedup_total_chars = 0
+        try:
+            raw_total_chars = sum(int(seg.get("output_chars") or 0) for seg in (segments_meta or []))
+            dedup_total_chars = sum(int(seg.get("deduped_chars") or 0) for seg in (segments_meta or []))
+        except Exception:
+            raw_total_chars = 0
+            dedup_total_chars = 0
+
+        logger.info(
+            "[analyze_scene] llm_output_length episode_id=%s provider=%s model=%s segments=%s finish_reason=%s output_chars=%s raw_total_chars=%s dedup_total_chars=%s",
+            getattr(request, "episode_id", None),
+            (config or {}).get("provider"),
+            (config or {}).get("model"),
+            len(segments_meta or []),
+            finish_reason,
+            len(result_content or ""),
+            raw_total_chars,
+            dedup_total_chars,
+        )
 
         completion_tokens_val = usage.get("completion_tokens")
         if completion_tokens_val is None:
@@ -1954,7 +2325,10 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             "segments": segments_meta,
             "max_segments": max_segments,
             "continuation_stopped_by_max_segments": continuation_stopped_by_max_segments,
+            "continuation_reason_counts": continuation_reason_counts,
+            "continuation_by_structure": continuation_by_structure,
             "provider_limit_hints": provider_limit_hints,
+            "llm_fallback_warnings": llm_fallback_warnings,
             "integrity": integrity_meta,
         })
 
@@ -2025,8 +2399,15 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         subject_consistency_meta = _detect_subject_consistency_warnings(result_content)
         debug_meta["subject_consistency"] = subject_consistency_meta
 
+        prompt_syntax_rules = ANALYSIS_PROMPT_TEMPLATE_SYNTAX_RULES
+
+        prompt_template_meta = _detect_prompt_template_syntax_warnings(result_content, prompt_syntax_rules)
+        debug_meta["prompt_template_syntax"] = prompt_template_meta
+
         sc_warning_codes = subject_consistency_meta.get("warning_codes") or []
         sc_warnings = subject_consistency_meta.get("warnings") or []
+        template_warning_codes = prompt_template_meta.get("warning_codes") or []
+        template_warnings = prompt_template_meta.get("warnings") or []
 
         if integrity_meta.get("warnings"):
             response_payload["warnings"] = integrity_meta.get("warnings")
@@ -2042,6 +2423,27 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             response_payload["warning_codes"] = [
                 *list(response_payload.get("warning_codes") or []),
                 *list(sc_warning_codes),
+            ]
+
+        if template_warnings:
+            response_payload["warnings"] = [
+                *list(response_payload.get("warnings") or []),
+                *list(template_warnings),
+            ]
+        if template_warning_codes:
+            response_payload["warning_codes"] = [
+                *list(response_payload.get("warning_codes") or []),
+                *list(template_warning_codes),
+            ]
+
+        if llm_fallback_warnings:
+            response_payload["warnings"] = [
+                *list(response_payload.get("warnings") or []),
+                *list(llm_fallback_warnings),
+            ]
+            response_payload["warning_codes"] = [
+                *list(response_payload.get("warning_codes") or []),
+                "ANALYSIS_LLM_CALL_FAILED_RETRIED",
             ]
 
         if response_payload.get("warnings"):
@@ -2066,6 +2468,17 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     getattr(request, "episode_id", None),
                     sc_warning_codes,
                     sc_warnings,
+                )
+            except Exception:
+                pass
+        if template_warning_codes or template_warnings:
+            try:
+                logger.warning(
+                    "[analyze_scene] prompt template syntax warning episode_id=%s codes=%s warnings=%s mismatches=%s",
+                    getattr(request, "episode_id", None),
+                    template_warning_codes,
+                    template_warnings,
+                    (prompt_template_meta or {}).get("mismatch_count", 0),
                 )
             except Exception:
                 pass
@@ -2939,7 +3352,7 @@ def parse_global_style_constraints(global_md: str) -> Dict[str, Any]:
         if item.startswith("全局风格"):
             current_block = "global_constraints"
             continue
-        if item.startswith("禁止项") or "Hard No" in item:
+        if item.startswith("禁止") or "Hard No" in item:
             current_block = "hard_no"
             continue
 
@@ -3503,7 +3916,7 @@ async def generate_project_story_dna_global(
         story_input = req.dict()
     story_input["mode"] = "global"
 
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = now_bj_iso()
     gi = dict(project.global_info or {})
     gi["story_generator_global_input"] = story_input
     gi["story_dna_global_md"] = generated_md
@@ -3545,7 +3958,7 @@ def save_project_story_generator_global_input(
         story_input = req.dict()
     story_input["mode"] = "global"
 
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = now_bj_iso()
     gi = dict(project.global_info or {})
     gi["story_generator_global_input"] = story_input
     gi["story_generator_global_input_updated_at"] = now_iso
@@ -3647,14 +4060,14 @@ def export_project_story_generator_global_package(
         raw = str(md or "")
         if not raw.strip():
             return {}
-        setup_block = _extract_between(raw, r"###\s*A\)\s*定场（开场与触发事件）", r"###\s*B\)\s*发展")
+        setup_block = _extract_between(raw, r"###\s*A\)", r"###\s*B\)")
         development_block = _extract_between(raw, r"###\s*B\)\s*发展", r"###\s*C\)\s*转折")
         turning_block = _extract_between(raw, r"###\s*C\)\s*转折", r"###\s*D\)\s*高潮")
         climax_block = _extract_between(raw, r"###\s*D\)\s*高潮", r"###\s*E\)\s*定局")
         resolution_block = _extract_between(raw, r"###\s*E\)\s*定局", r"##\s*5\)\s*悬念系统")
-        suspense_block = _extract_between(raw, r"##\s*5\)\s*悬念系统", r"##\s*6\)\s*伏笔与回收")
-        foreshadowing_block = _extract_between(raw, r"##\s*6\)\s*伏笔与回收", r"##\s*7\)\s*分集规划")
-        background_block = _extract_between(raw, r"##\s*1\)\s*核心设定（背景/世界观）", r"##\s*2\)\s*主角与目标")
+        suspense_block = _extract_between(raw, r"##\s*5\)", r"##\s*6\)")
+        foreshadowing_block = _extract_between(raw, r"##\s*6\)", r"##\s*7\)")
+        background_block = _extract_between(raw, r"##\s*1\)", r"##\s*2\)")
 
         hook = ""
         inciting = ""
@@ -3709,7 +4122,7 @@ def export_project_story_generator_global_package(
     return {
         "schema_version": 1,
         "export_type": "story_generator_global_project",
-        "exported_at": datetime.utcnow().isoformat(),
+        "exported_at": now_bj_iso(),
         "source_project": {
             "id": project.id,
             "title": project.title,
@@ -3740,7 +4153,7 @@ def import_project_story_generator_global_package(
 ):
     project = _require_project_access(db, project_id, current_user)
 
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = now_bj_iso()
     gi = dict(project.global_info or {})
 
     basic_information = req.basic_information or req.project_overview or {}
@@ -4435,7 +4848,7 @@ def update_project_character_profiles(
     gi = dict(project.global_info or {})
     profiles = req.character_profiles or []
     gi["character_profiles"] = profiles
-    gi["character_profiles_updated_at"] = datetime.utcnow().isoformat()
+    gi["character_profiles_updated_at"] = now_bj_iso()
     gi["character_canon_md"] = _render_canon_md(profiles)
     project.global_info = gi
 
@@ -4457,7 +4870,7 @@ def save_project_character_canon_input(
     """Persist Project Character Canon draft inputs without calling the LLM."""
     project = _require_project_access(db, project_id, current_user)
 
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = now_bj_iso()
     gi = dict(project.global_info or {})
     gi["character_canon_input"] = {
         "name": req.name or "",
@@ -4497,7 +4910,7 @@ def save_project_character_canon_categories(
     """Persist Project Character Canon tag/identity category configuration."""
     project = _require_project_access(db, project_id, current_user)
 
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = now_bj_iso()
     gi = dict(project.global_info or {})
     if req.tag_categories is not None:
         gi["character_canon_tag_categories"] = req.tag_categories
@@ -4641,7 +5054,7 @@ async def generate_project_character_profile(
     else:
         billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, details)
 
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = now_bj_iso()
     gi = dict(project.global_info or {})
     profiles = gi.get("character_profiles")
     profiles = list(profiles) if isinstance(profiles, list) else []
@@ -4782,7 +5195,7 @@ def _persist_episode_scene_generation_status(db: Session, episode: Episode, stat
         merged_status["force_stopped"] = True
 
     if bool(merged_status.get("force_stopped")):
-        now_iso = datetime.utcnow().isoformat()
+        now_iso = now_bj_iso()
         merged_status["running"] = False
         merged_status["status"] = "canceled"
         merged_status["stopped_by_user"] = True
@@ -4811,7 +5224,7 @@ def _run_episode_scene_generation_job(episode_id: int, req_payload: Dict[str, An
             latest["running"] = False
             latest["status"] = "stopped"
             latest["message"] = "Stopped before generation started"
-            latest["finished_at"] = datetime.utcnow().isoformat()
+            latest["finished_at"] = now_bj_iso()
             latest["updated_at"] = latest["finished_at"]
             _persist_episode_scene_generation_status(db, episode, latest)
             _log_batch_sys_event(
@@ -4845,7 +5258,7 @@ def _run_episode_scene_generation_job(episode_id: int, req_payload: Dict[str, An
             status_payload["message"] = "Scene generation completed"
             status_payload["scenes_created"] = int((result or {}).get("scenes_created") or 0)
             status_payload["result"] = result
-            status_payload["updated_at"] = datetime.utcnow().isoformat()
+            status_payload["updated_at"] = now_bj_iso()
             status_payload["finished_at"] = status_payload["updated_at"]
             _persist_episode_scene_generation_status(db, episode, status_payload)
             _log_batch_sys_event(
@@ -4871,7 +5284,7 @@ def _run_episode_scene_generation_job(episode_id: int, req_payload: Dict[str, An
                 status_payload["running"] = False
                 status_payload["status"] = "failed"
                 status_payload["message"] = str(e)
-                status_payload["updated_at"] = datetime.utcnow().isoformat()
+                status_payload["updated_at"] = now_bj_iso()
                 status_payload["finished_at"] = status_payload["updated_at"]
                 _persist_episode_scene_generation_status(db, episode, status_payload)
                 _log_batch_sys_event(
@@ -5045,7 +5458,7 @@ async def generate_episode_character_profile(
     else:
         billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, details)
 
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = now_bj_iso()
     profiles = list(episode.character_profiles or [])
     updated = False
     for p in profiles:
@@ -5265,7 +5678,7 @@ async def generate_episode_story_dna(
         story_input = req.dict()
     story_input["mode"] = mode
 
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = now_bj_iso()
     if mode == "global":
         gi = dict(project.global_info or {})
         gi["story_generator_global_input"] = story_input
@@ -5315,7 +5728,7 @@ def save_episode_story_generator_input(
         story_input = req.dict()
     story_input["mode"] = mode
 
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = now_bj_iso()
     if mode == "global":
         gi = dict(project.global_info or {})
         gi["story_generator_global_input"] = story_input
@@ -5541,7 +5954,7 @@ def start_episode_scenes_generation_job(
     if bool(latest.get("running")):
         raise HTTPException(status_code=409, detail="Scene generation is already running")
 
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = now_bj_iso()
     status_payload = {
         "running": True,
         "status": "running",
@@ -5600,7 +6013,7 @@ def get_episode_scenes_generation_job_status(
         and _is_stale_running_payload(status_payload, stale_minutes=10)
         and not _is_episode_worker_alive(EPISODE_SCENE_JOB_THREADS, EPISODE_SCENE_JOB_THREADS_LOCK, int(episode_id))
     ):
-        now_iso = datetime.utcnow().isoformat()
+        now_iso = now_bj_iso()
         status_payload["running"] = False
         status_payload["status"] = "canceled"
         status_payload["force_stopped"] = True
@@ -5628,7 +6041,7 @@ def stop_episode_scenes_generation_job(
         status_payload["message"] = "No running scene generation task"
         return status_payload
 
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = now_bj_iso()
     status_payload["stop_requested"] = True
     status_payload["stop_requested_at"] = now_iso
     status_payload["force_stopped"] = True
@@ -5731,7 +6144,7 @@ async def generate_project_episode_scripts_from_global_framework(
                     merged_status["stopped_by_user"] = bool(existing_status.get("stopped_by_user"))
 
             if bool(merged_status.get("force_stopped")):
-                now_iso = datetime.utcnow().isoformat()
+                now_iso = now_bj_iso()
                 merged_status["running"] = False
                 merged_status["status"] = "canceled"
                 merged_status["stopped_by_user"] = True
@@ -5944,7 +6357,7 @@ async def generate_project_episode_scripts_from_global_framework(
 
     if req.retry_failed_only and len(episodes_with_index) == 0:
         run_status["running"] = False
-        run_status["finished_at"] = datetime.utcnow().isoformat()
+        run_status["finished_at"] = now_bj_iso()
         run_status["message"] = "No failed episodes found from previous run"
         _persist_run_status(run_status)
         return {
@@ -5988,7 +6401,7 @@ async def generate_project_episode_scripts_from_global_framework(
 
     for idx, ep in episodes_with_index:
         if _is_stop_requested():
-            stopped_at = datetime.utcnow().isoformat()
+            stopped_at = now_bj_iso()
             run_status["stop_requested"] = True
             if not run_status.get("stop_requested_at"):
                 run_status["stop_requested_at"] = stopped_at
@@ -6051,7 +6464,7 @@ async def generate_project_episode_scripts_from_global_framework(
             })
             run_status["processed"] = int(run_status.get("processed") or 0) + 1
             run_status["skipped"] = int(run_status.get("skipped") or 0) + 1
-            run_status["updated_at"] = datetime.utcnow().isoformat()
+            run_status["updated_at"] = now_bj_iso()
             run_status["results"].append({
                 "episode_id": ep.id,
                 "episode_number": idx,
@@ -6178,7 +6591,7 @@ async def generate_project_episode_scripts_from_global_framework(
 
             ep.script_content = content
             ei = dict(ep.episode_info or {})
-            ei["episode_script_generated_at"] = datetime.utcnow().isoformat()
+            ei["episode_script_generated_at"] = now_bj_iso()
             if prompt_filename == "promo_generator_episode_script.txt":
                 ei["episode_script_source"] = "promo_global_framework_plus_project_character_canon"
             else:
@@ -6209,7 +6622,7 @@ async def generate_project_episode_scripts_from_global_framework(
             })
             run_status["processed"] = int(run_status.get("processed") or 0) + 1
             run_status["generated"] = int(run_status.get("generated") or 0) + 1
-            run_status["updated_at"] = datetime.utcnow().isoformat()
+            run_status["updated_at"] = now_bj_iso()
             run_status["results"].append({
                 "episode_id": ep.id,
                 "episode_number": idx,
@@ -6249,7 +6662,7 @@ async def generate_project_episode_scripts_from_global_framework(
             })
             run_status["processed"] = int(run_status.get("processed") or 0) + 1
             run_status["failed"] = int(run_status.get("failed") or 0) + 1
-            run_status["updated_at"] = datetime.utcnow().isoformat()
+            run_status["updated_at"] = now_bj_iso()
             run_status["results"].append({
                 "episode_id": ep.id,
                 "episode_number": idx,
@@ -6287,7 +6700,7 @@ async def generate_project_episode_scripts_from_global_framework(
                         "status": "skipped",
                         "reason": "aborted due to provider moderation block",
                     })
-                run_status["updated_at"] = datetime.utcnow().isoformat()
+                run_status["updated_at"] = now_bj_iso()
                 _persist_run_status(run_status)
                 break
 
@@ -6338,7 +6751,7 @@ async def generate_project_episode_scripts_from_global_framework(
     }
 
     run_status["running"] = False
-    run_status["finished_at"] = datetime.utcnow().isoformat()
+    run_status["finished_at"] = now_bj_iso()
     run_status["updated_at"] = run_status["finished_at"]
     run_status["errors"] = errors
     run_status["generation_success"] = len(errors) == 0
@@ -6388,7 +6801,7 @@ def stop_project_episode_scripts_generation(
     gi = dict(project.global_info or {})
     status_key = "episode_script_generation_status"
     status_payload = gi.get(status_key) if isinstance(gi.get(status_key), dict) else None
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = now_bj_iso()
 
     if not isinstance(status_payload, dict):
         status_payload = {
@@ -7315,7 +7728,7 @@ def _persist_scene_ai_shots_batch_status(db: Session, episode: Episode, status_p
         merged_status["force_stopped"] = True
 
     if bool(merged_status.get("force_stopped")):
-        now_iso = datetime.utcnow().isoformat()
+        now_iso = now_bj_iso()
         merged_status["running"] = False
         merged_status["status"] = "canceled"
         merged_status["stopped_by_user"] = True
@@ -7379,7 +7792,7 @@ def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id
                 latest["success"] = success
                 latest["failed"] = failed
                 latest["errors"] = errors
-                latest["finished_at"] = datetime.utcnow().isoformat()
+                latest["finished_at"] = now_bj_iso()
                 latest["stopped_by_user"] = True
                 latest["message"] = "Stopped by user request"
                 _persist_scene_ai_shots_batch_status(db, episode, latest)
@@ -7400,9 +7813,9 @@ def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id
             scene_label = scene_label_map.get(sid) or f"#{sid}"
             latest["current_scene_id"] = sid
             latest["current_scene_label"] = scene_label
-            latest["current_scene_started_at"] = datetime.utcnow().isoformat()
+            latest["current_scene_started_at"] = now_bj_iso()
             latest["message"] = f"Processing scene {scene_label}..."
-            latest["updated_at"] = datetime.utcnow().isoformat()
+            latest["updated_at"] = now_bj_iso()
             _persist_scene_ai_shots_batch_status(db, episode, latest)
 
             try:
@@ -7423,7 +7836,7 @@ def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id
                     latest_after_generate["success"] = success
                     latest_after_generate["failed"] = failed
                     latest_after_generate["errors"] = errors
-                    latest_after_generate["finished_at"] = datetime.utcnow().isoformat()
+                    latest_after_generate["finished_at"] = now_bj_iso()
                     latest_after_generate["stopped_by_user"] = True
                     latest_after_generate["message"] = "Stopped by user request"
                     _persist_scene_ai_shots_batch_status(db, episode, latest_after_generate)
@@ -7505,7 +7918,7 @@ def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id
             latest["success"] = success
             latest["failed"] = failed
             latest["errors"] = errors
-            latest["updated_at"] = datetime.utcnow().isoformat()
+            latest["updated_at"] = now_bj_iso()
             latest["message"] = f"Progress {completed}/{total}"
             _persist_scene_ai_shots_batch_status(db, episode, latest)
 
@@ -7517,7 +7930,7 @@ def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id
             final_status["success"] = success
             final_status["failed"] = failed
             final_status["errors"] = errors
-            final_status["finished_at"] = datetime.utcnow().isoformat()
+            final_status["finished_at"] = now_bj_iso()
             final_status["updated_at"] = final_status["finished_at"]
             final_status["stopped_by_user"] = bool(final_status.get("stop_requested"))
             final_status["message"] = f"Batch done: success {success}, failed {failed}"
@@ -7540,7 +7953,7 @@ def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id
             if episode:
                 failed_status = _read_scene_ai_shots_batch_status(episode)
                 failed_status["running"] = False
-                failed_status["finished_at"] = datetime.utcnow().isoformat()
+                failed_status["finished_at"] = now_bj_iso()
                 failed_status["updated_at"] = failed_status["finished_at"]
                 failed_status["message"] = f"Batch failed: {str(e)}"
                 failed_status["errors"] = list(failed_status.get("errors") or []) + [str(e)]
@@ -7588,7 +8001,7 @@ def start_scene_ai_shots_batch(
     if not scene_ids:
         raise HTTPException(status_code=400, detail="No saved scenes found for batch")
 
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = now_bj_iso()
     status_payload = {
         "running": True,
         "project_id": episode.project_id,
@@ -7651,7 +8064,7 @@ def get_scene_ai_shots_batch_status(
         and _is_stale_running_payload(status_payload, stale_minutes=10)
         and not _is_episode_worker_alive(SCENE_AI_SHOTS_BATCH_THREADS, SCENE_AI_SHOTS_BATCH_THREADS_LOCK, int(episode_id))
     ):
-        now_iso = datetime.utcnow().isoformat()
+        now_iso = now_bj_iso()
         status_payload["running"] = False
         status_payload["status"] = "canceled"
         status_payload["force_stopped"] = True
@@ -7681,7 +8094,7 @@ def stop_scene_ai_shots_batch(
         status_payload["message"] = "No running batch task"
         return status_payload
 
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = now_bj_iso()
     status_payload["stop_requested"] = True
     status_payload["stop_requested_at"] = now_iso
     status_payload["force_stopped"] = True
@@ -7831,11 +8244,29 @@ async def ai_generate_shots(
         # Force-remove common reasoning leakage (e.g., "analysis", <think> blocks)
         # before table parsing and persistence.
         response_content = sanitize_llm_markdown_output(response_content_raw)
-        reasoning_line_re = re.compile(
-            r"^\s*(i will|let me|let's|analysis|reasoning|thought process|"
-            r"分析|思路|推理|我将|我认为)\b",
-            flags=re.IGNORECASE,
-        )
+        reasoning_prefix_terms = [
+            "i will",
+            "let me",
+            "let's",
+            "analysis",
+            "reasoning",
+            "thought process",
+            "分析",
+            "思路",
+            "推理",
+            "我将",
+            "我认为",
+            "我認為",
+        ]
+        try:
+            escaped_terms = [re.escape(term) for term in reasoning_prefix_terms if str(term or "").strip()]
+            reasoning_line_re = re.compile(
+                r"^\s*(?:" + "|".join(escaped_terms) + r")\b",
+                flags=re.IGNORECASE,
+            )
+        except re.error as re_err:
+            logger.warning("[ai_generate_shots] reasoning regex compile failed, fallback used: %s", re_err)
+            reasoning_line_re = re.compile(r"^\s*(?:analysis|reasoning)\b", flags=re.IGNORECASE)
         cleaned_lines = []
         for line in str(response_content or "").splitlines():
             stripped = line.strip()
@@ -7927,7 +8358,7 @@ async def ai_generate_shots(
         from datetime import datetime
 
         result_wrapper = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": now_bj_iso(),
             "raw_text": response_content,
             "content": shots_data,
             "usage": usage,
@@ -8081,7 +8512,7 @@ def update_scene_latest_ai_result(
     db.commit()
 
     return {
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": now_bj_iso(),
         "raw_text": md,
         "content": data.content or [],
     }
@@ -8356,6 +8787,7 @@ class EntityCreate(BaseModel):
     description: str
     image_url: Optional[str] = None
     generation_prompt_en: Optional[str] = None
+    generation_prompt_cn: Optional[str] = None
     anchor_description: Optional[str] = None
     
     # New Fields
@@ -8382,6 +8814,7 @@ class EntityOut(BaseModel):
     description: str
     image_url: Optional[str]
     generation_prompt_en: Optional[str]
+    generation_prompt_cn: Optional[str]
     anchor_description: Optional[str]
     
     # New Fields
@@ -8446,6 +8879,7 @@ def create_entity(
             description=entity.description,
             image_url=entity.image_url,
             generation_prompt_en=entity.generation_prompt_en,
+            generation_prompt_cn=entity.generation_prompt_cn,
             anchor_description=entity.anchor_description,
             
             name_en=entity.name_en,
@@ -8475,6 +8909,7 @@ class EntityUpdate(BaseModel):
     description: Optional[str] = None
     image_url: Optional[str] = None
     generation_prompt_en: Optional[str] = None
+    generation_prompt_cn: Optional[str] = None
     anchor_description: Optional[str] = None
     
     # New Fields
@@ -8802,6 +9237,9 @@ class EmailVerificationConfirmRequest(BaseModel):
     email: str
     code: str
 
+
+EMAIL_VERIFICATION_TRIAL_CREDITS = 500
+
 class UserOut(BaseModel):
     id: int
     username: str
@@ -9008,6 +9446,17 @@ def send_email_verification_code(to_email: str, code: str) -> None:
     )
     _send_email_via_runtime_smtp(to_email, "AI Story Email Verification Code", content)
 
+
+def send_welcome_trial_credits_email(to_email: str) -> None:
+    content = (
+        "Welcome to AI Story!\n\n"
+        "Your email has been verified successfully. We have gifted 500 trial credits to your account.\n\n"
+        "You are welcome to start exploring now.\n"
+        "If you submit valid issues and suggestions, we may grant additional credits as rewards.\n\n"
+        "Thank you for trying AI Story."
+    )
+    _send_email_via_runtime_smtp(to_email, "Welcome to AI Story - Trial Credits Granted", content)
+
 @router.post("/users/", response_model=UserOut)
 def create_user(user: UserCreate, db: Session = Depends(get_db)):
     normalized_email = (user.email or "").strip().lower()
@@ -9104,6 +9553,26 @@ def confirm_user_verification_code(
     if not expire_at or datetime.utcnow() > expire_at:
         raise HTTPException(status_code=400, detail="Verification code expired")
 
+    old_credits = int(user.credits or 0)
+    target_credits = int(EMAIL_VERIFICATION_TRIAL_CREDITS)
+    granted_credits = max(0, target_credits - old_credits)
+    if granted_credits > 0:
+        user.credits = old_credits + granted_credits
+        trans = TransactionHistory(
+            user_id=user.id,
+            amount=granted_credits,
+            balance_after=int(user.credits or 0),
+            task_type="signup_bonus",
+            provider="system",
+            model="email_verification",
+            details={
+                "reason": "email_verification_trial_bonus",
+                "target_credits": target_credits,
+                "old_credits": old_credits,
+            },
+        )
+        db.add(trans)
+
     user.email_verified = True
     user.account_status = 1
     user.is_active = True
@@ -9111,6 +9580,13 @@ def confirm_user_verification_code(
     user.email_verification_expires_at = None
     db.commit()
     db.refresh(user)
+
+    try:
+        if granted_credits > 0:
+            send_welcome_trial_credits_email(email)
+    except Exception as e:
+        logger.error("Failed to send trial credits welcome email to %s: %s", email, e)
+
     return user
 
 # --- Login ---
@@ -10614,8 +11090,8 @@ def update_payment_config(
     if not setting:
         setting = WechatPayConfig(
             is_active=True,
-            created_at=datetime.utcnow().isoformat(),
-            updated_at=datetime.utcnow().isoformat(),
+            created_at=now_bj_iso(),
+            updated_at=now_bj_iso(),
         )
         db.add(setting)
 
@@ -10626,7 +11102,7 @@ def update_payment_config(
     setting.private_key = str(idx.private_key or "")
     setting.notify_url = str(idx.notify_url or "").strip()
     setting.use_mock = bool(idx.use_mock)
-    setting.updated_at = datetime.utcnow().isoformat()
+    setting.updated_at = now_bj_iso()
     
     db.commit()
     db.refresh(setting)
@@ -10697,8 +11173,8 @@ def update_smtp_config(
     if not setting:
         setting = SMTPSystemConfig(
             is_active=True,
-            created_at=datetime.utcnow().isoformat(),
-            updated_at=datetime.utcnow().isoformat(),
+            created_at=now_bj_iso(),
+            updated_at=now_bj_iso(),
         )
         db.add(setting)
 
@@ -10710,7 +11186,7 @@ def update_smtp_config(
     setting.use_tls = bool(idx.use_tls)
     setting.from_email = str(idx.from_email or "").strip()
     setting.frontend_base_url = str(idx.frontend_base_url or "").strip()
-    setting.updated_at = datetime.utcnow().isoformat()
+    setting.updated_at = now_bj_iso()
 
     db.commit()
     db.refresh(setting)
@@ -10740,7 +11216,7 @@ def test_smtp_config(
     try:
         _send_email_via_runtime_smtp(target_email, subject, content, strict=True)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"发送失败: {exc}")
+        raise HTTPException(status_code=400, detail=f"发送失�? {exc}")
 
     return {"success": True, "message": f"测试邮件已发送到 {target_email}"}
 
@@ -10912,7 +11388,7 @@ def get_runtime_stats(current_user: User = Depends(get_current_user)):
     return {
         "service": "aistory-backend",
         "pid": os.getpid(),
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": now_bj_iso(),
         "render": {
             "service_id": os.getenv("RENDER_SERVICE_ID", ""),
             "instance_id": os.getenv("RENDER_INSTANCE_ID", ""),
@@ -11112,7 +11588,7 @@ def create_recharge_order(
         status="PENDING",
         pay_url=pay_url,
         provider="wechat",
-        created_at=datetime.utcnow().isoformat()
+        created_at=now_bj_iso()
     )
     db.add(order)
     db.commit()
@@ -11140,7 +11616,7 @@ def check_order_status(
             logger.info(f"Order {order_no} confirmed SUCCESS via Active Query")
             # Update to PAID
             order.status = "PAID"
-            order.paid_at = datetime.utcnow().isoformat()
+            order.paid_at = now_bj_iso()
             
             # Add Credits
             user = db.query(User).filter(User.id == order.user_id).first()
@@ -11199,7 +11675,7 @@ async def wechat_notify(request: Request, db: Session = Depends(get_db)):
                 
                 if order:
                     order.status = "PAID"
-                    order.paid_at = datetime.utcnow().isoformat()
+                    order.paid_at = now_bj_iso()
                     # Store transaction_id from WeChat
                     wx_transaction_id = result.get('transaction_id')
                     
@@ -11256,7 +11732,7 @@ def mock_pay_order(
         
     # Process Payment
     order.status = "PAID"
-    order.paid_at = datetime.utcnow().isoformat()
+    order.paid_at = now_bj_iso()
     
     # Add Credits
     user = db.query(User).filter(User.id == order.user_id).first()
@@ -12472,13 +12948,13 @@ async def _run_generate_image_job(job_id: str, user_id: int, req_payload: Dict[s
             _set_image_job(
                 job_id,
                 status="failed",
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=now_bj_iso(),
                 error="User not found",
             )
             return
 
         req_obj = GenerationRequest(**req_payload)
-        _set_image_job(job_id, status="running", started_at=datetime.utcnow().isoformat())
+        _set_image_job(job_id, status="running", started_at=now_bj_iso())
         result = await asyncio.wait_for(
             _run_generate_image(req_obj, user, db),
             timeout=IMAGE_JOB_MAX_RUNNING_SECONDS,
@@ -12486,7 +12962,7 @@ async def _run_generate_image_job(job_id: str, user_id: int, req_payload: Dict[s
         _set_image_job(
             job_id,
             status="succeeded",
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=now_bj_iso(),
             result=result,
             error=None,
         )
@@ -12510,7 +12986,7 @@ async def _run_generate_image_job(job_id: str, user_id: int, req_payload: Dict[s
         _set_image_job(
             job_id,
             status="failed",
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=now_bj_iso(),
             error=f"image job timed out after {IMAGE_JOB_MAX_RUNNING_SECONDS}s",
         )
     except asyncio.CancelledError:
@@ -12533,7 +13009,7 @@ async def _run_generate_image_job(job_id: str, user_id: int, req_payload: Dict[s
         _set_image_job(
             job_id,
             status="canceled",
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=now_bj_iso(),
             error="Cancelled by user",
         )
         raise
@@ -12541,14 +13017,14 @@ async def _run_generate_image_job(job_id: str, user_id: int, req_payload: Dict[s
         _set_image_job(
             job_id,
             status="failed",
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=now_bj_iso(),
             error=str(e.detail),
         )
     except Exception as e:
         _set_image_job(
             job_id,
             status="failed",
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=now_bj_iso(),
             error=str(e),
         )
     finally:
@@ -12593,7 +13069,7 @@ def _maybe_finalize_stuck_job(
     set_job_func(
         job_id,
         status="failed",
-        finished_at=datetime.utcnow().isoformat(),
+        finished_at=now_bj_iso(),
         error=timeout_message,
     )
 
@@ -12623,7 +13099,7 @@ async def submit_generate_image_endpoint(
     fingerprint_token = _build_submit_idempotency_token("image", current_user.id, req_payload)
     idempotency_key = explicit_idempotency_key or fingerprint_token
     job_id = ""
-    now = datetime.utcnow().isoformat()
+    now = now_bj_iso()
 
     store_keys: List[str] = []
     if idempotency_key:
@@ -12648,7 +13124,7 @@ async def submit_generate_image_endpoint(
                 return {
                     "job_id": active_scope_job_id,
                     "status": active_scope_job.get("status") or "queued",
-                    "created_at": active_scope_job.get("created_at") or datetime.utcnow().isoformat(),
+                    "created_at": active_scope_job.get("created_at") or now_bj_iso(),
                     "deduplicated": True,
                     "scope_deduplicated": True,
                 }
@@ -12672,7 +13148,7 @@ async def submit_generate_image_endpoint(
                 return {
                     "job_id": existing_job_id,
                     "status": existing_job.get("status") or "queued",
-                    "created_at": existing_job.get("created_at") or datetime.utcnow().isoformat(),
+                    "created_at": existing_job.get("created_at") or now_bj_iso(),
                     "deduplicated": True,
                 }
 
@@ -12739,7 +13215,7 @@ def get_generate_image_job_status(
             _set_image_job(
                 job_id,
                 status="failed",
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=now_bj_iso(),
                 error=timeout_message,
             )
             with IMAGE_JOB_LOCK:
@@ -13042,44 +13518,86 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
         )
 
         # 1. Resolve Context for Aspect Ratio
+        def _safe_json_dict(value: Any) -> Dict[str, Any]:
+            if isinstance(value, dict):
+                return value
+            if isinstance(value, str):
+                try:
+                    parsed = json.loads(value)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except Exception:
+                    return {}
+            return {}
+
+        def _pick_ratio_from_info(info: Dict[str, Any]) -> Optional[str]:
+            if not isinstance(info, dict):
+                return None
+            tech = info.get("tech_params")
+            if isinstance(tech, dict):
+                vis = tech.get("visual_standard") or tech.get("visual standard") or {}
+                if isinstance(vis, dict):
+                    candidate = vis.get("aspect_ratio") or vis.get("aspectRatio")
+                    if str(candidate or "").strip():
+                        return str(candidate).strip()
+            direct = info.get("aspect_ratio") or info.get("aspectRatio")
+            if str(direct or "").strip():
+                return str(direct).strip()
+            nested = info.get("e_global_info")
+            if isinstance(nested, dict):
+                return _pick_ratio_from_info(nested)
+            return None
+
         aspect_ratio = None
-        episode_info = {}
+        aspect_ratio_source = "fallback"
+        episode_info: Dict[str, Any] = {}
+        project_global_info: Dict[str, Any] = {}
+        resolved_project_id = req.project_id
 
         # Try to find episode info via Shot -> Scene -> Episode
         if req.shot_id:
-             shot = db.query(Shot).filter(Shot.id == req.shot_id).first()
-             if shot:
-                 scene = db.query(Scene).filter(Scene.id == shot.scene_id).first()
-                 if scene and scene.episode_id:
-                     ep = db.query(Episode).filter(Episode.id == scene.episode_id).first()
-                     if ep and ep.episode_info:
-                         # Robust logic matching _build_shot_prompts
-                         temp = ep.episode_info
-                         if isinstance(temp, str):
-                             try: temp = json.loads(temp)
-                             except: temp = {}
-                         if isinstance(temp, dict):
-                              if "e_global_info" in temp and isinstance(temp["e_global_info"], dict):
-                                   episode_info = temp["e_global_info"]
-                              else:
-                                   episode_info = temp
+            shot = db.query(Shot).filter(Shot.id == req.shot_id).first()
+            if shot:
+                scene = db.query(Scene).filter(Scene.id == shot.scene_id).first()
+                if scene and scene.episode_id:
+                    ep = db.query(Episode).filter(Episode.id == scene.episode_id).first()
+                    if ep:
+                        if not resolved_project_id and ep.project_id:
+                            resolved_project_id = ep.project_id
+                        if ep.episode_info:
+                            temp = _safe_json_dict(ep.episode_info)
+                            if isinstance(temp.get("e_global_info"), dict):
+                                episode_info = temp.get("e_global_info") or {}
+                            else:
+                                episode_info = temp
 
-        # Extract Aspect Ratio
-        # Structure: tech_params -> visual_standard -> aspect_ratio
-        # Or direct top level
-        tech = episode_info.get("tech_params", {})
-        if isinstance(tech, dict):
-            vis = tech.get("visual_standard", {})
-            if isinstance(vis, dict):
-                aspect_ratio = vis.get("aspect_ratio") or vis.get("aspectRatio")
-        
-        if req.aspect_ratio:
-            aspect_ratio = req.aspect_ratio
-        elif not aspect_ratio:
-            # Fallback check
-            aspect_ratio = episode_info.get("aspect_ratio") or episode_info.get("aspectRatio")
+        # Project-level fallback: global_info.tech_params.visual_standard.aspect_ratio / global_info.aspectRatio
+        if resolved_project_id:
+            project = db.query(Project).filter(Project.id == resolved_project_id).first()
+            if project:
+                project_global_info = _safe_json_dict(project.global_info)
 
-        logger.info(f"[GenerateVideo] Extracted Aspect Ratio: {aspect_ratio}")
+        req_ratio = str(req.aspect_ratio or "").strip() or None
+        episode_ratio = _pick_ratio_from_info(episode_info)
+        project_ratio = _pick_ratio_from_info(project_global_info)
+
+        if req_ratio:
+            aspect_ratio = req_ratio
+            aspect_ratio_source = "request"
+        elif episode_ratio:
+            aspect_ratio = episode_ratio
+            aspect_ratio_source = "episode_info"
+        elif project_ratio:
+            aspect_ratio = project_ratio
+            aspect_ratio_source = "project_global_info"
+
+        logger.info(
+            "[GenerateVideo] Resolved aspect ratio=%s source=%s project_id=%s shot_id=%s",
+            aspect_ratio,
+            aspect_ratio_source,
+            resolved_project_id,
+            req.shot_id,
+        )
         _log_shot_submit_debug(
             "video_submit",
             req,
@@ -13088,6 +13606,8 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
                 "last_frame_url": req.last_frame_url,
                 "duration": req.duration,
                 "aspect_ratio": aspect_ratio,
+                "aspect_ratio_source": aspect_ratio_source,
+                "resolved_project_id": resolved_project_id,
                 "keyframes_count": len(req.keyframes or []),
                 "user_id": current_user.id,
             },
@@ -13285,13 +13805,13 @@ async def _run_generate_video_job(job_id: str, user_id: int, req_payload: Dict[s
             _set_video_job(
                 job_id,
                 status="failed",
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=now_bj_iso(),
                 error="User not found",
             )
             return
 
         req_obj = VideoGenerationRequest(**req_payload)
-        _set_video_job(job_id, status="running", started_at=datetime.utcnow().isoformat())
+        _set_video_job(job_id, status="running", started_at=now_bj_iso())
         result = await asyncio.wait_for(
             _run_generate_video(req_obj, user, db),
             timeout=VIDEO_JOB_MAX_RUNNING_SECONDS,
@@ -13299,7 +13819,7 @@ async def _run_generate_video_job(job_id: str, user_id: int, req_payload: Dict[s
         _set_video_job(
             job_id,
             status="succeeded",
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=now_bj_iso(),
             result=result,
             error=None,
         )
@@ -13307,14 +13827,14 @@ async def _run_generate_video_job(job_id: str, user_id: int, req_payload: Dict[s
         _set_video_job(
             job_id,
             status="failed",
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=now_bj_iso(),
             error=f"video job timed out after {VIDEO_JOB_MAX_RUNNING_SECONDS}s",
         )
     except asyncio.CancelledError:
         _set_video_job(
             job_id,
             status="canceled",
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=now_bj_iso(),
             error="Cancelled by user",
         )
         raise
@@ -13322,14 +13842,14 @@ async def _run_generate_video_job(job_id: str, user_id: int, req_payload: Dict[s
         _set_video_job(
             job_id,
             status="failed",
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=now_bj_iso(),
             error=str(e.detail),
         )
     except Exception as e:
         _set_video_job(
             job_id,
             status="failed",
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=now_bj_iso(),
             error=str(e),
         )
     finally:
@@ -13408,7 +13928,7 @@ async def submit_generate_video_endpoint(
     fingerprint_token = _build_submit_idempotency_token("video", current_user.id, req_payload)
     idempotency_key = explicit_idempotency_key or fingerprint_token
     job_id = ""
-    now = datetime.utcnow().isoformat()
+    now = now_bj_iso()
 
     store_keys: List[str] = []
     if idempotency_key:
@@ -13433,7 +13953,7 @@ async def submit_generate_video_endpoint(
                 return {
                     "job_id": active_scope_job_id,
                     "status": active_scope_job.get("status") or "queued",
-                    "created_at": active_scope_job.get("created_at") or datetime.utcnow().isoformat(),
+                    "created_at": active_scope_job.get("created_at") or now_bj_iso(),
                     "deduplicated": True,
                     "scope_deduplicated": True,
                 }
@@ -13457,7 +13977,7 @@ async def submit_generate_video_endpoint(
                 return {
                     "job_id": existing_job_id,
                     "status": existing_job.get("status") or "queued",
-                    "created_at": existing_job.get("created_at") or datetime.utcnow().isoformat(),
+                    "created_at": existing_job.get("created_at") or now_bj_iso(),
                     "deduplicated": True,
                 }
 
@@ -13524,7 +14044,7 @@ def get_generate_video_job_status(
             _set_video_job(
                 job_id,
                 status="failed",
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=now_bj_iso(),
                 error=timeout_message,
             )
             with VIDEO_JOB_LOCK:
@@ -13641,7 +14161,7 @@ def _build_batch_job_item(
     started_at = payload.get("started_at") or payload.get("created_at")
     finished_at = payload.get("finished_at")
     updated_at = payload.get("updated_at")
-    created_at = started_at or updated_at or datetime.utcnow().isoformat()
+    created_at = started_at or updated_at or now_bj_iso()
 
     error_text = ""
     errors = payload.get("errors")
@@ -13858,7 +14378,7 @@ def repair_generation_job_history(
 
     safe_older_than_minutes = max(10, min(int(older_than_minutes or 120), 60 * 24 * 14))
     cutoff_dt = datetime.utcnow() - timedelta(minutes=safe_older_than_minutes)
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = now_bj_iso()
 
     if current_user.is_superuser:
         projects = db.query(Project).all()
@@ -14012,7 +14532,7 @@ def stop_generation_job(
         if not target_id:
             raise HTTPException(status_code=400, detail="Invalid job_id")
 
-        now_iso = datetime.utcnow().isoformat()
+        now_iso = now_bj_iso()
 
         if safe_kind == "episode-scripts":
             project = db.query(Project).filter(Project.id == target_id).first()
@@ -14154,7 +14674,7 @@ def stop_generation_job(
     set_job_func(
         job_id,
         status="canceled",
-        finished_at=datetime.utcnow().isoformat(),
+        finished_at=now_bj_iso(),
         error="Force stopped by user" if force else "Cancelled by user",
     )
 
@@ -14194,7 +14714,7 @@ def stop_all_generation_jobs(
     if safe_kind not in allowed_kinds:
         raise HTTPException(status_code=400, detail="kind must be one of: all, image, video, episode-scenes, episode-scripts, scene-ai-shots-batch, shot-media-batch")
 
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = now_bj_iso()
     stopped = 0
     touched: List[str] = []
 
@@ -14377,7 +14897,7 @@ def _persist_shot_media_batch_status(db: Session, episode: Episode, status_paylo
             merged_status["stopped_by_user"] = bool(existing_status.get("stopped_by_user"))
 
     if bool(merged_status.get("force_stopped")):
-        now_iso = datetime.utcnow().isoformat()
+        now_iso = now_bj_iso()
         merged_status["running"] = False
         merged_status["status"] = "canceled"
         merged_status["stopped_by_user"] = True
@@ -14661,7 +15181,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
             latest_status["current_asset_type"] = None
             latest_status["current_asset_label"] = ""
             latest_status["message"] = "Stopped by user request"
-            latest_status["finished_at"] = datetime.utcnow().isoformat()
+            latest_status["finished_at"] = now_bj_iso()
             latest_status["updated_at"] = latest_status["finished_at"]
             _persist_shot_media_batch_status(db, latest_episode, latest_status)
             _log_batch_sys_event(
@@ -14697,7 +15217,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                     if latest_episode:
                         latest_status = _read_shot_media_batch_status(latest_episode)
                         latest_status["message"] = f"Retrying {stage_label} for shot {shot_label} ({attempt}/{max_attempts})..."
-                        latest_status["updated_at"] = datetime.utcnow().isoformat()
+                        latest_status["updated_at"] = now_bj_iso()
                         _persist_shot_media_batch_status(db, latest_episode, latest_status)
 
                 try:
@@ -14738,7 +15258,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
             latest["current_shot_id"] = shot.id
             latest["current_shot_label"] = shot_label
             latest["message"] = f"Processing shot {shot_label}..."
-            latest["updated_at"] = datetime.utcnow().isoformat()
+            latest["updated_at"] = now_bj_iso()
             _persist_shot_media_batch_status(db, episode, latest)
 
             shot_ok = True
@@ -14762,7 +15282,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                         latest["current_asset_type"] = "start_frame"
                         latest["current_asset_label"] = "Start Frame"
                         latest["message"] = f"Processing shot {shot_label} · Start Frame..."
-                        latest["updated_at"] = datetime.utcnow().isoformat()
+                        latest["updated_at"] = now_bj_iso()
                         _persist_shot_media_batch_status(db, episode, latest)
 
                         start_ref_index_map = _compute_subject_ref_index_map(start_prompt_raw, entity_lookup)
@@ -14816,7 +15336,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                         latest["current_asset_type"] = "end_frame"
                         latest["current_asset_label"] = "End Frame"
                         latest["message"] = f"Processing shot {shot_label} · End Frame..."
-                        latest["updated_at"] = datetime.utcnow().isoformat()
+                        latest["updated_at"] = now_bj_iso()
                         _persist_shot_media_batch_status(db, episode, latest)
 
                         end_ref_index_map = _compute_subject_ref_index_map(end_prompt_raw, entity_lookup)
@@ -14870,7 +15390,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                         latest["current_asset_type"] = "video"
                         latest["current_asset_label"] = "Video"
                         latest["message"] = f"Processing shot {shot_label} · Video..."
-                        latest["updated_at"] = datetime.utcnow().isoformat()
+                        latest["updated_at"] = now_bj_iso()
                         _persist_shot_media_batch_status(db, episode, latest)
 
                         video_prompt_raw = str(shot.video_content or shot.prompt or "").strip() or "Video motion"
@@ -15023,7 +15543,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
             latest["errors"] = errors
             latest["current_asset_type"] = None
             latest["current_asset_label"] = ""
-            latest["updated_at"] = datetime.utcnow().isoformat()
+            latest["updated_at"] = now_bj_iso()
             latest["message"] = (
                 f"Progress {completed}/{total}" if shot_ok else f"Progress {completed}/{total} (with errors)"
             )
@@ -15039,7 +15559,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
             final_status["errors"] = errors
             final_status["current_asset_type"] = None
             final_status["current_asset_label"] = ""
-            final_status["updated_at"] = datetime.utcnow().isoformat()
+            final_status["updated_at"] = now_bj_iso()
             final_status["finished_at"] = final_status["updated_at"]
             final_status["message"] = f"Batch done: success {success}, failed {failed}"
             _persist_shot_media_batch_status(db, episode, final_status)
@@ -15067,7 +15587,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
             if episode:
                 status_payload = _read_shot_media_batch_status(episode)
                 status_payload["running"] = False
-                status_payload["updated_at"] = datetime.utcnow().isoformat()
+                status_payload["updated_at"] = now_bj_iso()
                 status_payload["finished_at"] = status_payload["updated_at"]
                 status_payload["message"] = f"Batch failed: {str(e)}"
                 status_payload["current_asset_type"] = None
@@ -15121,7 +15641,7 @@ def start_shot_media_batch_job(
     if not shot_ids:
         raise HTTPException(status_code=400, detail="No shots found for batch task")
 
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = now_bj_iso()
     status_payload = {
         "running": True,
         "mode": mode,
@@ -15193,7 +15713,7 @@ def get_shot_media_batch_job_status(
         and _is_stale_running_payload(status_payload, stale_minutes=10)
         and not _is_episode_worker_alive(SHOT_MEDIA_BATCH_THREADS, SHOT_MEDIA_BATCH_THREADS_LOCK, int(episode_id))
     ):
-        now_iso = datetime.utcnow().isoformat()
+        now_iso = now_bj_iso()
         status_payload["running"] = False
         status_payload["status"] = "canceled"
         status_payload["force_stopped"] = True
@@ -15225,7 +15745,7 @@ def stop_shot_media_batch_job(
         status_payload["message"] = "No running batch task"
         return status_payload
 
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = now_bj_iso()
     status_payload["stop_requested"] = True
     status_payload["stop_requested_at"] = now_iso
     status_payload["force_stopped"] = True
@@ -15583,6 +16103,7 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
       "appearance_cn": "Detailed Chinese Description (Must include height & head-to-body ratio)",
       "clothing": "Detailed Description of clothing (Must include layers, materials, colors, wear)",
       "action_characteristics": "Inferred action traits (e.g. poised, controlled movements)",
+    "generation_prompt_cn": "中文生图提示词（内容语义与英文提示词一致，可自然中文表达）",
       "generation_prompt_en": "STRICTLY FOLLOW THIS TEMPLATE, replacing placeholders with visual details from image:\\n{char_prompt_template}",
       "anchor_description": "Distinct Visual Feature (e.g., 'Red Scarf', 'Scar on Cheek'). MAX 20 words. Must be obvious for AI recognition.",
       "visual_dependencies": [],
@@ -15604,6 +16125,7 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
       "name_en": "English Name",
       "type": "held/static",
       "description_cn": "Chinese Description (Must define Mobility & Mutable States)",
+    "generation_prompt_cn": "中文生图提示词（内容语义与英文提示词一致，可自然中文表达）",
       "generation_prompt_en": "STRICTLY FOLLOW THIS TEMPLATE, replacing placeholders with visual details from image:\\n{prop_prompt_template}",
       "anchor_description": "Distinct Visual Marker (e.g., 'Golden Dragon Handle'). MAX 20 words. Must be obvious for AI recognition.",
       "visual_dependencies": [],
@@ -15626,6 +16148,7 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
       "atmosphere": "Atmosphere",
       "visual_params": "Wide/Interior/Day",
       "description_cn": "Chinese Description",
+    "generation_prompt_cn": "中文生图提示词（内容语义与英文提示词一致，可自然中文表达）",
       "generation_prompt_en": "STRICTLY FOLLOW THIS TEMPLATE, replacing placeholders with visual details from image:\\n{env_prompt_template}",
       "anchor_description": "Distinct Visual Landmark (e.g., 'Giant Red Statue'). MAX 20 words. Must be obvious for AI recognition.",
       "visual_dependencies": [],
@@ -15639,7 +16162,7 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
 """
     else:
          # Fallback generic
-         schema_instruction = "Return a JSON object with keys: name_en, description_cn, generation_prompt_en."
+         schema_instruction = "Return a JSON object with keys: name_en, description_cn, generation_prompt_cn, generation_prompt_en."
 
     system_prompt = f"{base_instruction}\n\n{schema_instruction}\n\nConstraint: Return ONLY the raw JSON object. Do not include markdown formatting (like ```json), no <think> tags, no reasoning process, and no conversational text."
 
@@ -15662,6 +16185,7 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
         "appearance_cn": entity.appearance_cn,
         "clothing": entity.clothing,
         "role": entity.role,
+        "generation_prompt_cn": entity.generation_prompt_cn,
         "generation_prompt_en": entity.generation_prompt_en,
         "project_context": project_context
     }
@@ -15730,7 +16254,7 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
         {
             "role": "user", 
             "content": [
-                {"type": "text", "text": f"Here is the CURRENT information for subject '{entity.name}':\n{current_info_str}\n\nPlease analyze the image. Fuse the visual details from the image with the current information. \nIMPORTANT: Rewrite 'generation_prompt_en' to strictly follow the style and format of the current prompt, but update the content to match the image visually."},
+                {"type": "text", "text": f"Here is the CURRENT information for subject '{entity.name}':\n{current_info_str}\n\nPlease analyze the image. Fuse the visual details from the image with the current information. \nIMPORTANT: Rewrite both 'generation_prompt_cn' and 'generation_prompt_en' so they stay semantically aligned to each other and match the visual evidence from the image. 'generation_prompt_en' should keep the original format style."},
                 {"type": "image_url", "image_url": {"url": image_url_final}}
             ]
         }
@@ -15904,6 +16428,7 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
         if "atmosphere" in updated_info: entity.atmosphere = updated_info["atmosphere"]
         if "visual_params" in updated_info: entity.visual_params = updated_info["visual_params"]
         
+        if "generation_prompt_cn" in updated_info: entity.generation_prompt_cn = updated_info["generation_prompt_cn"]
         if "generation_prompt_en" in updated_info: entity.generation_prompt_en = updated_info["generation_prompt_en"]
         if "anchor_description" in updated_info: entity.anchor_description = updated_info["anchor_description"]
         
@@ -15920,7 +16445,7 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
             except: custom_attrs = {}
             
         custom_attrs['analysis_result'] = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": now_bj_iso(),
             "content": updated_info
         }
         # Re-assign to trigger SQLAlchemy detection of mutation if needed
@@ -16034,7 +16559,7 @@ def update_entity_latest_analysis(
     if not isinstance(result, dict): result = {}
     
     result['content'] = data.content
-    result['timestamp'] = datetime.utcnow().isoformat() # Update timestamp on edit
+    result['timestamp'] = now_bj_iso() # Update timestamp on edit
     
     custom_attrs['analysis_result'] = result
     entity.custom_attributes = custom_attrs  # Reassign for SQLAlchemy detection if Dict
@@ -16070,7 +16595,7 @@ def apply_entity_analysis(
             except: custom_attrs = {}
         
         custom_attrs['analysis_result'] = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": now_bj_iso(),
             "content": updated_info
         }
         entity.custom_attributes = custom_attrs
@@ -16101,6 +16626,7 @@ def apply_entity_analysis(
     if "atmosphere" in updated_info: entity.atmosphere = updated_info["atmosphere"]
     if "visual_params" in updated_info: entity.visual_params = updated_info["visual_params"]
     
+    if "generation_prompt_cn" in updated_info: entity.generation_prompt_cn = updated_info["generation_prompt_cn"]
     if "generation_prompt_en" in updated_info: entity.generation_prompt_en = updated_info["generation_prompt_en"]
     if "anchor_description" in updated_info: entity.anchor_description = updated_info["anchor_description"]
     
@@ -16112,4 +16638,5 @@ def apply_entity_analysis(
     db.commit()
     db.refresh(entity)
     return entity
+
 

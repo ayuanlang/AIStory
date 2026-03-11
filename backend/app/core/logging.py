@@ -111,6 +111,7 @@ def get_function_name(method: str, path: str):
 def _is_polling_log_suppressed(method: str, path: str) -> bool:
     key = f"{method} {path}"
     suppressed_patterns = [
+        r"^GET /api/v1/tasks/[^/]+$",
         r"^GET /api/v1/episodes/\d+/shots$",
         r"^GET /api/v1/projects/\d+/script_generator/episodes/scripts/status$",
         r"^GET /api/v1/episodes/\d+/scenes/ai_shots/batch/status$",
@@ -287,6 +288,8 @@ class LoggingMiddleware:
             await self.app(scope, receive_for_app, send_wrapper)
         except Exception as e:
             process_ms = int((time.time() - start_time) * 1000)
+            if is_polling_suppressed:
+                raise
             if not is_noise:
                 action = func_name or f"API Call: {method} {path}"
                 logger.error(
@@ -300,7 +303,7 @@ class LoggingMiddleware:
         status_code = response_status or 0
 
         if not is_noise:
-            if is_polling_suppressed and 200 <= status_code < 400:
+            if is_polling_suppressed:
                 return
 
             action = func_name or f"API Call: {method} {path}"

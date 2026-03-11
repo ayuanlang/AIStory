@@ -5,7 +5,7 @@ import httpx
 import json
 import asyncio
 import time
-from typing import Dict, Any, List, Optional, AsyncGenerator
+from typing import Dict, Any, List, Optional, AsyncGenerator, Tuple
 import logging
 import os
 import re
@@ -41,6 +41,8 @@ if not _llm_call_logger.handlers:
 # Some providers (e.g., Ark/Doubao) can take several minutes for large prompts.
 # Default timeout set to 300s, with env override support.
 DEFAULT_LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "300"))
+DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS = int(os.getenv("LLM_CONNECT_TIMEOUT_SECONDS", "15"))
+DEFAULT_LLM_NO_PROXY_CONNECT_TIMEOUT_SECONDS = int(os.getenv("LLM_NO_PROXY_CONNECT_TIMEOUT_SECONDS", "10"))
 
 _BASE64_PATTERN = re.compile(r'(data:[\w/+.-]+;base64,)[A-Za-z0-9+/=]{64,}')
 
@@ -63,6 +65,19 @@ def _debug_log(msg, level="info"):
     """Print to console and write to logger."""
     print(msg)
     getattr(logger, level, logger.info)(msg)
+
+
+def _safe_json_dict(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            return {}
+    return {}
 
 # ---------------------------------------------------------------------------
 # Token-aware history trimming
@@ -355,12 +370,195 @@ class LLMService:
             return "\n".join(chunks).strip()
         return str(value)
 
+    def _estimate_tokens_rough_from_text(self, text: Any) -> int:
+        raw = str(text or "")
+        if not raw:
+            return 0
+        # Keep a conservative upper-bound style estimate for mixed CJK/EN payloads.
+        char_est = int(len(raw) / 1.2)
+        byte_est = int(len(raw.encode("utf-8", errors="ignore")) / 3.2)
+        return max(1, char_est, byte_est)
+
+    def _estimate_prompt_tokens_rough_from_messages(self, messages: List[Dict[str, Any]]) -> int:
+        try:
+            # Include structural overhead so estimate is not underestimated.
+            serialized = json.dumps(messages or [], ensure_ascii=False, separators=(",", ":"))
+        except Exception:
+            serialized = str(messages or "")
+        return self._estimate_tokens_rough_from_text(serialized)
+
+    def _normalize_kie_usage(self, usage: Any, messages: List[Dict[str, Any]], output_text: str) -> Dict[str, Any]:
+        normalized = dict(usage or {}) if isinstance(usage, dict) else {}
+
+        def _to_int(v: Any) -> int:
+            try:
+                return max(0, int(v))
+            except Exception:
+                return 0
+
+        provider_prompt = _to_int(normalized.get("prompt_tokens"))
+        provider_completion = _to_int(normalized.get("completion_tokens"))
+
+        est_prompt = self._estimate_prompt_tokens_rough_from_messages(messages)
+        est_completion = self._estimate_tokens_rough_from_text(output_text)
+
+        prompt_suspicious = provider_prompt > 0 and est_prompt >= 1000 and provider_prompt < int(est_prompt * 0.35)
+        completion_suspicious = (
+            (provider_completion == 0 and est_completion >= 50)
+            or (provider_completion > 0 and est_completion >= 200 and provider_completion < int(est_completion * 0.35))
+        )
+
+        usage_normalized = False
+        if prompt_suspicious:
+            normalized["provider_prompt_tokens_raw"] = provider_prompt
+            normalized["prompt_tokens"] = max(provider_prompt, int(est_prompt * 0.8))
+            usage_normalized = True
+
+        if completion_suspicious:
+            normalized["provider_completion_tokens_raw"] = provider_completion
+            normalized["completion_tokens"] = max(provider_completion, int(est_completion * 0.8))
+            usage_normalized = True
+
+        prompt_tokens = _to_int(normalized.get("prompt_tokens"))
+        completion_tokens = _to_int(normalized.get("completion_tokens"))
+        normalized["total_tokens"] = max(_to_int(normalized.get("total_tokens")), prompt_tokens + completion_tokens)
+
+        # Keep cross-provider keys aligned for downstream billing.
+        normalized.setdefault("input_tokens", prompt_tokens)
+        normalized.setdefault("output_tokens", completion_tokens)
+
+        normalized["prompt_tokens_estimated_local"] = est_prompt
+        normalized["completion_tokens_estimated_local"] = est_completion
+        normalized["usage_normalized_by_local_estimate"] = usage_normalized
+        return normalized
+
     async def _raw_kie_llm_request_full(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> Dict[str, Any]:
         """KIE LLM — OpenAI-compatible chat/completions with model in URL path."""
         cfg = dict(extra_config or {})
 
+        root, resolved_model, url = self._resolve_kie_llm_url(base_url, model)
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        payload: Dict[str, Any] = {
+            "model": resolved_model,
+            "messages": messages,
+            "stream": False,
+        }
+
+        # KIE LLM: only forward known-safe chat/completions keys.
+        payload.update(self._extract_kie_chat_options(cfg))
+
+        cap_source = "provider_default"
+        if any(
+            payload.get(k) not in (None, "", 0)
+            for k in ("max_tokens", "max_completion_tokens", "max_output_tokens")
+        ):
+            cap_source = "user_configured"
+
+        prompt_chars = sum(len(str(m.get("content", ""))) for m in (messages or []))
+        _debug_log(
+            "[DEBUG][LLM][KIE] Request | "
+            f"provider=kie model={resolved_model} url={url} messages={len(messages or [])} "
+            f"prompt_chars={prompt_chars} max_tokens={payload.get('max_tokens')} "
+            f"max_completion_tokens={payload.get('max_completion_tokens')} "
+            f"max_output_tokens={payload.get('max_output_tokens')} "
+            f"cap_source={cap_source} "
+            f"has_tools={bool(payload.get('tools'))} has_response_format={bool(payload.get('response_format'))} "
+            f"include_thoughts={payload.get('include_thoughts')}"
+        )
+
+        timeout = max(90, DEFAULT_LLM_TIMEOUT_SECONDS)
+
+        def _do_post():
+            return requests.post(url, json=payload, headers=headers, timeout=timeout)
+
+        resp = await asyncio.to_thread(_do_post)
+        _debug_log(
+            f"[DEBUG][LLM][KIE] Response | status={resp.status_code} body_preview_len=800 body_preview={_strip_base64_from_log(resp.text[:800])}"
+        )
+
+        if resp.status_code != 200:
+            raise Exception(f"KIE chat/completions failed {resp.status_code}: {resp.text[:500]}")
+
+        data = resp.json()
+
+        # KIE may return HTTP 200 with an error payload like {"code":500,"msg":"..."}
+        kie_code = data.get("code")
+        if kie_code is not None and str(kie_code) != "200" and "choices" not in data:
+            err_msg = data.get("msg") or data.get("message") or data.get("error") or str(data)
+            raise Exception(f"KIE chat/completions error code={kie_code}: {err_msg}")
+
+        # KIE usage occasionally under-reports token counts for large prompts.
+        # Normalize with local rough estimates to keep diagnostics/billing consistent.
+        try:
+            extracted_text = self._extract_text_from_response(data)
+            normalized_usage = self._normalize_kie_usage(data.get("usage", {}), messages, extracted_text)
+            data["usage"] = normalized_usage
+            if normalized_usage.get("usage_normalized_by_local_estimate"):
+                logger.warning(
+                    "[KIE usage normalized] model=%s prompt_raw=%s completion_raw=%s prompt_est=%s completion_est=%s prompt_used=%s completion_used=%s",
+                    resolved_model,
+                    normalized_usage.get("provider_prompt_tokens_raw", normalized_usage.get("prompt_tokens")),
+                    normalized_usage.get("provider_completion_tokens_raw", normalized_usage.get("completion_tokens")),
+                    normalized_usage.get("prompt_tokens_estimated_local"),
+                    normalized_usage.get("completion_tokens_estimated_local"),
+                    normalized_usage.get("prompt_tokens"),
+                    normalized_usage.get("completion_tokens"),
+                )
+        except Exception:
+            pass
+
+        # Standard OpenAI-compatible response — return as-is
+        _debug_log(f"[DEBUG][LLM][KIE] Done | model={resolved_model} usage={data.get('usage', {})}")
+        return data
+
+    def _extract_kie_chat_options(self, cfg: Dict[str, Any]) -> Dict[str, Any]:
+        """Whitelist and normalize KIE chat/completions options.
+
+        KIE system setting configs may include non-chat keys (endpoint/query/credits/etc.).
+        Passing those through can lead to provider-specific undefined behavior.
+        """
+        safe_cfg = dict(cfg or {})
+        allowed_keys = {
+            "temperature",
+            "max_tokens",
+            "max_completion_tokens",
+            "max_output_tokens",
+            "top_p",
+            "presence_penalty",
+            "frequency_penalty",
+            "n",
+            "tools",
+            "tool_choice",
+            "response_format",
+            "include_thoughts",
+            "stop",
+            "seed",
+        }
+
+        out: Dict[str, Any] = {}
+        for key, value in safe_cfg.items():
+            if str(key).startswith("__"):
+                continue
+            if key in {"model", "messages", "stream"}:
+                continue
+            if key in allowed_keys:
+                out[key] = value
+
+        return out
+
+    def _resolve_kie_llm_url(self, base_url: str, model: str) -> Tuple[str, str, str]:
+        """Normalize KIE root URL and produce model-in-path chat/completions endpoint."""
         root = (base_url or "https://api.kie.ai").strip().rstrip("/")
-        # Strip legacy task-based path fragments if present in saved config
+
+        # If a full endpoint was saved (including model path), collapse back to provider root.
+        root = re.sub(r"/[^/]+/v1/chat/completions/?$", "", root, flags=re.IGNORECASE)
+
+        # Strip other legacy fragments if present.
         for suffix in ("/api/v1/jobs", "/v1/chat/completions", "/v1"):
             if root.endswith(suffix):
                 root = root[: -len(suffix)].rstrip("/")
@@ -375,49 +573,7 @@ class LLMService:
             logger.info("KIE LLM model remapped | from=%s to=%s", model, resolved_model)
 
         url = f"{root}/{resolved_model}/v1/chat/completions"
-
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-
-        payload: Dict[str, Any] = {
-            "model": resolved_model,
-            "messages": messages,
-            "stream": False,
-        }
-
-        # Forward extra config keys (temperature, max_tokens, tools, etc.)
-        if cfg:
-            for k, v in cfg.items():
-                if k not in ("model", "messages", "stream") and not str(k).startswith("__"):
-                    payload[k] = v
-
-        prompt_chars = sum(len(str(m.get("content", ""))) for m in (messages or []))
-        _debug_log(f"[DEBUG][LLM][KIE] Request | provider=kie model={resolved_model} url={url} messages={len(messages or [])} prompt_chars={prompt_chars}")
-
-        timeout = max(90, DEFAULT_LLM_TIMEOUT_SECONDS)
-
-        def _do_post():
-            return requests.post(url, json=payload, headers=headers, timeout=timeout)
-
-        resp = await asyncio.to_thread(_do_post)
-        _debug_log(f"[DEBUG][LLM][KIE] Response | status={resp.status_code} body={_strip_base64_from_log(resp.text[:800])}")
-
-        if resp.status_code != 200:
-            raise Exception(f"KIE chat/completions failed {resp.status_code}: {resp.text[:500]}")
-
-        data = resp.json()
-
-        # KIE may return HTTP 200 with an error payload like {"code":500,"msg":"..."}
-        kie_code = data.get("code")
-        if kie_code is not None and str(kie_code) != "200" and "choices" not in data:
-            err_msg = data.get("msg") or data.get("message") or data.get("error") or str(data)
-            raise Exception(f"KIE chat/completions error code={kie_code}: {err_msg}")
-
-        # Standard OpenAI-compatible response — return as-is
-        _debug_log(f"[DEBUG][LLM][KIE] Done | model={resolved_model} usage={data.get('usage', {})}")
-        return data
+        return root, resolved_model, url
 
     def _extract_finish_reason_from_response(self, full_response: Dict[str, Any]) -> Any:
         choices = full_response.get("choices") or []
@@ -761,6 +917,85 @@ class LLMService:
              logger.error(f"OpenAI Vision call failed: {e}")
              return {"content": f"Error: {e}", "usage": {}}
 
+    async def _call_intent_with_failover(
+        self,
+        messages: List[Dict[str, Any]],
+        config: Dict[str, Any],
+        extra_config: Optional[Dict[str, Any]] = None,
+        *,
+        category: str = "LLM",
+        modality: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        base_attempt_cfg = dict(config or {})
+        attempts: List[Dict[str, Any]] = [base_attempt_cfg]
+        active_cfg_obj = _safe_json_dict((base_attempt_cfg.get("config") or {}))
+        active_setting_id = active_cfg_obj.get("__resolved_setting_id")
+        resolved_user_id = active_cfg_obj.get("__resolved_user_id")
+
+        if resolved_user_id:
+            try:
+                from app.services.agent_service import agent_service
+                fallback_candidates = agent_service.get_fallback_configs(
+                    int(resolved_user_id),
+                    category=category,
+                    exclude_setting_id=int(active_setting_id) if str(active_setting_id or "").isdigit() else None,
+                    modality=modality,
+                    limit=3,
+                )
+                if isinstance(fallback_candidates, list) and fallback_candidates:
+                    attempts.extend([item for item in fallback_candidates if isinstance(item, dict)])
+            except Exception as exc:
+                logger.warning("[llm_fallback] failed loading fallback configs: %s", exc)
+
+        last_error: Optional[Exception] = None
+        total_attempts = len(attempts)
+
+        for idx, attempt_cfg in enumerate(attempts, start=1):
+            attempt_provider = attempt_cfg.get("provider") or self._infer_provider(attempt_cfg.get("base_url"), attempt_cfg.get("model"))
+            attempt_base_url = attempt_cfg.get("base_url")
+            attempt_model = attempt_cfg.get("model")
+            attempt_api_key = attempt_cfg.get("api_key")
+
+            if not str(attempt_api_key or "").strip():
+                last_error = Exception(self._vendor_failed_message(attempt_provider, "missing api_key"))
+                continue
+
+            runtime_extra = dict(_safe_json_dict(attempt_cfg.get("config") or {}))
+            for k, v in dict(extra_config or {}).items():
+                if not str(k).startswith("__"):
+                    runtime_extra[k] = v
+            runtime_extra["__provider"] = attempt_provider
+
+            logger.info(
+                "[llm_fallback] intent attempt %s/%s | provider=%s model=%s",
+                idx,
+                total_attempts,
+                attempt_provider,
+                attempt_model,
+            )
+
+            try:
+                return await self._call_openai_compatible(
+                    attempt_base_url,
+                    attempt_api_key,
+                    attempt_model,
+                    messages,
+                    runtime_extra,
+                )
+            except Exception as exc:
+                last_error = exc
+                logger.warning(
+                    "[llm_fallback] intent attempt %s/%s failed | provider=%s model=%s err=%s",
+                    idx,
+                    total_attempts,
+                    attempt_provider,
+                    attempt_model,
+                    str(exc)[:200],
+                )
+                continue
+
+        raise last_error or Exception("All LLM attempts exhausted")
+
     async def analyze_intent(self, query: str, context: Dict[str, Any], history: List[Dict[str, str]], config: Dict[str, Any]) -> Dict[str, Any]:
         """
         Analyzes user query and returns a plan (list of tool calls).
@@ -808,7 +1043,12 @@ class LLMService:
         extra_config.setdefault("__provider", config.get("provider") or self._infer_provider(base_url, model))
 
         try:
-            return await self._call_openai_compatible(base_url, api_key, model, messages, extra_config)
+            return await self._call_intent_with_failover(
+                messages,
+                config,
+                extra_config,
+                category="LLM",
+            )
         except Exception as e:
             logger.error(f"LLM Call failed: {e}")
             provider = (extra_config or {}).get("__provider") or config.get("provider") or self._infer_provider(base_url, model)
@@ -864,7 +1104,12 @@ class LLMService:
         extra_config.setdefault("__provider", config.get("provider") or self._infer_provider(base_url, model))
 
         try:
-            return await self._call_openai_compatible(base_url, api_key, model, messages, extra_config)
+            return await self._call_intent_with_failover(
+                messages,
+                config,
+                extra_config,
+                category="LLM",
+            )
         except Exception as e:
             logger.error(f"LLM custom-prompt intent call failed: {e}")
             provider = (extra_config or {}).get("__provider") or config.get("provider") or self._infer_provider(base_url, model)
@@ -1231,7 +1476,7 @@ class LLMService:
 
         def _request(bypass_proxy=False, connect_timeout=None):
             read_timeout = DEFAULT_LLM_TIMEOUT_SECONDS
-            c_timeout = connect_timeout or DEFAULT_LLM_TIMEOUT_SECONDS
+            c_timeout = connect_timeout or max(3, DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS)
             kwargs = {
                 "json": payload,
                 "headers": headers,
@@ -1245,9 +1490,9 @@ class LLMService:
             response = await asyncio.to_thread(_request, False)
         except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
             _debug_log(f"[DEBUG][LLM][{provider}] Connection failed ({str(e)[:120]}), retrying without proxy...", "warning")
-            logger.warning(f"Connection failed ({str(e)}). Retrying without proxy (connect_timeout=15s)...")
+            logger.warning(f"Connection failed ({str(e)}). Retrying without proxy (connect_timeout={DEFAULT_LLM_NO_PROXY_CONNECT_TIMEOUT_SECONDS}s)...")
             try:
-                response = await asyncio.to_thread(_request, True, 15)
+                response = await asyncio.to_thread(_request, True, max(3, DEFAULT_LLM_NO_PROXY_CONNECT_TIMEOUT_SECONDS))
             except requests.exceptions.Timeout as e2:
                 _debug_log(f"[DEBUG][LLM][{provider}] No-proxy retry also timed out: {e2}", "error")
                 logger.error(f"No-proxy retry also timed out: {e2}")
@@ -1415,21 +1660,14 @@ class LLMService:
         resolved_category = str((extra_config or {}).get("__resolved_category") or "LLM").strip().upper()
         provider = (extra_config or {}).get("__provider") or self._infer_provider(base_url, model)
 
-        # KIE provider does not support streaming – fall back to non-streaming
-        if provider == "kie" and resolved_category == "LLM":
-            full_response = await self._raw_kie_llm_request_full(base_url, api_key, model, messages, extra_config)
-            content = self._extract_text_from_response(full_response)
-            if content:
-                yield {"type": "token", "content": content}
-            yield {"type": "done", "usage": full_response.get("usage", {})}
-            return
-
         if provider == "grsai" and resolved_category == "LLM":
             base_url = self._normalize_grsai_llm_base_url(base_url)
 
         # ── Build URL (same logic as _raw_llm_request_full) ──
         configured_endpoint = ((extra_config or {}).get("endpoint") or "").strip()
-        if configured_endpoint and resolved_category == "LLM":
+        if provider == "kie" and resolved_category == "LLM":
+            _, resolved_model, url = self._resolve_kie_llm_url(base_url, model)
+        elif configured_endpoint and resolved_category == "LLM":
             endpoint_lower = configured_endpoint.lower()
             if "/chat/completions" in endpoint_lower:
                 url = configured_endpoint.rstrip("/")
@@ -1448,13 +1686,15 @@ class LLMService:
         }
 
         payload = {
-            "model": model,
+            "model": resolved_model if (provider == "kie" and resolved_category == "LLM") else model,
             "messages": messages,
             "stream": True,
             "temperature": 0.7,
         }
 
-        if extra_config:
+        if provider == "kie" and resolved_category == "LLM":
+            payload.update(self._extract_kie_chat_options(extra_config or {}))
+        elif extra_config:
             for k, v in extra_config.items():
                 if k not in ["model", "messages", "stream"] and not str(k).startswith("__"):
                     payload[k] = v
@@ -1797,14 +2037,35 @@ class LLMService:
         if user_id is None:
             user_id = (config.get("config") or {}).get("__resolved_user_id") or 1
         last_exc: Optional[Exception] = None
+        failed_attempts: List[str] = []
+
+        def _record_failed_attempt(provider: Any, model: Any, stage: str, attempt_no: int, err: Exception) -> None:
+            provider_text = str(provider or "unknown").strip() or "unknown"
+            model_text = str(model or "unknown").strip() or "unknown"
+            detail = str(err or "unknown error").strip()
+            failed_attempts.append(
+                f"{stage} attempt {attempt_no} failed ({provider_text}/{model_text}): {detail}"
+            )
+
+        def _attach_fallback_warnings(result: Dict[str, Any]) -> Dict[str, Any]:
+            if not isinstance(result, dict):
+                return result
+            if not failed_attempts:
+                return result
+            # Keep payload bounded to avoid oversized meta and UI spam.
+            result["fallback_warnings"] = failed_attempts[:8]
+            result["fallback_warning_codes"] = ["LLM_CALL_FAILED_RETRIED"]
+            return result
 
         # ── active config: 2 attempts ──
         for attempt in range(1, 3):
             try:
                 result = await self.chat_completion(messages, config)
-                return self._attach_routing_metadata(result, config)
+                result = self._attach_routing_metadata(result, config)
+                return _attach_fallback_warnings(result)
             except Exception as e:
                 last_exc = e
+                _record_failed_attempt(config.get("provider"), config.get("model"), "active", attempt, e)
                 logger.warning(
                     "[llm_fallback] chat_completion active attempt %d/2 failed | provider=%s model=%s err=%s",
                     attempt, config.get("provider"), config.get("model"), str(e)[:200],
@@ -1822,9 +2083,11 @@ class LLMService:
                     idx, len(fallbacks), fb_cfg.get("provider"), fb_cfg.get("model"),
                 )
                 result = await self.chat_completion(messages, fb_cfg)
-                return self._attach_routing_metadata(result, fb_cfg)
+                result = self._attach_routing_metadata(result, fb_cfg)
+                return _attach_fallback_warnings(result)
             except Exception as e:
                 last_exc = e
+                _record_failed_attempt(fb_cfg.get("provider"), fb_cfg.get("model"), "fallback", idx, e)
                 logger.warning(
                     "[llm_fallback] chat_completion fallback %d/%d failed | provider=%s model=%s err=%s",
                     idx, len(fallbacks), fb_cfg.get("provider"), fb_cfg.get("model"), str(e)[:200],

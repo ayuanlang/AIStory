@@ -3,7 +3,7 @@ In-memory async task manager for long-running LLM operations.
 
 Endpoints submit work via `submit()`, which runs the callable in a background
 thread and returns a task_id immediately.  The frontend then polls
-`GET /tasks/{task_id}` until status is "completed" or "failed".
+`GET /tasks/{task_id}` until status is "completed", "failed", or "canceled".
 
 Completed results are kept for a limited TTL so memory doesn't grow unbounded.
 """
@@ -163,12 +163,12 @@ def _load_task_from_db(task_id: str) -> Optional["_TaskRecord"]:
 class _TaskRecord:
     __slots__ = (
         "task_id", "status", "result", "error", "error_code", "created_at",
-        "finished_at", "user_id", "kind",
+        "finished_at", "user_id", "kind", "cancel_requested", "cancel_reason",
     )
 
     def __init__(self, task_id: str, user_id: Optional[int], kind: str):
         self.task_id = task_id
-        self.status = "pending"   # pending | running | completed | failed
+        self.status = "pending"   # pending | running | completed | failed | canceled
         self.result: Any = None
         self.error: Optional[str] = None
         self.error_code: Optional[int] = None
@@ -176,6 +176,8 @@ class _TaskRecord:
         self.finished_at: Optional[float] = None
         self.user_id = user_id
         self.kind = kind
+        self.cancel_requested = False
+        self.cancel_reason = ""
 
 
 def _evict_stale():
@@ -227,17 +229,32 @@ def submit(fn: Callable[[], Any], *, user_id: Optional[int] = None, kind: str = 
         rec.status = "running"
         _save_task_to_db(rec)
         try:
+            if rec.cancel_requested:
+                rec.status = "canceled"
+                rec.error = rec.cancel_reason or "Task canceled by user"
+                rec.error_code = 499
+                return
             rec.result = fn()
-            rec.status = "completed"
-        except Exception as exc:
-            rec.status = "failed"
-            # HTTPException from FastAPI endpoints
-            if hasattr(exc, 'status_code') and hasattr(exc, 'detail'):
-                rec.error = exc.detail
-                rec.error_code = exc.status_code
+            if rec.cancel_requested:
+                rec.status = "canceled"
+                rec.error = rec.cancel_reason or "Task canceled by user"
+                rec.error_code = 499
             else:
-                rec.error = str(exc)
-            logger.error("Task %s (%s) failed: %s\n%s", task_id, kind, exc, traceback.format_exc())
+                rec.status = "completed"
+        except Exception as exc:
+            if rec.cancel_requested:
+                rec.status = "canceled"
+                rec.error = rec.cancel_reason or "Task canceled by user"
+                rec.error_code = 499
+            else:
+                rec.status = "failed"
+                # HTTPException from FastAPI endpoints
+                if hasattr(exc, 'status_code') and hasattr(exc, 'detail'):
+                    rec.error = exc.detail
+                    rec.error_code = exc.status_code
+                else:
+                    rec.error = str(exc)
+                logger.error("Task %s (%s) failed: %s\n%s", task_id, kind, exc, traceback.format_exc())
         finally:
             rec.finished_at = time.time()
             _save_task_to_db(rec)
@@ -273,11 +290,44 @@ def get_status(task_id: str, user_id: Optional[int] = None) -> Optional[Dict[str
     }
     if rec.status == "completed":
         info["result"] = rec.result
+    elif rec.status == "canceled":
+        info["error"] = rec.error or "Task canceled by user"
+        info["error_code"] = rec.error_code or 499
     elif rec.status == "failed":
         info["error"] = rec.error
         if rec.error_code:
             info["error_code"] = rec.error_code
     return info
+
+
+def cancel(task_id: str, user_id: Optional[int] = None, reason: str = "Task canceled by user") -> Optional[Dict[str, Any]]:
+    """
+    Mark a task as canceled. This is cooperative cancellation: running work may
+    still finish in the background, but polling immediately returns canceled.
+    """
+    with _lock:
+        rec = _tasks.get(task_id)
+    if rec is None:
+        rec = _load_task_from_db(task_id)
+        if rec is not None:
+            with _lock:
+                _tasks[task_id] = rec
+    if rec is None:
+        return None
+    if user_id is not None and rec.user_id is not None and rec.user_id != user_id:
+        return None
+
+    if rec.status in {"completed", "failed", "canceled"}:
+        return get_status(task_id, user_id=user_id)
+
+    rec.cancel_requested = True
+    rec.cancel_reason = str(reason or "Task canceled by user").strip() or "Task canceled by user"
+    rec.status = "canceled"
+    rec.error = rec.cancel_reason
+    rec.error_code = 499
+    rec.finished_at = time.time()
+    _save_task_to_db(rec)
+    return get_status(task_id, user_id=user_id)
 
 
 # ---------------------------------------------------------------------------

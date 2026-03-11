@@ -73,7 +73,16 @@ async function pollTask(taskId, {
     let notFoundSince = 0;
   while (Date.now() < deadline) {
         try {
-            const res = await api.get(`/tasks/${taskId}`, baseURL ? { baseURL } : undefined);
+            const reqConfig = {
+                ...(baseURL ? { baseURL } : {}),
+                // Prevent proxy/browser stale-cache from pinning task status at "running".
+                params: { _ts: Date.now() },
+                headers: {
+                    'Cache-Control': 'no-cache, no-store, max-age=0',
+                    Pragma: 'no-cache',
+                },
+            };
+            const res = await api.get(`/tasks/${taskId}`, reqConfig);
             notFoundSince = 0;
             const info = res.data;
             if (info.status === 'completed') return info.result;
@@ -81,6 +90,13 @@ async function pollTask(taskId, {
                 const err = new Error(info.error || 'Task failed');
                 err.errorCode = info.error_code || 500;
                 err.response = { status: info.error_code || 500, data: { detail: info.error } };
+                throw err;
+            }
+            if (info.status === 'canceled' || info.status === 'cancelled') {
+                const err = new Error(info.error || 'Task canceled');
+                err.errorCode = info.error_code || 499;
+                err.isCanceled = true;
+                err.response = { status: info.error_code || 499, data: { detail: info.error || 'Task canceled' } };
                 throw err;
             }
             await new Promise(r => setTimeout(r, interval));
@@ -107,6 +123,13 @@ async function asyncLLMPost(url, data, config = {}) {
   const sep = url.includes('?') ? '&' : '?';
   const res = await api.post(`${url}${sep}async_mode=1`, data, config);
   if (res.data && res.data.task_id && res.data.async) {
+        if (typeof config.onTaskCreated === 'function') {
+            try {
+                config.onTaskCreated(res.data.task_id, { baseURL: res?.config?.baseURL || api.defaults.baseURL });
+            } catch (_) {
+                // Ignore callback errors to avoid breaking normal request flow.
+            }
+        }
         const submitBaseURL = res?.config?.baseURL || api.defaults.baseURL;
         return await pollTask(res.data.task_id, {
             ...(config.pollOptions || {}),
@@ -116,6 +139,17 @@ async function asyncLLMPost(url, data, config = {}) {
   }
   return res.data;
 }
+
+export const waitForAsyncTask = async (taskId, pollOptions = {}) => {
+    if (!taskId) throw new Error('Missing taskId');
+    return await pollTask(taskId, pollOptions || {});
+};
+
+export const stopAsyncTask = async (taskId) => {
+    if (!taskId) throw new Error('Missing taskId');
+    const response = await api.post(`/tasks/${taskId}/cancel`);
+    return response.data;
+};
 
 const VIDEO_JOB_TIMEOUT_MS_DEFAULT = (() => {
     const parsed = Number(import.meta?.env?.VITE_VIDEO_JOB_TIMEOUT_MS || 10 * 60 * 1000);
@@ -854,6 +888,7 @@ export const deleteAllEntities = async (projectId) => {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const AUTO_DOWNLOAD_PREF_KEY_PREFIX = 'aistory.autoDownloadLocal';
+const PROMPT_SUBMIT_LANG_PREF_KEY_PREFIX = 'aistory.promptSubmitLang';
 
 const decodeJwtPayload = (token) => {
     try {
@@ -877,6 +912,14 @@ const resolveCurrentUserStorageScope = () => {
 };
 
 const autoDownloadPreferenceStorageKey = () => `${AUTO_DOWNLOAD_PREF_KEY_PREFIX}:${resolveCurrentUserStorageScope()}`;
+const promptSubmitLanguageStorageKey = () => `${PROMPT_SUBMIT_LANG_PREF_KEY_PREFIX}:${resolveCurrentUserStorageScope()}`;
+
+export const normalizePromptSubmitLanguagePreference = (value) => {
+    const raw = String(value || '').trim().toLowerCase();
+    if (raw === 'auto') return 'auto';
+    if (raw === 'cn' || raw === 'zh' || raw === 'zh-cn') return 'cn';
+    return 'en';
+};
 
 export const getAutoDownloadLocalPreference = () => {
     try {
@@ -895,6 +938,33 @@ export const setAutoDownloadLocalPreference = (enabled) => {
     } catch {
         // ignore storage failures
     }
+};
+
+export const getPromptSubmitLanguagePreference = () => {
+    try {
+        const raw = localStorage.getItem(promptSubmitLanguageStorageKey());
+        if (!raw) return 'en';
+        return normalizePromptSubmitLanguagePreference(raw);
+    } catch {
+        return 'en';
+    }
+};
+
+export const setPromptSubmitLanguagePreference = (value) => {
+    try {
+        const normalized = normalizePromptSubmitLanguagePreference(value);
+        localStorage.setItem(promptSubmitLanguageStorageKey(), normalized);
+    } catch {
+        // ignore storage failures
+    }
+};
+
+export const resolvePromptSubmitLanguage = (uiLang = 'en', preference = null) => {
+    const normalized = normalizePromptSubmitLanguagePreference(
+        preference == null ? getPromptSubmitLanguagePreference() : preference
+    );
+    if (normalized === 'cn' || normalized === 'en') return normalized;
+    return String(uiLang || '').toLowerCase().startsWith('zh') ? 'cn' : 'en';
 };
 
 const shouldAutoDownloadByUserSetting = () => {
@@ -1454,8 +1524,8 @@ export const getSystemSettingsCatalog = async () => {
     return response.data;
 }
 
-export const selectSystemSetting = async (setting_id) => {
-    const response = await api.post('/settings/system/select', { setting_id });
+export const selectSystemSetting = async (setting_id, api_strategy = 'smart_default') => {
+    const response = await api.post('/settings/system/select', { setting_id, api_strategy });
     return response.data;
 }
 
@@ -1585,6 +1655,26 @@ export const setSystemProviderKeysManage = async (provider, keys = [], strategy 
 
 export const deleteSystemSettingManage = async (settingId) => {
     const response = await api.delete(`/settings/system/manage/${settingId}`);
+    return response.data;
+}
+
+export const listTaskDefaultApisManage = async () => {
+    const response = await api.get('/settings/system/manage/task-default-apis');
+    return response.data;
+}
+
+export const createTaskDefaultApiManage = async (payload) => {
+    const response = await api.post('/settings/system/manage/task-default-apis', payload || {});
+    return response.data;
+}
+
+export const updateTaskDefaultApiManage = async (taskCategory, payload) => {
+    const response = await api.post(`/settings/system/manage/task-default-apis/${encodeURIComponent(taskCategory)}`, payload || {});
+    return response.data;
+}
+
+export const deleteTaskDefaultApiManage = async (taskCategory) => {
+    const response = await api.delete(`/settings/system/manage/task-default-apis/${encodeURIComponent(taskCategory)}`);
     return response.data;
 }
 
@@ -1845,7 +1935,7 @@ export const refinePrompt = async (original_prompt, instruction, type = 'image')
     return await asyncLLMPost('/tools/refine_prompt', { original_prompt, instruction, type });
 };
 
-export const analyzeScene = async (scriptText, systemPrompt = null, projectMetadata = null, episodeId = null, analysisAttentionNotes = null, reuseSubjectAssets = null) => {
+export const analyzeScene = async (scriptText, systemPrompt = null, projectMetadata = null, episodeId = null, analysisAttentionNotes = null, reuseSubjectAssets = null, runtimeHooks = null) => {
     const payload = { 
         text: scriptText,
         system_prompt: systemPrompt,
@@ -1863,7 +1953,31 @@ export const analyzeScene = async (scriptText, systemPrompt = null, projectMetad
     if (Array.isArray(reuseSubjectAssets) && reuseSubjectAssets.length > 0) {
         payload.reuse_subject_assets = reuseSubjectAssets;
     }
-    const data = (await asyncLLMPost('/analyze_scene', payload)) ?? {};
+    const submitTimeoutRaw = Number(import.meta?.env?.VITE_ANALYZE_SCENE_SUBMIT_TIMEOUT_MS || 45000);
+    const submitTimeout = Number.isFinite(submitTimeoutRaw)
+        ? Math.max(15000, Math.min(180000, Math.floor(submitTimeoutRaw)))
+        : 45000;
+
+    let data = {};
+    try {
+        data = (await asyncLLMPost('/analyze_scene', payload, {
+            timeout: submitTimeout,
+            onTaskCreated: runtimeHooks?.onTaskCreated,
+            pollOptions: {
+                interval: 1200,
+                timeout: LLM_POLL_TIMEOUT,
+            },
+        })) ?? {};
+    } catch (error) {
+        const noResponse = !error?.response;
+        const timeout = String(error?.code || '') === 'ECONNABORTED';
+        const detail = buildApiErrorMessage(error);
+
+        if (timeout || noResponse) {
+            throw new Error(`AI Scene Analysis submit/poll no response (${submitTimeout}ms): ${detail}`);
+        }
+        throw new Error(detail || 'Scene analysis failed');
+    }
 
     const explicitSuccess = typeof data?.success === 'boolean' ? data.success : null;
     const statusText = String(data?.status || '').trim().toLowerCase();
@@ -1982,6 +2096,8 @@ export const getSystemAIAssistantAnalyze = async (payload = {}) => (await api.po
 export const getSystemAIAssistantApply = async (payload = {}) => (await api.post('/settings/system/ai-assistant/apply', payload || {})).data;
 export const aiAssistantExchangeRate = async (payload = {}) => (await api.post('/settings/system/ai-assistant/tools/exchange-rate', payload || {})).data;
 export const aiAssistantFetchPricing = async (payload = {}) => (await api.post('/settings/system/ai-assistant/tools/fetch-pricing', payload || {})).data;
+export const aiAssistantAnalyzeSupplierFeatures = async (payload = {}) => (await api.post('/settings/system/ai-assistant/tools/analyze-supplier-features', payload || {})).data;
+export const aiAssistantApplySupplierFeatures = async (payload = {}) => (await api.post('/settings/system/ai-assistant/tools/apply-supplier-features', payload || {})).data;
 export const fetchKiePricingManage = async (payload = {}) => (await api.post('/settings/system/manage/kie-pricing/fetch', payload || {})).data;
 export const generateKiePricingRulesManage = async (payload = {}) => (await api.post('/settings/system/manage/kie-pricing/generate', payload || {})).data;
 export const applyKiePricingRulesManage = async (payload = {}) => (await api.post('/settings/system/manage/kie-pricing/apply', payload || {})).data;

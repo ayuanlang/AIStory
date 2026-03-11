@@ -22,6 +22,7 @@ from typing import List, Dict, Any, Optional, Union
 from app.db.session import SessionLocal
 from app.models.all_models import APISetting, SystemAPISetting, ProviderKeyPool
 from app.core.config import settings
+from app.services.billing_service import BillingService
 from sqlalchemy import cast, String, func
 
 # Suppress InsecureRequestWarning from urllib3
@@ -59,7 +60,33 @@ class MediaGenerationService:
 # ...
     DOUBAO_MIN_IMAGE_PIXELS = 3_686_400
     SMART_ROUTER_PROVIDER = "smart_router"
+    USER_API_STRATEGY_FIXED = "fixed"
+    USER_API_STRATEGY_SMART_DEFAULT = "smart_default"
+    USER_API_STRATEGY_LOW_PRICE_REPLACE = "low_price_replace"
     _provider_key_cursors: Dict[str, int] = {}
+
+    def _normalize_api_strategy(self, value: Any, default: str = USER_API_STRATEGY_SMART_DEFAULT) -> str:
+        raw = str(value or "").strip().lower()
+        if raw in {self.USER_API_STRATEGY_FIXED, self.USER_API_STRATEGY_SMART_DEFAULT, self.USER_API_STRATEGY_LOW_PRICE_REPLACE}:
+            return raw
+        return default
+
+    def _normalize_generation_mode(self, value: Any) -> str:
+        raw = str(value or "").strip().lower()
+        aliases = {
+            "text-to-image": "t2i",
+            "image-to-image": "i2i",
+            "text-to-video": "t2v",
+            "image-to-video": "i2v",
+            "image2video": "i2v",
+            "img2video": "i2v",
+            "image2image": "i2i",
+            "img2img": "i2i",
+            "text2video": "t2v",
+            "text2image": "t2i",
+            "video-to-video": "v2v",
+        }
+        return aliases.get(raw, raw)
 
     def _provider_ci_filter(self, provider: Any):
         provider_norm = str(provider or "").strip().lower()
@@ -219,8 +246,8 @@ class MediaGenerationService:
             return None
         lowered = raw.lower()
         if lowered in {"adaptive", "auto"}:
-            return "16:9"
-        if raw == "2.35:1":
+            return "adaptive"
+        if raw in {"2.35:1", "2.39:1"}:
             return "21:9"
         return raw
 
@@ -572,6 +599,7 @@ class MediaGenerationService:
 
         candidates: List[Dict[str, Any]] = []
         provider_bundle_cache: Dict[str, Dict[str, Any]] = {}
+        target_generation_mode = self._normalize_generation_mode(modality)
         for row in rows:
             provider = self._normalize_provider_name(row.provider, category)
             if not provider:
@@ -618,6 +646,11 @@ class MediaGenerationService:
                 "priority": priority,
                 "retry_limit": retry_limit,
                 "is_multi_ref_default": bool(cfg.get("smart_multi_ref_default")),
+                "avg_price_estimate": int((BillingService.estimate_system_api_average_price(
+                    session,
+                    int(row.id),
+                    generation_mode=target_generation_mode,
+                ) or {}).get("average_cost") or 0),
                 "config": {
                     **self._setting_to_config(row, provider, defaults),
                     "config": {
@@ -810,15 +843,25 @@ class MediaGenerationService:
         allow_priority_fallback_when_explicit: bool = False,
         fallback_candidate_limit: int = 3,
         modality: str = None,
+        api_strategy: str = USER_API_STRATEGY_SMART_DEFAULT,
+        primary_retry_limit: int = 3,
     ) -> Dict[str, Any]:
         with SessionLocal() as session:
             smart_enabled = self._is_smart_routing_enabled(session, user_id)
             candidates = self._get_system_candidates(session, category, modality=modality)
 
-        if allow_priority_fallback_when_explicit:
+        strategy = self._normalize_api_strategy(api_strategy)
+        smart_default_strategy = strategy == self.USER_API_STRATEGY_SMART_DEFAULT
+        legacy_strategy = strategy not in {
+            self.USER_API_STRATEGY_FIXED,
+            self.USER_API_STRATEGY_SMART_DEFAULT,
+            self.USER_API_STRATEGY_LOW_PRICE_REPLACE,
+        }
+
+        if allow_priority_fallback_when_explicit and legacy_strategy:
             smart_enabled = True
 
-        if explicit_selection:
+        if explicit_selection and (legacy_strategy or smart_default_strategy):
             if allow_priority_fallback_when_explicit:
                 logger.info(
                     "Smart routing kept for explicit selection (fallback-enabled) | category=%s user_id=%s provider=%s model=%s fallback_limit=%s",
@@ -843,23 +886,58 @@ class MediaGenerationService:
         if requested_model:
             baseline_config["model"] = requested_model
 
-        fallback_candidates = sorted(
-            [
-                c for c in candidates
-                if c.get("provider") and not (
-                    c.get("provider") == effective_provider
-                    and str(c.get("model") or "") == str(baseline_config.get("model") or "")
-                )
-            ],
-            key=lambda x: (x.get("priority", 100), x.get("id", 0)),
-        )
-        if fallback_candidate_limit and fallback_candidate_limit > 0:
-            fallback_candidates = fallback_candidates[: int(fallback_candidate_limit)]
+        fallback_candidates: List[Dict[str, Any]] = []
+        if strategy == self.USER_API_STRATEGY_LOW_PRICE_REPLACE:
+            fallback_candidates = sorted(
+                [
+                    c for c in candidates
+                    if c.get("provider") and not (
+                        c.get("provider") == effective_provider
+                        and str(c.get("model") or "") == str(baseline_config.get("model") or "")
+                    )
+                ],
+                key=lambda x: (
+                    int(x.get("avg_price_estimate", 10**9) or 10**9),
+                    int(x.get("priority", 100) or 100),
+                    int(x.get("id", 0) or 0),
+                ),
+            )
+            if fallback_candidate_limit and fallback_candidate_limit > 0:
+                fallback_candidates = fallback_candidates[: int(fallback_candidate_limit)]
+        elif strategy == self.USER_API_STRATEGY_SMART_DEFAULT:
+            fallback_candidates = sorted(
+                [
+                    c for c in candidates
+                    if c.get("provider") and not (
+                        c.get("provider") == effective_provider
+                        and str(c.get("model") or "") == str(baseline_config.get("model") or "")
+                    )
+                ],
+                key=lambda x: (x.get("priority", 100), x.get("id", 0)),
+            )
+            # Smart default strategy: after 3 active retries, try up to 3 same-category fallbacks.
+            fallback_candidates = fallback_candidates[:3]
+        elif legacy_strategy and smart_enabled:
+            fallback_candidates = sorted(
+                [
+                    c for c in candidates
+                    if c.get("provider") and not (
+                        c.get("provider") == effective_provider
+                        and str(c.get("model") or "") == str(baseline_config.get("model") or "")
+                    )
+                ],
+                key=lambda x: (x.get("priority", 100), x.get("id", 0)),
+            )
+            if fallback_candidate_limit and fallback_candidate_limit > 0:
+                fallback_candidates = fallback_candidates[: int(fallback_candidate_limit)]
 
-        retry_limit = 2
+        retry_limit = max(1, int(primary_retry_limit or 3))
+        if legacy_strategy:
+            retry_limit = 2
         for c in candidates:
             if c.get("provider") == effective_provider and c.get("retry_limit") is not None:
-                retry_limit = max(1, int(c.get("retry_limit")))
+                if legacy_strategy:
+                    retry_limit = max(1, int(c.get("retry_limit")))
                 break
 
         multi_ref_count = len(reference_image_url) if isinstance(reference_image_url, list) else 0
@@ -885,7 +963,14 @@ class MediaGenerationService:
                 "tag": "active_retry",
             })
 
-        if smart_enabled:
+        if strategy == self.USER_API_STRATEGY_LOW_PRICE_REPLACE:
+            for c in fallback_candidates:
+                attempt_items.append({
+                    "provider": c.get("provider"),
+                    "config": dict(c.get("config") or {}),
+                    "tag": "priority_fallback",
+                })
+        elif smart_enabled and legacy_strategy:
             for c in fallback_candidates:
                 attempt_items.append({
                     "provider": c.get("provider"),
@@ -906,16 +991,6 @@ class MediaGenerationService:
         fallback_unlocked = False
 
         for index, attempt in enumerate(deduped_attempts, start=1):
-            if attempt.get("tag") == "active_retry" and fallback_unlocked:
-                logger.info(
-                    "Smart routing skip active retry | category=%s user_id=%s attempt=%s/%s reason=fallback_unlocked",
-                    category,
-                    user_id,
-                    index,
-                    len(deduped_attempts),
-                )
-                continue
-
             if attempt.get("tag") == "priority_fallback" and not fallback_unlocked:
                 logger.info(
                     "Smart routing skip fallback | category=%s user_id=%s attempt=%s/%s reason=no_explicit_submit_failure",
@@ -932,9 +1007,10 @@ class MediaGenerationService:
                 continue
 
             logger.info(
-                "Smart routing attempt | category=%s user_id=%s attempt=%s/%s provider=%s model=%s tag=%s smart_enabled=%s fallback_triggered=%s",
+                "Smart routing attempt | category=%s user_id=%s strategy=%s attempt=%s/%s provider=%s model=%s tag=%s smart_enabled=%s fallback_triggered=%s",
                 category,
                 user_id,
+                strategy,
                 index,
                 len(deduped_attempts),
                 selected_provider,
@@ -1265,6 +1341,8 @@ class MediaGenerationService:
                         resolved_source = f"system_by_category_fallback:{system_setting.provider}/{system_setting.model}"
 
                 if system_setting:
+                    user_cfg = self._safe_json_dict(getattr(user_setting, "config", None)) if user_setting else {}
+                    selected_strategy = self._normalize_api_strategy(user_cfg.get("api_strategy"), default=self.USER_API_STRATEGY_FIXED)
                     resolved_provider = self._normalize_provider_name(system_setting.provider, resolved_category) or target_provider
                     provider_key_pool_bundle = self._collect_provider_key_pool_bundle(
                         session,
@@ -1319,6 +1397,7 @@ class MediaGenerationService:
                             "__selection_source": "system_only",
                             "__resolved_source": resolved_source,
                             "__resolved_setting_id": system_setting.id,
+                            "__api_strategy": selected_strategy,
                         },
                     }
                 logger.warning(
@@ -1382,6 +1461,15 @@ class MediaGenerationService:
             ((api_config or {}).get("config") or {}).get("__resolved_source"),
         )
 
+        selected_strategy = self.USER_API_STRATEGY_FIXED
+        try:
+            selected_strategy = self._normalize_api_strategy(
+                ((api_config or {}).get("config") or {}).get("__api_strategy"),
+                default=self.USER_API_STRATEGY_FIXED,
+            )
+        except Exception:
+            selected_strategy = self.USER_API_STRATEGY_FIXED
+
         _debug_log(f"[MediaService] Generating Image. Provider: {provider}, Refs Type: {type(reference_image_url)}, Refs: {_strip_base64_from_log(reference_image_url)}, W: {width}, H: {height}, image_size: {image_size}, AR: {aspect_ratio}")
 
         result = await self._generate_with_smart_routing(
@@ -1401,6 +1489,8 @@ class MediaGenerationService:
             allow_priority_fallback_when_explicit=str(asset_type or "").strip().lower() in {"subject", "entity", "character", "prop", "environment"},
             fallback_candidate_limit=3,
             modality="image-to-image" if reference_image_url else "text-to-image",
+            api_strategy=selected_strategy,
+            primary_retry_limit=3,
         )
 
         # Download 
@@ -1474,6 +1564,15 @@ class MediaGenerationService:
             ((api_config or {}).get("config") or {}).get("__resolved_source"),
         )
 
+        selected_strategy = self.USER_API_STRATEGY_FIXED
+        try:
+            selected_strategy = self._normalize_api_strategy(
+                ((api_config or {}).get("config") or {}).get("__api_strategy"),
+                default=self.USER_API_STRATEGY_FIXED,
+            )
+        except Exception:
+            selected_strategy = self.USER_API_STRATEGY_FIXED
+
         if provider_locked_by_active_setting and not bool((llm_config or {}).get("provider") or (llm_config or {}).get("model")):
             logger.info(
                 "Generate video provider lock enabled | user_id=%s provider=%s reason=active_setting_no_explicit_override fallback=enabled_on_failure",
@@ -1498,6 +1597,8 @@ class MediaGenerationService:
             requested_model=(llm_config or {}).get("model"),
             explicit_selection=explicit_selection_for_video,
             modality="image-to-video" if reference_image_url else "text-to-video",
+            api_strategy=selected_strategy,
+            primary_retry_limit=3,
         )
 
         # Download 
@@ -1661,10 +1762,8 @@ class MediaGenerationService:
             except:
                  final_duration = -1
 
-            # Map aspect ratio for Doubao
-            final_ratio = aspect_ratio if aspect_ratio else "16:9" # Default to 16:9 if not provided for T2V
-            if final_ratio == "2.35:1": final_ratio = "21:9"
-            if final_ratio == "adaptive": final_ratio = "16:9" # Handle legacy "adaptive" if passed
+            # Map aspect ratio for Doubao (Ark): keep adaptive when provided.
+            final_ratio = self._normalize_aspect_ratio_value(aspect_ratio) or "16:9"
 
             payload = {
                 "model": model or "doubao-seedance-1-5-pro-251215",
@@ -1676,13 +1775,15 @@ class MediaGenerationService:
 
             # Apply Draft Mode (Sample Mode) if configured and supported (seedance models)
             if model and ("1-5-pro" in model or "seedance" in model):
-                 payload["draft"] = bool(tool_conf.get("draft", False))
+                payload["draft"] = bool(tool_conf.get("draft", False))
             
             # For Doubao (Ark), if image is provided, ratio should typically be omitted 
             # to respect image dimensions (or use 'size'/'resolution' params if available, but ratio causes 400).
             # Only add ratio for Text-to-Video (no start/end images)
             if not start_img_url and not last_frame_url:
-                 payload["ratio"] = final_ratio
+                payload["ratio"] = final_ratio
+                _debug_log(f"[DoubaoVideo] ratio_in={aspect_ratio}, ratio_final={final_ratio}, mode={'t2v' if (not start_img_url and not last_frame_url) else 'i2v'}")
+            _debug_log(f"[DoubaoVideo] payload_has_ratio={'ratio' in payload}, payload_ratio={payload.get('ratio')}, mode={'t2v' if (not start_img_url and not last_frame_url) else 'i2v'}")
 
 
             # Enable generate_audio for 1.5 Pro models which support it.
