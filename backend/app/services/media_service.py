@@ -23,6 +23,7 @@ from app.db.session import SessionLocal
 from app.models.all_models import APISetting, SystemAPISetting, ProviderKeyPool
 from app.core.config import settings
 from app.services.billing_service import BillingService
+from app.services.system_default_api_service import get_task_default_system_setting
 from sqlalchemy import cast, String, func
 
 # Suppress InsecureRequestWarning from urllib3
@@ -513,6 +514,8 @@ class MediaGenerationService:
             "grsai": "grsai",
             "kie-image": "kie",
             "kie-video": "kie",
+            "kie-voice": "kie",
+            "kie-tts": "kie",
             "kie": "kie",
             "doubao": "doubao",
             "doubao video": "doubao",
@@ -539,9 +542,20 @@ class MediaGenerationService:
             return normalized in {"doubao", "grsai", "kie", "tencent", "stability"}
         if cat == "video":
             return normalized in {"doubao", "grsai", "kie", "tencent", "wanxiang", "vidu"}
+        if cat == "voice":
+            return normalized in {"kie"}
         return False
 
     def _pick_system_setting_fallback(self, session, category: str, provider: Optional[str] = None) -> Optional[SystemAPISetting]:
+        # Prefer task-default system setting when no provider is pinned.
+        if not str(provider or "").strip():
+            default_row = get_task_default_system_setting(session, category)
+            if default_row:
+                if not self._is_deprecated_system_config(getattr(default_row, "config", None), getattr(default_row, "deprecated", None)):
+                    row_provider = self._normalize_provider_name(getattr(default_row, "provider", None), category)
+                    if self._is_supported_provider(category, row_provider):
+                        return default_row
+
         query = session.query(SystemAPISetting).filter(SystemAPISetting.category == category)
         normalized_provider = self._normalize_provider_name(provider, category) if provider else ""
         if normalized_provider:
@@ -789,6 +803,28 @@ class MediaGenerationService:
                         "model": active_config.get("model", "default"),
                         "duration": duration,
                         "category": "Video",
+                    },
+                }
+
+            if category == "Voice":
+                if provider == "kie":
+                    return await self._handle_kie_generation(
+                        "audio",
+                        prompt,
+                        active_config,
+                        reference_image_url,
+                        duration=duration,
+                        negative_prompt=negative_prompt,
+                    )
+
+                _debug_log(f"Unsupported Voice provider: {provider}", "warning")
+                return {
+                    "error": f"Unsupported voice provider: {provider}",
+                    "submit_failed": True,
+                    "details": {
+                        "provider": provider,
+                        "model": active_config.get("model", "default"),
+                        "category": "Voice",
                     },
                 }
 
@@ -1221,6 +1257,40 @@ class MediaGenerationService:
                 requested_provider = self._normalize_provider_name(str(provider or "").strip(), resolved_category)
                 requested_model_value = str(requested_model or "").strip()
 
+                def _build_runtime_from_system_row(system_row: SystemAPISetting, resolved_source: str, selected_strategy: str) -> Dict[str, Any]:
+                    resolved_provider = self._normalize_provider_name(system_row.provider, resolved_category) or requested_provider
+                    provider_key_pool_bundle = self._collect_provider_key_pool_bundle(
+                        session,
+                        resolved_category,
+                        resolved_provider,
+                    )
+                    merged_runtime_config = {
+                        **(system_row.config or {}),
+                        "provider": resolved_provider,
+                    }
+                    pooled_keys = self._normalize_api_keys(provider_key_pool_bundle.get("provider_api_keys"))
+                    if pooled_keys:
+                        merged_runtime_config["provider_api_keys"] = pooled_keys
+                        strategy = str(provider_key_pool_bundle.get("provider_api_key_strategy") or "random").strip().lower()
+                        if strategy in {"random", "round_robin", "weighted"}:
+                            merged_runtime_config["provider_api_key_strategy"] = strategy
+                        if strategy == "weighted":
+                            merged_runtime_config["provider_api_key_weights"] = provider_key_pool_bundle.get("provider_api_key_weights") or []
+
+                    return {
+                        "provider": system_row.provider,
+                        "api_key": self._pick_runtime_api_key(merged_runtime_config, system_row.api_key),
+                        "base_url": system_row.base_url or defaults.get(resolved_provider, {}).get("base_url"),
+                        "model": system_row.model or defaults.get(resolved_provider, {}).get("model"),
+                        "config": {
+                            **(system_row.config or {}),
+                            "__selection_source": "system_only",
+                            "__resolved_source": resolved_source,
+                            "__resolved_setting_id": system_row.id,
+                            "__api_strategy": selected_strategy,
+                        },
+                    }
+
                 if strict_provider and (not requested_provider or not self._is_supported_provider(resolved_category, requested_provider)):
                     logger.warning(
                         "Explicit provider unsupported/missing in media service | user_id=%s category=%s provider=%s",
@@ -1236,6 +1306,23 @@ class MediaGenerationService:
                         user_id,
                         resolved_category,
                     )
+                    default_row = get_task_default_system_setting(session, resolved_category)
+                    if default_row and not self._is_deprecated_system_config(default_row.config, getattr(default_row, "deprecated", None)):
+                        default_provider = self._normalize_provider_name(default_row.provider, resolved_category)
+                        if self._is_supported_provider(resolved_category, default_provider):
+                            return _build_runtime_from_system_row(
+                                default_row,
+                                f"task_default_system_setting:{default_row.provider}/{default_row.model}",
+                                self.USER_API_STRATEGY_FIXED,
+                            )
+
+                    fallback_any = self._pick_system_setting_fallback(session, resolved_category, None)
+                    if fallback_any:
+                        return _build_runtime_from_system_row(
+                            fallback_any,
+                            f"system_category_fallback_no_user:{fallback_any.provider}/{fallback_any.model}",
+                            self.USER_API_STRATEGY_FIXED,
+                        )
                     return {}
 
                 if strict_provider and requested_provider:
@@ -1264,15 +1351,12 @@ class MediaGenerationService:
 
                 if target_provider and not target_model:
                     logger.warning(
-                        "Active user setting missing model in media service | user_id=%s category=%s setting_id=%s provider=%s",
+                        "Active user setting missing model in media service (same-provider fallback disabled) | user_id=%s category=%s setting_id=%s provider=%s",
                         user_id,
                         resolved_category,
                         (user_setting.id if user_setting else None),
                         target_provider,
                     )
-                    fallback_same_provider = self._pick_system_setting_fallback(session, resolved_category, target_provider)
-                    if fallback_same_provider:
-                        target_model = str(fallback_same_provider.model or "").strip()
 
                 if not target_provider:
                     if strict_provider and requested_provider:
@@ -1290,6 +1374,25 @@ class MediaGenerationService:
                         target_model = str(fallback_any.model or "").strip()
 
                 if target_provider and not target_model and strict_provider and requested_provider:
+                    if not user_setting:
+                        default_row = get_task_default_system_setting(session, resolved_category)
+                        if default_row and not self._is_deprecated_system_config(default_row.config, getattr(default_row, "deprecated", None)):
+                            default_provider = self._normalize_provider_name(default_row.provider, resolved_category)
+                            if self._is_supported_provider(resolved_category, default_provider):
+                                logger.warning(
+                                    "Explicit provider has no model; fallback to task-default system setting because no active user setting | user_id=%s category=%s requested_provider=%s requested_model=%s default_provider=%s default_model=%s",
+                                    user_id,
+                                    resolved_category,
+                                    requested_provider,
+                                    requested_model_value,
+                                    default_row.provider,
+                                    default_row.model,
+                                )
+                                return _build_runtime_from_system_row(
+                                    default_row,
+                                    f"task_default_system_setting_explicit_missing_model:{default_row.provider}/{default_row.model}",
+                                    self.USER_API_STRATEGY_FIXED,
+                                )
                     logger.warning(
                         "Explicit provider has no resolvable model in media service | user_id=%s category=%s provider=%s requested_model=%s",
                         user_id,
@@ -1313,19 +1416,8 @@ class MediaGenerationService:
                 system_setting = None
                 resolved_source = ""
 
-                # Requested order (reversed):
-                # category fallback -> provider fallback -> provider+model exact match.
-                if not strict_provider and not provider_locked:
-                    system_setting = self._pick_system_setting_fallback(session, resolved_category, None)
-                    if system_setting:
-                        resolved_source = f"system_by_category_fallback:{system_setting.provider}/{system_setting.model}"
-
-                if not system_setting:
-                    system_setting = self._pick_system_setting_fallback(session, resolved_category, target_provider)
-                    if system_setting:
-                        resolved_source = f"system_by_provider_fallback:{target_provider}/{system_setting.model}"
-
-                if not system_setting and target_provider and target_model:
+                # Exact provider+model should always win when both are known.
+                if target_provider and target_model:
                     system_setting = session.query(SystemAPISetting).filter(
                         SystemAPISetting.category == resolved_category,
                         self._provider_ci_filter(target_provider),
@@ -1334,10 +1426,34 @@ class MediaGenerationService:
                     if system_setting:
                         resolved_source = f"system_by_user_provider_model:{target_provider}/{target_model}"
 
+                if not system_setting and not strict_provider and not provider_locked:
+                    system_setting = self._pick_system_setting_fallback(session, resolved_category, None)
+                    if system_setting:
+                        resolved_source = f"system_by_category_fallback:{system_setting.provider}/{system_setting.model}"
+
                 if not system_setting:
                     if strict_provider and requested_provider:
+                        if not user_setting:
+                            default_row = get_task_default_system_setting(session, resolved_category)
+                            if default_row and not self._is_deprecated_system_config(default_row.config, getattr(default_row, "deprecated", None)):
+                                default_provider = self._normalize_provider_name(default_row.provider, resolved_category)
+                                if self._is_supported_provider(resolved_category, default_provider):
+                                    logger.warning(
+                                        "Explicit provider/model not matched; fallback to task-default system setting because no active user setting | user_id=%s category=%s requested_provider=%s requested_model=%s default_provider=%s default_model=%s",
+                                        user_id,
+                                        resolved_category,
+                                        requested_provider,
+                                        requested_model_value,
+                                        default_row.provider,
+                                        default_row.model,
+                                    )
+                                    return _build_runtime_from_system_row(
+                                        default_row,
+                                        f"task_default_system_setting_explicit_unmatched:{default_row.provider}/{default_row.model}",
+                                        self.USER_API_STRATEGY_FIXED,
+                                    )
                         logger.warning(
-                            "Explicit provider has no available system setting after provider_fallback -> provider_model_exact in media service | user_id=%s category=%s provider=%s model=%s",
+                            "Explicit provider has no available system setting after provider_model_exact in media service | user_id=%s category=%s provider=%s model=%s",
                             user_id,
                             resolved_category,
                             target_provider,
@@ -1346,7 +1462,7 @@ class MediaGenerationService:
                         return {}
                     if provider_locked:
                         logger.warning(
-                            "Provider-locked selection has no available system setting after provider_fallback -> provider_model_exact in media service | user_id=%s category=%s provider=%s model=%s",
+                            "Provider-locked selection has no available system setting after provider_model_exact in media service | user_id=%s category=%s provider=%s model=%s",
                             user_id,
                             resolved_category,
                             target_provider,
@@ -1357,25 +1473,17 @@ class MediaGenerationService:
                 if system_setting:
                     user_cfg = self._safe_json_dict(getattr(user_setting, "config", None)) if user_setting else {}
                     selected_strategy = self._normalize_api_strategy(user_cfg.get("api_strategy"), default=self.USER_API_STRATEGY_FIXED)
-                    resolved_provider = self._normalize_provider_name(system_setting.provider, resolved_category) or target_provider
-                    provider_key_pool_bundle = self._collect_provider_key_pool_bundle(
-                        session,
+                    logger.warning(
+                        "Media config resolved candidate | user_id=%s category=%s source=%s setting_id=%s provider=%s model=%s deprecated_col=%s deprecated_effective=%s",
+                        user_id,
                         resolved_category,
-                        resolved_provider,
+                        resolved_source,
+                        system_setting.id,
+                        system_setting.provider,
+                        system_setting.model,
+                        getattr(system_setting, "deprecated", None),
+                        self._is_deprecated_system_config(system_setting.config, getattr(system_setting, "deprecated", None)),
                     )
-                    merged_runtime_config = {
-                        **(system_setting.config or {}),
-                        "provider": resolved_provider,
-                    }
-                    pooled_keys = self._normalize_api_keys(provider_key_pool_bundle.get("provider_api_keys"))
-                    if pooled_keys:
-                        merged_runtime_config["provider_api_keys"] = pooled_keys
-                        strategy = str(provider_key_pool_bundle.get("provider_api_key_strategy") or "random").strip().lower()
-                        if strategy in {"random", "round_robin", "weighted"}:
-                            merged_runtime_config["provider_api_key_strategy"] = strategy
-                        if strategy == "weighted":
-                            merged_runtime_config["provider_api_key_weights"] = provider_key_pool_bundle.get("provider_api_key_weights") or []
-
                     if self._is_deprecated_system_config(system_setting.config, getattr(system_setting, "deprecated", None)):
                         logger.warning(
                             "Blocked deprecated system api setting in media service | user_id=%s category=%s provider=%s model=%s setting_id=%s",
@@ -1392,7 +1500,7 @@ class MediaGenerationService:
                             "__blocked_reason": "该 System API 配置已弃用，禁止发起 API 调用。",
                         }
                     logger.info(
-                        "Resolved media API config (order: category_fallback -> provider_fallback -> provider_model_exact) | user_id=%s category=%s provider=%s source=%s selection_source=system_only setting_id=%s model=%s endpoint=%s",
+                        "Resolved media API config (order: provider_model_exact -> category_fallback) | user_id=%s category=%s provider=%s source=%s selection_source=system_only setting_id=%s model=%s endpoint=%s",
                         user_id,
                         resolved_category,
                         target_provider,
@@ -1401,19 +1509,7 @@ class MediaGenerationService:
                         system_setting.model,
                         system_setting.base_url,
                     )
-                    return {
-                        "provider": system_setting.provider,
-                        "api_key": self._pick_runtime_api_key(merged_runtime_config, system_setting.api_key),
-                        "base_url": system_setting.base_url or defaults.get(resolved_provider, {}).get("base_url"),
-                        "model": system_setting.model or defaults.get(resolved_provider, {}).get("model"),
-                        "config": {
-                            **(system_setting.config or {}),
-                            "__selection_source": "system_only",
-                            "__resolved_source": resolved_source,
-                            "__resolved_setting_id": system_setting.id,
-                            "__api_strategy": selected_strategy,
-                        },
-                    }
+                    return _build_runtime_from_system_row(system_setting, resolved_source, selected_strategy)
                 logger.warning(
                     "No matching system api setting by provider+model in media service | user_id=%s category=%s provider=%s model=%s",
                     user_id,
@@ -1548,6 +1644,41 @@ class MediaGenerationService:
             strict_provider=explicit_provider_selected,
         )
 
+        _debug_log(
+            "[MediaService][VideoConfig] requested_provider=%s requested_model=%s strict_provider=%s resolved_provider=%s resolved_model=%s resolved_source=%s has_api_config=%s"
+            % (
+                self._normalize_provider_name((llm_config or {}).get("provider"), "Video") if llm_config else None,
+                (llm_config or {}).get("model"),
+                explicit_provider_selected,
+                self._normalize_provider_name((api_config or {}).get("provider"), "Video") if api_config else None,
+                (api_config or {}).get("model") if api_config else None,
+                (((api_config or {}).get("config") or {}).get("__resolved_source") if api_config else None),
+                bool(api_config),
+            )
+        )
+        if api_config:
+            resolved_source_dbg = str((((api_config or {}).get("config") or {}).get("__resolved_source") or "")).strip()
+            if "task_default_system_setting" in resolved_source_dbg:
+                _debug_log(
+                    "[MediaService][VideoConfig] using task-default system setting | source=%s provider=%s model=%s"
+                    % (
+                        resolved_source_dbg,
+                        (api_config or {}).get("provider"),
+                        (api_config or {}).get("model"),
+                    )
+                )
+
+        explicit_selection_for_video = bool((llm_config or {}).get("provider") or (llm_config or {}).get("model"))
+        if explicit_selection_for_video and not api_config:
+            _debug_log(
+                "[MediaService][VideoConfig] explicit provider/model requested but no active non-deprecated system setting matched; blocking request",
+                "warning",
+            )
+            return {
+                "error": "显式指定的视频 provider/model 未命中可用的系统配置（可能已弃用或不存在）",
+                "submit_failed": True,
+            }
+
         if api_config and api_config.get("__blocked"):
             return {
                 "error": self._vendor_failed_message(self._normalize_provider_name((api_config or {}).get("provider"), "Video") or provider, api_config.get("__blocked_reason") or "该系统配置已弃用"),
@@ -1563,9 +1694,21 @@ class MediaGenerationService:
             merged_config.update(provider_options)
             api_config["config"] = merged_config
 
+        _debug_log(
+            "[MediaService][VoiceConfig] requested_provider=%s requested_model=%s resolved_provider=%s resolved_model=%s resolved_source=%s voice=%s language_code=%s"
+            % (
+                self._normalize_provider_name((llm_config or {}).get("provider"), "Voice") if llm_config else None,
+                (llm_config or {}).get("model"),
+                self._normalize_provider_name((api_config or {}).get("provider"), "Voice") if api_config else None,
+                (api_config or {}).get("model") if api_config else None,
+                (((api_config or {}).get("config") or {}).get("__resolved_source") if api_config else None),
+                (((api_config or {}).get("config") or {}).get("voice") if api_config else None),
+                (((api_config or {}).get("config") or {}).get("language_code") if api_config else None),
+            )
+        )
+
         resolved_source = str((((api_config or {}).get("config") or {}).get("__resolved_source") or "")).strip().lower()
         provider_locked_by_active_setting = bool(resolved_provider) and ("system_by_user_provider_model:" in resolved_source)
-        explicit_selection_for_video = bool((llm_config or {}).get("provider") or (llm_config or {}).get("model"))
 
         logger.info(
             "Generate video provider resolution | user_id=%s strict_provider=%s requested_provider=%s requested_model=%s resolved_provider=%s resolved_model=%s resolved_source=%s",
@@ -1627,6 +1770,101 @@ class MediaGenerationService:
             error_provider = result.get("_attempt_provider") if isinstance(result, dict) else None
             result["error"] = self._vendor_failed_message(error_provider or provider, result.get("error"))
         
+        return result
+
+    async def generate_voice(
+        self,
+        prompt: str,
+        negative_prompt: Optional[str] = None,
+        llm_config: Optional[Dict[str, Any]] = None,
+        duration: int = 5,
+        provider_options: Optional[Dict[str, Any]] = None,
+        user_id: int = 1,
+        user_credits: int = 0,
+    ):
+        explicit_provider_selected = bool((llm_config or {}).get("provider"))
+        provider = None
+        if llm_config and llm_config.get("provider"):
+            provider = self._normalize_provider_name(llm_config["provider"], "Voice")
+
+        if not provider:
+            try:
+                with SessionLocal() as session:
+                    self._repair_invalid_user_config_rows(session, user_id, category="Voice")
+                    active_setting = self._get_active_user_setting(session, user_id, "Voice")
+                    if active_setting and active_setting.provider:
+                        provider = self._normalize_provider_name(active_setting.provider, "Voice")
+            except Exception as e:
+                _debug_log(f"Error finding active voice provider: {e}", "error")
+
+        if not provider:
+            provider = "kie"
+
+        api_config = self.get_api_config(
+            provider,
+            user_id,
+            category="Voice",
+            requested_model=(llm_config or {}).get("model"),
+            user_credits=user_credits,
+            strict_provider=explicit_provider_selected,
+        )
+
+        if not api_config:
+            api_config = {
+                "provider": "kie",
+                "model": str((llm_config or {}).get("model") or "elevenlabs/text-to-speech-turbo-2-5").strip(),
+                "api_key": settings.KIE_API_KEY,
+                "base_url": "https://api.kie.ai",
+                "config": {},
+            }
+
+        resolved_provider = self._normalize_provider_name((api_config or {}).get("provider"), "Voice") if api_config else None
+        if resolved_provider:
+            provider = resolved_provider
+
+        if api_config is not None and isinstance(provider_options, dict) and provider_options:
+            merged_config = dict((api_config.get("config") or {}))
+            merged_config.update(provider_options)
+            api_config["config"] = merged_config
+
+        selected_strategy = self.USER_API_STRATEGY_FIXED
+        try:
+            selected_strategy = self._normalize_api_strategy(
+                ((api_config or {}).get("config") or {}).get("__api_strategy"),
+                default=self.USER_API_STRATEGY_FIXED,
+            )
+        except Exception:
+            selected_strategy = self.USER_API_STRATEGY_FIXED
+
+        result = await self._generate_with_smart_routing(
+            category="Voice",
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            provider=provider,
+            api_config=api_config,
+            user_id=user_id,
+            reference_image_url=None,
+            duration=duration,
+            requested_model=(llm_config or {}).get("model"),
+            explicit_selection=bool((llm_config or {}).get("provider") or (llm_config or {}).get("model")),
+            allow_priority_fallback_when_explicit=True,
+            fallback_candidate_limit=3,
+            modality="text-to-audio",
+            api_strategy=selected_strategy,
+            primary_retry_limit=3,
+        )
+
+        if result and "url" in result and result["url"]:
+            result["url"] = await asyncio.to_thread(
+                self._download_and_save,
+                result["url"],
+                None,
+                user_id,
+            )
+        if result and result.get("error"):
+            error_provider = result.get("_attempt_provider") if isinstance(result, dict) else None
+            result["error"] = self._vendor_failed_message(error_provider or provider, result.get("error"))
+
         return result
     
     # --- Provider Implementations ---
@@ -3222,6 +3460,37 @@ class MediaGenerationService:
             "prompt": prompt,
         }
 
+        if gen_type == "audio":
+            payload_input["text"] = prompt
+            if tool_conf.get("text") is not None and str(tool_conf.get("text") or "").strip():
+                payload_input["text"] = str(tool_conf.get("text") or "").strip()
+            for key in ["voice", "language_code", "previous_text", "next_text"]:
+                if tool_conf.get(key) is not None and str(tool_conf.get(key)).strip() != "":
+                    payload_input[key] = tool_conf.get(key)
+
+            # Compatibility alias: if caller passes "language", map to docs field "language_code".
+            if tool_conf.get("language") is not None and str(tool_conf.get("language")).strip() != "":
+                payload_input["language_code"] = str(tool_conf.get("language")).strip()
+
+            def _set_float(key: str, min_val: float, max_val: float):
+                raw = tool_conf.get(key)
+                if raw is None or str(raw).strip() == "":
+                    return
+                try:
+                    value = float(raw)
+                    value = max(min_val, min(max_val, value))
+                    payload_input[key] = value
+                except Exception:
+                    pass
+
+            _set_float("stability", 0.0, 1.0)
+            _set_float("similarity_boost", 0.0, 1.0)
+            _set_float("style", 0.0, 1.0)
+            _set_float("speed", 0.7, 1.2)
+
+            if tool_conf.get("timestamps") is not None:
+                payload_input["timestamps"] = bool(tool_conf.get("timestamps"))
+
         raw_ar = str(aspect_ratio or "").strip()
         normalized_ar = self._normalize_aspect_ratio_value(aspect_ratio)
         if use_veo_api and raw_ar.lower() in {"auto", "adaptive"}:
@@ -3242,13 +3511,16 @@ class MediaGenerationService:
                 # Map to ratio enum when available; fallback to auto.
                 kie_image_size = normalized_ar or "auto"
                 payload_input["image_size"] = kie_image_size
-        else:
+        elif gen_type == "video":
             duration_value = 5
             try:
                 duration_value = int(float(duration if duration is not None else 5))
             except Exception:
                 duration_value = 5
             payload_input["duration"] = str(max(1, duration_value))
+
+        if gen_type == "audio":
+            payload_input.pop("duration", None)
 
         resolved_refs: List[str] = []
         if ref_image:
@@ -3685,6 +3957,16 @@ class MediaGenerationService:
                 return False
             return "images size exceeds limit" in text or "image size exceeds limit" in text
 
+        def _is_kie_invalid_voice_error(value: Any) -> bool:
+            text = str(value or "").strip().lower()
+            if not text:
+                return False
+            return (
+                "voice is not within the range of allowed options" in text
+                or "voice is not within the range" in text
+                or "invalid voice" in text
+            )
+
         def _is_veo_fast_model_name(current_model: Any) -> bool:
             return "fast" in str(current_model or "").strip().lower()
 
@@ -3727,7 +4009,8 @@ class MediaGenerationService:
 
         def _post_submit(submit_payload: Dict[str, Any]):
             log_payload = _strip_base64_from_log(submit_payload)
-            _debug_log(f"[KIE_video] Submitting to URL: {submit_url} | Model: {submit_payload.get('model')} | Payload: {log_payload}")
+            kie_tag = "audio" if gen_type == "audio" else ("video" if gen_type == "video" else "image")
+            _debug_log(f"[KIE_{kie_tag}] Submitting to URL: {submit_url} | Model: {submit_payload.get('model')} | Payload: {log_payload}")
             
             logger.info("KIE performing HTTP Request | Method: POST | URL: %s | Payload_model: %s", submit_url, submit_payload.get('model'))
             return requests.post(submit_url, json=submit_payload, headers=headers, timeout=(30, 300), verify=False)
@@ -3899,6 +4182,38 @@ class MediaGenerationService:
                                 break
                     except Exception:
                         continue
+
+        if gen_type == "audio":
+            code_preview = data.get("code")
+            msg_preview = data.get("msg") or data.get("message") or ""
+            voice_value = None
+            if isinstance(submit_payload.get("input"), dict):
+                voice_value = submit_payload.get("input", {}).get("voice")
+            if code_preview not in (None, 200, "200") and _is_kie_invalid_voice_error(msg_preview) and str(voice_value or "").strip():
+                retry_payload = dict(submit_payload or {})
+                retry_input = dict(retry_payload.get("input") or {})
+                old_voice = retry_input.pop("voice", None)
+                retry_payload["input"] = retry_input
+                logger.warning(
+                    "KIE audio voice fallback retry | model=%s old_voice=%s reason=%s",
+                    submitted_model,
+                    old_voice,
+                    msg_preview,
+                )
+                _debug_log(
+                    f"[KIE_audio] voice invalid fallback retry | model={submitted_model} old_voice={old_voice}"
+                )
+                try:
+                    retry_resp = await asyncio.to_thread(_post_submit, retry_payload)
+                    if retry_resp.status_code == 200:
+                        retry_data = retry_resp.json()
+                        retry_code = retry_data.get("code")
+                        if retry_code in (None, 200, "200"):
+                            resp = retry_resp
+                            data = retry_data
+                            submit_payload = retry_payload
+                except Exception as retry_err:
+                    logger.warning("KIE audio voice fallback retry failed: %s", retry_err)
 
         base_metadata = {"provider": "kie", "model": submitted_model, "prompt": prompt}
 
@@ -4198,11 +4513,53 @@ class MediaGenerationService:
 
              response = requests.get(url, stream=True, timeout=600, headers={"User-Agent": "Mozilla/5.0"})
              if response.status_code == 200:
-                ext = ".png"
-                ct = response.headers.get("Content-Type", "").lower()
-                if "video" in ct or ".mp4" in url: ext = ".mp4"
-                elif "jpeg" in ct: ext = ".jpg"
-                elif "webp" in ct: ext = ".webp"
+                from urllib.parse import urlparse
+
+                ct = str(response.headers.get("Content-Type", "")).split(";")[0].strip().lower()
+                path_ext = os.path.splitext(urlparse(url).path or "")[1].lower()
+
+                ext_by_ct = {
+                    "image/png": ".png",
+                    "image/jpeg": ".jpg",
+                    "image/jpg": ".jpg",
+                    "image/webp": ".webp",
+                    "image/gif": ".gif",
+                    "image/bmp": ".bmp",
+                    "video/mp4": ".mp4",
+                    "video/quicktime": ".mov",
+                    "video/webm": ".webm",
+                    "video/x-msvideo": ".avi",
+                    "video/x-matroska": ".mkv",
+                    "audio/mpeg": ".mp3",
+                    "audio/mp3": ".mp3",
+                    "audio/wav": ".wav",
+                    "audio/x-wav": ".wav",
+                    "audio/mp4": ".m4a",
+                    "audio/aac": ".aac",
+                    "audio/flac": ".flac",
+                    "audio/ogg": ".ogg",
+                    "audio/opus": ".opus",
+                }
+
+                allowed_exts = {
+                    ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp",
+                    ".mp4", ".mov", ".webm", ".avi", ".mkv",
+                    ".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus",
+                }
+
+                ext = ext_by_ct.get(ct)
+                if not ext and path_ext in allowed_exts:
+                    ext = path_ext
+
+                if not ext:
+                    if "video" in ct:
+                        ext = ".mp4"
+                    elif "audio" in ct:
+                        ext = ".mp3"
+                    elif "image" in ct:
+                        ext = ".png"
+                    else:
+                        ext = ".bin"
                 
                 filename = f"gen_{uuid.uuid4().hex[:8]}{ext}"
                 if filename_base: filename = f"{filename_base}_{filename}"

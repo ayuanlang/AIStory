@@ -1459,6 +1459,17 @@ export const generateVideo = async (prompt, provider = null, ref_image_url = nul
     return result;
 }
 
+export const generateVoice = async (prompt, provider = null, model = null, options = {}) => {
+    const payload = {
+        prompt,
+        ...options,
+        ...(provider ? { provider } : {}),
+        ...(model ? { model } : {}),
+    };
+    const response = await api.post('/generate/voice', payload);
+    return response.data;
+}
+
 export const deleteProject = async (projectId) => {
     const response = await api.delete(`/projects/${projectId}`);
     return response.data;

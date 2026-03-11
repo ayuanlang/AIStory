@@ -154,6 +154,227 @@ function getResolutionByAspectAndImageSize(aspectRatio, imageSize) {
     return presets[key] || null;
 }
 
+function extractDialogueOnlyFromPrompt(value) {
+    const raw = String(value || '').replace(/\r\n/g, '\n').trim();
+    if (!raw) return '';
+
+    const picked = [];
+    const seen = new Set();
+    const actionNarrativeHints = [
+        /向后|向前|转身|冲向|走向|跑向|扑向|跌倒|摔倒|倒地|抓起|扔|推开|拉住|退回|冲进|冲出|掏出|举起|放下|拿起/i,
+        /camera|镜头|画面|特写|远景|中景|俯拍|仰拍|切到|切换|运镜/i,
+        /背景|场景|环境|光线|氛围|动作|表情|神态/i,
+    ];
+
+    const isLikelySpokenLine = (text) => {
+        const stable = String(text || '').replace(/\s+/g, ' ').trim();
+        if (!stable) return false;
+        if (/^[\[(（【].*[\])）】]$/.test(stable)) return false;
+        if (stable.length < 2) return false;
+
+        // Quoted segments are strong speech signals.
+        if (/["“”'‘’「」『』]/.test(stable)) return true;
+
+        // Filter obvious narrative/action description lines.
+        if (actionNarrativeHints.some((pattern) => pattern.test(stable))) {
+            // Allow if line still looks like direct speech sentence.
+            if (!/[!?！？]$/.test(stable) && !/我|你|他|她|它|我们|你们|他们|她们/.test(stable)) {
+                return false;
+            }
+        }
+
+        // Spoken text commonly ends with sentence punctuation.
+        if (/[。.!?！？]$/.test(stable)) return true;
+
+        // Imperative/interjection style short lines.
+        if (stable.length <= 40 && /快|别|不要|住手|滚|闭嘴|听着|救命|该死|停下/.test(stable)) return true;
+
+        return false;
+    };
+
+    const pushSegment = (segment) => {
+        const text = String(segment || '').replace(/\s+/g, ' ').trim();
+        if (!text) return;
+        if (!isLikelySpokenLine(text)) return;
+        const key = text.toLowerCase();
+        if (seen.has(key)) return;
+        seen.add(key);
+        picked.push(text);
+    };
+
+    const quotePatterns = [
+        /"([^"\n]{1,400})"/g,
+        /“([^”\n]{1,400})”/g,
+        /‘([^’\n]{1,400})’/g,
+        /「([^」\n]{1,400})」/g,
+        /『([^』\n]{1,400})』/g,
+    ];
+    quotePatterns.forEach((pattern) => {
+        let match;
+        while ((match = pattern.exec(raw)) !== null) {
+            pushSegment(match[1]);
+        }
+    });
+
+    const lines = raw.split('\n').map((line) => String(line || '').trim()).filter(Boolean);
+    lines.forEach((line) => {
+        const tagged = line.match(/(?:^|\s)(?:dialogue|line|lines|对白|台词)\s*[:：]\s*(.+)$/i);
+        if (tagged && tagged[1]) {
+            pushSegment(tagged[1]);
+            return;
+        }
+
+        const speakerLine = line.match(/^[^:：\n]{1,30}[:：]\s*(.+)$/);
+        if (speakerLine && speakerLine[1]) {
+            pushSegment(speakerLine[1]);
+        }
+    });
+
+    return picked.join('\n');
+}
+
+function inferLanguageCodeFromProjectLanguage(value, uiLang = 'en') {
+    const raw = String(value || '').trim().toLowerCase();
+    if (!raw) {
+        return String(uiLang || '').toLowerCase().startsWith('zh') ? 'zh' : 'en';
+    }
+    if (/中文|汉语|汉语普通话|mandarin|chinese|\bzh\b/.test(raw)) return 'zh';
+    if (/english|英文|英语|\ben\b/.test(raw)) return 'en';
+    if (/japanese|日语|日本语|\bja\b/.test(raw)) return 'ja';
+    if (/korean|韩语|한국어|\bko\b/.test(raw)) return 'ko';
+    if (/spanish|espa[ñn]ol|西班牙语|\bes\b/.test(raw)) return 'es';
+    if (/french|fran[çc]ais|法语|\bfr\b/.test(raw)) return 'fr';
+    if (/german|deutsch|德语|\bde\b/.test(raw)) return 'de';
+    if (/italian|italiano|意大利语|\bit\b/.test(raw)) return 'it';
+    if (/portuguese|portugu[eê]s|葡萄牙语|\bpt\b/.test(raw)) return 'pt';
+    if (/russian|русский|俄语|\bru\b/.test(raw)) return 'ru';
+    if (/arabic|العربية|阿拉伯语|\bar\b/.test(raw)) return 'ar';
+    if (/hindi|हिन्दी|印地语|\bhi\b/.test(raw)) return 'hi';
+    return String(uiLang || '').toLowerCase().startsWith('zh') ? 'zh' : 'en';
+}
+
+function buildVoicePromptWithEntityContext(videoPrompt, entityList = [], projectLanguage = '', uiLang = 'en') {
+    const dialogueOnly = extractDialogueOnlyFromPrompt(videoPrompt);
+    if (!dialogueOnly) {
+        return {
+            dialogueOnly: '',
+            voicePrompt: '',
+            matchedEntities: [],
+            languageCode: inferLanguageCodeFromProjectLanguage(projectLanguage, uiLang),
+        };
+    }
+
+    const sourceText = String(videoPrompt || '');
+    const normalizedSource = normalizeEntityToken(sourceText);
+    const tokens = new Set();
+
+    const addToken = (value) => {
+        const token = normalizeEntityToken(value);
+        if (!token) return;
+        tokens.add(token);
+    };
+
+    [
+        /\[([\s\S]+?)\]/g,
+        /\{([\s\S]+?)\}/g,
+        /【([\s\S]+?)】/g,
+        /｛([\s\S]+?)｝/g,
+        /(?:^|[\s,，;；])(@[^\s,，;；\]\[\(\)（）\{\}【】]+)/g,
+    ].forEach((regex) => {
+        regex.lastIndex = 0;
+        let matched;
+        while ((matched = regex.exec(sourceText)) !== null) {
+            addToken(matched?.[1] || '');
+        }
+    });
+
+    const speakerRegex = /^[^:：\n]{1,30}[:：]\s*/;
+    sourceText
+        .split(/\r?\n/)
+        .map((line) => String(line || '').trim())
+        .forEach((line) => {
+            const matched = line.match(speakerRegex);
+            if (matched) {
+                addToken(String(matched[0] || '').replace(/[:：]\s*$/, ''));
+            }
+        });
+
+    dialogueOnly
+        .split(/\r?\n/)
+        .map((line) => String(line || '').trim())
+        .forEach((line) => {
+            const matched = line.match(speakerRegex);
+            if (matched) {
+                addToken(String(matched[0] || '').replace(/[:：]\s*$/, ''));
+            }
+        });
+
+    const matchedEntities = [];
+    const seenEntityIds = new Set();
+    (Array.isArray(entityList) ? entityList : []).forEach((entity) => {
+        const id = String(entity?.id || '').trim();
+        const nameCn = normalizeEntityToken(entity?.name || '');
+        const nameEn = normalizeEntityToken(entity?.name_en || '');
+
+        const explicitMatched = Array.from(tokens).some((token) => token === nameCn || (nameEn && token === nameEn));
+        const fuzzyMatched = (!explicitMatched && nameCn && nameCn.length >= 2 && normalizedSource.includes(nameCn))
+            || (!explicitMatched && nameEn && nameEn.length >= 2 && normalizedSource.includes(nameEn));
+
+        if (!explicitMatched && !fuzzyMatched) return;
+        if (id && seenEntityIds.has(id)) return;
+
+        if (id) seenEntityIds.add(id);
+        matchedEntities.push(entity);
+    });
+
+    if (matchedEntities.length === 0) {
+        const languageCode = inferLanguageCodeFromProjectLanguage(projectLanguage, uiLang);
+        const languageHint = String(projectLanguage || '').trim() || languageCode;
+        return {
+            dialogueOnly,
+            voicePrompt: [
+                dialogueOnly,
+                '[Project Language Requirement]',
+                `project_language: ${languageHint}`,
+                `language_code: ${languageCode}`,
+                `You MUST configure TTS parameters with language_code='${languageCode}' and keep narration strictly in that language.`,
+            ].join('\n'),
+            matchedEntities: [],
+            languageCode,
+        };
+    }
+
+    const contextLines = matchedEntities.map((entity, idx) => {
+        const displayName = String(entity?.name_en || entity?.name || `Character ${idx + 1}`).trim();
+        const promptEn = String(entity?.generation_prompt_en || entity?.generation_prompt_cn || '').trim();
+        if (promptEn) {
+            return `Character ${idx + 1}: ${displayName} | Prompt EN: ${promptEn}`;
+        }
+        return `Character ${idx + 1}: ${displayName}`;
+    });
+
+    const languageCode = inferLanguageCodeFromProjectLanguage(projectLanguage, uiLang);
+    const languageHint = String(projectLanguage || '').trim() || languageCode;
+
+    const voicePrompt = [
+        dialogueOnly,
+        '[Project Language Requirement]',
+        `project_language: ${languageHint}`,
+        `language_code: ${languageCode}`,
+        `You MUST configure TTS parameters with language_code='${languageCode}' and keep narration strictly in that language.`,
+        '[Character Voice Context]',
+        ...contextLines,
+        'Infer speaker voice parameters from the context above, especially age and gender cues.',
+    ].join('\n');
+
+    return {
+        dialogueOnly,
+        voicePrompt,
+        matchedEntities,
+        languageCode,
+    };
+}
+
 const buildEpisodeDisplayLabel = ({ episodeNumber, title, fallbackNumber } = {}) => {
     const directNumber = Number(episodeNumber);
     const fallback = Number(fallbackNumber);
@@ -199,6 +420,7 @@ import {
     deleteAllEntities,
     generateImage,
     generateVideo,
+    generateVoice,
     fetchAssets, 
     generateSceneShots,
     fetchSceneShotsPrompt,
@@ -16592,6 +16814,30 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         }
     }, [editingShot, onLog, persistEditingShotUpdates, projectId, setShotGeneratingState, t]);
 
+    const isVoiceoverSyncEnabled = useMemo(() => {
+        try {
+            const tech = JSON.parse(editingShot?.technical_notes || '{}');
+            return Boolean(tech?.video_generate_voiceover);
+        } catch (e) {
+            return false;
+        }
+    }, [editingShot?.technical_notes]);
+
+    const setVoiceoverSyncEnabled = useCallback((enabled) => {
+        setEditingShot((prev) => {
+            if (!prev) return prev;
+            let tech = {};
+            try {
+                tech = JSON.parse(prev.technical_notes || '{}');
+                if (!tech || typeof tech !== 'object') tech = {};
+            } catch (e) {
+                tech = {};
+            }
+            tech.video_generate_voiceover = Boolean(enabled);
+            return { ...prev, technical_notes: JSON.stringify(tech) };
+        });
+    }, []);
+
     const handleGenerateVideo = async (promptOverride = null) => {
         if (!editingShot) return;
         const targetShotId = editingShot.id;
@@ -16720,20 +16966,75 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 'info'
             );
 
-            const res = await generateVideo(finalPrompt, null, apiRefImageUrl, apiLastFrameUrl, durParam, {
-                project_id: projectId,
-                shot_id: targetShotId,
-                shot_number: editingShot.shot_id,
-                shot_name: editingShot.shot_name,
-                prompt_language: resolvedPromptSubmitLang,
-                asset_type: 'video',
-                negative_prompt: buildEntityNegativePrompt(rawPrompt, null, entities),
-                on_job_created: (jobId) => {
-                    createdVideoJobId = String(jobId || '').trim();
-                    setPendingVideoJob(targetShotId, jobId);
-                },
-            }, apiKeyframes);
-            if (res && res.url) {
+            let videoTaskPromise = null;
+            try {
+                videoTaskPromise = generateVideo(finalPrompt, null, apiRefImageUrl, apiLastFrameUrl, durParam, {
+                    project_id: projectId,
+                    shot_id: targetShotId,
+                    shot_number: editingShot.shot_id,
+                    shot_name: editingShot.shot_name,
+                    prompt_language: resolvedPromptSubmitLang,
+                    asset_type: 'video',
+                    negative_prompt: buildEntityNegativePrompt(rawPrompt, null, entities),
+                    on_job_created: (jobId) => {
+                        createdVideoJobId = String(jobId || '').trim();
+                        setPendingVideoJob(targetShotId, jobId);
+                    },
+                }, apiKeyframes);
+                onLog?.(t('视频请求已发起', 'Video request dispatched'), 'info');
+            } catch (videoDispatchError) {
+                onLog?.(`${t('视频请求发起失败', 'Video request dispatch failed')}: ${videoDispatchError?.message || 'unknown error'}`, 'error');
+                throw videoDispatchError;
+            }
+
+            const shouldGenerateVoiceover = Boolean(tech.video_generate_voiceover);
+            let voiceTaskPromise = null;
+            let usedVoicePrompt = '';
+            if (shouldGenerateVoiceover) {
+                const projectLanguage = String(
+                    activeEpisode?.episode_info?.e_global_info?.language
+                    || activeEpisode?.episode_info?.language
+                    || project?.global_info?.language
+                    || ''
+                ).trim();
+                const voiceBuild = buildVoicePromptWithEntityContext(finalPrompt, entities, projectLanguage, uiLang);
+                usedVoicePrompt = String(voiceBuild.voicePrompt || '').trim();
+                if (!usedVoicePrompt) {
+                    onLog?.(t('未检测到对白，已跳过配音生成', 'No dialogue detected, skipped voiceover generation'), 'warning');
+                } else {
+                    onLog?.(`${t('配音语言约束', 'Voice language constraint')}: ${voiceBuild.languageCode}`, 'info');
+                    if (Array.isArray(voiceBuild.matchedEntities) && voiceBuild.matchedEntities.length > 0) {
+                        const names = voiceBuild.matchedEntities
+                            .map((entity) => String(entity?.name_en || entity?.name || '').trim())
+                            .filter(Boolean)
+                            .join(', ');
+                        onLog?.(`${t('配音角色识别', 'Voice role context')}: ${names}`, 'info');
+                    }
+                    onLog?.(t('开始生成配音...', 'Generating voiceover...'), 'info');
+                    voiceTaskPromise = generateVoice(usedVoicePrompt, null, null, {
+                        project_id: projectId,
+                        shot_id: targetShotId,
+                        shot_number: editingShot.shot_id,
+                        shot_name: editingShot.shot_name,
+                        asset_type: 'voiceover',
+                        use_llm_param_planning: true,
+                        language_code: voiceBuild.languageCode,
+                        project_language: projectLanguage || voiceBuild.languageCode,
+                    });
+                }
+            }
+
+            if (shouldGenerateVoiceover) {
+                onLog?.(t('视频与配音已并发发起', 'Video and voiceover requests dispatched concurrently'), 'info');
+            }
+
+            const [videoSettled, voiceSettled] = await Promise.allSettled([
+                videoTaskPromise,
+                voiceTaskPromise || Promise.resolve(null),
+            ]);
+
+            if (videoSettled.status === 'fulfilled' && videoSettled.value && videoSettled.value.url) {
+                const res = videoSettled.value;
                 clearPendingVideoJob(targetShotId);
                 const newData = { video_url: res.url, prompt: rawPrompt };
                 
@@ -16756,6 +17057,48 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
                 // 3. Refresh asset metadata so resolution/aspect_ratio show immediately
                 refreshShotAssetsMeta();
+            }
+
+            if (voiceTaskPromise) {
+                if (voiceSettled.status === 'fulfilled') {
+                    const voiceRes = voiceSettled.value;
+                    const voiceUrl = String(voiceRes?.url || '').trim();
+                    if (voiceUrl) {
+                        const persistedVoicePrompt = usedVoicePrompt || extractDialogueOnlyFromPrompt(finalPrompt) || finalPrompt;
+                        const nextTech = { ...tech, voiceover_url: voiceUrl, voiceover_prompt: persistedVoicePrompt };
+                        if (voiceRes?.metadata && typeof voiceRes.metadata === 'object') {
+                            nextTech.voiceover_metadata = voiceRes.metadata;
+                        }
+                        const voiceUpdate = { technical_notes: JSON.stringify(nextTech) };
+                        setEditingShot(prev => {
+                            if (!prev || prev.id !== targetShotId) return prev;
+                            return { ...prev, ...voiceUpdate };
+                        });
+
+                        // Backend /generate/voice already persists shot technical notes,
+                        // including planning fields; avoid racing overwrite from stale local tech.
+                        refreshShotAssetsMeta();
+                        onLog?.(t('配音生成完成', 'Voiceover generated'), 'success');
+                    } else {
+                        onLog?.(t('配音生成完成但未返回音频 URL', 'Voiceover completed but no audio URL returned'), 'warning');
+                    }
+                } else {
+                    const voiceErr = voiceSettled.reason;
+                    const detail = voiceErr?.response?.data?.detail || voiceErr?.message || 'unknown error';
+                    onLog?.(`${t('配音生成失败', 'Voiceover generation failed')}: ${detail}`, 'error');
+                }
+            }
+
+            if (videoSettled.status === 'rejected') {
+                const e = videoSettled.reason;
+                if (createdVideoJobId && isClientInterruptionError(e)) {
+                    onLog?.('Video job is still running on server; it will auto-resume when you return.', 'warning');
+                    showNotification('Video job continues in background.', 'info');
+                } else {
+                    clearPendingVideoJob(targetShotId);
+                    onLog?.(`Generation failed: ${e?.message || 'unknown error'}`, 'error');
+                    showNotification(`Generation failed: ${e?.message || 'unknown error'}`, 'error');
+                }
             }
         } catch (e) {
              if (createdVideoJobId && isClientInterruptionError(e)) {
@@ -17354,9 +17697,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                         <div className="flex justify-between items-center">
                                             <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
                                                 {t('起始帧', 'Start Frame')}
-                                                <span className={`text-[9px] px-1.5 py-0.5 rounded border font-mono normal-case ${sourceBadgeClass(activeSources.Image)}`}>
-                                                    {t('来源', 'Source')}: {sourceBadgeText(activeSources.Image)}
-                                                </span>
                                             </div>
                                             <div className="flex gap-1">
                                                 <button
@@ -17486,9 +17826,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                         <div className="flex justify-between items-center">
                                             <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
                                                 {t('结束帧', 'End Frame')}
-                                                <span className={`text-[9px] px-1.5 py-0.5 rounded border font-mono normal-case ${sourceBadgeClass(activeSources.Image)}`}>
-                                                    {t('来源', 'Source')}: {sourceBadgeText(activeSources.Image)}
-                                                </span>
                                             </div>
                                             <div className="flex gap-1">
                                                 <button
@@ -17638,12 +17975,18 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                         <div className="flex justify-between items-center">
                                             <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
                                                 {t('最终视频', 'Final Video')}
-                                                <span className={`text-[9px] px-1.5 py-0.5 rounded border font-mono normal-case ${sourceBadgeClass(activeSources.Video)}`}>
-                                                    {t('来源', 'Source')}: {sourceBadgeText(activeSources.Video)}
-                                                </span>
                                             </div>
                                             
                                             <div className="flex items-center gap-2">
+                                                <label className="inline-flex items-center gap-1.5 text-[10px] text-white/80 whitespace-nowrap">
+                                                    <input
+                                                        type="checkbox"
+                                                        className="accent-sky-400"
+                                                        checked={isVoiceoverSyncEnabled}
+                                                        onChange={(e) => setVoiceoverSyncEnabled(e.target.checked)}
+                                                    />
+                                                    {t('同时生成配音', 'Generate voiceover together')}
+                                                </label>
                                                 <button
                                                     onClick={() => openAssetDetailModal('video')}
                                                     className="bg-white/10 hover:bg-white/20 text-[10px] px-2 py-0.5 rounded flex items-center gap-1 transition-colors"
@@ -17706,7 +18049,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 </button>
                                             </div>
                                         </div>
-                                        
+
                                         <div 
                                             className="aspect-video bg-black rounded border border-white/10 relative group overflow-hidden cursor-pointer flex items-center justify-center"
                                             onClick={() => openAssetDetailModal('video')}
@@ -17733,6 +18076,19 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                             )}
                                              {(editingShot.video_url) && <div className="absolute inset-0 flex items-center justify-center pointer-events-none group-hover:bg-black/10"><Maximize2 className="text-white opacity-0 group-hover:opacity-100 drop-shadow-md"/></div>}
                                         </div>
+                                        {(() => {
+                                            let voiceoverUrl = '';
+                                            try {
+                                                voiceoverUrl = String(JSON.parse(editingShot.technical_notes || '{}')?.voiceover_url || '').trim();
+                                            } catch (e) {}
+                                            if (!voiceoverUrl) return null;
+                                            return (
+                                                <div className="rounded border border-white/10 bg-black/20 p-2">
+                                                    <div className="text-[10px] uppercase font-bold text-muted-foreground mb-1">{t('配音预览', 'Voiceover Preview')}</div>
+                                                    <audio src={getFullUrl(voiceoverUrl)} controls className="w-full" />
+                                                </div>
+                                            );
+                                        })()}
 
                                         <textarea
                                             className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[60px]"
@@ -18092,9 +18448,9 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 const linkedAssetDetail = buildShotAssetDetail(linkedAsset, detailType, detailUrl);
                                                 const linkedAssetMeta = linkedAssetDetail.rawMeta;
 
-                                                const renderAssetMetaPanel = () => (
+                                                const renderAssetMetaPanel = (assetDetail = linkedAssetDetail, rawMeta = linkedAssetMeta, titleText = t('资产元数据', 'Asset Metadata')) => (
                                                     <div className="space-y-2 rounded-lg border border-white/10 bg-black/30 p-3">
-                                                        <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('资产元数据', 'Asset Metadata')}</div>
+                                                        <div className="text-[11px] text-muted-foreground uppercase font-bold">{titleText}</div>
                                                         {shotAssetsMetaLoading && (
                                                             <div className="text-xs text-muted-foreground flex items-center gap-1">
                                                                 <Loader2 className="w-3 h-3 animate-spin" />
@@ -18104,54 +18460,54 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                         <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
                                                             <div>
                                                                 <div className="text-[10px] text-muted-foreground uppercase">{t('分辨率', 'Resolution')}</div>
-                                                                <div className="text-white/90">{linkedAssetDetail.resolution || '-'}</div>
+                                                                <div className="text-white/90">{assetDetail.resolution || '-'}</div>
                                                             </div>
                                                             <div>
                                                                 <div className="text-[10px] text-muted-foreground uppercase">{t('画幅比', 'Aspect Ratio')}</div>
-                                                                <div className="text-white/90">{linkedAssetDetail.aspectRatio || '-'}</div>
+                                                                <div className="text-white/90">{assetDetail.aspectRatio || '-'}</div>
                                                             </div>
                                                             <div>
                                                                 <div className="text-[10px] text-muted-foreground uppercase">{t('文件大小', 'File Size')}</div>
-                                                                <div className="text-white/90">{linkedAssetDetail.fileSize || '-'}</div>
+                                                                <div className="text-white/90">{assetDetail.fileSize || '-'}</div>
                                                             </div>
                                                             <div>
                                                                 <div className="text-[10px] text-muted-foreground uppercase">{t('格式', 'Format')}</div>
-                                                                <div className="text-white/90">{linkedAssetDetail.format || '-'}</div>
+                                                                <div className="text-white/90">{assetDetail.format || '-'}</div>
                                                             </div>
                                                             <div>
                                                                 <div className="text-[10px] text-muted-foreground uppercase">{t('时长', 'Duration')}</div>
-                                                                <div className="text-white/90">{linkedAssetDetail.duration || '-'}</div>
+                                                                <div className="text-white/90">{assetDetail.duration || '-'}</div>
                                                             </div>
                                                             <div>
                                                                 <div className="text-[10px] text-muted-foreground uppercase">{t('来源', 'Source')}</div>
-                                                                <div className="text-white/90">{linkedAssetDetail.source || '-'}</div>
+                                                                <div className="text-white/90">{assetDetail.source || '-'}</div>
                                                             </div>
                                                             <div>
                                                                 <div className="text-[10px] text-muted-foreground uppercase">Provider</div>
                                                                 <div className="text-white/90">
-                                                                    {linkedAssetDetail.providerAlias || linkedAssetDetail.provider || '-'}
-                                                                    {linkedAssetDetail.providerAlias && linkedAssetDetail.provider ? (
-                                                                        <span className="ml-1 text-[10px] text-muted-foreground font-mono">({linkedAssetDetail.provider})</span>
+                                                                    {assetDetail.providerAlias || assetDetail.provider || '-'}
+                                                                    {assetDetail.providerAlias && assetDetail.provider ? (
+                                                                        <span className="ml-1 text-[10px] text-muted-foreground font-mono">({assetDetail.provider})</span>
                                                                     ) : null}
                                                                 </div>
                                                             </div>
                                                             <div>
                                                                 <div className="text-[10px] text-muted-foreground uppercase">Model</div>
-                                                                <div className="text-white/90">{linkedAssetDetail.model || '-'}</div>
+                                                                <div className="text-white/90">{assetDetail.model || '-'}</div>
                                                             </div>
                                                             <div className="col-span-2">
                                                                 <div className="text-[10px] text-muted-foreground uppercase">{t('文件名', 'Filename')}</div>
-                                                                <div className="text-white/90 break-all">{linkedAssetDetail.filename || linkedAssetDetail.url.split('/').pop() || '-'}</div>
+                                                                <div className="text-white/90 break-all">{assetDetail.filename || assetDetail.url.split('/').pop() || '-'}</div>
                                                             </div>
                                                             <div className="col-span-2">
                                                                 <div className="text-[10px] text-muted-foreground uppercase">{t('创建时间', 'Created At')}</div>
-                                                                <div className="text-white/90">{linkedAssetDetail.createdAt || '-'}</div>
+                                                                <div className="text-white/90">{assetDetail.createdAt || '-'}</div>
                                                             </div>
                                                         </div>
-                                                        {linkedAssetMeta && Object.keys(linkedAssetMeta).length > 0 && (
+                                                        {rawMeta && Object.keys(rawMeta).length > 0 && (
                                                             <details className="pt-1">
                                                                 <summary className="text-[10px] uppercase text-muted-foreground cursor-pointer">{t('原始元数据', 'Raw Metadata')}</summary>
-                                                                <pre className="mt-2 p-2 rounded border border-white/10 bg-black/40 text-[10px] text-gray-300 overflow-auto max-h-36">{JSON.stringify(linkedAssetMeta, null, 2)}</pre>
+                                                                <pre className="mt-2 p-2 rounded border border-white/10 bg-black/40 text-[10px] text-gray-300 overflow-auto max-h-36">{JSON.stringify(rawMeta, null, 2)}</pre>
                                                             </details>
                                                         )}
                                                     </div>
@@ -18295,6 +18651,15 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 if (modalType === 'video') {
                                                     const pendingVideoJobId = getPendingVideoJobId(editingShot?.id);
                                                     const isStoppingCurrentVideo = Boolean(stoppingVideoByShot[String(editingShot?.id || '')]);
+                                                    const voiceoverUrl = String(tech.voiceover_url || '').trim();
+                                                    const voiceAsset = resolveShotAssetByUrl(voiceoverUrl, 'audio');
+                                                    const voiceAssetDetail = buildShotAssetDetail(voiceAsset, 'audio', voiceoverUrl);
+                                                    const voiceAssetMeta = voiceAssetDetail.rawMeta;
+                                                    const voicePersistedMeta = (tech.voiceover_metadata && typeof tech.voiceover_metadata === 'object') ? tech.voiceover_metadata : null;
+                                                    const voicePlanMeta = (tech.voiceover_plan && typeof tech.voiceover_plan === 'object') ? tech.voiceover_plan : null;
+                                                    const hasVoiceAssetMeta = Boolean(voiceAssetMeta && Object.keys(voiceAssetMeta).length > 0);
+                                                    const hasVoicePersistedMeta = Boolean(voicePersistedMeta && Object.keys(voicePersistedMeta).length > 0);
+                                                    const resolvedVoiceMeta = hasVoiceAssetMeta ? voiceAssetMeta : voicePersistedMeta;
                                                     return (
                                                         <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_1fr] gap-4">
                                                             <div className="space-y-3">
@@ -18308,8 +18673,22 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                     {editingShot.video_url ? <video src={getFullUrl(editingShot.video_url)} controls className="max-w-full max-h-full object-contain" /> : <Video className="w-8 h-8 opacity-30" />}
                                                                 </div>
                                                                 <div className="text-xs text-muted-foreground break-all">{t('视频 URL', 'Video URL')}: {editingShot.video_url || '-'}</div>
+                                                                <div className="text-xs text-muted-foreground break-all">{t('配音 URL', 'Voice URL')}: {String(tech.voiceover_url || '') || '-'}</div>
                                                                 <div className="text-xs text-muted-foreground">{t('时长', 'Duration')}: {editingShot.duration || '5'}</div>
                                                                 <div className="text-xs text-muted-foreground">{t('模式', 'Mode')}: {tech.video_mode_unified || tech.video_gen_mode || 'start'}</div>
+                                                                {voiceoverUrl && (
+                                                                    <div className="space-y-2 rounded-lg border border-white/10 bg-black/30 p-3">
+                                                                        <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('配音预览', 'Voiceover Preview')}</div>
+                                                                        <audio src={getFullUrl(voiceoverUrl)} controls className="w-full" />
+                                                                    </div>
+                                                                )}
+                                                                {voiceoverUrl && renderAssetMetaPanel(voiceAssetDetail, resolvedVoiceMeta, t('配音元信息', 'Voice Metadata'))}
+                                                                {voicePlanMeta && !hasVoiceAssetMeta && !hasVoicePersistedMeta && (
+                                                                    <div className="space-y-2 rounded-lg border border-white/10 bg-black/30 p-3">
+                                                                        <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('配音规划参数', 'Voice Planning Metadata')}</div>
+                                                                        <pre className="mt-1 p-2 rounded border border-white/10 bg-black/40 text-[10px] text-gray-300 overflow-auto max-h-36">{JSON.stringify(voicePlanMeta, null, 2)}</pre>
+                                                                    </div>
+                                                                )}
                                                                 {renderAssetMetaPanel()}
                                                             </div>
                                                             <div className="space-y-3">
@@ -18330,6 +18709,15 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                         {isStoppingCurrentVideo ? t('停止中...', 'Stopping...') : t('强制停止', 'Force Stop')}
                                                                     </button>
                                                                 </div>
+                                                                <label className="inline-flex items-center gap-2 text-xs text-white/80">
+                                                                    <input
+                                                                        type="checkbox"
+                                                                        className="accent-sky-400"
+                                                                        checked={isVoiceoverSyncEnabled}
+                                                                        onChange={(e) => setVoiceoverSyncEnabled(e.target.checked)}
+                                                                    />
+                                                                    {t('同时生成配音', 'Generate voiceover together')}
+                                                                </label>
                                                                 <div className="flex items-center justify-between">
                                                                     <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('生成模式', 'Generation Mode')}</div>
                                                                     <select

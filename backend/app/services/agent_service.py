@@ -1573,6 +1573,17 @@ Output ONLY the JSON object now."""
                 ).order_by(SystemAPISetting.id.desc()).first()
 
                 if setting:
+                    logger.warning(
+                        "Agent config resolved candidate | user_id=%s category=%s source=%s setting_id=%s provider=%s model=%s deprecated_col=%s deprecated_effective=%s",
+                        user_id,
+                        resolved_category,
+                        f"system_by_user_provider_model:{target_provider}/{target_model}",
+                        setting.id,
+                        setting.provider,
+                        setting.model,
+                        getattr(setting, "deprecated", None),
+                        self._is_deprecated_system_config(setting.config, getattr(setting, "deprecated", None)),
+                    )
                     if self._is_deprecated_system_config(setting.config, getattr(setting, "deprecated", None)):
                         logger.warning(
                             "Blocked deprecated system api setting | user_id=%s category=%s provider=%s model=%s setting_id=%s",
@@ -1640,9 +1651,29 @@ Output ONLY the JSON object now."""
 
                     sys_fallback = None
                     for cand in sys_candidates:
-                        if self._is_deprecated_system_config(cand.config, getattr(cand, "deprecated", None)):
+                        cand_deprecated = self._is_deprecated_system_config(cand.config, getattr(cand, "deprecated", None))
+                        logger.warning(
+                            "Agent fallback candidate check | user_id=%s category=%s source=%s setting_id=%s provider=%s model=%s deprecated_col=%s deprecated_effective=%s",
+                            user_id,
+                            resolved_category,
+                            selection_source,
+                            getattr(cand, "id", None),
+                            getattr(cand, "provider", None),
+                            getattr(cand, "model", None),
+                            getattr(cand, "deprecated", None),
+                            cand_deprecated,
+                        )
+                        if cand_deprecated:
                             continue
                         if not _is_endpoint_compatible(cand.config or {}):
+                            logger.warning(
+                                "Agent fallback candidate skipped by endpoint compatibility | user_id=%s category=%s source=%s setting_id=%s endpoint=%s",
+                                user_id,
+                                resolved_category,
+                                selection_source,
+                                getattr(cand, "id", None),
+                                (cand.config or {}).get("endpoint"),
+                            )
                             continue
                         sys_fallback = cand
                         break
@@ -1727,6 +1758,17 @@ Output ONLY the JSON object now."""
                     )
 
                 if selected:
+                    logger.warning(
+                        "Agent active config resolved candidate | user_id=%s category=%s source=%s setting_id=%s provider=%s model=%s deprecated_col=%s deprecated_effective=%s",
+                        user_id,
+                        resolved_category,
+                        selected_source,
+                        selected.id,
+                        selected.provider,
+                        selected.model,
+                        getattr(selected, "deprecated", None),
+                        self._is_deprecated_system_config(selected.config, getattr(selected, "deprecated", None)),
+                    )
                     if self._is_deprecated_system_config(selected.config, getattr(selected, "deprecated", None)):
                         logger.warning(
                             "Blocked deprecated active system api config | user_id=%s category=%s provider=%s model=%s setting_id=%s",

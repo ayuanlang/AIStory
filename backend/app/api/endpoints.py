@@ -12209,6 +12209,21 @@ class VideoGenerationRequest(BaseModel):
     callBackUrl: Optional[str] = None
 
 
+class VoiceGenerationRequest(BaseModel):
+    prompt: str
+    negative_prompt: Optional[str] = None
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    project_id: Optional[int] = None
+    shot_id: Optional[int] = None
+    shot_number: Optional[str] = None
+    shot_name: Optional[str] = None
+    asset_type: Optional[str] = None
+    use_llm_param_planning: Optional[bool] = False
+    language_code: Optional[str] = None
+    project_language: Optional[str] = None
+
+
 def _build_runtime_llm_config(provider: Optional[str], model: Optional[str], media_type: str = "media") -> Optional[Dict[str, str]]:
     provider_text = str(provider or "").strip()
     model_text = str(model or "").strip()
@@ -12267,6 +12282,297 @@ def _build_video_provider_options(req: VideoGenerationRequest) -> Dict[str, Any]
         options["kling_elements"] = req.kling_elements
 
     return options
+
+
+def _extract_json_object_from_text(raw_text: Any) -> Dict[str, Any]:
+    text = str(raw_text or "").strip()
+    if not text:
+        return {}
+
+    clean = text
+    if clean.startswith("```"):
+        lines = clean.split("\n")
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        clean = "\n".join(lines).strip()
+
+    try:
+        parsed = json.loads(clean)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+
+    start = clean.find("{")
+    end = clean.rfind("}")
+    if start >= 0 and end > start:
+        candidate = clean[start:end + 1]
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            return {}
+    return {}
+
+
+async def _plan_voice_params_with_llm(user_id: int, video_prompt: str) -> Dict[str, Any]:
+    prompt_text = str(video_prompt or "").strip()
+    if not prompt_text:
+        return {}
+
+    # For voice prompt planning, prefer system-default LLM category config
+    # instead of user-bound provider/model routing.
+    llm_config = agent_service.get_system_default_llm_config(user_id=user_id, category="LLM")
+    planning_category = "LLM"
+
+    if not llm_config or not llm_config.get("api_key"):
+        llm_config = agent_service.get_active_llm_config(user_id, category="LLM")
+        planning_category = "LLM"
+
+    if not llm_config or not llm_config.get("api_key"):
+        return {}
+
+    try:
+        cfg = (llm_config or {}).get("config") if isinstance(llm_config, dict) else {}
+        logger.info(
+            "[GenerateVoice] planning llm config | user_id=%s source=%s setting_id=%s provider=%s model=%s",
+            user_id,
+            (cfg or {}).get("__selection_source") or (cfg or {}).get("__resolved_source") or "unknown",
+            (cfg or {}).get("__resolved_setting_id"),
+            llm_config.get("provider") if isinstance(llm_config, dict) else None,
+            llm_config.get("model") if isinstance(llm_config, dict) else None,
+        )
+    except Exception:
+        pass
+
+    system_prompt = (
+        "You are a TTS planning engine focused on dialogue extraction. Analyze the video prompt and output ONLY one JSON object. "
+        "Do not include markdown, comments, or extra text."
+    )
+    supported_voices_hint = (
+        "Rachel, Aria, Roger, Sarah, Laura, Charlie, George, Callum, River, Liam, Charlotte, Alice, "
+        "Matilda, Will, Jessica, Eric, Chris, Brian, Daniel, Lily, Bill"
+    )
+    user_prompt = (
+        "Generate voice planning params with dialogue extraction as the top priority.\\n"
+        "Rules:\\n"
+        "1) Extract ONLY explicit spoken dialogue lines from the prompt (quoted lines, speaker: line).\n"
+        "2) NEVER convert action/narration into speech. Never paraphrase plot description as dialogue.\n"
+        "3) If no explicit dialogue is present, set text to an empty string.\n"
+        "4) Keep original wording and language of extracted dialogue as much as possible.\n"
+        "5) Voice must be one of the supported names (or a valid official voice id).\n"
+        "6) If uncertain, use conservative defaults: voice=Rachel, stability=0.5, similarity_boost=0.75, style=0, speed=1.0, timestamps=false.\n"
+        "7) language_code should be ISO 639-1 (en/zh/ja/ko/es/fr/de/it/pt/ru/ar/hi etc).\n"
+        "Supported voice names include:\n"
+        f"{supported_voices_hint}\n"
+        "Examples:\n"
+        "- Input: 伊莎贝拉向后跌倒，老板冲进大楼。 -> text: \"\"\n"
+        "- Input: 老板：\"滚出去！\" -> text: \"滚出去！\"\n"
+        "Return JSON schema exactly:\\n"
+        "{\\n"
+        "  \"text\": \"string\",\\n"
+        "  \"voice\": \"string\",\\n"
+        "  \"stability\": \"number 0..1\",\\n"
+        "  \"similarity_boost\": \"number 0..1\",\\n"
+        "  \"style\": \"number 0..1\",\\n"
+        "  \"speed\": \"number 0.7..1.2\",\\n"
+        "  \"timestamps\": \"boolean\",\\n"
+        "  \"previous_text\": \"string\",\\n"
+        "  \"next_text\": \"string\",\\n"
+        "  \"language_code\": \"ISO 639-1 string, e.g. en zh ja\"\\n"
+        "}\\n\\n"
+        f"Video prompt:\\n{prompt_text}"
+    )
+
+    llm_resp = await llm_service.generate_content_with_fallback(
+        user_prompt,
+        system_prompt,
+        llm_config,
+        user_id=user_id,
+        category=planning_category,
+        modality="text",
+    )
+    parsed = _extract_json_object_from_text((llm_resp or {}).get("content"))
+    if not parsed:
+        return {}
+
+    def _pick_text(*keys: str) -> str:
+        for key in keys:
+            val = parsed.get(key)
+            if val is None:
+                continue
+            text = str(val).strip()
+            if text:
+                return text
+        return ""
+
+    normalized: Dict[str, Any] = {}
+    text_value = _pick_text("text", "tts_text", "voice_text", "narration")
+    if text_value:
+        normalized["text"] = text_value
+
+    voice_value = _pick_text("voice", "voice_id")
+    if voice_value:
+        normalized["voice"] = voice_value
+
+    language_code_value = _pick_text("language_code", "language", "lang")
+    if language_code_value:
+        normalized["language_code"] = language_code_value
+
+    for key in ["previous_text", "next_text"]:
+        value = _pick_text(key)
+        if value:
+            normalized[key] = value
+
+    for float_key in ["stability", "similarity_boost", "style", "speed"]:
+        raw = parsed.get(float_key)
+        if raw is None or str(raw).strip() == "":
+            continue
+        try:
+            normalized[float_key] = float(raw)
+        except Exception:
+            pass
+
+    timestamps_raw = parsed.get("timestamps")
+    if timestamps_raw is not None:
+        normalized["timestamps"] = _to_bool(timestamps_raw)
+
+    return normalized
+
+
+_KIE_TTS_DEFAULT_VOICE = "Rachel"
+_KIE_TTS_ALLOWED_VOICES = {
+    "Rachel", "Aria", "Roger", "Sarah", "Laura", "Charlie", "George", "Callum", "River", "Liam",
+    "Charlotte", "Alice", "Matilda", "Will", "Jessica", "Eric", "Chris", "Brian", "Daniel", "Lily", "Bill",
+}
+
+
+def _normalize_kie_voice_name(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+
+    # Accept official custom voice ids (alnum) used by KIE/ElevenLabs voice catalogs.
+    if re.fullmatch(r"[A-Za-z0-9]{18,32}", raw):
+        return raw
+
+    candidates = [
+        raw,
+        raw.split(" - ")[0].strip(),
+        raw.split("|")[0].strip(),
+        raw.split("（")[0].strip(),
+        raw.split("(")[0].strip(),
+    ]
+    for candidate in candidates:
+        if candidate in _KIE_TTS_ALLOWED_VOICES:
+            return candidate
+
+    return ""
+
+
+def _normalize_language_code(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return ""
+    # Keep main ISO 639-1 code to avoid provider errors on unsupported variants.
+    base = raw.split("-")[0].strip()
+    if re.fullmatch(r"[a-z]{2}", base):
+        return base
+    return ""
+
+
+def _clamp_float(value: Any, min_val: float, max_val: float, default: float) -> float:
+    try:
+        num = float(value)
+    except Exception:
+        num = float(default)
+    return max(min_val, min(max_val, num))
+
+
+def _extract_dialogue_text_for_tts(value: Any) -> str:
+    raw = str(value or "").replace("\r\n", "\n").strip()
+    if not raw:
+        return ""
+
+    picked: List[str] = []
+    seen = set()
+
+    def _push(text_like: Any) -> None:
+        text = str(text_like or "").strip()
+        if not text:
+            return
+        stable = re.sub(r"\s+", " ", text).strip()
+        if not stable:
+            return
+        key = stable.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        picked.append(stable)
+
+    quote_patterns = [
+        r'"([^"\n]{1,400})"',
+        r'“([^”\n]{1,400})”',
+        r'‘([^’\n]{1,400})’',
+        r'「([^」\n]{1,400})」',
+        r'『([^』\n]{1,400})』',
+    ]
+    for pattern in quote_patterns:
+        for m in re.finditer(pattern, raw):
+            _push(m.group(1))
+
+    for line in [str(x or "").strip() for x in raw.split("\n") if str(x or "").strip()]:
+        tagged = re.search(r'(?:^|\s)(?:dialogue|line|lines|对白|台词)\s*[:：]\s*(.+)$', line, re.IGNORECASE)
+        if tagged and tagged.group(1):
+            _push(tagged.group(1))
+            continue
+
+        speaker = re.match(r'^[^:：\n]{1,30}[:：]\s*(.+)$', line)
+        if speaker and speaker.group(1):
+            _push(speaker.group(1))
+
+    return "\n".join(picked)
+
+
+def _sanitize_kie_tts_plan(raw_plan: Dict[str, Any], fallback_text: str) -> Dict[str, Any]:
+    plan = raw_plan if isinstance(raw_plan, dict) else {}
+    out: Dict[str, Any] = {}
+
+    fallback_dialogue = _extract_dialogue_text_for_tts(fallback_text)
+    planned_text_raw = str(plan.get("text") or "").strip()
+    planned_dialogue_only = _extract_dialogue_text_for_tts(planned_text_raw)
+    text_value = planned_dialogue_only or fallback_dialogue
+    if text_value:
+        out["text"] = text_value[:5000]
+
+    voice_value = _normalize_kie_voice_name(plan.get("voice") or plan.get("voice_id"))
+    out["voice"] = voice_value or _KIE_TTS_DEFAULT_VOICE
+
+    language_code = _normalize_language_code(plan.get("language_code") or plan.get("language") or plan.get("lang"))
+    if language_code:
+        out["language_code"] = language_code
+
+    out["stability"] = _clamp_float(plan.get("stability"), 0.0, 1.0, 0.5)
+    out["similarity_boost"] = _clamp_float(plan.get("similarity_boost"), 0.0, 1.0, 0.75)
+    out["style"] = _clamp_float(plan.get("style"), 0.0, 1.0, 0.0)
+    out["speed"] = _clamp_float(plan.get("speed"), 0.7, 1.2, 1.0)
+
+    if plan.get("timestamps") is None:
+        out["timestamps"] = False
+    else:
+        out["timestamps"] = bool(_to_bool(plan.get("timestamps")))
+
+    previous_text = str(plan.get("previous_text") or "").strip()
+    next_text = str(plan.get("next_text") or "").strip()
+    if previous_text:
+        out["previous_text"] = previous_text[:5000]
+    if next_text:
+        out["next_text"] = next_text[:5000]
+
+    return out
 
 
 class ShotMediaBatchStartRequest(BaseModel):
@@ -12345,6 +12651,7 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
         lower_url = str(url or "").lower()
         is_image = lower_url.endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"))
         is_video = lower_url.endswith((".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"))
+        is_audio = lower_url.endswith((".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus"))
 
         meta = {}
         # Copy known fields
@@ -12524,7 +12831,7 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
 
         asset = Asset(
             user_id=user_id,
-            type="image" if is_image else "video",
+            type=("image" if is_image else ("audio" if is_audio else "video")),
             url=url,
             filename=fname,
             meta_info=meta,
@@ -13667,6 +13974,153 @@ async def generate_video_endpoint(
     return await _run_generate_video(req, current_user, db)
 
 
+@router.post("/generate/voice")
+async def generate_voice_endpoint(
+    req: VoiceGenerationRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        stable_prompt = str(req.prompt or "").strip()
+        if not stable_prompt:
+            raise HTTPException(status_code=400, detail="Voice prompt is empty")
+
+        extracted_dialogue = _extract_dialogue_text_for_tts(stable_prompt)
+
+        provider_options: Dict[str, Any] = {}
+        planned_payload: Dict[str, Any] = {}
+        effective_prompt = stable_prompt
+        explicit_language_code = _normalize_language_code(req.language_code)
+        explicit_project_language = str(req.project_language or "").strip()
+
+        if bool(req.use_llm_param_planning):
+            try:
+                planned_payload = await _plan_voice_params_with_llm(current_user.id, stable_prompt)
+            except Exception as planning_err:
+                logger.warning("[GenerateVoice] LLM planning failed: %s", planning_err)
+                planned_payload = {}
+
+            if planned_payload:
+                raw_planned_text = str((planned_payload or {}).get("text") or "").strip()
+                planned_payload = _sanitize_kie_tts_plan(planned_payload, stable_prompt)
+                planned_text = str(planned_payload.get("text") or "").strip()
+                non_dialogue_text_stripped = bool(raw_planned_text) and (raw_planned_text != planned_text)
+                fallback_dialogue_used = bool(extracted_dialogue) and planned_text == extracted_dialogue
+                logger.warning(
+                    "[GenerateVoice] dialogue extraction | user_id=%s prompt_chars=%s dialogue_chars=%s planned_text_chars=%s fallback_dialogue_used=%s non_dialogue_text_stripped=%s",
+                    current_user.id,
+                    len(stable_prompt),
+                    len(extracted_dialogue),
+                    len(planned_text),
+                    fallback_dialogue_used,
+                    non_dialogue_text_stripped,
+                )
+                if planned_text:
+                    effective_prompt = planned_text
+                for key in [
+                    "text",
+                    "voice",
+                    "language_code",
+                    "stability",
+                    "similarity_boost",
+                    "style",
+                    "speed",
+                    "timestamps",
+                    "previous_text",
+                    "next_text",
+                ]:
+                    if planned_payload.get(key) is not None:
+                        provider_options[key] = planned_payload.get(key)
+            else:
+                logger.warning(
+                    "[GenerateVoice] dialogue extraction | user_id=%s prompt_chars=%s dialogue_chars=%s planned_text_chars=0 fallback_dialogue_used=%s",
+                    current_user.id,
+                    len(stable_prompt),
+                    len(extracted_dialogue),
+                    bool(extracted_dialogue),
+                )
+
+        if explicit_language_code:
+            provider_options["language_code"] = explicit_language_code
+
+        if explicit_project_language:
+            logger.warning(
+                "[GenerateVoice] project language hint | user_id=%s project_language=%s language_code=%s",
+                current_user.id,
+                explicit_project_language,
+                provider_options.get("language_code"),
+            )
+
+        logger.warning(
+            "[GenerateVoice] planned params | user_id=%s voice=%s language_code=%s stability=%s similarity_boost=%s style=%s speed=%s timestamps=%s",
+            current_user.id,
+            provider_options.get("voice"),
+            provider_options.get("language_code"),
+            provider_options.get("stability"),
+            provider_options.get("similarity_boost"),
+            provider_options.get("style"),
+            provider_options.get("speed"),
+            provider_options.get("timestamps"),
+        )
+
+        result = await media_service.generate_voice(
+            prompt=effective_prompt,
+            negative_prompt=req.negative_prompt,
+            llm_config=_build_runtime_llm_config(req.provider, req.model, media_type="voice"),
+            duration=5,
+            provider_options=provider_options,
+            user_id=current_user.id,
+            user_credits=(current_user.credits or 0),
+        )
+
+        if "error" in result:
+            detail = result["error"]
+            if "details" in result:
+                detail = f"{detail}: {result['details']}"
+            raise HTTPException(status_code=400, detail=detail)
+
+        voice_url = str((result or {}).get("url") or "").strip()
+        if not voice_url:
+            raise HTTPException(status_code=400, detail="Voice generation returned empty URL")
+
+        if req.shot_id:
+            shot = db.query(Shot).filter(Shot.id == int(req.shot_id)).first()
+            if shot:
+                tech = {}
+                try:
+                    tech = json.loads(shot.technical_notes or "{}")
+                    if not isinstance(tech, dict):
+                        tech = {}
+                except Exception:
+                    tech = {}
+                tech["voiceover_url"] = voice_url
+                tech["voiceover_prompt"] = effective_prompt
+                if bool(req.use_llm_param_planning):
+                    tech["voiceover_plan"] = planned_payload
+                shot.technical_notes = json.dumps(tech, ensure_ascii=False)
+                db.add(shot)
+                db.commit()
+
+        # Register voice asset so frontend can resolve metadata panels by URL.
+        if voice_url:
+            try:
+                _register_asset_helper(
+                    db,
+                    current_user.id,
+                    voice_url,
+                    req,
+                    (result.get("metadata") if isinstance(result, dict) else None),
+                )
+            except Exception as asset_err:
+                logger.warning("[GenerateVoice] asset registration failed: %s", asset_err)
+
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+
+
 async def _run_generate_video(req: VideoGenerationRequest, current_user: User, db: Session):
     reservation_tx = None
     _is_token_billing = billing_service.is_token_pricing(db, "video_gen", req.provider, req.model)
@@ -13851,6 +14305,14 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
             user_credits=(current_user.credits or 0),
             filename_base=_build_generation_filename_base(req, db),
         )
+        print(
+            "[GenerateVideo][Config] req_provider=%s req_model=%s runtime_llm_config=%s"
+            % (
+                req.provider,
+                req.model,
+                _build_runtime_llm_config(req.provider, req.model, media_type="video"),
+            )
+        )
         if "error" in result:
              detail = result["error"]
              if "details" in result:
@@ -14028,6 +14490,12 @@ async def _run_generate_video_job(job_id: str, user_id: int, req_payload: Dict[s
         )
         raise
     except HTTPException as e:
+        logger.warning(
+            "[VideoJob] failed | job_id=%s user_id=%s detail=%s",
+            job_id,
+            user_id,
+            str(e.detail),
+        )
         _set_video_job(
             job_id,
             status="failed",
@@ -14035,6 +14503,11 @@ async def _run_generate_video_job(job_id: str, user_id: int, req_payload: Dict[s
             error=str(e.detail),
         )
     except Exception as e:
+        logger.exception(
+            "[VideoJob] unexpected failure | job_id=%s user_id=%s",
+            job_id,
+            user_id,
+        )
         _set_video_job(
             job_id,
             status="failed",
