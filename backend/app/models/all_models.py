@@ -2,7 +2,7 @@
 from sqlalchemy import Column, Integer, String, Text, ForeignKey, JSON, Boolean, Float
 from sqlalchemy.orm import relationship
 from app.db.session import Base
-import datetime
+from app.core.time_utils import now_bj_iso
 
 class User(Base):
     __tablename__ = "users"
@@ -45,7 +45,7 @@ class TransactionHistory(Base):
     model = Column(String, nullable=True)
     details = Column(JSON, default={}) # Extra metadata (e.g. prompt length, status)
     
-    created_at = Column(String, default=datetime.datetime.utcnow().isoformat)
+    created_at = Column(String, default=now_bj_iso)
     
     user = relationship("User", back_populates="transactions")
 
@@ -57,7 +57,7 @@ class SystemLog(Base):
     action = Column(String, index=True)
     details = Column(Text, nullable=True)
     ip_address = Column(String, nullable=True)
-    timestamp = Column(String, default=datetime.datetime.utcnow().isoformat)
+    timestamp = Column(String, default=now_bj_iso)
     
     user = relationship("User", back_populates="system_logs")
 
@@ -71,8 +71,8 @@ class Project(Base):
     # script_title, overall_genre, color_tone, borrowed_films, notes
     global_info = Column(JSON, default={})
     
-    created_at = Column(String, default=datetime.datetime.utcnow().isoformat)
-    updated_at = Column(String, default=datetime.datetime.utcnow().isoformat)
+    created_at = Column(String, default=now_bj_iso)
+    updated_at = Column(String, default=now_bj_iso)
     
     owner = relationship("User", back_populates="projects")
     shares = relationship("ProjectShare", back_populates="project", cascade="all, delete-orphan")
@@ -86,7 +86,7 @@ class ProjectShare(Base):
     id = Column(Integer, primary_key=True, index=True)
     project_id = Column(Integer, ForeignKey("projects.id"), index=True, nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
-    created_at = Column(String, default=datetime.datetime.utcnow().isoformat)
+    created_at = Column(String, default=now_bj_iso)
 
     project = relationship("Project", back_populates="shares")
     user = relationship("User", back_populates="shared_projects")
@@ -209,6 +209,7 @@ class Entity(Base):
 
     image_url = Column(String, nullable=True)
     generation_prompt_en = Column(Text, nullable=True)
+    generation_prompt_cn = Column(Text, nullable=True)
     anchor_description = Column(Text, nullable=True)
     
     # Store arbitrary user-defined attributes
@@ -227,7 +228,7 @@ class Asset(Base):
     meta_info = Column(JSON, default={}) # width, height, size, duration, format
     remark = Column(Text, nullable=True)
     
-    created_at = Column(String, default=datetime.datetime.utcnow().isoformat)
+    created_at = Column(String, default=now_bj_iso)
     
     owner = relationship("User", back_populates="assets")
 
@@ -250,38 +251,38 @@ class APISetting(Base):
 
 
 class SystemAPISetting(Base):
-    """系统级 API 模型配置表。
+    """系统�?API 模型配置表�?
 
-    每一行代表一个可用的 AI 模型端点（LLM / Image / Video / Voice / Music 等）。
-    管理员通过后台配置，前端和业务服务按 category + modality 匹配可用模型。
+    每一行代表一个可用的 AI 模型端点（LLM / Image / Video / Voice / Music 等）�?
+    管理员通过后台配置，前端和业务服务�?category + modality 匹配可用模型�?
 
     字段说明:
-      name      — 显示名称，默认 "System Setting"
-      category  — 业务分类: LLM / Image / Video / Voice / Music
-      provider  — 供应商标识: openai / dashscope / volcengine / minimax / kling / siliconflow 等
-      api_key   — API 密钥（多 key 逗号分隔，用于轮询）
-      base_url  — API 基础地址，为空则使用 SDK 默认值
-      model     — 模型标识，如 gpt-4o / seedream-3.0 / wan-x2.1-t2v-turbo
-      modality  — 模态描述 (JSON)，v2 格式，结构:
+      name      �?显示名称，默�?"System Setting"
+      category  �?业务分类: LLM / Image / Video / Voice / Music
+      provider  �?供应商标�? openai / dashscope / volcengine / minimax / kling / siliconflow �?
+      api_key   �?API 密钥（多 key 逗号分隔，用于轮询）
+      base_url  �?API 基础地址，为空则使用 SDK 默认�?
+      model     �?模型标识，如 gpt-4o / seedream-3.0 / wan-x2.1-t2v-turbo
+      modality  �?模态描�?(JSON)，v2 格式，结�?
                   {
-                    "generation_modes": ["t2i","i2i"],  # 生成方式(缩写)，筛选匹配核心
+                    "generation_modes": ["t2i","i2i"],  # 生成方式(缩写)，筛选匹配核�?
                     "max_resolution": "2048x2048",       # 最高输出分辨率
-                    "aspect_ratios": ["1:1","16:9"],    # 支持画幅比
+                    "aspect_ratios": ["1:1","16:9"],    # 支持画幅�?
                     "has_audio": false,                  # 是否支持音频(视频模型)
-                    "max_duration": 10,                  # 最大生成时长(秒)
+                    "max_duration": 10,                  # 最大生成时�?�?
                     "base_model": "seedream-4.5",       # 基础模型
                     "model_version": "v4.5",            # 模型版本
                     "model_type": "diffusion",          # 架构: diffusion/transformer
                     "input_formats": ["text","image"],  # 输入格式
                     "output_format": "image"             # 输出格式
                   }
-                  generation_modes 缩写: t2i(文生图) i2i(图生图) t2v(文生视频)
-                  i2v(图生视频) v2v(视频转视频) t2a(文生音频) a2t(语音识别)
-                  a2a(音频转音频) s2v(语音驱动视频/数字人) i2t(图像理解)
-      tags      — 模型标签 (JSON string[])，如 ["真人写实","局部重绘","高清"]
-      deprecated— 是否已弃用
-      config    — 额外配置 (JSON)，如 webhook_url / strategy / weights 等
-    is_active — 是否为该类别默认 API（当用户未指定该类别时自动选用）
+                  generation_modes 缩写: t2i(文生�? i2i(图生�? t2v(文生视频)
+                  i2v(图生视频) v2v(视频转视�? t2a(文生音频) a2t(语音识别)
+                  a2a(音频转音�? s2v(语音驱动视频/数字�? i2t(图像理解)
+      tags      �?模型标签 (JSON string[])，如 ["真人写实","局部重�?,"高清"]
+      deprecated�?是否已弃�?
+      config    �?额外配置 (JSON)，如 webhook_url / strategy / weights �?
+    is_active �?是否为该类别默认 API（当用户未指定该类别时自动选用�?
     """
     __tablename__ = "system_api_settings"
     id = Column(Integer, primary_key=True, index=True)
@@ -292,20 +293,71 @@ class SystemAPISetting(Base):
     api_key = Column(String)                    # 多key逗号分隔用于轮询
     base_url = Column(String, nullable=True)    # 自定义API地址
     model = Column(String, nullable=True)       # 模型标识
-    base_model = Column(String, nullable=True)  # 基础模型归类名（如 qwen-plus / gpt-4o）
-    modality = Column(JSON, nullable=True)      # 模态描述(v2 JSON), 详见 docstring
+    base_model = Column(String, nullable=True)  # 基础模型归类名（�?qwen-plus / gpt-4o�?
+    modality = Column(JSON, nullable=True)      # 模态描�?v2 JSON), 详见 docstring
+
+    # Wide modality columns (normalized from modality JSON + supplier docs extraction)
+    generation_modes = Column(JSON, nullable=True)              # [t2i, i2i, i2v, t2v, s2v, image_edit, t2a, a2t, a2a, t2m]
+    input_formats = Column(JSON, nullable=True)                 # generic input formats
+    output_format = Column(String, nullable=True)               # generic output format
+    supported_resolutions = Column(JSON, nullable=True)         # ["1280x720", "1080p", "4k", ...]
+    aspect_ratios = Column(JSON, nullable=True)                 # ["1:1", "16:9", ...]
+    max_images_per_call = Column(Integer, nullable=True)
+    reference_image_limit = Column(String, nullable=True)       # e.g. "1-2 images"
+    reference_video_limit = Column(String, nullable=True)
+    durations_seconds = Column(JSON, nullable=True)             # [3,5,10]
+    max_duration = Column(Integer, nullable=True)               # seconds
+    fps_options = Column(JSON, nullable=True)                   # [24,30,60]
+    has_audio = Column(Boolean, nullable=True)
+    mode_values = Column(JSON, nullable=True)                   # provider mode enums (std/pro/fast/...)
+
+    # Category-specific capability objects (wide columns)
+    text_capabilities = Column(JSON, nullable=True)             # LLM
+    image_capabilities = Column(JSON, nullable=True)            # Image
+    video_capabilities = Column(JSON, nullable=True)            # Video
+    digital_human_capabilities = Column(JSON, nullable=True)    # DigitalHuman
+    voice_capabilities = Column(JSON, nullable=True)            # Voice
+    music_capabilities = Column(JSON, nullable=True)            # Music
+
+    # Billing-related hints extracted from supplier docs
+    pricing_unit = Column(String, nullable=True)                # per_call/per_image/per_second/per_minute/per_1k_tokens
+    token_billing_supported = Column(Boolean, nullable=True)
+    input_token_price = Column(Float, nullable=True)
+    output_token_price = Column(Float, nullable=True)
+    per_resolution_price_map = Column(JSON, nullable=True)
+    per_duration_price_map = Column(JSON, nullable=True)
+    has_tiered_pricing = Column(Boolean, nullable=True)
+    free_quota = Column(String, nullable=True)
+    currency = Column(String, nullable=True)
+
     tags = Column(JSON, nullable=True)          # 模型标签 string[]
-    supplier_info = Column(JSON, nullable=True) # 原供应商API定价信息(审计对照用)
+    supplier_info = Column(JSON, nullable=True) # 原供应商API定价信息(审计对照�?
     deprecated = Column(Boolean, default=False) # 是否弃用
-    config = Column(JSON, default={})           # 额外配置(webhook_url等)
+    config = Column(JSON, default={})           # 额外配置(webhook_url�?
 
     is_active = Column(Boolean, default=False)  # 是否为该类别默认 API
 
 
-class SystemAPIBillingRule(Base):
-    """按 system_api_settings.id 绑定的细化计费规则（宽表）。
+class TaskDefaultSystemAPI(Base):
+    """Per-task default System API binding.
 
-    规则支持 Text/Image/Video 三类模式，按元信息匹配；命中多条时使用价格最高的规则。
+    This is the source of truth for category/task default routing,
+    decoupled from system_api_settings.is_active.
+    """
+
+    __tablename__ = "system_task_default_apis"
+
+    id = Column(Integer, primary_key=True, index=True)
+    task_category = Column(String, unique=True, index=True, nullable=False)  # LLM/IMAGE/VIDEO/DIGITAL_HUMAN/VOICE/MUSIC
+    system_api_id = Column(Integer, ForeignKey("system_api_settings.id"), index=True, nullable=False)
+    created_at = Column(String, default=now_bj_iso)
+    updated_at = Column(String, default=now_bj_iso)
+
+
+class SystemAPIBillingRule(Base):
+    """�?system_api_settings.id 绑定的细化计费规则（宽表）�?
+
+    规则支持 Text/Image/Video 三类模式，按元信息匹配；命中多条时使用价格最高的规则�?
     """
     __tablename__ = "system_api_billing_rules"
 
@@ -317,7 +369,7 @@ class SystemAPIBillingRule(Base):
     is_active = Column(Boolean, default=True)
     priority = Column(Integer, default=0)
 
-    # 模式开关
+    # 模式开�?
     applies_to_text = Column(Boolean, default=False)
     applies_to_image = Column(Boolean, default=False)
     applies_to_video = Column(Boolean, default=False)
@@ -360,8 +412,8 @@ class SystemAPIBillingRule(Base):
     charge_multiplier = Column(Float, default=2.0)
 
     extra_conditions = Column(JSON, default={})
-    created_at = Column(String, default=datetime.datetime.utcnow().isoformat)
-    updated_at = Column(String, default=datetime.datetime.utcnow().isoformat)
+    created_at = Column(String, default=now_bj_iso)
+    updated_at = Column(String, default=now_bj_iso)
 
 
 class SMTPSystemConfig(Base):
@@ -383,8 +435,8 @@ class SMTPSystemConfig(Base):
     from_email = Column(String, nullable=False, default="")
     frontend_base_url = Column(String, nullable=False, default="")
     is_active = Column(Boolean, default=True)
-    created_at = Column(String, default=datetime.datetime.utcnow().isoformat)
-    updated_at = Column(String, default=datetime.datetime.utcnow().isoformat)
+    created_at = Column(String, default=now_bj_iso)
+    updated_at = Column(String, default=now_bj_iso)
 
 
 class WechatPayConfig(Base):
@@ -405,12 +457,12 @@ class WechatPayConfig(Base):
     notify_url = Column(String, nullable=False, default="")
     use_mock = Column(Boolean, default=True)
     is_active = Column(Boolean, default=True)
-    created_at = Column(String, default=datetime.datetime.utcnow().isoformat)
-    updated_at = Column(String, default=datetime.datetime.utcnow().isoformat)
+    created_at = Column(String, default=now_bj_iso)
+    updated_at = Column(String, default=now_bj_iso)
 
 
 class TransactionAction(Base):
-    """交易动作流水（预扣/结算/退补/取消）审计表。"""
+    """Transaction action audit records (reserve/settle/refund/cancel)."""
     __tablename__ = "transaction_action"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -437,22 +489,24 @@ class TransactionAction(Base):
     matched_rule_ids = Column(JSON, default=[])
     usage_metadata = Column(JSON, default={})
     billing_metadata = Column(JSON, default={})
-    created_at = Column(String, default=datetime.datetime.utcnow().isoformat)
+    created_at = Column(String, default=now_bj_iso)
 
 
 class ProviderKeyPool(Base):
-    """供应商统一密钥池表。
-    每行代表一个供应商的 API 密钥池及其选择策略。
-    provider 唯一索引，全局只有一份密钥池配置。
+    """Unified provider API key pool.
+
+    One row stores one provider's key pool and routing strategy.
+    The `provider` field is globally unique.
     """
     __tablename__ = "provider_key_pool"
     id = Column(Integer, primary_key=True, index=True)
-    provider = Column(String, unique=True, index=True, nullable=False)  # 供应商标识(小写)
+    provider = Column(String, unique=True, index=True, nullable=False)  # Provider identifier (lowercase)
     api_keys = Column(JSON, default=[])           # 密钥列表 List[str]
     strategy = Column(String, default="random")   # random / round_robin / weighted
-    weights = Column(JSON, default=[])            # 权重列表 List[float]，strategy=weighted 时使用
-    created_at = Column(String, default=datetime.datetime.utcnow().isoformat)
-    updated_at = Column(String, default=datetime.datetime.utcnow().isoformat)
+    weights = Column(JSON, default=[])            # Weights list when strategy=weighted
+    intro_url = Column(String, nullable=True)     # Provider API documentation URL
+    created_at = Column(String, default=now_bj_iso)
+    updated_at = Column(String, default=now_bj_iso)
 
 
 class RechargePlan(Base):
@@ -476,7 +530,8 @@ class PaymentOrder(Base):
     pay_url = Column(String, nullable=True) # QR Code Content
     
     provider = Column(String, default="wechat")
-    created_at = Column(String, default=datetime.datetime.utcnow().isoformat)
+    created_at = Column(String, default=now_bj_iso)
     paid_at = Column(String, nullable=True)
     
     user = relationship("User")
+

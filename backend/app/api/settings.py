@@ -12,112 +12,31 @@ import time
 from datetime import datetime, timezone, timedelta
 import math
 from types import SimpleNamespace
-from app.db.session import get_db
-try:
-    from app.core.time_utils import now_bj_iso
-except Exception:
-    def now_bj_iso() -> str:
-        return datetime.now(timezone(timedelta(hours=8), name="CST")).isoformat(timespec="microseconds")
+from typing import List, Dict, Tuple, Any, Optional
+from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 
-try:
-    from app.core.prompts.supplier_feature_analysis_prompt import get_supplier_feature_analysis_system_prompt
-except Exception:
-    def get_supplier_feature_analysis_system_prompt() -> str:
-        return (
-            "You are a senior API product + billing analyst. Return ONE valid JSON object only. "
-            "Extract model-level capabilities and billing clues from supplier docs."
-        )
+from app.db.session import get_db
+from app.core.time_utils import now_bj_iso
+from app.core.prompts.supplier_feature_analysis_prompt import get_supplier_feature_analysis_system_prompt
 from app.models.all_models import (
     APISetting,
     User,
     SystemAPISetting,
+    TaskDefaultSystemAPI,
     ProviderKeyPool,
     SystemAPIBillingRule,
     TransactionAction,
     SMTPSystemConfig,
     WechatPayConfig,
 )
-try:
-    from app.models.all_models import TaskDefaultSystemAPI
-    HAS_TASK_DEFAULT_SYSTEM_API_MODEL = True
-except Exception:
-    HAS_TASK_DEFAULT_SYSTEM_API_MODEL = False
-
-    class TaskDefaultSystemAPI:
-        pass
-try:
-    from app.services.system_default_api_service import (
-        get_task_default_system_setting,
-        is_task_default_system_setting,
-        upsert_task_default_system_setting,
-        clear_task_default_for_category,
-        clear_task_defaults_for_system_api_ids,
-        normalize_task_category,
-    )
-except Exception:
-    def normalize_task_category(value):
-        raw = str(value or "").strip().lower()
-        if raw in {"llm", "text", "chat"}:
-            return "LLM"
-        if raw in {"image", "img", "t2i", "i2i"}:
-            return "Image"
-        if raw in {"video", "t2v", "i2v", "v2v"}:
-            return "Video"
-        if raw in {"digital_human", "digital-human", "avatar", "s2v", "数字人"}:
-            return "DigitalHuman"
-        if raw in {"voice", "audio", "speech", "tts", "asr"}:
-            return "Voice"
-        if raw in {"music"}:
-            return "Music"
-        return str(value or "LLM")
-
-    def get_task_default_system_setting(db, task_category):
-        category = normalize_task_category(task_category)
-        return db.query(SystemAPISetting).filter(
-            SystemAPISetting.category == category,
-            SystemAPISetting.is_active == True,
-        ).order_by(SystemAPISetting.id.desc()).first()
-
-    def is_task_default_system_setting(db, system_api_id, category=None):
-        sid = int(system_api_id or 0)
-        if sid <= 0:
-            return False
-        row = db.query(SystemAPISetting).filter(SystemAPISetting.id == sid).first()
-        if not row:
-            return False
-        if category:
-            return bool(row.is_active and str(row.category or "") == normalize_task_category(category))
-        return bool(row.is_active)
-
-    def upsert_task_default_system_setting(db, task_category, system_api_id):
-        category = normalize_task_category(task_category)
-        sid = int(system_api_id or 0)
-        if sid <= 0:
-            return
-        db.query(SystemAPISetting).filter(SystemAPISetting.category == category).update(
-            {"is_active": False},
-            synchronize_session=False,
-        )
-        db.query(SystemAPISetting).filter(SystemAPISetting.id == sid).update(
-            {"is_active": True},
-            synchronize_session=False,
-        )
-
-    def clear_task_default_for_category(db, task_category):
-        category = normalize_task_category(task_category)
-        db.query(SystemAPISetting).filter(SystemAPISetting.category == category).update(
-            {"is_active": False},
-            synchronize_session=False,
-        )
-
-    def clear_task_defaults_for_system_api_ids(db, system_api_ids):
-        ids = [int(x) for x in (system_api_ids or []) if str(x).strip().isdigit()]
-        if not ids:
-            return
-        db.query(SystemAPISetting).filter(SystemAPISetting.id.in_(ids)).update(
-            {"is_active": False},
-            synchronize_session=False,
-        )
+from app.services.system_default_api_service import (
+    get_task_default_system_setting,
+    is_task_default_system_setting,
+    upsert_task_default_system_setting,
+    clear_task_default_for_category,
+    clear_task_defaults_for_system_api_ids,
+    normalize_task_category,
+)
 from app.schemas.settings import (
     APISettingOut,
     APISettingUpdate,
@@ -135,6 +54,9 @@ from app.schemas.settings import (
     SystemAPISettingImportRequest,
     SystemAPIProviderImportRequest,
     SystemConfigSyncBundleImportRequest,
+    TaskDefaultSystemAPIManageCreate,
+    TaskDefaultSystemAPIManageUpdate,
+    TaskDefaultSystemAPIManageOut,
     AgentToolPolicyUpdate,
     AgentToolPolicyOut,
     SystemAIAssistantRequest,
@@ -144,6 +66,11 @@ from app.schemas.settings import (
     ExchangeRateResponse,
     FetchPricingPageRequest,
     FetchPricingPageResponse,
+    SupplierApiFeatureAnalyzeRequest,
+    SupplierApiFeatureAnalyzeResponse,
+    SupplierApiFeatureApplyRequest,
+    SupplierApiFeatureApplyResponse,
+    SupplierApiFeatureModel,
     KIEPricingGenerateRequest,
     KIEPricingApplyRequest,
     KIEPricingFetchRequest,
@@ -163,101 +90,10 @@ from app.schemas.settings import (
     SystemAPIBillingRuleMultiplierResetRequest,
     SystemAPIBillingRuleMultiplierResetResponse,
 )
-try:
-    from app.schemas.settings import (
-        TaskDefaultSystemAPIManageCreate,
-        TaskDefaultSystemAPIManageUpdate,
-        TaskDefaultSystemAPIManageOut,
-    )
-except Exception:
-    from pydantic import BaseModel
-
-    class TaskDefaultSystemAPIManageCreate(BaseModel):
-        task_category: str
-        system_api_id: int
-
-    class TaskDefaultSystemAPIManageUpdate(BaseModel):
-        system_api_id: int
-
-    class TaskDefaultSystemAPIManageOut(BaseModel):
-        task_category: str
-        system_api_id: int
-        system_api_category: Optional[str] = None
-        system_api_provider: Optional[str] = None
-        system_api_model: Optional[str] = None
-        system_api_name: Optional[str] = None
-        created_at: Optional[str] = None
-        updated_at: Optional[str] = None
-
-try:
-    from app.schemas.settings import (
-        SupplierApiFeatureAnalyzeRequest,
-        SupplierApiFeatureAnalyzeResponse,
-        SupplierApiFeatureApplyRequest,
-        SupplierApiFeatureApplyResponse,
-        SupplierApiFeatureModel,
-    )
-except Exception:
-    from pydantic import BaseModel
-
-    class SupplierApiFeatureAnalyzeRequest(BaseModel):
-        provider: str
-        source_urls: Optional[list[str]] = None
-        selected_system_api_ids: Optional[list[int]] = None
-        include_provider_intro_url: Optional[bool] = True
-        search_keywords: Optional[list[str]] = None
-        user_supplement: Optional[str] = None
-        max_length: Optional[int] = 40000
-        max_pages: Optional[int] = 6
-        save_to_db: Optional[bool] = True
-        create_missing_models: Optional[bool] = True
-
-    class SupplierApiFeatureModel(BaseModel):
-        provider: str
-        category: str
-        model: str
-        base_model: Optional[str] = None
-        generation_modes: Optional[list[str]] = None
-        image_capabilities: Optional[Dict[str, Any]] = None
-        video_capabilities: Optional[Dict[str, Any]] = None
-        digital_human_capabilities: Optional[Dict[str, Any]] = None
-        text_capabilities: Optional[Dict[str, Any]] = None
-        voice_capabilities: Optional[Dict[str, Any]] = None
-        music_capabilities: Optional[Dict[str, Any]] = None
-        notes: Optional[str] = None
-        confidence: Optional[float] = 0.0
-
-    class SupplierApiFeatureAnalyzeResponse(BaseModel):
-        provider: str
-        analyzed_url_count: Optional[int] = 0
-        selected_system_api_count: Optional[int] = 0
-        selected_system_api_ids: Optional[list[int]] = None
-        source_urls_used: Optional[list[str]] = None
-        models: Optional[list[SupplierApiFeatureModel]] = None
-        saved_created: Optional[int] = 0
-        saved_updated: Optional[int] = 0
-        warnings: Optional[list[str]] = None
-        provider_summary: Optional[str] = None
-        llm_input: Optional[str] = None
-        llm_output: Optional[str] = None
-        llm_raw: Optional[str] = None
-
-    class SupplierApiFeatureApplyRequest(BaseModel):
-        provider: str
-        models: Optional[list[SupplierApiFeatureModel]] = None
-        create_missing_models: Optional[bool] = True
-
-    class SupplierApiFeatureApplyResponse(BaseModel):
-        provider: str
-        requested_count: Optional[int] = 0
-        saved_created: Optional[int] = 0
-        saved_updated: Optional[int] = 0
-        skipped_count: Optional[int] = 0
-        warnings: Optional[list[str]] = None
 from app.api.deps import get_current_user
 from app.services.billing_service import BillingService
-from typing import List, Dict, Tuple, Any, Optional
-from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
+
+HAS_TASK_DEFAULT_SYSTEM_API_MODEL = True
 
 router = APIRouter()
 logger = logging.getLogger("settings_api")

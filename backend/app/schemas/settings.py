@@ -43,19 +43,21 @@ class SystemSettings(BaseModel):
 
 
 class SystemAPIModelOption(BaseModel):
-    """前端模型选项展示。
-
-    modality: 模态描述 JSON，格式见 SystemAPISetting 模型 docstring。
-             核心字段 generation_modes 使用缩写: t2i/i2i/t2v/i2v/v2v/t2a/a2t/a2a/s2v/i2t
-    tags:     模型标签列表，如 ["真人写实", "局部重绘", "高清"]
-    """
+    """前端模型选项展示。"""
     id: int
     name: Optional[str] = None
     user_id: Optional[int] = None
     provider: str
     category: Optional[str] = None          # LLM / Image / Video / Voice / Music
     model: Optional[str] = None
-    modality: Optional[Dict[str, Any]] = None  # {generation_modes, max_resolution, ...}
+    generation_modes: Optional[List[str]] = None
+    input_formats: Optional[List[str]] = None
+    output_format: Optional[str] = None
+    supported_resolutions: Optional[List[str]] = None
+    aspect_ratios: Optional[List[str]] = None
+    max_duration: Optional[int] = None
+    has_audio: Optional[bool] = None
+    mode_values: Optional[List[str]] = None
     tags: Optional[List[str]] = None           # 模型标签
     base_url: Optional[str] = None
     webhook_url: Optional[str] = None
@@ -63,6 +65,8 @@ class SystemAPIModelOption(BaseModel):
     is_active: bool = False  # Category default flag for this System API category
     has_api_key: bool = False
     api_key_masked: Optional[str] = None
+    avg_price_estimate: Optional[int] = None
+    avg_price_source: Optional[str] = None
 
 
 class SystemAPIProviderSettings(BaseModel):
@@ -74,6 +78,7 @@ class SystemAPIProviderSettings(BaseModel):
 
 class SystemAPISelectionRequest(BaseModel):
     setting_id: int
+    api_strategy: Optional[str] = "smart_default"
 
 
 class SystemAPISettingManageUpdate(BaseModel):
@@ -84,9 +89,36 @@ class SystemAPISettingManageUpdate(BaseModel):
     base_url: Optional[str] = None
     model: Optional[str] = None
     base_model: Optional[str] = None
-    modality: Optional[Dict[str, Any]] = None
     tags: Optional[List[str]] = None
     supplier_info: Optional[Dict[str, Any]] = None  # 原供应商API定价信息(审计用)
+    generation_modes: Optional[List[str]] = None
+    input_formats: Optional[List[str]] = None
+    output_format: Optional[str] = None
+    supported_resolutions: Optional[List[str]] = None
+    aspect_ratios: Optional[List[str]] = None
+    max_images_per_call: Optional[int] = None
+    reference_image_limit: Optional[str] = None
+    reference_video_limit: Optional[str] = None
+    durations_seconds: Optional[List[float]] = None
+    max_duration: Optional[int] = None
+    fps_options: Optional[List[float]] = None
+    has_audio: Optional[bool] = None
+    mode_values: Optional[List[str]] = None
+    text_capabilities: Optional[Dict[str, Any]] = None
+    image_capabilities: Optional[Dict[str, Any]] = None
+    video_capabilities: Optional[Dict[str, Any]] = None
+    digital_human_capabilities: Optional[Dict[str, Any]] = None
+    voice_capabilities: Optional[Dict[str, Any]] = None
+    music_capabilities: Optional[Dict[str, Any]] = None
+    pricing_unit: Optional[str] = None
+    token_billing_supported: Optional[bool] = None
+    input_token_price: Optional[float] = None
+    output_token_price: Optional[float] = None
+    per_resolution_price_map: Optional[Dict[str, Any]] = None
+    per_duration_price_map: Optional[Dict[str, Any]] = None
+    has_tiered_pricing: Optional[bool] = None
+    free_quota: Optional[str] = None
+    currency: Optional[str] = None
     config: Optional[Dict[str, Any]] = None
     billing_unit_type: Optional[str] = None
     billing_cost: Optional[int] = None
@@ -104,9 +136,36 @@ class SystemAPISettingManageCreate(BaseModel):
     base_url: Optional[str] = None
     model: Optional[str] = None
     base_model: Optional[str] = None
-    modality: Optional[Dict[str, Any]] = None
     tags: Optional[List[str]] = None
     supplier_info: Optional[Dict[str, Any]] = None  # 原供应商API定价信息(审计用)
+    generation_modes: Optional[List[str]] = None
+    input_formats: Optional[List[str]] = None
+    output_format: Optional[str] = None
+    supported_resolutions: Optional[List[str]] = None
+    aspect_ratios: Optional[List[str]] = None
+    max_images_per_call: Optional[int] = None
+    reference_image_limit: Optional[str] = None
+    reference_video_limit: Optional[str] = None
+    durations_seconds: Optional[List[float]] = None
+    max_duration: Optional[int] = None
+    fps_options: Optional[List[float]] = None
+    has_audio: Optional[bool] = None
+    mode_values: Optional[List[str]] = None
+    text_capabilities: Optional[Dict[str, Any]] = None
+    image_capabilities: Optional[Dict[str, Any]] = None
+    video_capabilities: Optional[Dict[str, Any]] = None
+    digital_human_capabilities: Optional[Dict[str, Any]] = None
+    voice_capabilities: Optional[Dict[str, Any]] = None
+    music_capabilities: Optional[Dict[str, Any]] = None
+    pricing_unit: Optional[str] = None
+    token_billing_supported: Optional[bool] = None
+    input_token_price: Optional[float] = None
+    output_token_price: Optional[float] = None
+    per_resolution_price_map: Optional[Dict[str, Any]] = None
+    per_duration_price_map: Optional[Dict[str, Any]] = None
+    has_tiered_pricing: Optional[bool] = None
+    free_quota: Optional[str] = None
+    currency: Optional[str] = None
     config: Optional[Dict[str, Any]] = {}
     billing_unit_type: Optional[str] = "per_call"
     billing_cost: Optional[int] = 0
@@ -148,9 +207,36 @@ class SystemAPISettingOut(BaseModel):
     base_url: Optional[str] = None
     model: Optional[str] = None
     base_model: Optional[str] = None
-    modality: Optional[Dict[str, Any]] = None
     tags: Optional[List[str]] = None
     supplier_info: Optional[Dict[str, Any]] = None  # 原供应商API定价信息(审计用)
+    generation_modes: Optional[List[str]] = None
+    input_formats: Optional[List[str]] = None
+    output_format: Optional[str] = None
+    supported_resolutions: Optional[List[str]] = None
+    aspect_ratios: Optional[List[str]] = None
+    max_images_per_call: Optional[int] = None
+    reference_image_limit: Optional[str] = None
+    reference_video_limit: Optional[str] = None
+    durations_seconds: Optional[List[float]] = None
+    max_duration: Optional[int] = None
+    fps_options: Optional[List[float]] = None
+    has_audio: Optional[bool] = None
+    mode_values: Optional[List[str]] = None
+    text_capabilities: Optional[Dict[str, Any]] = None
+    image_capabilities: Optional[Dict[str, Any]] = None
+    video_capabilities: Optional[Dict[str, Any]] = None
+    digital_human_capabilities: Optional[Dict[str, Any]] = None
+    voice_capabilities: Optional[Dict[str, Any]] = None
+    music_capabilities: Optional[Dict[str, Any]] = None
+    pricing_unit: Optional[str] = None
+    token_billing_supported: Optional[bool] = None
+    input_token_price: Optional[float] = None
+    output_token_price: Optional[float] = None
+    per_resolution_price_map: Optional[Dict[str, Any]] = None
+    per_duration_price_map: Optional[Dict[str, Any]] = None
+    has_tiered_pricing: Optional[bool] = None
+    free_quota: Optional[str] = None
+    currency: Optional[str] = None
     config: Optional[Dict[str, Any]] = {}
     billing_unit_type: Optional[str] = "per_call"
     billing_cost: Optional[int] = 0
@@ -172,7 +258,34 @@ class SystemAPISettingImportItem(BaseModel):
     base_url: Optional[str] = None
     model: Optional[str] = None
     base_model: Optional[str] = None
-    modality: Optional[Dict[str, Any]] = None
+    generation_modes: Optional[List[str]] = None
+    input_formats: Optional[List[str]] = None
+    output_format: Optional[str] = None
+    supported_resolutions: Optional[List[str]] = None
+    aspect_ratios: Optional[List[str]] = None
+    max_images_per_call: Optional[int] = None
+    reference_image_limit: Optional[int] = None
+    reference_video_limit: Optional[int] = None
+    durations_seconds: Optional[List[float]] = None
+    max_duration: Optional[int] = None
+    fps_options: Optional[List[float]] = None
+    has_audio: Optional[bool] = None
+    mode_values: Optional[List[str]] = None
+    text_capabilities: Optional[Dict[str, Any]] = None
+    image_capabilities: Optional[Dict[str, Any]] = None
+    video_capabilities: Optional[Dict[str, Any]] = None
+    digital_human_capabilities: Optional[Dict[str, Any]] = None
+    voice_capabilities: Optional[Dict[str, Any]] = None
+    music_capabilities: Optional[Dict[str, Any]] = None
+    pricing_unit: Optional[str] = None
+    token_billing_supported: Optional[bool] = None
+    input_token_price: Optional[float] = None
+    output_token_price: Optional[float] = None
+    per_resolution_price_map: Optional[Dict[str, Any]] = None
+    per_duration_price_map: Optional[Dict[str, Any]] = None
+    has_tiered_pricing: Optional[bool] = None
+    free_quota: Optional[str] = None
+    currency: Optional[str] = None
     tags: Optional[List[str]] = None
     supplier_info: Optional[Dict[str, Any]] = None
     config: Optional[Dict[str, Any]] = {}
@@ -196,7 +309,34 @@ class SystemAPIProviderModelImportItem(BaseModel):
     base_url: Optional[str] = None
     model: Optional[str] = None
     base_model: Optional[str] = None
-    modality: Optional[Dict[str, Any]] = None
+    generation_modes: Optional[List[str]] = None
+    input_formats: Optional[List[str]] = None
+    output_format: Optional[str] = None
+    supported_resolutions: Optional[List[str]] = None
+    aspect_ratios: Optional[List[str]] = None
+    max_images_per_call: Optional[int] = None
+    reference_image_limit: Optional[int] = None
+    reference_video_limit: Optional[int] = None
+    durations_seconds: Optional[List[float]] = None
+    max_duration: Optional[int] = None
+    fps_options: Optional[List[float]] = None
+    has_audio: Optional[bool] = None
+    mode_values: Optional[List[str]] = None
+    text_capabilities: Optional[Dict[str, Any]] = None
+    image_capabilities: Optional[Dict[str, Any]] = None
+    video_capabilities: Optional[Dict[str, Any]] = None
+    digital_human_capabilities: Optional[Dict[str, Any]] = None
+    voice_capabilities: Optional[Dict[str, Any]] = None
+    music_capabilities: Optional[Dict[str, Any]] = None
+    pricing_unit: Optional[str] = None
+    token_billing_supported: Optional[bool] = None
+    input_token_price: Optional[float] = None
+    output_token_price: Optional[float] = None
+    per_resolution_price_map: Optional[Dict[str, Any]] = None
+    per_duration_price_map: Optional[Dict[str, Any]] = None
+    has_tiered_pricing: Optional[bool] = None
+    free_quota: Optional[str] = None
+    currency: Optional[str] = None
     tags: Optional[List[str]] = None
     supplier_info: Optional[Dict[str, Any]] = None
     config: Optional[Dict[str, Any]] = {}
@@ -349,6 +489,26 @@ class SystemConfigSyncBundleImportRequest(BaseModel):
     confirm_clear_existing: bool = False
 
 
+class TaskDefaultSystemAPIManageCreate(BaseModel):
+    task_category: str
+    system_api_id: int
+
+
+class TaskDefaultSystemAPIManageUpdate(BaseModel):
+    system_api_id: int
+
+
+class TaskDefaultSystemAPIManageOut(BaseModel):
+    task_category: str
+    system_api_id: int
+    system_api_category: Optional[str] = None
+    system_api_provider: Optional[str] = None
+    system_api_model: Optional[str] = None
+    system_api_name: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
 class SystemAPIProviderModelCatalog(BaseModel):
     category: str
     provider: str
@@ -375,7 +535,6 @@ class SystemAIAssistantModelInput(BaseModel):
     name: Optional[str] = None
     category: str = "LLM"
     model: str
-    modality: Optional[Dict[str, Any]] = None
     tags: Optional[List[str]] = None
     base_url: Optional[str] = None
     endpoint: Optional[str] = None
@@ -413,7 +572,6 @@ class SystemAIAssistantSuggestion(BaseModel):
     provider: str
     category: str
     model: str
-    modality: Optional[Dict[str, Any]] = None
     tags: Optional[List[str]] = None
     name: Optional[str] = None
     base_url: Optional[str] = None
@@ -474,6 +632,66 @@ class FetchPricingPageResponse(BaseModel):
     truncated: bool = False
     format: Optional[str] = None        # html/json
     error: Optional[str] = None
+
+
+class SupplierApiFeatureAnalyzeRequest(BaseModel):
+    provider: str
+    source_urls: List[str] = Field(default_factory=list)
+    selected_system_api_ids: List[int] = Field(default_factory=list)
+    include_provider_intro_url: bool = True
+    search_keywords: List[str] = Field(default_factory=list)
+    user_supplement: Optional[str] = None
+    max_length: int = 40000
+    max_pages: int = 6
+    save_to_db: bool = True
+    create_missing_models: bool = True
+
+
+class SupplierApiFeatureModel(BaseModel):
+    provider: str
+    category: str
+    model: str
+    base_model: Optional[str] = None
+    generation_modes: List[str] = Field(default_factory=list)
+    image_capabilities: Dict[str, Any] = Field(default_factory=dict)
+    video_capabilities: Dict[str, Any] = Field(default_factory=dict)
+    digital_human_capabilities: Dict[str, Any] = Field(default_factory=dict)
+    text_capabilities: Dict[str, Any] = Field(default_factory=dict)
+    voice_capabilities: Dict[str, Any] = Field(default_factory=dict)
+    music_capabilities: Dict[str, Any] = Field(default_factory=dict)
+    notes: Optional[str] = None
+    confidence: float = 0.0
+
+
+class SupplierApiFeatureAnalyzeResponse(BaseModel):
+    provider: str
+    analyzed_url_count: int = 0
+    selected_system_api_count: int = 0
+    selected_system_api_ids: List[int] = Field(default_factory=list)
+    source_urls_used: List[str] = Field(default_factory=list)
+    models: List[SupplierApiFeatureModel] = Field(default_factory=list)
+    saved_created: int = 0
+    saved_updated: int = 0
+    warnings: List[str] = Field(default_factory=list)
+    provider_summary: Optional[str] = None
+    llm_input: Optional[str] = None
+    llm_output: Optional[str] = None
+    llm_raw: Optional[str] = None
+
+
+class SupplierApiFeatureApplyRequest(BaseModel):
+    provider: str
+    models: List[SupplierApiFeatureModel] = Field(default_factory=list)
+    create_missing_models: bool = True
+
+
+class SupplierApiFeatureApplyResponse(BaseModel):
+    provider: str
+    requested_count: int = 0
+    saved_created: int = 0
+    saved_updated: int = 0
+    skipped_count: int = 0
+    warnings: List[str] = Field(default_factory=list)
 
 
 class KIEPricingGenerateRequest(BaseModel):
@@ -566,6 +784,8 @@ class KIEPricingGenerateResponse(BaseModel):
     warnings: List[str] = Field(default_factory=list)
     tables_parse_status: str = "none"
     tables_parse_warning: Optional[str] = None
+    llm_input: Optional[str] = None
+    llm_output: Optional[str] = None
     llm_raw: Optional[str] = None
     error: Optional[str] = None
 
@@ -588,12 +808,14 @@ class ProviderKeyPoolCreate(BaseModel):
     api_keys: Optional[List[str]] = Field(default_factory=list)
     strategy: Optional[str] = "random"
     weights: Optional[List[float]] = None
+    intro_url: Optional[str] = None
 
 class ProviderKeyPoolUpdate(BaseModel):
     provider: Optional[str] = None
     api_keys: Optional[List[str]] = None
     strategy: Optional[str] = None
     weights: Optional[List[float]] = None
+    intro_url: Optional[str] = None
 
 class ProviderKeyPoolOut(BaseModel):
     id: int
@@ -601,6 +823,7 @@ class ProviderKeyPoolOut(BaseModel):
     api_keys: Optional[List[str]] = []
     strategy: Optional[str] = "random"
     weights: Optional[List[float]] = []
+    intro_url: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     class Config:
