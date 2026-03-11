@@ -1072,20 +1072,28 @@ def _apply_system_provider_key_pool(db: Session, provider: str, keys: List[str])
     normalized = _normalize_api_keys(keys)
     provider_name = _normalize_system_provider_name(provider)
 
-    # Upsert provider_key_pool record
-    record = db.query(ProviderKeyPool).filter(ProviderKeyPool.provider == provider_name).first()
-    if record:
-        record.api_keys = normalized
-        record.weights = _normalize_key_weights(record.weights, normalized)
-        record.updated_at = now_bj_iso()
-    else:
-        record = ProviderKeyPool(
+    # SQL-level upsert avoids stale ORM row state after bulk-delete flows.
+    now_iso = now_bj_iso()
+    target_weights = _normalize_key_weights(None, normalized)
+    updated_rows = db.query(ProviderKeyPool).filter(
+        ProviderKeyPool.provider == provider_name,
+    ).update(
+        {
+            "api_keys": normalized,
+            "weights": target_weights,
+            "updated_at": now_iso,
+        },
+        synchronize_session=False,
+    )
+    if int(updated_rows or 0) == 0:
+        db.add(ProviderKeyPool(
             provider=provider_name,
             api_keys=normalized,
             strategy="random",
-            weights=_normalize_key_weights(None, normalized),
-        )
-        db.add(record)
+            weights=target_weights,
+            created_at=now_iso,
+            updated_at=now_iso,
+        ))
 
     # Sync primary key to all system_api_settings rows for legacy compatibility
     primary_key = normalized[0] if normalized else ""
@@ -1102,20 +1110,28 @@ def _apply_provider_key_bundle_to_rows(db: Session, provider_name: str, keys: Li
     normalized = _normalize_api_keys(keys)
     provider_name = _normalize_system_provider_name(provider_name)
 
-    record = db.query(ProviderKeyPool).filter(ProviderKeyPool.provider == provider_name).first()
-    if record:
-        record.api_keys = normalized
-        record.strategy = strategy
-        record.weights = weights
-        record.updated_at = now_bj_iso()
-    else:
-        record = ProviderKeyPool(
+    # SQL-level upsert avoids StaleDataError in replace_all transaction scopes.
+    now_iso = now_bj_iso()
+    updated_rows = db.query(ProviderKeyPool).filter(
+        ProviderKeyPool.provider == provider_name,
+    ).update(
+        {
+            "api_keys": normalized,
+            "strategy": strategy,
+            "weights": weights,
+            "updated_at": now_iso,
+        },
+        synchronize_session=False,
+    )
+    if int(updated_rows or 0) == 0:
+        db.add(ProviderKeyPool(
             provider=provider_name,
             api_keys=normalized,
             strategy=strategy,
             weights=weights,
-        )
-        db.add(record)
+            created_at=now_iso,
+            updated_at=now_iso,
+        ))
 
     primary_key = normalized[0] if normalized else ""
     rows = db.query(SystemAPISetting).filter(
