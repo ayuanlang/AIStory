@@ -18,7 +18,15 @@ try:
 except Exception:
     def now_bj_iso() -> str:
         return datetime.now(timezone(timedelta(hours=8), name="CST")).isoformat(timespec="microseconds")
-from app.core.prompts.supplier_feature_analysis_prompt import get_supplier_feature_analysis_system_prompt
+
+try:
+    from app.core.prompts.supplier_feature_analysis_prompt import get_supplier_feature_analysis_system_prompt
+except Exception:
+    def get_supplier_feature_analysis_system_prompt() -> str:
+        return (
+            "You are a senior API product + billing analyst. Return ONE valid JSON object only. "
+            "Extract model-level capabilities and billing clues from supplier docs."
+        )
 from app.models.all_models import (
     APISetting,
     User,
@@ -30,14 +38,79 @@ from app.models.all_models import (
     SMTPSystemConfig,
     WechatPayConfig,
 )
-from app.services.system_default_api_service import (
-    get_task_default_system_setting,
-    is_task_default_system_setting,
-    upsert_task_default_system_setting,
-    clear_task_default_for_category,
-    clear_task_defaults_for_system_api_ids,
-    normalize_task_category,
-)
+try:
+    from app.services.system_default_api_service import (
+        get_task_default_system_setting,
+        is_task_default_system_setting,
+        upsert_task_default_system_setting,
+        clear_task_default_for_category,
+        clear_task_defaults_for_system_api_ids,
+        normalize_task_category,
+    )
+except Exception:
+    def normalize_task_category(value):
+        raw = str(value or "").strip().lower()
+        if raw in {"llm", "text", "chat"}:
+            return "LLM"
+        if raw in {"image", "img", "t2i", "i2i"}:
+            return "Image"
+        if raw in {"video", "t2v", "i2v", "v2v"}:
+            return "Video"
+        if raw in {"digital_human", "digital-human", "avatar", "s2v", "数字人"}:
+            return "DigitalHuman"
+        if raw in {"voice", "audio", "speech", "tts", "asr"}:
+            return "Voice"
+        if raw in {"music"}:
+            return "Music"
+        return str(value or "LLM")
+
+    def get_task_default_system_setting(db, task_category):
+        category = normalize_task_category(task_category)
+        return db.query(SystemAPISetting).filter(
+            SystemAPISetting.category == category,
+            SystemAPISetting.is_active == True,
+        ).order_by(SystemAPISetting.id.desc()).first()
+
+    def is_task_default_system_setting(db, system_api_id, category=None):
+        sid = int(system_api_id or 0)
+        if sid <= 0:
+            return False
+        row = db.query(SystemAPISetting).filter(SystemAPISetting.id == sid).first()
+        if not row:
+            return False
+        if category:
+            return bool(row.is_active and str(row.category or "") == normalize_task_category(category))
+        return bool(row.is_active)
+
+    def upsert_task_default_system_setting(db, task_category, system_api_id):
+        category = normalize_task_category(task_category)
+        sid = int(system_api_id or 0)
+        if sid <= 0:
+            return
+        db.query(SystemAPISetting).filter(SystemAPISetting.category == category).update(
+            {"is_active": False},
+            synchronize_session=False,
+        )
+        db.query(SystemAPISetting).filter(SystemAPISetting.id == sid).update(
+            {"is_active": True},
+            synchronize_session=False,
+        )
+
+    def clear_task_default_for_category(db, task_category):
+        category = normalize_task_category(task_category)
+        db.query(SystemAPISetting).filter(SystemAPISetting.category == category).update(
+            {"is_active": False},
+            synchronize_session=False,
+        )
+
+    def clear_task_defaults_for_system_api_ids(db, system_api_ids):
+        ids = [int(x) for x in (system_api_ids or []) if str(x).strip().isdigit()]
+        if not ids:
+            return
+        db.query(SystemAPISetting).filter(SystemAPISetting.id.in_(ids)).update(
+            {"is_active": False},
+            synchronize_session=False,
+        )
 from app.schemas.settings import (
     APISettingOut,
     APISettingUpdate,
