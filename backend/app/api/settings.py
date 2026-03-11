@@ -9,11 +9,15 @@ import ast
 import random
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import math
 from types import SimpleNamespace
 from app.db.session import get_db
-from app.core.time_utils import now_bj_iso
+try:
+    from app.core.time_utils import now_bj_iso
+except Exception:
+    def now_bj_iso() -> str:
+        return datetime.now(timezone(timedelta(hours=8), name="CST")).isoformat(timespec="microseconds")
 from app.core.prompts.supplier_feature_analysis_prompt import get_supplier_feature_analysis_system_prompt
 from app.models.all_models import (
     APISetting,
