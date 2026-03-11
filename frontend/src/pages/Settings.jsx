@@ -6,6 +6,7 @@ import { API_URL } from '@/config';
 import { updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, selectSystemSetting, updateMyProfile, updateMyPassword, uploadMyAvatar, recordSystemLogAction, getAutoDownloadLocalPreference, setAutoDownloadLocalPreference, getPromptSubmitLanguagePreference, setPromptSubmitLanguagePreference, normalizePromptSubmitLanguagePreference } from '../services/api';
 import RechargeModal from '../components/RechargeModal'; // Import RechargeModal
 import { getUiLang, setUiLang as setGlobalUiLang, tUI, UI_LANG_EVENT } from '../lib/uiLang';
+import { formatProviderLabel } from '../lib/providerLabel';
 
 const DEFAULT_CHARACTER_SUPPLEMENTS = [
     "Default Aesthetic Policy (when no explicit style is provided): prioritize premium cinematic beauty and modern elegance.",
@@ -100,6 +101,36 @@ const THEMES = {
 const Settings = () => {
     const [uiLang, setUiLang] = useState(getUiLang());
     const t = (zh, en) => tUI(uiLang, zh, en);
+    const formatAvgPriceSource = (source) => {
+        const key = String(source || '').trim().toLowerCase();
+        if (!key) return t('未知来源', 'Unknown');
+        if (key === 'system_api_rule_price_average') return t('规则均价', 'Rule Avg');
+        if (key === 'system_api_billing_rule') return t('命中计费规则', 'Matched Rule');
+        if (key === 'system_api_base_rule') return t('基础规则', 'Base Rule');
+        if (key === 'default_api_pricing') return t('默认定价兜底', 'Default Fallback');
+        if (key === 'mixed') return t('混合来源', 'Mixed');
+        if (key === 'no_profiles') return t('无样本', 'No Profiles');
+        return key;
+    };
+    const aliasifyProviderInDetails = (payload, fallbackAlias = '') => {
+        const fallback = String(fallbackAlias || '').trim();
+        const walk = (value) => {
+            if (Array.isArray(value)) return value.map(walk);
+            if (!value || typeof value !== 'object') return value;
+            const out = {};
+            Object.keys(value).forEach((k) => {
+                out[k] = walk(value[k]);
+            });
+            const providerText = String(out.provider || '').trim();
+            const aliasText = String(out.provider_alias || '').trim() || (providerText ? fallback : '');
+            if (providerText && aliasText) {
+                out.provider = aliasText;
+                out.provider_code = providerText;
+            }
+            return out;
+        };
+        return walk(payload);
+    };
     const location = useLocation();
     const navigate = useNavigate();
     const { llmConfig, setLLMConfig, savedConfigs, saveProviderConfig, addLog, generationConfig, setGenerationConfig, savedToolConfigs, saveToolConfig } = useStore();
@@ -1085,9 +1116,29 @@ const Settings = () => {
         // 3. Sync to Backend
         await syncToBackend("LLM", provider, configToSave);
         await refreshActiveSettingSources();
-        showNotification(`Settings for ${provider} saved and activated`, "success");
-        
-        addLog(`Settings for ${provider} saved and activated`, "success");
+
+        let providerAlias = '';
+        try {
+            const latestSettings = await getSettings();
+            const targetProvider = String(provider || '').trim().toLowerCase();
+            const targetModel = String(configToSave.model || '').trim();
+            const exact = (latestSettings || []).find((row) => (
+                String(row?.provider || '').trim().toLowerCase() === targetProvider
+                && String(row?.category || '').trim() === 'LLM'
+                && String(row?.model || '').trim() === targetModel
+            ));
+            const fallback = exact || (latestSettings || []).find((row) => (
+                String(row?.provider || '').trim().toLowerCase() === targetProvider
+                && String(row?.category || '').trim() === 'LLM'
+            ));
+            providerAlias = String(fallback?.provider_alias || '').trim();
+        } catch {
+            providerAlias = '';
+        }
+
+        const providerLabel = formatProviderLabel(provider, providerAlias);
+        showNotification(`Settings for ${providerLabel} saved and activated`, "success");
+        addLog(`Settings for ${providerLabel} saved and activated`, "success");
     };
 
     const handleSaveGeneration = async () => {
@@ -1162,7 +1213,7 @@ const Settings = () => {
         addLog("Generation settings & credentials saved", "success");
     };
 
-    const handleSelectSystemSetting = async (setting, category) => {
+    const handleSelectSystemSetting = async (setting, category, providerAlias = '') => {
         if (!setting?.id) return;
         setSelectingSystemId(setting.id);
         try {
@@ -1181,8 +1232,12 @@ const Settings = () => {
                     model: selected.model || ''
                 });
             }
-            showNotification(`System setting activated: ${selected?.provider || setting.provider} / ${selected?.model || setting.model || ''}`, 'success');
-            addLog(`Activated system API setting: ${selected?.provider || setting.provider} (${selected?.category || setting.category}), strategy=${chosenStrategy}`, 'success');
+            const providerLabel = formatProviderLabel(
+                selected?.provider || setting.provider,
+                providerAlias || selected?.provider_alias || setting.provider_alias,
+            );
+            showNotification(`System setting activated: ${providerLabel} / ${selected?.model || setting.model || ''}`, 'success');
+            addLog(`Activated system API setting: ${providerLabel} (${selected?.category || setting.category}), strategy=${chosenStrategy}`, 'success');
             await loadSystemSettingsCatalog();
             await refreshActiveSettingSources();
         } catch (err) {
@@ -1480,16 +1535,18 @@ const Settings = () => {
                         {t('该开关会立即保存到当前用户本地设置。', 'This toggle is saved immediately to current user local settings.')}
                     </p>
                     <div className="space-y-2 bg-white/5 p-3 rounded-lg border border-white/10">
-                        <label className="text-sm text-white/90">{t('提示词提交语种', 'Prompt Submit Language')}</label>
-                        <select
-                            value={promptSubmitLanguage}
-                            onChange={(e) => handlePromptSubmitLanguageChange(e.target.value)}
-                            className="w-full md:w-56 p-2 rounded-md bg-white/10 border border-white/10 text-sm"
-                        >
-                            <option value="en">{t('英文', 'English')}</option>
-                            <option value="cn">{t('中文', 'Chinese')}</option>
-                            <option value="auto">{t('按界面语言', 'Follow UI Language')}</option>
-                        </select>
+                        <div className="flex flex-wrap items-center gap-2 md:gap-3">
+                            <label className="text-sm leading-6 text-white/90">{t('提示词提交语种', 'Prompt Submit Language')}</label>
+                            <select
+                                value={promptSubmitLanguage}
+                                onChange={(e) => handlePromptSubmitLanguageChange(e.target.value)}
+                                className="w-full sm:w-56 p-2 rounded-md bg-white/10 border border-white/10 text-sm"
+                            >
+                                <option value="en">{t('英文', 'English')}</option>
+                                <option value="cn">{t('中文', 'Chinese')}</option>
+                                <option value="auto">{t('按界面语言', 'Follow UI Language')}</option>
+                            </select>
+                        </div>
                         <p className="text-[11px] text-muted-foreground">
                             {t('该选项会立即保存到当前用户本地设置，并用于 Subject 与 Shot 的生成提交。', 'This option is saved immediately to current user local settings and applies to Subject and Shot generation submissions.')}
                         </p>
@@ -1670,7 +1727,7 @@ const Settings = () => {
                                                     </td>
                                                     <td className="p-3 text-xs opacity-70">
                                                         <div className="max-h-[120px] overflow-y-auto whitespace-pre-wrap break-all w-[300px] bg-black/20 p-2 rounded border border-white/10 font-mono text-[10px]">
-                                                            {JSON.stringify(t.details, null, 2)}
+                                                            {JSON.stringify(aliasifyProviderInDetails(t.details, t.provider_alias), null, 2)}
                                                         </div>
                                                     </td>
                                                     <td className={`p-3 text-right font-mono font-bold ${t.amount < 0 ? 'text-red-400' : 'text-green-400'}`}>
@@ -1776,7 +1833,12 @@ const Settings = () => {
                                                 {categoryBlock.groups.map((group) => (
                                                     <div key={`${group.category}-${group.provider}`} className="border border-white/10 rounded-lg p-4 bg-white/5 space-y-3">
                                                         <div className="flex flex-wrap items-center gap-2">
-                                                            <span className="text-sm font-semibold">{group.provider}</span>
+                                                            <span className="text-sm font-semibold">{group.provider_alias || group.provider}</span>
+                                                            {group.provider_alias && (
+                                                                <span className="text-[10px] px-1.5 py-0.5 rounded border border-white/20 text-muted-foreground font-mono">
+                                                                    {group.provider}
+                                                                </span>
+                                                            )}
                                                             {group.shared_key_configured ? (
                                                                 <span className="text-[10px] px-2 py-0.5 rounded border border-green-500/30 text-green-300 bg-green-500/10">{t('共享密钥已就绪', 'Shared Key Ready')}</span>
                                                             ) : (
@@ -1795,9 +1857,14 @@ const Settings = () => {
                                                                         <div className="font-mono break-all flex flex-wrap items-center gap-2">
                                                                             <span>{row.model || '-'}</span>
                                                                             {Number.isFinite(Number(row.avg_price_estimate)) && (
-                                                                                <span className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-400/30 bg-emerald-500/10 text-emerald-200">
-                                                                                    {t('均价估算', 'Avg')}: {Number(row.avg_price_estimate || 0)}
-                                                                                </span>
+                                                                                <>
+                                                                                    <span className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-400/30 bg-emerald-500/10 text-emerald-200">
+                                                                                        {t('均价估算', 'Avg')}: {Number(row.avg_price_estimate || 0)}
+                                                                                    </span>
+                                                                                    <span className="text-[10px] px-1.5 py-0.5 rounded border border-slate-400/30 bg-slate-500/10 text-slate-200">
+                                                                                        {t('来源', 'Source')}: {formatAvgPriceSource(row.avg_price_source)}
+                                                                                    </span>
+                                                                                </>
                                                                             )}
                                                                         </div>
                                                                     </div>
@@ -1806,7 +1873,7 @@ const Settings = () => {
                                                                             <button
                                                                                 onClick={(e) => {
                                                                                     e.stopPropagation();
-                                                                                    handleSelectSystemSetting(row, categoryBlock.category);
+                                                                                    handleSelectSystemSetting(row, categoryBlock.category, group.provider_alias || '');
                                                                                 }}
                                                                                 disabled={!group.shared_key_configured || selectingSystemId === row.id || !!row.deprecated}
                                                                                 className="text-xs px-3 py-1.5 rounded border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50 disabled:cursor-not-allowed"

@@ -407,8 +407,136 @@ Output ONLY the JSON object now."""
             return parsed
         return None
 
+    def _normalize_upsert_system_api_pricing_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        src = dict(params or {}) if isinstance(params, dict) else {}
+
+        def _pick_text(*keys: str) -> str:
+            for key in keys:
+                if key not in src:
+                    continue
+                value = src.get(key)
+                if value is None:
+                    continue
+                text = str(value).strip()
+                if text:
+                    return text
+            return ""
+
+        target = src.get("target") if isinstance(src.get("target"), dict) else {}
+        target_list = src.get("targets") if isinstance(src.get("targets"), list) else []
+        first_target = target_list[0] if target_list and isinstance(target_list[0], dict) else {}
+
+        provider = _pick_text("provider", "provider_name", "vendor", "supplier")
+        model = _pick_text("model", "model_name", "api_model")
+        category = _pick_text("category", "task_category", "api_category")
+
+        if not provider:
+            provider = str(target.get("provider") or first_target.get("provider") or "").strip()
+        if not model:
+            model = str(target.get("model") or first_target.get("model") or "").strip()
+        if not category:
+            category = str(target.get("category") or first_target.get("category") or "").strip()
+
+        if category and category.upper() in {"TEXT", "CHAT"}:
+            category = "LLM"
+
+        if provider:
+            src["provider"] = provider
+        if model:
+            src["model"] = model
+        if category:
+            src["category"] = category
+
+        # Map common price aliases to canonical supplier fields when missing.
+        if "supplier_price" not in src:
+            for k in ("price_per_call", "price_per_second", "unit_price", "price"):
+                if k in src and src.get(k) is not None:
+                    src["supplier_price"] = src.get(k)
+                    break
+        if "supplier_price_input" not in src and "input_price" in src:
+            src["supplier_price_input"] = src.get("input_price")
+        if "supplier_price_output" not in src and "output_price" in src:
+            src["supplier_price_output"] = src.get("output_price")
+
+        return src
+
+    def _hydrate_upsert_system_api_target(
+        self,
+        db: Session,
+        params: Dict[str, Any],
+        query_text: str = "",
+    ) -> Dict[str, Any]:
+        out = self._normalize_upsert_system_api_pricing_params(params)
+        provider = str(out.get("provider") or "").strip().lower()
+        category = str(out.get("category") or "").strip()
+        model = str(out.get("model") or "").strip().lower()
+
+        text_parts = [
+            str(query_text or ""),
+            str(out.get("query") or ""),
+            str(out.get("text") or ""),
+            str(out.get("objective") or ""),
+            str(out.get("content") or ""),
+            str(out.get("raw_text") or ""),
+            str(out.get("rule_name") or ""),
+            str(out.get("rule_description") or ""),
+        ]
+        haystack = "\n".join([p for p in text_parts if p]).lower()
+
+        # Infer provider/category from obvious intent tokens.
+        if not provider and "kie" in haystack:
+            provider = "kie"
+        if not category:
+            if any(token in haystack for token in ["video", "t2v", "i2v", "veo", "kling", "hailuo", "wan", "sora"]):
+                category = "Video"
+
+        # Veo family canonical mapping for KIE rows.
+        if not model and any(token in haystack for token in ["veo-3-1", "veo 3 1", "veo3.1", "veo3_1", "veo 3.1"]):
+            fast_tokens = ["fast mode", "fast", "极速", "快速"]
+            if any(token in haystack for token in fast_tokens):
+                model = "veo3_fast"
+            else:
+                model = "veo3"
+
+        # Generic model extraction: provider/model slug pattern in text.
+        if not model:
+            m = re.search(r"\b([a-z0-9._-]+/[a-z0-9._-]+)\b", haystack)
+            if m:
+                model = str(m.group(1) or "").strip().lower()
+
+        # If model still missing, use a fuzzy lookup from existing system rows.
+        if not model and haystack:
+            rows = db.query(SystemAPISetting).order_by(SystemAPISetting.id.desc()).all()
+            for row in rows:
+                row_provider = str(getattr(row, "provider", "") or "").strip().lower()
+                row_category = str(getattr(row, "category", "") or "").strip().lower()
+                row_model = str(getattr(row, "model", "") or "").strip().lower()
+                if not row_model:
+                    continue
+                if provider and row_provider != provider:
+                    continue
+                if category and row_category != str(category).strip().lower():
+                    continue
+                if row_model in haystack:
+                    model = row_model
+                    if not provider:
+                        provider = row_provider
+                    if not category:
+                        category = str(getattr(row, "category", "") or "").strip()
+                    break
+
+        if provider:
+            out["provider"] = provider
+        if category:
+            out["category"] = category
+        if model:
+            out["model"] = model
+        return out
+
     def _normalize_system_upsert_preview(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        params = self._normalize_upsert_system_api_pricing_params(params)
         provider = str(params.get("provider") or "").strip()
+        provider_alias = str(params.get("provider_alias") or "").strip()
         category = str(params.get("category") or "LLM").strip() or "LLM"
         category_lower = category.lower()
         model = str(params.get("model") or "").strip()
@@ -448,6 +576,7 @@ Output ONLY the JSON object now."""
 
         return {
             "provider": provider,
+            "provider_alias": provider_alias,
             "category": category,
             "model": model,
             "name": (str(params.get("name") or "").strip() or None),
@@ -476,6 +605,22 @@ Output ONLY the JSON object now."""
             "has_rule_dimensions": has_rule_dimensions,
             "rule_signature": rule_signature,
         }
+
+    def _build_provider_alias_lookup(self, db: Session) -> Dict[str, str]:
+        rows = db.query(ProviderKeyPool.provider, ProviderKeyPool.provider_alias).all()
+        out: Dict[str, str] = {}
+        for provider_name, alias_name in rows:
+            provider_text = str(provider_name or "").strip().lower()
+            alias_text = str(alias_name or "").strip()
+            if provider_text and alias_text and provider_text not in out:
+                out[provider_text] = alias_text
+        return out
+
+    def _resolve_provider_alias(self, provider_name: Any, alias_lookup: Optional[Dict[str, str]] = None) -> str:
+        provider_text = str(provider_name or "").strip().lower()
+        if not provider_text:
+            return ""
+        return str((alias_lookup or {}).get(provider_text) or "").strip()
 
     def _safe_optional_int(self, value: Any) -> Optional[int]:
         if value is None or str(value).strip() == "":
@@ -788,6 +933,58 @@ Output ONLY the JSON object now."""
                 return same_model_rows[0]
 
         return None
+
+    def _ensure_system_api_setting_for_pricing_upsert(
+        self,
+        db: Session,
+        provider: str,
+        category: str,
+        model: str,
+    ) -> Optional[SystemAPISetting]:
+        """Find existing system setting for pricing upsert, or create a minimal row."""
+        provider_text = str(provider or "").strip()
+        category_text = str(category or "LLM").strip() or "LLM"
+        model_text = str(model or "").strip()
+        if not provider_text or not model_text:
+            return None
+
+        existing = self._find_existing_system_api_setting(db, provider_text, category_text, model_text)
+        if existing:
+            return existing
+
+        default_base_url = None
+        try:
+            from app.api.settings import DEFAULTS
+            default_base_url = (DEFAULTS.get(provider_text) or {}).get("base_url")
+        except Exception:
+            default_base_url = None
+
+        config_payload: Dict[str, Any] = {"deprecated": False}
+        if str(provider_text).strip().lower() == "kie":
+            kie_base_url = "https://api.kie.ai"
+            config_payload.update({
+                "endpoint": f"{kie_base_url}/api/v1/jobs/createTask",
+                "query_endpoint": f"{kie_base_url}/api/v1/jobs/recordInfo",
+                "credits_endpoint": f"{kie_base_url}/api/v1/user/credits",
+                "credits_endpoint_v2": f"{kie_base_url}/api/v1/chat/credit",
+            })
+            if not default_base_url:
+                default_base_url = kie_base_url
+
+        created = SystemAPISetting(
+            name=f"{provider_text} {model_text}",
+            category=category_text,
+            provider=provider_text,
+            api_key="",
+            base_url=default_base_url,
+            model=model_text,
+            config=config_payload,
+            is_active=False,
+            deprecated=False,
+        )
+        db.add(created)
+        db.flush()
+        return created
 
     def _is_system_write_confirmation(self, query: str, history: List[Dict[str, Any]], params: Dict[str, Any]) -> bool:
         if bool(params.get("confirm")):
@@ -1139,6 +1336,14 @@ Output ONLY the JSON object now."""
             if isinstance(val, dict):
                 params = val
                 break
+        if not params and item:
+            params = {
+                k: v for k, v in item.items()
+                if k not in {"tool", "tool_name", "parameters", "tool_parameters", "tool_input"}
+            }
+
+        if tool_name == "upsert_system_api_pricing":
+            params = self._normalize_upsert_system_api_pricing_params(params)
         return {"tool_name": tool_name, "params": params}
     def _safe_json_dict_or_none(self, value: Any) -> Optional[Dict[str, Any]]:
         if value is None:
@@ -2194,6 +2399,7 @@ Output ONLY the JSON object now."""
         updated_data = None
         last_tool_result = None
         pending_write_previews: List[Dict[str, Any]] = []
+        provider_alias_lookup = self._build_provider_alias_lookup(db)
 
         for plan_item in llm_result.get("plan", []):
             normalized = self._extract_plan_item_tool_and_params(plan_item)
@@ -2213,30 +2419,28 @@ Output ONLY the JSON object now."""
                     params[k] = last_tool_result
 
             if tool_name == "upsert_system_api_pricing":
+                params = self._hydrate_upsert_system_api_target(db, params, request.query)
                 existing_row = self._find_existing_system_api_setting(
                     db,
                     str(params.get("provider") or "").strip(),
                     str(params.get("category") or "LLM").strip() or "LLM",
                     str(params.get("model") or "").strip(),
                 )
-                if not existing_row:
-                    actions.append(AgentAction(
-                        tool=tool_name,
-                        parameters=params,
-                        status="failed",
-                        result="Update-only policy: target API setting does not exist. Please create it first in System API settings CRUD.",
-                    ))
-                    continue
-
                 if not self._is_system_write_confirmation(request.query, request.history or [], params):
                     preview = self._normalize_system_upsert_preview(params)
+                    preview["provider_alias"] = self._resolve_provider_alias(preview.get("provider"), provider_alias_lookup)
                     preview = self._annotate_system_upsert_preview_with_rule_action(db, params, preview, existing_row)
                     pending_write_previews.append(preview)
+                    pending_msg = "Write confirmation required. Please explicitly confirm before applying pricing updates."
+                    if not existing_row:
+                        pending_msg = (
+                            "Write confirmation required. Target API setting is missing and will be auto-created before applying pricing updates."
+                        )
                     actions.append(AgentAction(
                         tool=tool_name,
                         parameters=params,
                         status="blocked",
-                        result="Write confirmation required. Please explicitly confirm before applying pricing updates.",
+                        result=pending_msg,
                     ))
                     continue
 
@@ -2292,6 +2496,7 @@ Output ONLY the JSON object now."""
                         continue
 
                     preview = self._normalize_system_upsert_preview(params)
+                    preview["provider_alias"] = self._resolve_provider_alias(preview.get("provider"), provider_alias_lookup)
                     preview = self._annotate_system_upsert_preview_with_rule_action(db, params, preview, existing_row)
                     pending_write_previews.append(preview)
                     auto_blocked_actions.append(AgentAction(
@@ -2307,6 +2512,7 @@ Output ONLY the JSON object now."""
         if pending_write_previews:
             preview_lines = []
             for idx, item in enumerate(pending_write_previews, start=1):
+                provider_label = str(item.get("provider_alias") or item.get("provider") or "").strip() or "-"
                 action_label = str(item.get("preview_action_label") or "待确认")
                 action_suffix = f"action={action_label}"
                 if item.get("preview_rule_id") is not None:
@@ -2314,17 +2520,17 @@ Output ONLY the JSON object now."""
                 category_text = str(item.get("category") or "").strip().lower()
                 if category_text == "image":
                     preview_lines.append(
-                        f"{idx}) provider={item.get('provider')}, category={item.get('category')}, model={item.get('model')}, "
+                        f"{idx}) provider={provider_label}, category={item.get('category')}, model={item.get('model')}, "
                         f"unit={item.get('unit_type')}, per_image={float(item.get('cost_decimal') or 0):.2f}, multiplier={float(item.get('multiplier_2dp') or 0):.2f}, {action_suffix}"
                     )
                 elif str(item.get("unit_type") or "") in {"per_token", "per_1k_tokens", "per_million_tokens"}:
                     preview_lines.append(
-                        f"{idx}) provider={item.get('provider')}, category={item.get('category')}, model={item.get('model')}, "
+                        f"{idx}) provider={provider_label}, category={item.get('category')}, model={item.get('model')}, "
                         f"unit={item.get('unit_type')}, in/out={float(item.get('cost_input_decimal') or 0):.2f}/{float(item.get('cost_output_decimal') or 0):.2f}, multiplier={float(item.get('multiplier_2dp') or 0):.2f}, {action_suffix}"
                     )
                 else:
                     preview_lines.append(
-                        f"{idx}) provider={item.get('provider')}, category={item.get('category')}, model={item.get('model')}, "
+                        f"{idx}) provider={provider_label}, category={item.get('category')}, model={item.get('model')}, "
                         f"unit={item.get('unit_type')}, cost={float(item.get('cost_decimal') or 0):.2f}, multiplier={float(item.get('multiplier_2dp') or 0):.2f}, {action_suffix}"
                     )
 
@@ -2588,6 +2794,7 @@ Output ONLY the JSON object now."""
         actions: List[AgentAction] = []
         updated_data = None
         pending_write_previews: List[Dict[str, Any]] = []
+        provider_alias_lookup = self._build_provider_alias_lookup(db)
         tool_policy = self._get_agent_tool_policy(db)
 
         for plan_item in llm_result.get("plan", []):
@@ -2604,30 +2811,28 @@ Output ONLY the JSON object now."""
                 continue
 
             if tool_name == "upsert_system_api_pricing":
+                params = self._hydrate_upsert_system_api_target(db, params, request.query)
                 existing_row = self._find_existing_system_api_setting(
                     db,
                     str(params.get("provider") or "").strip(),
                     str(params.get("category") or "LLM").strip() or "LLM",
                     str(params.get("model") or "").strip(),
                 )
-                if not existing_row:
-                    actions.append(AgentAction(
-                        tool=tool_name,
-                        parameters=params,
-                        status="failed",
-                        result="Update-only policy: target API setting does not exist. Please create it first in System API settings CRUD.",
-                    ))
-                    continue
-
                 if not self._is_system_write_confirmation(request.query, request.history or [], params):
                     preview = self._normalize_system_upsert_preview(params)
+                    preview["provider_alias"] = self._resolve_provider_alias(preview.get("provider"), provider_alias_lookup)
                     preview = self._annotate_system_upsert_preview_with_rule_action(db, params, preview, existing_row)
                     pending_write_previews.append(preview)
+                    pending_msg = "Write confirmation required. Please explicitly confirm before applying pricing updates."
+                    if not existing_row:
+                        pending_msg = (
+                            "Write confirmation required. Target API setting is missing and will be auto-created before applying pricing updates."
+                        )
                     actions.append(AgentAction(
                         tool=tool_name,
                         parameters=params,
                         status="blocked",
-                        result="Write confirmation required. Please explicitly confirm before applying pricing updates.",
+                        result=pending_msg,
                     ))
                     continue
 
@@ -2685,6 +2890,7 @@ Output ONLY the JSON object now."""
                         continue
 
                     preview = self._normalize_system_upsert_preview(params)
+                    preview["provider_alias"] = self._resolve_provider_alias(preview.get("provider"), provider_alias_lookup)
                     preview = self._annotate_system_upsert_preview_with_rule_action(db, params, preview, existing_row)
                     pending_write_previews.append(preview)
                     auto_blocked_actions.append(AgentAction(
@@ -2700,6 +2906,7 @@ Output ONLY the JSON object now."""
         if pending_write_previews:
             preview_lines = []
             for idx, item in enumerate(pending_write_previews, start=1):
+                provider_label = str(item.get("provider_alias") or item.get("provider") or "").strip() or "-"
                 action_label = str(item.get("preview_action_label") or "待确认")
                 action_suffix = f"action={action_label}"
                 if item.get("preview_rule_id") is not None:
@@ -2707,17 +2914,17 @@ Output ONLY the JSON object now."""
                 category_text = str(item.get("category") or "").strip().lower()
                 if category_text == "image":
                     preview_lines.append(
-                        f"{idx}) provider={item.get('provider')}, category={item.get('category')}, model={item.get('model')}, "
+                        f"{idx}) provider={provider_label}, category={item.get('category')}, model={item.get('model')}, "
                         f"unit={item.get('unit_type')}, per_image={float(item.get('cost_decimal') or 0):.2f}, multiplier={float(item.get('multiplier_2dp') or 0):.2f}, {action_suffix}"
                     )
                 elif str(item.get("unit_type") or "") in {"per_token", "per_1k_tokens", "per_million_tokens"}:
                     preview_lines.append(
-                        f"{idx}) provider={item.get('provider')}, category={item.get('category')}, model={item.get('model')}, "
+                        f"{idx}) provider={provider_label}, category={item.get('category')}, model={item.get('model')}, "
                         f"unit={item.get('unit_type')}, in/out={float(item.get('cost_input_decimal') or 0):.2f}/{float(item.get('cost_output_decimal') or 0):.2f}, multiplier={float(item.get('multiplier_2dp') or 0):.2f}, {action_suffix}"
                     )
                 else:
                     preview_lines.append(
-                        f"{idx}) provider={item.get('provider')}, category={item.get('category')}, model={item.get('model')}, "
+                        f"{idx}) provider={provider_label}, category={item.get('category')}, model={item.get('model')}, "
                         f"unit={item.get('unit_type')}, cost={float(item.get('cost_decimal') or 0):.2f}, multiplier={float(item.get('multiplier_2dp') or 0):.2f}, {action_suffix}"
                     )
 
@@ -3014,6 +3221,7 @@ Output ONLY the JSON object now."""
                 from app.services.modality_utils import modality_matches
                 rows = [r for r in rows if modality_matches(getattr(r, "modality", None), modality)]
 
+            alias_lookup = self._build_provider_alias_lookup(db)
             items = []
             for row in rows:
                 api_pricing = self._read_billing_from_row(row, session=db)
@@ -3021,6 +3229,7 @@ Output ONLY the JSON object now."""
                     "id": row.id,
                     "name": row.name,
                     "provider": row.provider,
+                    "provider_alias": self._resolve_provider_alias(row.provider, alias_lookup),
                     "category": row.category,
                     "model": row.model,
                     "modality": row.modality,
@@ -3055,6 +3264,12 @@ Output ONLY the JSON object now."""
             }
 
         if tool == "upsert_system_api_pricing":
+            params = self._normalize_upsert_system_api_pricing_params(params)
+            params = self._hydrate_upsert_system_api_target(
+                db,
+                params,
+                str((context or {}).get("query") or ""),
+            )
             provider = str(params.get("provider") or "").strip()
             category = str(params.get("category") or "LLM").strip() or "LLM"
             category_lower = category.lower()
@@ -3086,11 +3301,13 @@ Output ONLY the JSON object now."""
 
             row = self._find_existing_system_api_setting(db, provider, category, model)
             if not row:
+                row = self._ensure_system_api_setting_for_pricing_upsert(db, provider, category, model)
+            if not row:
                 return {
                     "status": "failed",
                     "result": (
-                        "Update-only policy: target API setting does not exist "
-                        f"({provider}/{category}/{model}). Create it first in System API settings CRUD."
+                        "Target API setting does not exist and auto-create failed "
+                        f"({provider}/{category}/{model}). Please create it first in System API settings CRUD."
                     ),
                 }
 

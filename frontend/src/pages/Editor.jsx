@@ -278,6 +278,7 @@ import {
 // RefineControl moved to components/RefineControl.jsx
 import { processPrompt } from '../lib/promptUtils';
 import { normalizeEntityToken } from '../lib/entityToken';
+import { formatProviderLabel } from '../lib/providerLabel';
 import SettingsPage from './Settings';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
 
@@ -471,6 +472,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
         character_relationships: "",
         notes: "",
         story_dna_global_md: "",
+        promo_dna_global_md: "",
         story_generator_global_input: {
             episodes_count: 12,
             background: "",
@@ -1252,7 +1254,9 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                 ? updated.global_info
                 : {};
             const returnedMarkdown = String(
-                responseGlobalInfo.story_dna_global_md
+                responseGlobalInfo.promo_dna_global_md
+                || responseGlobalInfo.story_dna_global_md
+                || updated?.promo_dna_global_md
                 || updated?.story_dna_global_md
                 || ''
             );
@@ -1261,7 +1265,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                 const merged = {
                     ...prev,
                     ...responseGlobalInfo,
-                    story_dna_global_md: returnedMarkdown || prev.story_dna_global_md || '',
+                    promo_dna_global_md: returnedMarkdown || prev.promo_dna_global_md || '',
                     promo_generator_input: {
                         ...promoInput,
                         episodes_count: episodesCount,
@@ -2474,14 +2478,14 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                         {promoFrameworkViewMode === 'edit' ? (
                             <textarea
                                 className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-56 resize-none"
-                                value={info.story_dna_global_md || ''}
-                                onChange={(e) => updateField('story_dna_global_md', e.target.value)}
+                                value={info.promo_dna_global_md || ''}
+                                onChange={(e) => updateField('promo_dna_global_md', e.target.value)}
                                 placeholder={t('（生成后，宣传片全局框架会显示在这里。你可以编辑后保存修改。）', '(After generation, promo global framework will appear here. You can edit it and Save Changes.)')}
                             />
                         ) : (
                             <div className="bg-black/30 border border-white/10 rounded-md px-3 py-3 h-56 overflow-y-auto custom-scrollbar prose prose-invert max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1">
-                                {(info.story_dna_global_md || '').trim()
-                                    ? <ReactMarkdown>{info.story_dna_global_md}</ReactMarkdown>
+                                {(info.promo_dna_global_md || '').trim()
+                                    ? <ReactMarkdown>{info.promo_dna_global_md}</ReactMarkdown>
                                     : <div className="text-sm text-muted-foreground">{t('（生成后，宣传片全局框架会显示在这里。）', '(After generation, promo global framework will appear here.)')}</div>
                                 }
                             </div>
@@ -13596,7 +13600,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                                     <option value="">{t('默认（系统）', 'Default (System)')}</option>
                                                     {availableProviders.map(p => (
                                                         <option key={p.provider} value={p.provider}>
-                                                           {p.provider ? (p.provider.charAt(0).toUpperCase() + p.provider.slice(1)) : 'Unknown'}
+                                                           {formatProviderLabel(p.provider, p.provider_alias) || 'Unknown'}
                                                         </option>
                                                     ))}
                                                 </select>
@@ -14310,6 +14314,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             duration: durationText,
             source: String(meta.source || '').trim(),
             provider: String(meta.provider || '').trim(),
+            providerAlias: String(meta.provider_alias || '').trim(),
             model: String(meta.model || '').trim(),
             rawMeta: meta,
         };
@@ -18045,7 +18050,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                             </div>
                                                             <div>
                                                                 <div className="text-[10px] text-muted-foreground uppercase">Provider</div>
-                                                                <div className="text-white/90">{linkedAssetDetail.provider || '-'}</div>
+                                                                <div className="text-white/90">
+                                                                    {linkedAssetDetail.providerAlias || linkedAssetDetail.provider || '-'}
+                                                                    {linkedAssetDetail.providerAlias && linkedAssetDetail.provider ? (
+                                                                        <span className="ml-1 text-[10px] text-muted-foreground font-mono">({linkedAssetDetail.provider})</span>
+                                                                    ) : null}
+                                                                </div>
                                                             </div>
                                                             <div>
                                                                 <div className="text-[10px] text-muted-foreground uppercase">Model</div>

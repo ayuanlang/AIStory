@@ -8,6 +8,7 @@ import {
     streamSystemManagementAgentCommand,
 } from '../services/api';
 import { Send, Bot, X, Trash2, History } from 'lucide-react';
+import { formatProviderLabel } from '../lib/providerLabel';
 
 /** Strip <think>...</think> blocks and unclosed <think> tails from streaming text. */
 const stripThinkBlocks = (text) =>
@@ -63,7 +64,7 @@ const MessageBubble = React.memo(({ role, content, streaming: isStreaming, actio
                                         <div className="space-y-1 text-amber-100/90">
                                             {previewItems.slice(0, 6).map((item, idx) => (
                                                 <div key={`${item?.provider || 'p'}-${item?.model || 'm'}-${idx}`} className="font-mono text-[11px]">
-                                                    {idx + 1}. {item?.provider || '-'} / {item?.category || '-'} / {item?.model || '-'} | {item?.preview_action_label || '待确认'}
+                                                    {idx + 1}. {formatProviderLabel(item?.provider, item?.provider_alias)} / {item?.category || '-'} / {item?.model || '-'} | {item?.preview_action_label || '待确认'}
                                                 </div>
                                             ))}
                                         </div>

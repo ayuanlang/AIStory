@@ -180,7 +180,7 @@ const UserAdmin = () => {
     const [providerKeyPoolRows, setProviderKeyPoolRows] = useState([]);
     const [isProviderKeyPoolLoading, setIsProviderKeyPoolLoading] = useState(false);
     const [selectedKeyPoolId, setSelectedKeyPoolId] = useState('');
-    const [keyPoolForm, setKeyPoolForm] = useState({ provider: '', api_keys: '', strategy: 'random', weights: '', intro_url: '' });
+    const [keyPoolForm, setKeyPoolForm] = useState({ provider: '', provider_alias: '', api_keys: '', strategy: 'random', weights: '', intro_url: '' });
     const [taskDefaultApiRows, setTaskDefaultApiRows] = useState([]);
     const [isTaskDefaultApiLoading, setIsTaskDefaultApiLoading] = useState(false);
     const [selectedTaskDefaultCategory, setSelectedTaskDefaultCategory] = useState('');
@@ -2241,13 +2241,14 @@ const UserAdmin = () => {
 
     useEffect(() => {
         if (!selectedKeyPoolId) {
-            setKeyPoolForm({ provider: '', api_keys: '', strategy: 'random', weights: '', intro_url: '' });
+            setKeyPoolForm({ provider: '', provider_alias: '', api_keys: '', strategy: 'random', weights: '', intro_url: '' });
             return;
         }
         const row = providerKeyPoolRows.find((r) => String(r.id) === String(selectedKeyPoolId));
         if (!row) return;
         setKeyPoolForm({
             provider: row.provider || '',
+            provider_alias: row.provider_alias || '',
             api_keys: Array.isArray(row.api_keys) ? row.api_keys.join('\n') : '',
             strategy: row.strategy || 'random',
             weights: Array.isArray(row.weights) && row.weights.length ? row.weights.join('\n') : '',
@@ -2292,6 +2293,7 @@ const UserAdmin = () => {
         try {
             await createProviderKeyPool({
                 provider,
+                provider_alias: String(keyPoolForm.provider_alias || '').trim() || undefined,
                 api_keys: keys,
                 strategy: keyPoolForm.strategy || 'random',
                 weights: keyPoolForm.strategy === 'weighted' ? weights : undefined,
@@ -2310,6 +2312,7 @@ const UserAdmin = () => {
         try {
             await updateProviderKeyPool(Number(selectedKeyPoolId), {
                 provider: String(keyPoolForm.provider || '').trim() || undefined,
+                provider_alias: String(keyPoolForm.provider_alias || '').trim() || undefined,
                 api_keys: keys,
                 strategy: keyPoolForm.strategy || 'random',
                 weights: keyPoolForm.strategy === 'weighted' ? weights : undefined,
@@ -4577,6 +4580,7 @@ const UserAdmin = () => {
                                                             <tr className="text-gray-400 border-b border-white/10">
                                                                 <th className="text-left py-1.5 px-2">ID</th>
                                                                 <th className="text-left py-1.5 px-2">Provider</th>
+                                                                <th className="text-left py-1.5 px-2">{t('供应商别名', 'Provider Alias')}</th>
                                                                 <th className="text-left py-1.5 px-2">{t('密钥数', 'Keys')}</th>
                                                                 <th className="text-left py-1.5 px-2">{t('策略', 'Strategy')}</th>
                                                                 <th className="text-left py-1.5 px-2">{t('介绍 URL', 'Intro URL')}</th>
@@ -4591,6 +4595,7 @@ const UserAdmin = () => {
                                                                 >
                                                                     <td className="py-1.5 px-2">{row.id}</td>
                                                                     <td className="py-1.5 px-2 font-mono">{row.provider}</td>
+                                                                    <td className="py-1.5 px-2">{row.provider_alias || '-'}</td>
                                                                     <td className="py-1.5 px-2">{Array.isArray(row.api_keys) ? row.api_keys.length : 0}</td>
                                                                     <td className="py-1.5 px-2">{row.strategy || 'random'}</td>
                                                                     <td className="py-1.5 px-2 max-w-[220px] truncate" title={row.intro_url || '-'}>{row.intro_url || '-'}</td>
@@ -4598,7 +4603,7 @@ const UserAdmin = () => {
                                                                 </tr>
                                                             ))}
                                                             {providerKeyPoolRows.length === 0 && (
-                                                                <tr><td colSpan={6} className="py-3 px-2 text-center text-gray-500">{t('暂无数据', 'No data')}</td></tr>
+                                                                <tr><td colSpan={7} className="py-3 px-2 text-center text-gray-500">{t('暂无数据', 'No data')}</td></tr>
                                                             )}
                                                         </tbody>
                                                     </table>
@@ -4612,6 +4617,15 @@ const UserAdmin = () => {
                                                             onChange={(e) => setKeyPoolForm(f => ({ ...f, provider: e.target.value }))}
                                                             className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm font-mono"
                                                             placeholder="e.g. openai"
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-xs uppercase text-gray-400 mb-1">{t('供应商别名', 'Provider Alias')}</label>
+                                                        <input
+                                                            value={keyPoolForm.provider_alias}
+                                                            onChange={(e) => setKeyPoolForm(f => ({ ...f, provider_alias: e.target.value }))}
+                                                            className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                            placeholder={t('例如 OpenAI 官方', 'e.g. OpenAI Official')}
                                                         />
                                                     </div>
                                                     <div>

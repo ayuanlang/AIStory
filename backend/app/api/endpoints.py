@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
 from sqlalchemy import or_, and_
 from app.db.session import get_db, SessionLocal
-from app.models.all_models import Project, ProjectShare, User, Episode, Scene, Shot, Entity, Asset, APISetting, SystemAPISetting, ScriptSegment, TransactionHistory, SMTPSystemConfig, WechatPayConfig
+from app.models.all_models import Project, ProjectShare, User, Episode, Scene, Shot, Entity, Asset, APISetting, SystemAPISetting, ScriptSegment, TransactionHistory, SMTPSystemConfig, WechatPayConfig, ProviderKeyPool
 from app.schemas.agent import AgentRequest, AgentResponse, AnalyzeSceneRequest
 from app.services.agent_service import agent_service
 from app.services.billing_service import billing_service
@@ -722,6 +722,51 @@ def _compact_job_result(result: Any) -> Any:
             compact["metadata"] = compact_meta
 
     return compact or {"url": result.get("url")}
+
+
+def _build_provider_alias_lookup(db: Session) -> Dict[str, str]:
+    rows = db.query(ProviderKeyPool.provider, ProviderKeyPool.provider_alias).all()
+    alias_map: Dict[str, str] = {}
+    for row in rows:
+        provider_key = str(getattr(row, "provider", "") or "").strip().lower()
+        alias_text = str(getattr(row, "provider_alias", "") or "").strip()
+        if provider_key and alias_text:
+            alias_map[provider_key] = alias_text
+    return alias_map
+
+
+def _resolve_provider_alias(alias_map: Dict[str, str], provider: Any) -> Optional[str]:
+    provider_key = str(provider or "").strip().lower()
+    if not provider_key:
+        return None
+    alias_text = str((alias_map or {}).get(provider_key) or "").strip()
+    return alias_text or None
+
+
+def _attach_provider_alias_to_dict(meta: Any, alias_map: Dict[str, str]) -> Any:
+    if not isinstance(meta, dict):
+        return meta
+    out = dict(meta)
+    provider_text = str(out.get("provider") or "").strip()
+    if provider_text and not str(out.get("provider_alias") or "").strip():
+        alias_text = _resolve_provider_alias(alias_map, provider_text)
+        if alias_text:
+            out["provider_alias"] = alias_text
+    return out
+
+
+def _attach_provider_alias_deep(payload: Any, alias_map: Dict[str, str]) -> Any:
+    if isinstance(payload, dict):
+        out = {k: _attach_provider_alias_deep(v, alias_map) for k, v in payload.items()}
+        provider_text = str(out.get("provider") or "").strip()
+        if provider_text and not str(out.get("provider_alias") or "").strip():
+            alias_text = _resolve_provider_alias(alias_map, provider_text)
+            if alias_text:
+                out["provider_alias"] = alias_text
+        return out
+    if isinstance(payload, list):
+        return [_attach_provider_alias_deep(item, alias_map) for item in payload]
+    return payload
 
 
 def _prune_image_jobs_locked() -> None:
@@ -3926,18 +3971,12 @@ async def generate_project_story_dna_global(
     language = (req.language or gi_existing.get("language") or "").strip()
     base_positioning = (req.base_positioning or gi_existing.get("base_positioning") or "").strip()
     global_style = (req.Global_Style or gi_existing.get("Global_Style") or gi_existing.get("global_style") or "").strip()
-    generator_kind = _normalize_generator_kind(req.generator_kind)
+    generator_kind = _normalize_generator_kind(req.generator_kind) or "story"
 
     if generator_kind == "promo":
         prompt_filename = "promo_generator_global.txt"
-    elif generator_kind == "story":
-        prompt_filename = "story_generator_global.txt"
     else:
-        prompt_filename = "promo_generator_global.txt" if _should_use_promo_prompts(
-            gi_existing,
-            req_type=project_type,
-            req_extra_notes=req.extra_notes,
-        ) else "story_generator_global.txt"
+        prompt_filename = "story_generator_global.txt"
 
     try:
         sys_prompt = _resolve_prompt_text(prompt_filename)
@@ -4030,7 +4069,7 @@ async def generate_project_story_dna_global(
             output_ratio=1.0,
         )
     settle_details = {
-        "item": "story_generator_global",
+        "item": "promo_generator_global" if generator_kind == "promo" else "story_generator_global",
         "prompt_tokens": int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0),
         "completion_tokens": int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0),
         "total_tokens": int(
@@ -4061,15 +4100,29 @@ async def generate_project_story_dna_global(
     except AttributeError:
         story_input = req.dict()
     story_input["mode"] = "global"
+    generator_kind = _normalize_generator_kind(story_input.get("generator_kind") or req.generator_kind) or "story"
+    story_input["generator_kind"] = generator_kind
+    generator_kind = _normalize_generator_kind(story_input.get("generator_kind") or req.generator_kind) or "story"
+    story_input["generator_kind"] = generator_kind
+    story_input["generator_kind"] = generator_kind
 
     now_iso = now_bj_iso()
     gi = dict(project.global_info or {})
-    gi["story_generator_global_input"] = story_input
-    gi["story_dna_global_md"] = generated_md
-    gi["story_dna_global_updated_at"] = now_iso
-    if extracted_constraints:
-        gi["global_style_constraints"] = extracted_constraints
-        gi["global_style_constraints_updated_at"] = now_iso
+    if generator_kind == "promo":
+        gi["promo_generator_input"] = story_input
+        gi["promo_generator_input_updated_at"] = now_iso
+        gi["promo_dna_global_md"] = generated_md
+        gi["promo_dna_global_updated_at"] = now_iso
+        if extracted_constraints:
+            gi["promo_global_style_constraints"] = extracted_constraints
+            gi["promo_global_style_constraints_updated_at"] = now_iso
+    else:
+        gi["story_generator_global_input"] = story_input
+        gi["story_dna_global_md"] = generated_md
+        gi["story_dna_global_updated_at"] = now_iso
+        if extracted_constraints:
+            gi["global_style_constraints"] = extracted_constraints
+            gi["global_style_constraints_updated_at"] = now_iso
     project.global_info = gi
 
     db.add(project)
@@ -4103,11 +4156,17 @@ def save_project_story_generator_global_input(
     except AttributeError:
         story_input = req.dict()
     story_input["mode"] = "global"
+    generator_kind = _normalize_generator_kind(story_input.get("generator_kind") or req.generator_kind) or "story"
+    story_input["generator_kind"] = generator_kind
 
     now_iso = now_bj_iso()
     gi = dict(project.global_info or {})
-    gi["story_generator_global_input"] = story_input
-    gi["story_generator_global_input_updated_at"] = now_iso
+    if generator_kind == "promo":
+        gi["promo_generator_input"] = story_input
+        gi["promo_generator_input_updated_at"] = now_iso
+    else:
+        gi["story_generator_global_input"] = story_input
+        gi["story_generator_global_input_updated_at"] = now_iso
     project.global_info = gi
 
     db.add(project)
@@ -5699,17 +5758,11 @@ async def generate_episode_story_dna(
         # Backward compatible: allow generating global from any episode, but store to project.global_info
         if not req.episodes_count or int(req.episodes_count) <= 0:
             raise HTTPException(status_code=400, detail="episodes_count is required for global mode")
-        generator_kind = _normalize_generator_kind(req.generator_kind)
+        generator_kind = _normalize_generator_kind(req.generator_kind) or "story"
         if generator_kind == "promo":
             prompt_filename = "promo_generator_global.txt"
-        elif generator_kind == "story":
-            prompt_filename = "story_generator_global.txt"
         else:
-            prompt_filename = "promo_generator_global.txt" if _should_use_promo_prompts(
-                project.global_info,
-                req_type=req.type,
-                req_extra_notes=req.extra_notes,
-            ) else "story_generator_global.txt"
+            prompt_filename = "story_generator_global.txt"
     else:
         if not req.episode_number or int(req.episode_number) <= 0:
             raise HTTPException(status_code=400, detail="episode_number is required for episode mode")
@@ -5823,13 +5876,22 @@ async def generate_episode_story_dna(
     except AttributeError:
         story_input = req.dict()
     story_input["mode"] = mode
+    story_input["generator_kind"] = _normalize_generator_kind(story_input.get("generator_kind") or req.generator_kind) or "story"
+    story_input["generator_kind"] = _normalize_generator_kind(story_input.get("generator_kind") or req.generator_kind) or "story"
 
     now_iso = now_bj_iso()
     if mode == "global":
+        global_kind = _normalize_generator_kind(story_input.get("generator_kind")) or "story"
         gi = dict(project.global_info or {})
-        gi["story_generator_global_input"] = story_input
-        gi["story_dna_global_md"] = generated_md
-        gi["story_dna_global_updated_at"] = now_iso
+        if global_kind == "promo":
+            gi["promo_generator_input"] = story_input
+            gi["promo_generator_input_updated_at"] = now_iso
+            gi["promo_dna_global_md"] = generated_md
+            gi["promo_dna_global_updated_at"] = now_iso
+        else:
+            gi["story_generator_global_input"] = story_input
+            gi["story_dna_global_md"] = generated_md
+            gi["story_dna_global_updated_at"] = now_iso
         project.global_info = gi
         db.add(project)
     else:
@@ -5876,9 +5938,14 @@ def save_episode_story_generator_input(
 
     now_iso = now_bj_iso()
     if mode == "global":
+        global_kind = _normalize_generator_kind(story_input.get("generator_kind")) or "story"
         gi = dict(project.global_info or {})
-        gi["story_generator_global_input"] = story_input
-        gi["story_generator_global_input_updated_at"] = now_iso
+        if global_kind == "promo":
+            gi["promo_generator_input"] = story_input
+            gi["promo_generator_input_updated_at"] = now_iso
+        else:
+            gi["story_generator_global_input"] = story_input
+            gi["story_generator_global_input_updated_at"] = now_iso
         project.global_info = gi
         db.add(project)
     else:
@@ -6328,6 +6395,8 @@ async def generate_project_episode_scripts_from_global_framework(
         latest_status = _read_run_status()
         return bool(latest_status.get("stop_requested"))
 
+    generator_kind = _normalize_generator_kind(req.generator_kind) or "story"
+
     # Determine target episode count
     target_n: Optional[int] = None
     if req.episodes_count is not None:
@@ -6340,7 +6409,8 @@ async def generate_project_episode_scripts_from_global_framework(
             raise HTTPException(status_code=400, detail="episodes_count must be an integer")
     else:
         try:
-            saved = (gi.get("story_generator_global_input") or {}).get("episodes_count")
+            input_key = "promo_generator_input" if generator_kind == "promo" else "story_generator_global_input"
+            saved = (gi.get(input_key) or {}).get("episodes_count")
             if saved is not None:
                 target_n = int(saved)
         except Exception:
@@ -6365,7 +6435,8 @@ async def generate_project_episode_scripts_from_global_framework(
         )
         raise HTTPException(status_code=400, detail="episodes_count is required (or generate/save Global Story first)")
 
-    global_md = str(gi.get("story_dna_global_md") or "").strip()
+    global_md_key = "promo_dna_global_md" if generator_kind == "promo" else "story_dna_global_md"
+    global_md = str(gi.get(global_md_key) or "").strip()
     if not global_md:
         logger.warning(
             f"[generate_episode_scripts] missing global framework. project_id={project_id} user_id={current_user.id}"
@@ -6383,7 +6454,7 @@ async def generate_project_episode_scripts_from_global_framework(
         logger.info(
             f"[generate_episode_scripts] RESPONSE success=False status_code=400 project_id={project_id} detail=Generated Global Framework is empty"
         )
-        raise HTTPException(status_code=400, detail="Generated Global Framework (story_dna_global_md) is empty")
+        raise HTTPException(status_code=400, detail=f"Generated Global Framework ({global_md_key}) is empty")
 
     character_canon_md = str(gi.get("character_canon_md") or "").strip()
     if not character_canon_md:
@@ -6406,7 +6477,8 @@ async def generate_project_episode_scripts_from_global_framework(
         )
 
     relationships = str(gi.get("character_relationships") or "").strip()
-    constraints_obj = (project.global_info or {}).get("global_style_constraints")
+    constraints_key = "promo_global_style_constraints" if generator_kind == "promo" else "global_style_constraints"
+    constraints_obj = (project.global_info or {}).get(constraints_key)
     has_constraints = bool(constraints_obj)
     has_relationships = bool(relationships)
     if str(gi.get("character_canon_md") or "").strip():
@@ -6423,13 +6495,10 @@ async def generate_project_episode_scripts_from_global_framework(
         f"character_canon_len={len(character_canon_md)} character_source={character_canon_source}"
     )
 
-    generator_kind = _normalize_generator_kind(req.generator_kind)
     if generator_kind == "promo":
         prompt_filename = "promo_generator_episode_script.txt"
-    elif generator_kind == "story":
-        prompt_filename = "script_generator_episode_script.txt"
     else:
-        prompt_filename = "promo_generator_episode_script.txt" if _should_use_promo_prompts(gi) else "script_generator_episode_script.txt"
+        prompt_filename = "script_generator_episode_script.txt"
     try:
         sys_prompt = _resolve_prompt_text(prompt_filename)
     except FileNotFoundError:
@@ -10544,6 +10613,7 @@ def get_assets(
         shots = db.query(Shot.id, Shot.shot_id).filter(Shot.id.in_(shot_ids)).all()
         shot_map = {s.id: s.shot_id for s in shots}
 
+    provider_alias_map = _build_provider_alias_lookup(db)
     results = []
     for a in filtered_assets:
         meta = _meta_dict(a.meta_info)
@@ -10572,6 +10642,8 @@ def get_assets(
                 sid_int = int(s_id)
                 if sid_int in shot_map: meta['shot_number'] = shot_map[sid_int]
             except: pass
+
+            meta = _attach_provider_alias_to_dict(meta, provider_alias_map)
 
         results.append({
             "id": a.id,
@@ -12023,8 +12095,30 @@ def get_transactions(
     
     if target_id:
         query = query.filter(TransactionHistory.user_id == target_id)
-        
-    return query.order_by(TransactionHistory.id.desc()).limit(limit).all()
+
+    rows = query.order_by(TransactionHistory.id.desc()).limit(limit).all()
+    alias_map = _build_provider_alias_lookup(db)
+    results: List[Dict[str, Any]] = []
+    for row in rows:
+        provider_text = str(getattr(row, "provider", "") or "").strip() or None
+        provider_alias = _resolve_provider_alias(alias_map, provider_text)
+        details_payload = _attach_provider_alias_deep(getattr(row, "details", None), alias_map)
+        payload = {
+            "id": row.id,
+            "user_id": row.user_id,
+            "amount": row.amount,
+            "balance_after": row.balance_after,
+            "task_type": row.task_type,
+            "provider": row.provider,
+            "model": row.model,
+            "details": details_payload,
+            "created_at": row.created_at,
+        }
+        if provider_alias:
+            payload["provider_alias"] = provider_alias
+        results.append(payload)
+
+    return results
 
 class CreditUpdate(BaseModel):
     amount: int # Absolute value or delta? Let's say absolute set for admin simplicity, or add functionality
@@ -12266,6 +12360,9 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
             for k in ["provider", "model", "duration", "width", "height", "aspect_ratio", "submit_aspect_ratio", "prompt", "seed"]:
                 if k in source_metadata:
                     meta[k] = source_metadata[k]
+
+        provider_alias_map = _build_provider_alias_lookup(db)
+        meta = _attach_provider_alias_to_dict(meta, provider_alias_map)
 
         def _set_size(bytes_size: Optional[int]) -> None:
             if bytes_size is None:

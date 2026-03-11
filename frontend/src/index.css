@@ -67,6 +67,18 @@
     @apply bg-background text-foreground antialiased;
     font-feature-settings: "rlig" 1, "calt" 1;
   }
+
+  /* Ensure dropdown list text remains readable across OS/browser popup rendering. */
+  select {
+    color: hsl(var(--foreground));
+    background-color: hsl(var(--background));
+  }
+
+  select option,
+  select optgroup {
+    color: hsl(var(--foreground));
+    background-color: hsl(var(--background));
+  }
 }
 
 /* Agent Chat Markdown Styles */

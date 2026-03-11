@@ -110,6 +110,20 @@ def check_and_migrate_tables():
         except Exception as e:
             logger.error(f"Failed to ensure provider_key_pool.intro_url column: {e}")
 
+        # Ensure provider_key_pool.provider_alias exists for user-facing provider display names.
+        try:
+            inspector = inspect(engine)
+            existing_pool_cols = {c['name'] for c in inspector.get_columns('provider_key_pool')} if inspector.has_table('provider_key_pool') else set()
+            if 'provider_alias' not in existing_pool_cols:
+                with engine.begin() as conn:
+                    if is_postgres:
+                        conn.execute(text("ALTER TABLE provider_key_pool ADD COLUMN IF NOT EXISTS provider_alias VARCHAR"))
+                    else:
+                        conn.execute(text("ALTER TABLE provider_key_pool ADD COLUMN provider_alias VARCHAR"))
+                logger.info("Ensured provider_key_pool.provider_alias column")
+        except Exception as e:
+            logger.error(f"Failed to ensure provider_key_pool.provider_alias column: {e}")
+
         # Ensure dedicated default API mapping table exists.
         try:
             if not inspector.has_table("system_task_default_apis"):

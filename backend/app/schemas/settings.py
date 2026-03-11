@@ -71,6 +71,7 @@ class SystemAPIModelOption(BaseModel):
 
 class SystemAPIProviderSettings(BaseModel):
     provider: str
+    provider_alias: Optional[str] = None
     category: str
     shared_key_configured: bool = False
     models: List[SystemAPIModelOption] = []
@@ -805,6 +806,7 @@ class KIEPricingApplyResponse(BaseModel):
 
 class ProviderKeyPoolCreate(BaseModel):
     provider: str
+    provider_alias: Optional[str] = None
     api_keys: Optional[List[str]] = Field(default_factory=list)
     strategy: Optional[str] = "random"
     weights: Optional[List[float]] = None
@@ -812,6 +814,7 @@ class ProviderKeyPoolCreate(BaseModel):
 
 class ProviderKeyPoolUpdate(BaseModel):
     provider: Optional[str] = None
+    provider_alias: Optional[str] = None
     api_keys: Optional[List[str]] = None
     strategy: Optional[str] = None
     weights: Optional[List[float]] = None
@@ -820,6 +823,7 @@ class ProviderKeyPoolUpdate(BaseModel):
 class ProviderKeyPoolOut(BaseModel):
     id: int
     provider: str
+    provider_alias: Optional[str] = None
     api_keys: Optional[List[str]] = []
     strategy: Optional[str] = "random"
     weights: Optional[List[float]] = []

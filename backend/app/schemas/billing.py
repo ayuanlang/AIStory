@@ -8,6 +8,7 @@ class TransactionOut(BaseModel):
     balance_after: int
     task_type: Optional[str] = None
     provider: Optional[str] = None
+    provider_alias: Optional[str] = None
     model: Optional[str] = None
     details: Optional[Any] = None
     created_at: str

@@ -78,6 +78,10 @@ class BillingService:
         if cat == "vision":
             return [{"input_tokens": 1000, "output_tokens": 300, "total_tokens": 1300}]
 
+        if cat == "llm":
+            # LLM average estimation baseline: 1M total tokens with input:output = 3:1.
+            return [{"input_tokens": 750000, "output_tokens": 250000, "total_tokens": 1000000}]
+
         return [{"input_tokens": 1500, "output_tokens": 700, "total_tokens": 2200}]
 
     @staticmethod
@@ -98,6 +102,12 @@ class BillingService:
             return {"average_cost": 0, "source": "system_api_not_found", "samples": 0}
 
         category = str(getattr(system_row, "category", "") or "").strip()
+
+        # Media categories: prefer averaging this API's own active rule prices.
+        media_avg = BillingService._estimate_media_average_price_from_rules(db, api_id, category)
+        if media_avg is not None:
+            return media_avg
+
         task_type = BillingService._task_type_for_category(category)
         profiles = BillingService._default_usage_profiles_for_category(category, generation_mode=generation_mode)
 
@@ -123,6 +133,46 @@ class BillingService:
         return {
             "average_cost": max(0, avg_cost),
             "source": source,
+            "samples": len(costs),
+        }
+
+    @staticmethod
+    def _estimate_media_average_price_from_rules(
+        db: Session,
+        system_api_id: int,
+        category: str,
+    ) -> Optional[Dict[str, Any]]:
+        cat = str(category or "").strip().lower()
+        if cat not in {"image", "video"}:
+            return None
+
+        rows = db.query(SystemAPIBillingRule).filter(
+            SystemAPIBillingRule.system_api_id == int(system_api_id),
+            SystemAPIBillingRule.is_active == True,
+        ).order_by(SystemAPIBillingRule.priority.desc(), SystemAPIBillingRule.id.desc()).all()
+
+        if not rows:
+            return None
+
+        costs: List[int] = []
+        for row in rows:
+            if cat == "image" and not bool(getattr(row, "applies_to_image", False)):
+                continue
+            if cat == "video" and not bool(getattr(row, "applies_to_video", False)):
+                continue
+
+            cost = max(0, BillingService._to_int(getattr(row, "billing_cost", 0), 0))
+            if cost <= 0:
+                continue
+            costs.append(int(cost))
+
+        if not costs:
+            return None
+
+        avg_cost = int(round(sum(costs) / float(len(costs))))
+        return {
+            "average_cost": max(0, avg_cost),
+            "source": "system_api_rule_price_average",
             "samples": len(costs),
         }
 

@@ -1063,9 +1063,10 @@ def _get_system_provider_key_pool_full(db: Session, provider: str) -> dict:
             "keys": keys,
             "strategy": _normalize_key_strategy(record.strategy),
             "weights": _normalize_key_weights(record.weights, keys),
+            "provider_alias": str(getattr(record, "provider_alias", "") or "").strip() or None,
             "intro_url": str(getattr(record, "intro_url", "") or "").strip() or None,
         }
-    return {"keys": [], "strategy": "random", "weights": [], "intro_url": None}
+    return {"keys": [], "strategy": "random", "weights": [], "provider_alias": None, "intro_url": None}
 
 
 def _apply_system_provider_key_pool(db: Session, provider: str, keys: List[str]) -> None:
@@ -2644,6 +2645,11 @@ def get_system_settings(
                 user_active_by_category[cat] = row_data
 
         grouped: Dict[Tuple[str, str], Dict] = {}
+        provider_alias_map = {
+            str(row.provider or "").strip().lower(): (str(getattr(row, "provider_alias", "") or "").strip() or None)
+            for row in db.query(ProviderKeyPool.provider, ProviderKeyPool.provider_alias).all()
+            if str(row.provider or "").strip()
+        }
         for item in system_settings:
             provider = item.provider or "unknown"
             category = item.category or "LLM"
@@ -2660,6 +2666,7 @@ def get_system_settings(
             if key not in grouped:
                 grouped[key] = {
                     "provider": provider,
+                    "provider_alias": provider_alias_map.get(str(provider or "").strip().lower()),
                     "category": category,
                     "shared_key_configured": False,
                     "models_map": {},
@@ -5631,6 +5638,7 @@ def export_system_config_sync_bundle_for_manage(
     provider_key_pools_payload = [
         {
             "provider": row.provider,
+            "provider_alias": str(getattr(row, "provider_alias", "") or "").strip() or None,
             "api_keys": _normalize_api_keys(row.api_keys),
             "strategy": _normalize_key_strategy(row.strategy),
             "weights": row.weights if row.weights else [],
@@ -5849,6 +5857,7 @@ def import_system_config_sync_bundle_for_manage(
                 keys = _normalize_api_keys(raw_pool.get("api_keys"))
                 strategy = _normalize_key_strategy(raw_pool.get("strategy"))
                 weights = _normalize_key_weights(raw_pool.get("weights"), keys)
+                provider_alias = str(raw_pool.get("provider_alias") or "").strip() or None
                 intro_url = _normalize_optional_http_url(raw_pool.get("intro_url"))
                 updated_at = str(raw_pool.get("updated_at") or now_bj_iso())
 
@@ -5861,6 +5870,7 @@ def import_system_config_sync_bundle_for_manage(
                         "api_keys": keys,
                         "strategy": strategy,
                         "weights": weights,
+                        "provider_alias": provider_alias,
                         "intro_url": intro_url,
                         "updated_at": updated_at,
                     },
@@ -5874,6 +5884,7 @@ def import_system_config_sync_bundle_for_manage(
                 created_at = str(raw_pool.get("created_at") or now_bj_iso())
                 db.add(ProviderKeyPool(
                     provider=provider_name,
+                    provider_alias=provider_alias,
                     api_keys=keys,
                     strategy=strategy,
                     weights=weights,
@@ -6161,6 +6172,7 @@ def list_provider_key_pools(
         ProviderKeyPoolOut(
             id=row.id,
             provider=row.provider,
+            provider_alias=str(getattr(row, "provider_alias", "") or "").strip() or None,
             api_keys=_normalize_api_keys(row.api_keys),
             strategy=_normalize_key_strategy(row.strategy),
             weights=row.weights if row.weights else [],
@@ -6196,6 +6208,7 @@ def create_provider_key_pool(
 
     record = ProviderKeyPool(
         provider=provider_name,
+        provider_alias=str(payload.provider_alias or "").strip() or None,
         api_keys=keys,
         strategy=strategy,
         weights=weights,
@@ -6209,6 +6222,7 @@ def create_provider_key_pool(
     return ProviderKeyPoolOut(
         id=record.id,
         provider=record.provider,
+        provider_alias=str(getattr(record, "provider_alias", "") or "").strip() or None,
         api_keys=_normalize_api_keys(record.api_keys),
         strategy=_normalize_key_strategy(record.strategy),
         weights=record.weights if record.weights else [],
@@ -6243,6 +6257,8 @@ def update_provider_key_pool(
             record.provider = new_provider
     if payload.api_keys is not None:
         record.api_keys = _normalize_api_keys(payload.api_keys)
+    if payload.provider_alias is not None:
+        record.provider_alias = str(payload.provider_alias or "").strip() or None
     if payload.strategy is not None:
         record.strategy = _normalize_key_strategy(payload.strategy)
     if payload.weights is not None:
@@ -6256,6 +6272,7 @@ def update_provider_key_pool(
     return ProviderKeyPoolOut(
         id=record.id,
         provider=record.provider,
+        provider_alias=str(getattr(record, "provider_alias", "") or "").strip() or None,
         api_keys=_normalize_api_keys(record.api_keys),
         strategy=_normalize_key_strategy(record.strategy),
         weights=record.weights if record.weights else [],

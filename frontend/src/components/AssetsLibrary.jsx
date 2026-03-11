@@ -140,6 +140,42 @@ const hasAnyLookupValue = (lookup, keys = []) => {
     return false;
 };
 
+const stringifyMetaValue = (value) => {
+    if (value === null || value === undefined) return '';
+    if (typeof value === 'string') return value;
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+    try {
+        return JSON.stringify(value);
+    } catch {
+        return String(value);
+    }
+};
+
+const formatMetadataEntry = (key, value, metaInfo) => {
+    const rawKey = String(key || '');
+    const normalizedKey = rawKey.trim().toLowerCase();
+    if (!rawKey) return null;
+    if (normalizedKey === 'provider_alias') return null;
+
+    const providerCode = String(value || '').trim();
+    const providerAlias = String(metaInfo?.provider_alias || '').trim();
+    if (normalizedKey === 'provider' && providerAlias) {
+        return {
+            key: rawKey,
+            label: rawKey,
+            value: providerAlias,
+            suffix: providerCode && providerCode !== providerAlias ? providerCode : '',
+        };
+    }
+
+    return {
+        key: rawKey,
+        label: rawKey,
+        value: stringifyMetaValue(value),
+        suffix: '',
+    };
+};
+
 const decodeSafe = (value) => {
     const raw = String(value || '').trim();
     if (!raw) return '';
@@ -1404,12 +1440,18 @@ const AssetDetailModal = ({ asset, onClose, onUpdate }) => {
                              <div>
                                 <label className="text-xs font-bold text-muted-foreground uppercase mb-2 block">{t('元数据', 'Metadata')}</label>
                                 <div className="bg-black/30 rounded-lg p-3 space-y-1">
-                                    {Object.entries(asset.meta_info).map(([k, v]) => (
-                                        <div key={k} className="flex justify-between text-xs">
-                                            <span className="text-white/40">{k}:</span>
-                                            <span className="font-mono text-white/80">{v}</span>
-                                        </div>
-                                    ))}
+                                    {Object.entries(asset.meta_info)
+                                        .map(([k, v]) => formatMetadataEntry(k, v, asset.meta_info))
+                                        .filter(Boolean)
+                                        .map((entry) => (
+                                            <div key={entry.key} className="flex justify-between text-xs gap-2">
+                                                <span className="text-white/40">{entry.label}:</span>
+                                                <span className="font-mono text-white/80 text-right break-all">
+                                                    {entry.value || '-'}
+                                                    {entry.suffix ? <span className="ml-1 text-white/50">({entry.suffix})</span> : null}
+                                                </span>
+                                            </div>
+                                        ))}
                                 </div>
                             </div>
                         )}

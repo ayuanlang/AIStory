@@ -501,6 +501,7 @@ class ProviderKeyPool(Base):
     __tablename__ = "provider_key_pool"
     id = Column(Integer, primary_key=True, index=True)
     provider = Column(String, unique=True, index=True, nullable=False)  # Provider identifier (lowercase)
+    provider_alias = Column(String, nullable=True) # Display alias for user-facing settings UI
     api_keys = Column(JSON, default=[])           # 密钥列表 List[str]
     strategy = Column(String, default="random")   # random / round_robin / weighted
     weights = Column(JSON, default=[])            # Weights list when strategy=weighted
