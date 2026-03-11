@@ -135,9 +135,6 @@ from app.schemas.settings import (
     SystemAPISettingImportRequest,
     SystemAPIProviderImportRequest,
     SystemConfigSyncBundleImportRequest,
-    TaskDefaultSystemAPIManageCreate,
-    TaskDefaultSystemAPIManageUpdate,
-    TaskDefaultSystemAPIManageOut,
     AgentToolPolicyUpdate,
     AgentToolPolicyOut,
     SystemAIAssistantRequest,
@@ -171,6 +168,31 @@ from app.schemas.settings import (
     SystemAPIBillingRuleMultiplierResetRequest,
     SystemAPIBillingRuleMultiplierResetResponse,
 )
+try:
+    from app.schemas.settings import (
+        TaskDefaultSystemAPIManageCreate,
+        TaskDefaultSystemAPIManageUpdate,
+        TaskDefaultSystemAPIManageOut,
+    )
+except Exception:
+    from pydantic import BaseModel
+
+    class TaskDefaultSystemAPIManageCreate(BaseModel):
+        task_category: str
+        system_api_id: int
+
+    class TaskDefaultSystemAPIManageUpdate(BaseModel):
+        system_api_id: int
+
+    class TaskDefaultSystemAPIManageOut(BaseModel):
+        task_category: str
+        system_api_id: int
+        system_api_category: Optional[str] = None
+        system_api_provider: Optional[str] = None
+        system_api_model: Optional[str] = None
+        system_api_name: Optional[str] = None
+        created_at: Optional[str] = None
+        updated_at: Optional[str] = None
 from app.api.deps import get_current_user
 from app.services.billing_service import BillingService
 from typing import List, Dict, Tuple, Any, Optional
