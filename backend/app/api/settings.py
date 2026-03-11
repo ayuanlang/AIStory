@@ -1,24 +1,38 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import cast, String, func
+from sqlalchemy import cast, String, func, inspect
 import logging
 import json
+import asyncio
 import os
 import ast
 import random
 import re
-from datetime import datetime, timezone
+import time
+from datetime import datetime
 import math
+from types import SimpleNamespace
 from app.db.session import get_db
+from app.core.time_utils import now_bj_iso
+from app.core.prompts.supplier_feature_analysis_prompt import get_supplier_feature_analysis_system_prompt
 from app.models.all_models import (
     APISetting,
     User,
     SystemAPISetting,
+    TaskDefaultSystemAPI,
     ProviderKeyPool,
     SystemAPIBillingRule,
     TransactionAction,
     SMTPSystemConfig,
     WechatPayConfig,
+)
+from app.services.system_default_api_service import (
+    get_task_default_system_setting,
+    is_task_default_system_setting,
+    upsert_task_default_system_setting,
+    clear_task_default_for_category,
+    clear_task_defaults_for_system_api_ids,
+    normalize_task_category,
 )
 from app.schemas.settings import (
     APISettingOut,
@@ -37,6 +51,9 @@ from app.schemas.settings import (
     SystemAPISettingImportRequest,
     SystemAPIProviderImportRequest,
     SystemConfigSyncBundleImportRequest,
+    TaskDefaultSystemAPIManageCreate,
+    TaskDefaultSystemAPIManageUpdate,
+    TaskDefaultSystemAPIManageOut,
     AgentToolPolicyUpdate,
     AgentToolPolicyOut,
     SystemAIAssistantRequest,
@@ -46,6 +63,11 @@ from app.schemas.settings import (
     ExchangeRateResponse,
     FetchPricingPageRequest,
     FetchPricingPageResponse,
+    SupplierApiFeatureAnalyzeRequest,
+    SupplierApiFeatureAnalyzeResponse,
+    SupplierApiFeatureApplyRequest,
+    SupplierApiFeatureApplyResponse,
+    SupplierApiFeatureModel,
     KIEPricingGenerateRequest,
     KIEPricingApplyRequest,
     KIEPricingFetchRequest,
@@ -66,6 +88,7 @@ from app.schemas.settings import (
     SystemAPIBillingRuleMultiplierResetResponse,
 )
 from app.api.deps import get_current_user
+from app.services.billing_service import BillingService
 from typing import List, Dict, Tuple, Any, Optional
 from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 
@@ -83,6 +106,7 @@ _KIE_HINT_TEMPLATE_LIMIT_PER_MODEL = 6
 _KIE_TO_SYSTEM_CREDIT_RATIO = 3.0
 _USD_TO_CNY_RATE = 7.0
 _SYSTEM_CREDIT_PER_CNY = 100.0
+_USER_API_STRATEGIES = {"fixed", "smart_default", "low_price_replace"}
 
 
 def _default_agent_tool_policy() -> Dict[str, Any]:
@@ -187,11 +211,11 @@ def _safe_non_negative_float(value: Any) -> float:
 
 
 def _multiplied_cost_to_credit(value: Any, multiplier: float) -> int:
-    """Convert supplier price (CNY/元) to credits (分).
+    """Convert supplier price (CNY/USD) to system credits.
 
     Formula: credits = ceil(price_cny * 100 * multiplier)
-    100 = 元转分 (1积分 = 1分钱 = 0.01元)
-    multiplier = 上浮倍率 (default 2.0, 作为利润)
+    100 = CNY to credits (1 credit = 0.01 CNY)
+    multiplier = markup multiplier (default 2.0)
     """
     base = _safe_non_negative_float(value)
     mul = _safe_non_negative_float(multiplier)
@@ -301,7 +325,7 @@ def _convert_supplier_value_to_system_credit(value: Any, source_unit: str) -> in
     if unit in {"usd", "$", "us_dollar", "dollar", "dollars"}:
         cny = base * _USD_TO_CNY_RATE
         return int(math.ceil(cny * _SYSTEM_CREDIT_PER_CNY))
-    if unit in {"cny", "rmb", "yuan", "元", "人民币"}:
+    if unit in {"cny", "rmb", "yuan", "¥", "人民币"}:
         return int(math.ceil(base * _SYSTEM_CREDIT_PER_CNY))
     if unit in {"system_credit", "system_credits", "credit_system", "credits_system"}:
         return int(math.ceil(base))
@@ -392,12 +416,36 @@ def _parse_confirmed_pricing_tables(payload: KIEPricingGenerateRequest) -> Tuple
 
 
 def _resolve_system_llm_runtime_config(db: Session) -> Dict[str, Any]:
-    rows = db.query(SystemAPISetting).filter(
+    configs = _resolve_system_llm_runtime_configs(db, max_candidates=1)
+    return configs[0] if configs else {}
+
+
+def _resolve_system_llm_runtime_configs(db: Session, max_candidates: int = 4) -> List[Dict[str, Any]]:
+    default_row = get_task_default_system_setting(db, "LLM")
+    rows: List[SystemAPISetting] = []
+    if default_row is not None:
+        rows.append(default_row)
+
+    # Fallback candidates: all available LLM providers/models, prefer active rows first.
+    fallback_rows = db.query(SystemAPISetting).filter(
         SystemAPISetting.category == "LLM",
-        SystemAPISetting.is_active == True,
-    ).order_by(SystemAPISetting.id.desc()).all()
+        ~SystemAPISetting.category.like("System_%"),
+    ).order_by(
+        SystemAPISetting.is_active.desc(),
+        SystemAPISetting.id.asc(),
+    ).all()
+    rows.extend(fallback_rows)
+
+    out: List[Dict[str, Any]] = []
+    seen_setting_ids = set()
 
     for row in rows:
+        if row is None:
+            continue
+        row_id = int(getattr(row, "id", 0) or 0)
+        if row_id > 0 and row_id in seen_setting_ids:
+            continue
+
         cfg = _safe_json_dict(getattr(row, "config", {}) or {})
         if bool(getattr(row, "deprecated", False)):
             continue
@@ -411,14 +459,20 @@ def _resolve_system_llm_runtime_config(db: Session) -> Dict[str, Any]:
         merged_cfg["__selection_source"] = "system_kie_pricing_assistant"
         merged_cfg["__resolved_setting_id"] = row.id
 
-        return {
+        out.append({
             "provider": row.provider,
             "api_key": runtime_key,
             "base_url": row.base_url or default.get("base_url"),
             "model": row.model or default.get("model"),
             "config": merged_cfg,
-        }
-    return {}
+        })
+        if row_id > 0:
+            seen_setting_ids.add(row_id)
+
+        if len(out) >= max(1, int(max_candidates or 1)):
+            break
+
+    return out
 
 
 def _build_kie_pagination_urls(url: str, max_pages: int) -> List[str]:
@@ -518,6 +572,131 @@ def _fetch_kie_pricing_paginated(url: str, max_length: int, max_pages: int) -> D
     }
 
 
+def _normalize_generation_modes(values: Any) -> List[str]:
+    if isinstance(values, str):
+        raw_items = [x.strip() for x in values.replace(";", ",").split(",")]
+    elif isinstance(values, list):
+        raw_items = [str(x or "").strip() for x in values]
+    else:
+        raw_items = []
+
+    alias = {
+        "text2image": "t2i",
+        "txt2img": "t2i",
+        "image2image": "i2i",
+        "img2img": "i2i",
+        "image2video": "i2v",
+        "img2video": "i2v",
+        "text2video": "t2v",
+        "txt2video": "t2v",
+        "digital_human": "s2v",
+        "avatar": "s2v",
+        "image_edit": "i2i",
+    }
+    out: List[str] = []
+    seen = set()
+    for item in raw_items:
+        k = item.strip().lower()
+        if not k:
+            continue
+        normalized = alias.get(k, k)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        out.append(normalized)
+    return out
+
+
+def _clean_feature_dict(value: Any) -> Dict[str, Any]:
+    data = _safe_json_dict(value)
+    out: Dict[str, Any] = {}
+    for key, raw in data.items():
+        name = str(key or "").strip()
+        if not name:
+            continue
+        if isinstance(raw, list):
+            cleaned = []
+            seen = set()
+            for item in raw:
+                token = str(item or "").strip()
+                if not token or token in seen:
+                    continue
+                seen.add(token)
+                cleaned.append(token)
+            out[name] = cleaned
+        elif isinstance(raw, (int, float, bool)) or raw is None:
+            out[name] = raw
+        else:
+            out[name] = str(raw or "").strip()
+    return out
+
+
+def _build_modality_from_feature_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
+    generation_modes = _normalize_generation_modes(profile.get("generation_modes"))
+    text_caps = _clean_feature_dict(profile.get("text_capabilities"))
+    image_caps = _clean_feature_dict(profile.get("image_capabilities"))
+    video_caps = _clean_feature_dict(profile.get("video_capabilities"))
+    digital_caps = _clean_feature_dict(profile.get("digital_human_capabilities"))
+    voice_caps = _clean_feature_dict(profile.get("voice_capabilities"))
+    music_caps = _clean_feature_dict(profile.get("music_capabilities"))
+
+    out: Dict[str, Any] = {
+        "generation_modes": generation_modes,
+    }
+
+    if profile.get("base_model"):
+        out["base_model"] = str(profile.get("base_model") or "").strip()
+
+    if text_caps:
+        out["text_capabilities"] = text_caps
+        if text_caps.get("input_formats") and not out.get("input_formats"):
+            out["input_formats"] = text_caps.get("input_formats")
+        if text_caps.get("output_format") and not out.get("output_format"):
+            out["output_format"] = text_caps.get("output_format")
+
+    if image_caps.get("supported_resolutions"):
+        out["supported_resolutions"] = image_caps.get("supported_resolutions")
+    if image_caps.get("aspect_ratios"):
+        out["aspect_ratios"] = image_caps.get("aspect_ratios")
+
+    if video_caps.get("supported_resolutions") and not out.get("supported_resolutions"):
+        out["supported_resolutions"] = video_caps.get("supported_resolutions")
+    if video_caps.get("aspect_ratios") and not out.get("aspect_ratios"):
+        out["aspect_ratios"] = video_caps.get("aspect_ratios")
+    if video_caps.get("durations_seconds"):
+        durations = []
+        for val in video_caps.get("durations_seconds") or []:
+            try:
+                durations.append(float(val))
+            except Exception:
+                continue
+        if durations:
+            out["max_duration"] = max(durations)
+
+    if bool(digital_caps.get("supported")):
+        out["has_digital_human"] = True
+
+    if voice_caps:
+        out["voice_capabilities"] = voice_caps
+        if voice_caps.get("has_audio") is not None:
+            out["has_audio"] = bool(voice_caps.get("has_audio"))
+        if voice_caps.get("input_formats") and not out.get("input_formats"):
+            out["input_formats"] = voice_caps.get("input_formats")
+        if voice_caps.get("output_format") and not out.get("output_format"):
+            out["output_format"] = voice_caps.get("output_format")
+
+    if music_caps:
+        out["music_capabilities"] = music_caps
+        if music_caps.get("has_audio") is not None:
+            out["has_audio"] = bool(music_caps.get("has_audio"))
+        if music_caps.get("input_formats") and not out.get("input_formats"):
+            out["input_formats"] = music_caps.get("input_formats")
+        if music_caps.get("output_format") and not out.get("output_format"):
+            out["output_format"] = music_caps.get("output_format")
+
+    return out
+
+
 def _build_system_ai_suggestions(payload: SystemAIAssistantRequest, db: Session) -> List[SystemAIAssistantSuggestion]:
     provider = str(payload.provider or "").strip()
     if not provider:
@@ -550,7 +729,6 @@ def _build_system_ai_suggestions(payload: SystemAIAssistantRequest, db: Session)
             provider=provider,
             category=category,
             model=model_name,
-            modality=(item.modality if item.modality else (existing.modality if existing else None)),
             tags=(item.tags if item.tags else (getattr(existing, "tags", None) if existing else None)),
             name=(str(item.name or "").strip() or (existing.name if existing else f"{provider} {model_name}")),
             base_url=(str(item.base_url or "").strip() or (existing.base_url if existing else None)),
@@ -618,11 +796,40 @@ def _safe_json_dict(value) -> Dict:
     return {}
 
 
+def _assign_wide_modality_fields(target: SystemAPISetting, source: Any) -> None:
+    field_names = [
+        "generation_modes", "input_formats", "output_format", "supported_resolutions", "aspect_ratios",
+        "max_images_per_call", "reference_image_limit", "reference_video_limit", "durations_seconds",
+        "max_duration", "fps_options", "has_audio", "mode_values", "text_capabilities",
+        "image_capabilities", "video_capabilities", "digital_human_capabilities", "voice_capabilities",
+        "music_capabilities", "pricing_unit", "token_billing_supported", "input_token_price",
+        "output_token_price", "per_resolution_price_map", "per_duration_price_map", "has_tiered_pricing",
+        "free_quota", "currency",
+    ]
+    for field_name in field_names:
+        if hasattr(source, field_name):
+            setattr(target, field_name, getattr(source, field_name, None))
+
+
+def _primary_generation_mode_from_wide(generation_modes: Any) -> Optional[str]:
+    if isinstance(generation_modes, list):
+        for mode in generation_modes:
+            text = str(mode or "").strip()
+            if text:
+                return text
+    return None
+
+
 def _safe_int(value: Any, default: Optional[int] = 0) -> Optional[int]:
     try:
         return int(value)
     except Exception:
         return default
+
+
+def _normalize_user_api_strategy(value: Any, default: str = "smart_default") -> str:
+    raw = str(value or "").strip().lower()
+    return raw if raw in _USER_API_STRATEGIES else default
 
 
 def _is_json_object_value(value: Any) -> bool:
@@ -853,8 +1060,9 @@ def _get_system_provider_key_pool_full(db: Session, provider: str) -> dict:
             "keys": keys,
             "strategy": _normalize_key_strategy(record.strategy),
             "weights": _normalize_key_weights(record.weights, keys),
+            "intro_url": str(getattr(record, "intro_url", "") or "").strip() or None,
         }
-    return {"keys": [], "strategy": "random", "weights": []}
+    return {"keys": [], "strategy": "random", "weights": [], "intro_url": None}
 
 
 def _apply_system_provider_key_pool(db: Session, provider: str, keys: List[str]) -> None:
@@ -866,7 +1074,7 @@ def _apply_system_provider_key_pool(db: Session, provider: str, keys: List[str])
     if record:
         record.api_keys = normalized
         record.weights = _normalize_key_weights(record.weights, normalized)
-        record.updated_at = datetime.utcnow().isoformat()
+        record.updated_at = now_bj_iso()
     else:
         record = ProviderKeyPool(
             provider=provider_name,
@@ -896,7 +1104,7 @@ def _apply_provider_key_bundle_to_rows(db: Session, provider_name: str, keys: Li
         record.api_keys = normalized
         record.strategy = strategy
         record.weights = weights
-        record.updated_at = datetime.utcnow().isoformat()
+        record.updated_at = now_bj_iso()
     else:
         record = ProviderKeyPool(
             provider=provider_name,
@@ -912,6 +1120,36 @@ def _apply_provider_key_bundle_to_rows(db: Session, provider_name: str, keys: Li
     ).all()
     for row in rows:
         row.api_key = primary_key
+
+
+def _normalize_optional_http_url(value: Any) -> Optional[str]:
+    text_value = str(value or "").strip()
+    if not text_value:
+        return None
+    if not text_value.startswith(("http://", "https://")):
+        return None
+    return text_value
+
+
+def _derive_base_model_from_model(model_value: Any) -> Optional[str]:
+    model_text = str(model_value or "").strip()
+    if not model_text:
+        return None
+    normalized = model_text.replace("\\", "/").strip("/")
+    if not normalized:
+        return None
+    if "/" in normalized:
+        head = normalized.split("/", 1)[0].strip()
+        if head:
+            return head
+    return normalized
+
+
+def _resolve_base_model(explicit_base_model: Any, model_value: Any) -> Optional[str]:
+    explicit_text = str(explicit_base_model or "").strip()
+    if explicit_text:
+        return explicit_text
+    return _derive_base_model_from_model(model_value)
 
 
 def _pick_provider_runtime_key(db: Session, provider: str, fallback_key: str = "") -> str:
@@ -940,10 +1178,15 @@ def _ensure_default_system_selection_for_user(db: Session, user_id: int) -> None
     ).distinct().all()
     user_active_categories_set = {str(cat[0]).strip() for cat in user_active_categories if cat[0]}
 
-    active_system_rows = db.query(SystemAPISetting).filter(
-        SystemAPISetting.is_active == True,
-        ~SystemAPISetting.category.like("System_%"),
-    ).order_by(SystemAPISetting.category.asc(), SystemAPISetting.id.desc()).all()
+    active_system_rows: List[SystemAPISetting] = []
+    for category in ["LLM", "Image", "Video", "DigitalHuman", "Voice", "Music"]:
+        row = get_task_default_system_setting(db, category)
+        if not row:
+            continue
+        cat = str(row.category or "").strip()
+        if not cat or cat.startswith("System_"):
+            continue
+        active_system_rows.append(row)
 
     if not active_system_rows:
         return
@@ -961,6 +1204,7 @@ def _ensure_default_system_selection_for_user(db: Session, user_id: int) -> None
         marker_config = {
             "selection_source": "system",
             "use_system_setting_id": int(system_setting.id),
+            "api_strategy": "smart_default",
         }
 
         db.add(APISetting(
@@ -1339,7 +1583,7 @@ def _upsert_base_billing_rule(
     }
     flags = _category_to_mode_flags(category)
     rule = _get_base_billing_rule(db, system_api_id, include_inactive=True)
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = now_bj_iso()
 
     if rule:
         extra = _rule_extra_conditions(rule)
@@ -1489,7 +1733,7 @@ def _replace_kie_granular_billing_rules(
         return []
 
     flags = _category_to_mode_flags(category)
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = now_bj_iso()
     created_rows: List[SystemAPIBillingRule] = []
 
     for idx, item in enumerate(granular_rules):
@@ -1560,8 +1804,7 @@ def _resolve_system_setting_billing(db: Session, row: SystemAPISetting) -> Dict[
 def _setting_to_out(db: Session, row: SystemAPISetting) -> SystemAPISettingOut:
     billing = _resolve_system_setting_billing(db, row)
     out_cfg = _strip_billing_from_config(row.config)
-    modality = row.modality if isinstance(row.modality, dict) else {}
-    base_model = str(getattr(row, "base_model", "") or "").strip() or str(modality.get("base_model") or "").strip() or None
+    base_model = _resolve_base_model(getattr(row, "base_model", None), getattr(row, "model", None))
     return SystemAPISettingOut(
         id=row.id,
         name=row.name,
@@ -1571,9 +1814,36 @@ def _setting_to_out(db: Session, row: SystemAPISetting) -> SystemAPISettingOut:
         base_url=row.base_url,
         model=row.model,
         base_model=base_model,
-        modality=row.modality,
         tags=getattr(row, "tags", None),
         supplier_info=getattr(row, "supplier_info", None),
+        generation_modes=getattr(row, "generation_modes", None),
+        input_formats=getattr(row, "input_formats", None),
+        output_format=getattr(row, "output_format", None),
+        supported_resolutions=getattr(row, "supported_resolutions", None),
+        aspect_ratios=getattr(row, "aspect_ratios", None),
+        max_images_per_call=getattr(row, "max_images_per_call", None),
+        reference_image_limit=getattr(row, "reference_image_limit", None),
+        reference_video_limit=getattr(row, "reference_video_limit", None),
+        durations_seconds=getattr(row, "durations_seconds", None),
+        max_duration=getattr(row, "max_duration", None),
+        fps_options=getattr(row, "fps_options", None),
+        has_audio=getattr(row, "has_audio", None),
+        mode_values=getattr(row, "mode_values", None),
+        text_capabilities=getattr(row, "text_capabilities", None),
+        image_capabilities=getattr(row, "image_capabilities", None),
+        video_capabilities=getattr(row, "video_capabilities", None),
+        digital_human_capabilities=getattr(row, "digital_human_capabilities", None),
+        voice_capabilities=getattr(row, "voice_capabilities", None),
+        music_capabilities=getattr(row, "music_capabilities", None),
+        pricing_unit=getattr(row, "pricing_unit", None),
+        token_billing_supported=getattr(row, "token_billing_supported", None),
+        input_token_price=getattr(row, "input_token_price", None),
+        output_token_price=getattr(row, "output_token_price", None),
+        per_resolution_price_map=getattr(row, "per_resolution_price_map", None),
+        per_duration_price_map=getattr(row, "per_duration_price_map", None),
+        has_tiered_pricing=getattr(row, "has_tiered_pricing", None),
+        free_quota=getattr(row, "free_quota", None),
+        currency=getattr(row, "currency", None),
         config=out_cfg,
         billing_unit_type=billing["unit_type"],
         billing_cost=billing["cost"],
@@ -1581,7 +1851,7 @@ def _setting_to_out(db: Session, row: SystemAPISetting) -> SystemAPISettingOut:
         billing_cost_output=billing["cost_output"],
         has_granular_billing_rules=_has_granular_billing_rules(db, int(row.id)),
         deprecated=_is_setting_deprecated(out_cfg, row.deprecated),
-        is_active=bool(row.is_active),
+        is_active=is_task_default_system_setting(db, int(row.id), row.category),
     )
 
 
@@ -1589,6 +1859,108 @@ def _rule_to_out(rule: SystemAPIBillingRule) -> SystemAPIBillingRuleOut:
     if hasattr(SystemAPIBillingRuleOut, "model_validate"):
         return SystemAPIBillingRuleOut.model_validate(rule)
     return SystemAPIBillingRuleOut.from_orm(rule)
+
+
+def _task_default_row_to_out(row: TaskDefaultSystemAPI, system_row: Optional[SystemAPISetting]) -> TaskDefaultSystemAPIManageOut:
+    return TaskDefaultSystemAPIManageOut(
+        task_category=normalize_task_category(getattr(row, "task_category", None)),
+        system_api_id=int(getattr(row, "system_api_id", 0) or 0),
+        system_api_category=str(getattr(system_row, "category", "") or "").strip() or None,
+        system_api_provider=str(getattr(system_row, "provider", "") or "").strip() or None,
+        system_api_model=str(getattr(system_row, "model", "") or "").strip() or None,
+        system_api_name=str(getattr(system_row, "name", "") or "").strip() or None,
+        created_at=str(getattr(row, "created_at", "") or "").strip() or None,
+        updated_at=str(getattr(row, "updated_at", "") or "").strip() or None,
+    )
+
+
+def _assert_task_default_target_row(db: Session, system_api_id: int) -> SystemAPISetting:
+    sid = _safe_non_negative_int(system_api_id)
+    if sid <= 0:
+        raise HTTPException(status_code=400, detail="system_api_id must be a positive integer")
+    row = db.query(SystemAPISetting).filter(SystemAPISetting.id == sid).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="system_api_id not found")
+    if _is_system_reserved_category(str(getattr(row, "category", "") or "")):
+        raise HTTPException(status_code=400, detail="system_api_id cannot reference System_* infrastructure categories")
+    return row
+
+
+@router.get("/settings/system/manage/task-default-apis", response_model=List[TaskDefaultSystemAPIManageOut])
+def list_task_default_apis_for_manage(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+
+    rows = db.query(TaskDefaultSystemAPI).order_by(TaskDefaultSystemAPI.task_category.asc()).all()
+    system_rows = db.query(SystemAPISetting).filter(
+        SystemAPISetting.id.in_([int(getattr(row, "system_api_id", 0) or 0) for row in rows])
+    ).all() if rows else []
+    by_id = {int(item.id): item for item in system_rows}
+    return [_task_default_row_to_out(row, by_id.get(int(getattr(row, "system_api_id", 0) or 0))) for row in rows]
+
+
+@router.post("/settings/system/manage/task-default-apis", response_model=TaskDefaultSystemAPIManageOut)
+def create_task_default_api_for_manage(
+    payload: TaskDefaultSystemAPIManageCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+
+    category = normalize_task_category(payload.task_category)
+    target = _assert_task_default_target_row(db, payload.system_api_id)
+    upsert_task_default_system_setting(db, category, int(target.id))
+    db.commit()
+
+    record = db.query(TaskDefaultSystemAPI).filter(TaskDefaultSystemAPI.task_category == category).first()
+    if not record:
+        raise HTTPException(status_code=500, detail="failed to create task default mapping")
+    db.refresh(record)
+    return _task_default_row_to_out(record, target)
+
+
+@router.post("/settings/system/manage/task-default-apis/{task_category}", response_model=TaskDefaultSystemAPIManageOut)
+def update_task_default_api_for_manage(
+    task_category: str,
+    payload: TaskDefaultSystemAPIManageUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+
+    category = normalize_task_category(task_category)
+    target = _assert_task_default_target_row(db, payload.system_api_id)
+    upsert_task_default_system_setting(db, category, int(target.id))
+    db.commit()
+
+    record = db.query(TaskDefaultSystemAPI).filter(TaskDefaultSystemAPI.task_category == category).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="task default mapping not found")
+    db.refresh(record)
+    return _task_default_row_to_out(record, target)
+
+
+@router.delete("/settings/system/manage/task-default-apis/{task_category}")
+def delete_task_default_api_for_manage(
+    task_category: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+
+    category = normalize_task_category(task_category)
+    existing = db.query(TaskDefaultSystemAPI).filter(TaskDefaultSystemAPI.task_category == category).first()
+    if not existing:
+        raise HTTPException(status_code=404, detail="task default mapping not found")
+    clear_task_default_for_category(db, category)
+    db.commit()
+    return {"ok": True, "task_category": category}
 
 
 def _is_setting_deprecated(config_value, deprecated_flag: Any = None) -> bool:
@@ -1649,7 +2021,7 @@ _BILLING_CONFIG_KEYS = {"api_pricing", "billing_unit_type", "billing_cost", "bil
 
 
 def _extract_billing_from_config(config_value: Any) -> Dict[str, Any]:
-    """从 config dict 中提取计价信息，返回 {unit_type, cost, cost_input, cost_output}。"""
+    """Extract billing fields from a config dict."""
     cfg = _safe_json_dict(config_value)
     ap = cfg.get("api_pricing") if isinstance(cfg.get("api_pricing"), dict) else {}
     return {
@@ -1661,7 +2033,7 @@ def _extract_billing_from_config(config_value: Any) -> Dict[str, Any]:
 
 
 def _strip_billing_from_config(config_value: Any) -> Dict[str, Any]:
-    """返回去除所有计价键的 config dict。"""
+    """Return config dict without billing-related keys."""
     cfg = _safe_json_dict(config_value)
     for key in _BILLING_CONFIG_KEYS:
         cfg.pop(key, None)
@@ -1669,12 +2041,12 @@ def _strip_billing_from_config(config_value: Any) -> Dict[str, Any]:
 
 
 def _normalize_system_api_billing_config(config_value: Any) -> Dict[str, Any]:
-    """兼容入口：清理 config 中的计价键，返回干净的 config（不含计价信息）。"""
+    """Compatibility wrapper to strip billing fields from config."""
     return _strip_billing_from_config(config_value)
 
 
 def _billing_from_payload_or_config(payload, raw_config: dict) -> Dict[str, Any]:
-    """优先使用 payload 上的显式计价字段；否则从 config dict 中提取。"""
+    """Prefer explicit billing fields from payload, else read from config."""
     ut = getattr(payload, "billing_unit_type", None)
     c = getattr(payload, "billing_cost", None)
     ci = getattr(payload, "billing_cost_input", None)
@@ -1899,7 +2271,6 @@ def _ensure_builtin_system_settings(db: Session) -> None:
         to_create.append(item)
 
     if not to_create:
-        # continue to normalize existing KIE video rows
         pass
 
     shared_key = ""
@@ -1919,30 +2290,14 @@ def _ensure_builtin_system_settings(db: Session) -> None:
             api_key=shared_key,
             base_url=item["base_url"],
             model=item["model"],
+            base_model=_derive_base_model_from_model(item["model"]),
             deprecated=False,
             config=item["config"],
             is_active=False,
         ))
 
-    # Normalize existing KIE Video rows: clear previous forced deprecation for known KIE video built-ins.
-    known_kie_video_models = {
-        str(item.get("model") or "").strip().lower()
-        for item in builtins
-        if str(item.get("provider") or "").strip().lower() == "kie"
-        and str(item.get("category") or "").strip().lower() == "video"
-    }
-    kie_video_rows = db.query(SystemAPISetting).filter(
-        _system_provider_case_insensitive_filter("kie"),
-        SystemAPISetting.category == "Video",
-    ).all()
-    for row in kie_video_rows:
-        model_text = str(row.model or "").strip().lower()
-        cfg = _safe_json_dict(row.config)
-
-        if model_text in known_kie_video_models:
-            cfg["deprecated"] = False
-            row.deprecated = False
-            row.config = cfg
+    # Keep existing deprecation decisions intact.
+    # Built-in sync should only create missing rows, not mutate admin-maintained deprecated flags.
 
     db.flush()
 
@@ -2180,7 +2535,14 @@ def get_system_settings(
             SystemAPISetting.base_url,
             SystemAPISetting.api_key,
             SystemAPISetting.deprecated.label("deprecated_flag"),
-            SystemAPISetting.modality,
+            SystemAPISetting.generation_modes,
+            SystemAPISetting.input_formats,
+            SystemAPISetting.output_format,
+            SystemAPISetting.supported_resolutions,
+            SystemAPISetting.aspect_ratios,
+            SystemAPISetting.max_duration,
+            SystemAPISetting.has_audio,
+            SystemAPISetting.mode_values,
             SystemAPISetting.tags,
             cast(SystemAPISetting.config, String).label("config_raw"),
         ).filter(
@@ -2258,7 +2620,14 @@ def get_system_settings(
                 provider=provider,
                 category=category,
                 model=item.model,
-                modality=item.modality,
+                generation_modes=(getattr(item, "generation_modes", None) or []),
+                input_formats=(getattr(item, "input_formats", None) or []),
+                output_format=getattr(item, "output_format", None),
+                supported_resolutions=(getattr(item, "supported_resolutions", None) or []),
+                aspect_ratios=(getattr(item, "aspect_ratios", None) or []),
+                max_duration=getattr(item, "max_duration", None),
+                has_audio=getattr(item, "has_audio", None),
+                mode_values=(getattr(item, "mode_values", None) or []),
                 tags=getattr(item, "tags", None),
                 base_url=item.base_url,
                 webhook_url=(item_config or {}).get("webHook"),
@@ -2267,6 +2636,14 @@ def get_system_settings(
                 has_api_key=has_key,
                 api_key_masked=_mask_api_key(runtime_key) if has_key else "",
             )
+
+            avg_pricing = BillingService.estimate_system_api_average_price(
+                db,
+                int(item.id),
+                generation_mode=_primary_generation_mode_from_wide(getattr(item, "generation_modes", None)),
+            )
+            option.avg_price_estimate = int(avg_pricing.get("average_cost") or 0)
+            option.avg_price_source = str(avg_pricing.get("source") or "") or None
 
             if option.deprecated:
                 continue
@@ -2369,6 +2746,7 @@ def select_system_setting(
     marker_config = {
         "selection_source": "system",
         "use_system_setting_id": int(system_setting.id),
+        "api_strategy": _normalize_user_api_strategy(selection.api_strategy, default="smart_default"),
     }
 
     if user_setting:
@@ -2451,8 +2829,7 @@ def list_system_settings_missing_billing_rules(
             continue
         if int(row.id) in billed_api_ids:
             continue
-        modality = row.modality if isinstance(row.modality, dict) else {}
-        base_model = str(getattr(row, "base_model", "") or "").strip() or str(modality.get("base_model") or "").strip() or None
+        base_model = _resolve_base_model(getattr(row, "base_model", None), getattr(row, "model", None))
         out_rows.append(
             SystemAPIMissingBillingRuleOut(
                 id=int(row.id),
@@ -2576,7 +2953,7 @@ def create_system_api_billing_rule(
 
     payload_data = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
     payload_data["charge_multiplier"] = _normalize_rule_charge_multiplier(payload_data.get("charge_multiplier"), default=2.0)
-    payload_data["updated_at"] = datetime.utcnow().isoformat()
+    payload_data["updated_at"] = now_bj_iso()
     rule = SystemAPIBillingRule(**payload_data)
     db.add(rule)
     db.flush()
@@ -2605,7 +2982,7 @@ def update_system_api_billing_rule(
         update_data["charge_multiplier"] = _normalize_rule_charge_multiplier(update_data.get("charge_multiplier"), default=2.0)
     for key, value in update_data.items():
         setattr(rule, key, value)
-    rule.updated_at = datetime.utcnow().isoformat()
+    rule.updated_at = now_bj_iso()
     _refresh_has_granular_billing_rules_flag(db, int(rule.system_api_id))
     db.commit()
     db.refresh(rule)
@@ -2734,7 +3111,7 @@ def reset_system_api_billing_rule_charge_multipliers(
     max_cost = max(score for _, score in scored)
 
     updated = 0
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = now_bj_iso()
     preview: List[Dict[str, Any]] = []
 
     for row, score in scored:
@@ -2827,7 +3204,7 @@ def apply_system_ai_assistant(
 
     suggestions = _build_system_ai_suggestions(payload, db)
     applied_count = 0
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = now_bj_iso()
 
     for suggestion in suggestions:
         existing = _find_system_setting_by_normalized_triplet(db, suggestion.provider, suggestion.category, suggestion.model)
@@ -2845,7 +3222,7 @@ def apply_system_ai_assistant(
         pricing_scheme = {
             "strategy": "supplier_price_x_multiplier",
             "multiplier": suggestion.multiplier,
-            "cny_to_credit_rate": 100,  # 1积分=1分钱=0.01元
+            "cny_to_credit_rate": 100,  # 1积分=1分钱=0.01�?
             "supplier_currency": suggestion.supplier_currency or "CNY",
             "supplier_price_basis": suggestion.supplier_price_basis or "money",
             "conversion_note": "Only CNY monetary prices are accepted. Non-CNY must be converted via exchange-rate tool first.",
@@ -2918,7 +3295,7 @@ def ai_assistant_exchange_rate(
     payload: ExchangeRateRequest,
     current_user: User = Depends(get_current_user),
 ):
-    """AI助手工具: 汇率兑换 — 将外币金额转换为人民币(CNY)。"""
+    """AI assistant tool: convert currency amounts to CNY."""
     if not _can_manage_system_settings(current_user):
         raise HTTPException(status_code=403, detail="Only superuser can use system AI assistant tools")
 
@@ -2946,7 +3323,7 @@ def ai_assistant_fetch_pricing(
     payload: FetchPricingPageRequest,
     current_user: User = Depends(get_current_user),
 ):
-    """AI助手工具: 定价页面读取 — 抓取供应商定价页面并提取结构化内容。"""
+    """AI assistant tool: fetch pricing page and extract structured content."""
     if not _can_manage_system_settings(current_user):
         raise HTTPException(status_code=403, detail="Only superuser can use system AI assistant tools")
 
@@ -2960,13 +3337,582 @@ def ai_assistant_fetch_pricing(
     return FetchPricingPageResponse(**result)
 
 
+@router.post("/settings/system/ai-assistant/tools/analyze-supplier-features", response_model=SupplierApiFeatureAnalyzeResponse)
+async def ai_assistant_analyze_supplier_features(
+    payload: SupplierApiFeatureAnalyzeRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Analyze supplier API feature profiles from docs pages and persist to system_api_settings."""
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only superuser can use system AI assistant tools")
+
+    from app.services.llm_service import llm_service
+    from app.services.pricing_tools import fetch_pricing_page
+
+    selected_api_ids = {
+        int(x) for x in (payload.selected_system_api_ids or [])
+        if _safe_non_negative_int(x) > 0
+    }
+    selected_rows: List[SystemAPISetting] = []
+    if selected_api_ids:
+        selected_rows = db.query(SystemAPISetting).filter(
+            SystemAPISetting.id.in_(selected_api_ids),
+            ~SystemAPISetting.category.like("System_%"),
+        ).all()
+
+    provider = _normalize_system_provider_name(payload.provider)
+    if not provider and selected_rows:
+        provider = _normalize_system_provider_name(getattr(selected_rows[0], "provider", ""))
+    if not provider:
+        raise HTTPException(status_code=400, detail="provider is required")
+
+    logger.info("supplier_feature_analysis.start provider=%s selected_api_ids=%s", provider, sorted(selected_api_ids))
+
+    urls: List[str] = []
+    for item in payload.source_urls or []:
+        u = str(item or "").strip()
+        if not u:
+            continue
+        if not u.startswith(("http://", "https://")):
+            continue
+        if u not in urls:
+            urls.append(u)
+    def _append_unique_http_url(raw: Any):
+        normalized = _normalize_optional_http_url(raw)
+        if normalized and normalized not in urls:
+            urls.append(normalized)
+
+    if bool(payload.include_provider_intro_url):
+        pool_record = _get_provider_key_pool_record(db, provider)
+        _append_unique_http_url(getattr(pool_record, "intro_url", None) if pool_record else None)
+
+    selected_api_context: List[Dict[str, Any]] = []
+    for row in selected_rows:
+        row_provider = _normalize_system_provider_name(getattr(row, "provider", ""))
+        if row_provider and provider and row_provider != provider:
+            continue
+        supplier_info = _safe_json_dict(getattr(row, "supplier_info", {}))
+        selected_api_context.append({
+            "id": int(row.id),
+            "provider": row_provider,
+            "category": str(row.category or "").strip(),
+            "model": str(row.model or "").strip(),
+            "base_model": str(row.base_model or "").strip(),
+            "generation_modes": getattr(row, "generation_modes", None),
+            "input_formats": getattr(row, "input_formats", None),
+            "output_format": getattr(row, "output_format", None),
+            "supported_resolutions": getattr(row, "supported_resolutions", None),
+            "aspect_ratios": getattr(row, "aspect_ratios", None),
+            "max_duration": getattr(row, "max_duration", None),
+            "has_audio": getattr(row, "has_audio", None),
+            "mode_values": getattr(row, "mode_values", None),
+            "supplier_info": supplier_info,
+        })
+        for key_name in ["intro_url", "docs_url", "doc_url", "pricing_url", "official_url", "api_doc_url"]:
+            _append_unique_http_url(supplier_info.get(key_name))
+        for list_name in ["source_urls", "urls", "references"]:
+            values = supplier_info.get(list_name)
+            if isinstance(values, list):
+                for item in values:
+                    _append_unique_http_url(item)
+        _append_unique_http_url(getattr(row, "base_url", None))
+
+    max_len = min(max(int(payload.max_length or 40000), 2000), 50000)
+    max_pages = min(max(int(payload.max_pages or 6), 1), 12)
+    # Bound page fetching time to avoid long stalls when candidate URLs are slow/unreachable.
+    fetch_timeout_seconds = min(120.0, max(35.0, float(max_pages * 8)))
+    fetch_deadline = time.monotonic() + fetch_timeout_seconds
+
+    page_summaries: List[Dict[str, Any]] = []
+    combined_parts: List[str] = []
+    warnings: List[str] = []
+
+    if not urls:
+        logger.info("supplier_feature_analysis.skip_fetch provider=%s reason=no_source_urls", provider)
+    else:
+        for base_url in urls:
+            if time.monotonic() >= fetch_deadline:
+                warnings.append(f"fetch_timeout_reached:{int(fetch_timeout_seconds)}s")
+                logger.warning("supplier_feature_analysis.fetch_timeout provider=%s timeout_seconds=%s", provider, fetch_timeout_seconds)
+                break
+            page_urls = [base_url]
+            page_urls.extend(_build_kie_pagination_urls(base_url, max_pages=max_pages))
+            seen_hash = set()
+            collected = 0
+            for page_url in page_urls:
+                if time.monotonic() >= fetch_deadline:
+                    warnings.append(f"fetch_timeout_reached:{int(fetch_timeout_seconds)}s")
+                    logger.warning("supplier_feature_analysis.fetch_timeout_during_pages provider=%s url=%s", provider, base_url)
+                    break
+                if collected >= max_pages:
+                    break
+                result = fetch_pricing_page(page_url, max_length=max_len)
+                if result.get("error"):
+                    warnings.append(f"fetch_failed:{page_url}:{result.get('error')}")
+                    continue
+
+                text_content = str(result.get("text_content") or "")
+                if not text_content.strip():
+                    continue
+                text_hash = hash(text_content)
+                if text_hash in seen_hash:
+                    continue
+                seen_hash.add(text_hash)
+                collected += 1
+
+                tables = result.get("tables") if isinstance(result.get("tables"), list) else []
+                page_summaries.append({
+                    "url": page_url,
+                    "title": str(result.get("title") or "").strip() or None,
+                    "text_length": len(text_content),
+                    "table_count": len(tables),
+                })
+                combined_parts.append(f"### {page_url}\n{text_content}")
+                if tables:
+                    try:
+                        combined_parts.append(f"TABLES: {json.dumps(tables, ensure_ascii=False)[:12000]}")
+                    except Exception:
+                        pass
+
+    logger.info(
+        "supplier_feature_analysis.fetch_done provider=%s urls=%s pages=%s warnings=%s",
+        provider,
+        len(urls),
+        len(page_summaries),
+        len(warnings),
+    )
+
+    combined_text = "\n\n".join(combined_parts)
+    if not combined_text.strip() and selected_api_context:
+        combined_text = f"SELECTED_SYSTEM_APIS: {json.dumps(selected_api_context, ensure_ascii=False)}"
+    auto_research_mode = not combined_text.strip()
+    if auto_research_mode:
+        warnings.append("no_readable_source_content_fallback_to_llm_self_research")
+
+    keyword_candidates = [
+        "resolution", "aspect ratio", "duration", "reference image", "base model",
+        "t2i", "i2i", "i2v", "t2v", "digital human", "image edit",
+        "pricing", "price", "cost", "billing", "token", "input token", "output token",
+        "fps", "audio", "webhook", "queue", "concurrency", "rate limit",
+        "llm", "chat", "completion", "context window", "input tokens", "output tokens", "reasoning",
+        "voice", "tts", "asr", "speech", "speaker", "emotion", "tone", "voice clone", "sample rate", "bitrate",
+        "music", "bgm", "instrumental", "vocal", "genre", "tempo", "bpm", "key", "style",
+        "分辨率", "画幅", "时长", "参考图", "基础模型", "数字人", "图像修改",
+        "计费", "价格", "成本", "输入token", "输出token", "并发", "限流", "队列",
+        "配音", "语音", "音色", "语速", "情感", "采样率", "码率", "克隆",
+        "音乐", "背景音乐", "曲风", "节奏", "调式", "乐器",
+        "文本", "对话", "推理", "上下文", "上下文长度", "输入长度", "输出长度",
+    ]
+    for kw in payload.search_keywords or []:
+        token = str(kw or "").strip()
+        if token and token not in keyword_candidates:
+            keyword_candidates.append(token)
+
+    keyword_hits: Dict[str, int] = {}
+    lower_text = combined_text.lower()
+    for kw in keyword_candidates:
+        k = str(kw or "").strip().lower()
+        if not k:
+            continue
+        keyword_hits[k] = lower_text.count(k)
+
+    llm_configs = _resolve_system_llm_runtime_configs(db, max_candidates=4)
+    if not llm_configs:
+        raise HTTPException(status_code=400, detail="No system default LLM configured for analysis")
+
+    user_supplement = str(payload.user_supplement or "").strip()
+
+    system_prompt = get_supplier_feature_analysis_system_prompt()
+
+    query_payload = {
+        "provider": provider,
+        "user_supplement": user_supplement or None,
+        "keyword_hits": keyword_hits,
+        "pages": page_summaries,
+        "auto_research_mode": auto_research_mode,
+        "selected_system_apis": selected_api_context,
+        "target_mapping": {
+            "system_api_modality_fields": [
+                "generation_modes", "supported_resolutions", "aspect_ratios", "max_duration", "has_audio", "base_model", "input_formats", "output_format",
+                "text_capabilities", "voice_capabilities", "music_capabilities"
+            ],
+            "billing_rule_matching_fields": [
+                "generation_mode", "input_format", "output_format", "has_audio",
+                "input_tokens_min", "input_tokens_max", "output_tokens_min", "output_tokens_max", "total_tokens_min", "total_tokens_max",
+                "width_min", "width_max", "height_min", "height_max", "duration_seconds_min", "duration_seconds_max", "fps_min", "fps_max",
+                "sample_rate_min", "sample_rate_max", "bitrate_min", "bitrate_max"
+            ]
+        },
+        # Keep input conservative to reduce upstream truncation/empty responses.
+        "content": combined_text[:60000],
+    }
+    query = json.dumps(query_payload, ensure_ascii=False)
+
+    async def _run_supplier_feature_analysis_llm(input_query: str, prompt_text: str, llm_runtime_config: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+        llm_result_local = await llm_service.analyze_intent_with_system_prompt(
+            input_query,
+            {},
+            [],
+            llm_runtime_config,
+            prompt_text,
+        )
+        if bool(llm_result_local.get("_llm_error")):
+            raise RuntimeError(str(llm_result_local.get("reply") or "llm_error"))
+        llm_raw_local = str(llm_result_local.get("reply") or llm_result_local.get("content") or llm_result_local)
+        parsed_local = _extract_json_from_llm_text(llm_raw_local)
+        return llm_raw_local, parsed_local
+
+    llm_raw: str = ""
+    parsed: Dict[str, Any] = {}
+    llm_attempt_timeout_seconds = 40
+    attempt_errors: List[str] = []
+
+    for idx, llm_config in enumerate(llm_configs, start=1):
+        provider_name = str(llm_config.get("provider") or "").strip() or "unknown"
+        model_name = str(llm_config.get("model") or "").strip() or "-"
+        logger.info(
+            "supplier_feature_analysis.llm_attempt_start provider=%s attempt=%s/%s target=%s/%s timeout=%ss",
+            provider,
+            idx,
+            len(llm_configs),
+            provider_name,
+            model_name,
+            llm_attempt_timeout_seconds,
+        )
+        try:
+            llm_raw, parsed = await asyncio.wait_for(
+                _run_supplier_feature_analysis_llm(query, system_prompt, llm_config),
+                timeout=llm_attempt_timeout_seconds,
+            )
+            initial_models = parsed.get("models") if isinstance(parsed.get("models"), list) else []
+            if len(initial_models) == 0:
+                retry_prompt = (
+                    system_prompt
+                    + " STRICT MODE: return JSON object only. "
+                    + "If no model can be extracted, set models=[] and explain why in warnings."
+                )
+                retry_query = json.dumps({
+                    "provider": provider,
+                    "pages": page_summaries,
+                    "selected_system_apis": selected_api_context,
+                    "content_excerpt": combined_text[:30000],
+                    "instruction": "extract model capabilities",
+                }, ensure_ascii=False)
+                retry_raw, retry_parsed = await asyncio.wait_for(
+                    _run_supplier_feature_analysis_llm(retry_query, retry_prompt, llm_config),
+                    timeout=llm_attempt_timeout_seconds,
+                )
+                retry_models = retry_parsed.get("models") if isinstance(retry_parsed.get("models"), list) else []
+                if len(retry_models) > 0:
+                    llm_raw, parsed = retry_raw, retry_parsed
+                else:
+                    warnings.append("llm_empty_models_after_retry")
+
+            current_models = parsed.get("models") if isinstance(parsed.get("models"), list) else []
+            if current_models or idx >= len(llm_configs):
+                break
+
+            attempt_errors.append(f"attempt_{idx}:{provider_name}/{model_name}:empty_models")
+            warnings.append(f"llm_attempt_empty_models:{provider_name}:{model_name}")
+        except asyncio.TimeoutError:
+            attempt_errors.append(f"attempt_{idx}:{provider_name}/{model_name}:timeout")
+            warnings.append(f"llm_attempt_timeout:{provider_name}:{model_name}")
+            continue
+        except Exception as exc:
+            attempt_errors.append(f"attempt_{idx}:{provider_name}/{model_name}:{str(exc)[:200]}")
+            warnings.append(f"llm_attempt_failed:{provider_name}:{model_name}")
+            continue
+
+    if attempt_errors:
+        logger.warning("supplier_feature_analysis.llm_attempt_errors provider=%s details=%s", provider, attempt_errors)
+
+    logger.info(
+        "supplier_feature_analysis.llm_done provider=%s models=%s warnings=%s",
+        provider,
+        len(parsed.get("models") if isinstance(parsed.get("models"), list) else []),
+        len(warnings),
+    )
+
+    raw_models = parsed.get("models") if isinstance(parsed.get("models"), list) else []
+    if not raw_models:
+        warnings.append("llm_no_parsed_models")
+    normalized_models: List[SupplierApiFeatureModel] = []
+    for item in raw_models:
+        if not isinstance(item, dict):
+            continue
+        model_name = str(item.get("model") or "").strip()
+        if not model_name:
+            continue
+        category = str(item.get("category") or "").strip() or "Image"
+        if category.lower() == "digitalhuman":
+            category = "DigitalHuman"
+        if category.lower() == "digital_human":
+            category = "DigitalHuman"
+        generation_modes = _normalize_generation_modes(item.get("generation_modes"))
+        confidence = 0.0
+        try:
+            confidence = float(item.get("confidence") or 0.0)
+        except Exception:
+            confidence = 0.0
+        confidence = max(0.0, min(confidence, 1.0))
+
+        normalized_models.append(SupplierApiFeatureModel(
+            provider=provider,
+            category=category,
+            model=model_name,
+            base_model=(str(item.get("base_model") or "").strip() or None),
+            generation_modes=generation_modes,
+            text_capabilities=_clean_feature_dict(item.get("text_capabilities")),
+            image_capabilities=_clean_feature_dict(item.get("image_capabilities")),
+            video_capabilities=_clean_feature_dict(item.get("video_capabilities")),
+            digital_human_capabilities=_clean_feature_dict(item.get("digital_human_capabilities")),
+            voice_capabilities=_clean_feature_dict(item.get("voice_capabilities")),
+            music_capabilities=_clean_feature_dict(item.get("music_capabilities")),
+            notes=(str(item.get("notes") or "").strip() or None),
+            confidence=confidence,
+        ))
+
+    saved_created = 0
+    saved_updated = 0
+    if payload.save_to_db and normalized_models:
+        apply_result = _apply_supplier_feature_models_to_db(
+            db=db,
+            provider=provider,
+            models=normalized_models,
+            source_urls=urls,
+            create_missing_models=bool(payload.create_missing_models),
+        )
+        saved_created = int(apply_result.get("saved_created") or 0)
+        saved_updated = int(apply_result.get("saved_updated") or 0)
+        warnings.extend(apply_result.get("warnings") or [])
+
+    parsed_warnings = parsed.get("warnings") if isinstance(parsed.get("warnings"), list) else []
+    for w in parsed_warnings:
+        wt = str(w or "").strip()
+        if wt:
+            warnings.append(wt)
+
+    return SupplierApiFeatureAnalyzeResponse(
+        provider=provider,
+        analyzed_url_count=len(page_summaries),
+        selected_system_api_count=len(selected_api_context),
+        selected_system_api_ids=[int(item.get("id")) for item in selected_api_context if _safe_non_negative_int(item.get("id")) > 0],
+        source_urls_used=urls,
+        models=normalized_models,
+        saved_created=saved_created,
+        saved_updated=saved_updated,
+        warnings=warnings,
+        provider_summary=(str(parsed.get("provider_summary") or "").strip() or None),
+        llm_input=query,
+        llm_output=llm_raw,
+        llm_raw=llm_raw,
+    )
+
+
+def _apply_supplier_feature_models_to_db(
+    db: Session,
+    provider: str,
+    models: List[SupplierApiFeatureModel],
+    source_urls: Optional[List[str]] = None,
+    create_missing_models: bool = True,
+) -> Dict[str, Any]:
+    saved_created = 0
+    saved_updated = 0
+    skipped_count = 0
+    warnings: List[str] = []
+    now_iso = now_bj_iso()
+    normalized_provider = _normalize_system_provider_name(provider)
+
+    for item in models or []:
+        if not isinstance(item, SupplierApiFeatureModel):
+            continue
+        model_name = str(item.model or "").strip()
+        category = str(item.category or "").strip() or "Image"
+        if not model_name:
+            skipped_count += 1
+            warnings.append("skip_empty_model")
+            continue
+
+        existing = _find_system_setting_by_normalized_triplet(db, normalized_provider, category, model_name)
+        profile_dict = {
+            "provider": normalized_provider,
+            "category": category,
+            "model": model_name,
+            "base_model": item.base_model,
+            "generation_modes": item.generation_modes,
+            "text_capabilities": item.text_capabilities,
+            "image_capabilities": item.image_capabilities,
+            "video_capabilities": item.video_capabilities,
+            "digital_human_capabilities": item.digital_human_capabilities,
+            "voice_capabilities": item.voice_capabilities,
+            "music_capabilities": item.music_capabilities,
+            "notes": item.notes,
+            "confidence": item.confidence,
+            "source_urls": source_urls or [],
+            "updated_at": now_iso,
+        }
+        feature_payload = _build_modality_from_feature_profile(profile_dict)
+
+        wide_payload = {
+            "generation_modes": feature_payload.get("generation_modes"),
+            "input_formats": feature_payload.get("input_formats"),
+            "output_format": feature_payload.get("output_format"),
+            "supported_resolutions": feature_payload.get("supported_resolutions"),
+            "aspect_ratios": feature_payload.get("aspect_ratios"),
+            "max_images_per_call": feature_payload.get("max_images_per_call"),
+            "reference_image_limit": feature_payload.get("reference_image_limit"),
+            "reference_video_limit": feature_payload.get("reference_video_limit"),
+            "durations_seconds": feature_payload.get("durations_seconds"),
+            "max_duration": feature_payload.get("max_duration"),
+            "fps_options": feature_payload.get("fps_options"),
+            "has_audio": feature_payload.get("has_audio"),
+            "mode_values": feature_payload.get("mode_values"),
+            "text_capabilities": feature_payload.get("text_capabilities"),
+            "image_capabilities": feature_payload.get("image_capabilities"),
+            "video_capabilities": feature_payload.get("video_capabilities"),
+            "digital_human_capabilities": feature_payload.get("digital_human_capabilities"),
+            "voice_capabilities": feature_payload.get("voice_capabilities"),
+            "music_capabilities": feature_payload.get("music_capabilities"),
+        }
+
+        if existing:
+            existing.base_model = _resolve_base_model(item.base_model, existing.model or model_name)
+            for k, v in wide_payload.items():
+                setattr(existing, k, v)
+            supplier_info = _safe_json_dict(existing.supplier_info)
+            supplier_info.setdefault("feature_profiles", {})
+            supplier_info["feature_profiles"][model_name] = profile_dict
+            existing.supplier_info = supplier_info
+            saved_updated += 1
+            continue
+
+        if create_missing_models:
+            supplier_info = {
+                "feature_profiles": {
+                    model_name: profile_dict,
+                }
+            }
+            row = SystemAPISetting(
+                name=f"{normalized_provider} {model_name}",
+                category=category,
+                provider=normalized_provider,
+                api_key="",
+                base_url=None,
+                model=model_name,
+                base_model=_resolve_base_model(item.base_model, model_name),
+                generation_modes=wide_payload.get("generation_modes"),
+                input_formats=wide_payload.get("input_formats"),
+                output_format=wide_payload.get("output_format"),
+                supported_resolutions=wide_payload.get("supported_resolutions"),
+                aspect_ratios=wide_payload.get("aspect_ratios"),
+                max_images_per_call=wide_payload.get("max_images_per_call"),
+                reference_image_limit=wide_payload.get("reference_image_limit"),
+                reference_video_limit=wide_payload.get("reference_video_limit"),
+                durations_seconds=wide_payload.get("durations_seconds"),
+                max_duration=wide_payload.get("max_duration"),
+                fps_options=wide_payload.get("fps_options"),
+                has_audio=wide_payload.get("has_audio"),
+                mode_values=wide_payload.get("mode_values"),
+                text_capabilities=wide_payload.get("text_capabilities"),
+                image_capabilities=wide_payload.get("image_capabilities"),
+                video_capabilities=wide_payload.get("video_capabilities"),
+                digital_human_capabilities=wide_payload.get("digital_human_capabilities"),
+                voice_capabilities=wide_payload.get("voice_capabilities"),
+                music_capabilities=wide_payload.get("music_capabilities"),
+                tags=[],
+                supplier_info=supplier_info,
+                deprecated=False,
+                config={},
+                is_active=False,
+            )
+            db.add(row)
+            saved_created += 1
+            continue
+
+        skipped_count += 1
+
+    if saved_created > 0 or saved_updated > 0:
+        db.commit()
+
+    return {
+        "saved_created": saved_created,
+        "saved_updated": saved_updated,
+        "skipped_count": skipped_count,
+        "warnings": warnings,
+    }
+
+
+@router.post("/settings/system/ai-assistant/tools/apply-supplier-features", response_model=SupplierApiFeatureApplyResponse)
+async def ai_assistant_apply_supplier_features(
+    payload: SupplierApiFeatureApplyRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Persist selected supplier feature models into system_api_settings."""
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only superuser can use system AI assistant tools")
+
+    provider = _normalize_system_provider_name(payload.provider)
+    if not provider:
+        raise HTTPException(status_code=400, detail="provider is required")
+    if not payload.models:
+        raise HTTPException(status_code=400, detail="models is required")
+
+    normalized_models: List[SupplierApiFeatureModel] = []
+    for item in payload.models:
+        model_name = str(item.model or "").strip()
+        if not model_name:
+            continue
+        category = str(item.category or "").strip() or "Image"
+        if category.lower() == "digitalhuman":
+            category = "DigitalHuman"
+        if category.lower() == "digital_human":
+            category = "DigitalHuman"
+        normalized_models.append(SupplierApiFeatureModel(
+            provider=provider,
+            category=category,
+            model=model_name,
+            base_model=(str(item.base_model or "").strip() or None),
+            generation_modes=_normalize_generation_modes(item.generation_modes),
+            text_capabilities=_clean_feature_dict(item.text_capabilities),
+            image_capabilities=_clean_feature_dict(item.image_capabilities),
+            video_capabilities=_clean_feature_dict(item.video_capabilities),
+            digital_human_capabilities=_clean_feature_dict(item.digital_human_capabilities),
+            voice_capabilities=_clean_feature_dict(item.voice_capabilities),
+            music_capabilities=_clean_feature_dict(item.music_capabilities),
+            notes=(str(item.notes or "").strip() or None),
+            confidence=max(0.0, min(float(item.confidence or 0.0), 1.0)),
+        ))
+
+    if not normalized_models:
+        raise HTTPException(status_code=400, detail="No valid models to apply")
+
+    apply_result = _apply_supplier_feature_models_to_db(
+        db=db,
+        provider=provider,
+        models=normalized_models,
+        source_urls=[],
+        create_missing_models=bool(payload.create_missing_models),
+    )
+
+    return SupplierApiFeatureApplyResponse(
+        provider=provider,
+        requested_count=len(payload.models),
+        saved_created=int(apply_result.get("saved_created") or 0),
+        saved_updated=int(apply_result.get("saved_updated") or 0),
+        skipped_count=int(apply_result.get("skipped_count") or 0),
+        warnings=[str(w) for w in (apply_result.get("warnings") or []) if str(w).strip()],
+    )
+
+
 @router.post("/settings/system/manage/kie-pricing/generate", response_model=KIEPricingGenerateResponse)
 async def generate_kie_pricing_rules(
     payload: KIEPricingGenerateRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """KIE 专项定价助手: 抓取定价页 -> LLM 匹配 system_api(kie) -> 生成规则建议。"""
+    """KIE pricing helper: fetch pricing, map to system_api(kie), generate rule suggestions."""
     if not _can_manage_system_settings(current_user):
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
@@ -3254,6 +4200,8 @@ async def generate_kie_pricing_rules(
         warnings=[str(x) for x in warnings if str(x).strip()],
         tables_parse_status=tables_parse_status,
         tables_parse_warning=tables_parse_warning,
+        llm_input=(llm_query[:4000] if llm_query else None),
+        llm_output=(llm_raw[:4000] if llm_raw else None),
         llm_raw=(llm_raw[:4000] if llm_raw else None),
     )
 
@@ -3264,7 +4212,7 @@ def apply_kie_pricing_rules(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """KIE 专项定价助手: 直接应用已有建议，不重新执行 LLM 匹配生成。"""
+    """KIE pricing helper: apply existing suggestions without re-running LLM matching."""
     if not _can_manage_system_settings(current_user):
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
@@ -3376,7 +4324,7 @@ def fetch_kie_pricing_data(
     payload: KIEPricingFetchRequest,
     current_user: User = Depends(get_current_user),
 ):
-    """KIE 专项定价抓取: 支持分页探测，先确认数据再做匹配生成。"""
+    """KIE pricing fetch helper: probe pages and confirm data before matching generation."""
     if not _can_manage_system_settings(current_user):
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
@@ -3409,8 +4357,7 @@ def create_system_setting_for_manage(
     if _is_system_reserved_category(category):
         raise HTTPException(status_code=400, detail="System_* categories are reserved for infrastructure settings and cannot be managed as AIGC System API")
     model = (payload.model or "").strip()
-    modality_payload = payload.modality if isinstance(payload.modality, dict) else {}
-    base_model = (payload.base_model or "").strip() or str(modality_payload.get("base_model") or "").strip() or None
+    base_model = _resolve_base_model(payload.base_model, payload.model)
     existing = _find_system_setting_by_normalized_triplet(db, provider, category, model)
     if existing:
         raw_cfg = payload.config if isinstance(payload.config, dict) else _safe_json_dict(existing.config)
@@ -3420,11 +4367,38 @@ def create_system_setting_for_manage(
         existing.base_url = payload.base_url
         existing.model = payload.model
         existing.base_model = base_model
-        existing.modality = payload.modality
         existing.tags = getattr(payload, "tags", None)
         existing.supplier_info = getattr(payload, "supplier_info", None) or existing.supplier_info
+        existing.generation_modes = getattr(payload, "generation_modes", None)
+        existing.input_formats = getattr(payload, "input_formats", None)
+        existing.output_format = getattr(payload, "output_format", None)
+        existing.supported_resolutions = getattr(payload, "supported_resolutions", None)
+        existing.aspect_ratios = getattr(payload, "aspect_ratios", None)
+        existing.max_images_per_call = getattr(payload, "max_images_per_call", None)
+        existing.reference_image_limit = getattr(payload, "reference_image_limit", None)
+        existing.reference_video_limit = getattr(payload, "reference_video_limit", None)
+        existing.durations_seconds = getattr(payload, "durations_seconds", None)
+        existing.max_duration = getattr(payload, "max_duration", None)
+        existing.fps_options = getattr(payload, "fps_options", None)
+        existing.has_audio = getattr(payload, "has_audio", None)
+        existing.mode_values = getattr(payload, "mode_values", None)
+        existing.text_capabilities = getattr(payload, "text_capabilities", None)
+        existing.image_capabilities = getattr(payload, "image_capabilities", None)
+        existing.video_capabilities = getattr(payload, "video_capabilities", None)
+        existing.digital_human_capabilities = getattr(payload, "digital_human_capabilities", None)
+        existing.voice_capabilities = getattr(payload, "voice_capabilities", None)
+        existing.music_capabilities = getattr(payload, "music_capabilities", None)
+        existing.pricing_unit = getattr(payload, "pricing_unit", None)
+        existing.token_billing_supported = getattr(payload, "token_billing_supported", None)
+        existing.input_token_price = getattr(payload, "input_token_price", None)
+        existing.output_token_price = getattr(payload, "output_token_price", None)
+        existing.per_resolution_price_map = getattr(payload, "per_resolution_price_map", None)
+        existing.per_duration_price_map = getattr(payload, "per_duration_price_map", None)
+        existing.has_tiered_pricing = getattr(payload, "has_tiered_pricing", None)
+        existing.free_quota = getattr(payload, "free_quota", None)
+        existing.currency = getattr(payload, "currency", None)
         existing.config = target_cfg
-        existing.is_active = bool(payload.is_active)
+        existing.is_active = bool(existing.is_active)
         _clear_row_billing_columns(existing)
 
         effective_key = _sync_system_provider_shared_key(
@@ -3435,12 +4409,10 @@ def create_system_setting_for_manage(
         )
         existing.api_key = effective_key
 
-        if existing.is_active:
-            db.query(SystemAPISetting).filter(
-                SystemAPISetting.category == existing.category,
-                SystemAPISetting.id != existing.id,
-                SystemAPISetting.is_active == True,
-            ).update({"is_active": False})
+        if bool(payload.is_active):
+            upsert_task_default_system_setting(db, existing.category, int(existing.id))
+        else:
+            clear_task_default_for_category(db, existing.category)
 
         if _is_system_api_auto_billing_sync_enabled():
             _upsert_base_billing_rule(db, existing.id, existing.category, billing, activate=True)
@@ -3461,12 +4433,39 @@ def create_system_setting_for_manage(
         base_url=payload.base_url,
         model=payload.model,
         base_model=base_model,
-        modality=payload.modality,
         tags=getattr(payload, "tags", None),
         supplier_info=getattr(payload, "supplier_info", None),
+        generation_modes=getattr(payload, "generation_modes", None),
+        input_formats=getattr(payload, "input_formats", None),
+        output_format=getattr(payload, "output_format", None),
+        supported_resolutions=getattr(payload, "supported_resolutions", None),
+        aspect_ratios=getattr(payload, "aspect_ratios", None),
+        max_images_per_call=getattr(payload, "max_images_per_call", None),
+        reference_image_limit=getattr(payload, "reference_image_limit", None),
+        reference_video_limit=getattr(payload, "reference_video_limit", None),
+        durations_seconds=getattr(payload, "durations_seconds", None),
+        max_duration=getattr(payload, "max_duration", None),
+        fps_options=getattr(payload, "fps_options", None),
+        has_audio=getattr(payload, "has_audio", None),
+        mode_values=getattr(payload, "mode_values", None),
+        text_capabilities=getattr(payload, "text_capabilities", None),
+        image_capabilities=getattr(payload, "image_capabilities", None),
+        video_capabilities=getattr(payload, "video_capabilities", None),
+        digital_human_capabilities=getattr(payload, "digital_human_capabilities", None),
+        voice_capabilities=getattr(payload, "voice_capabilities", None),
+        music_capabilities=getattr(payload, "music_capabilities", None),
+        pricing_unit=getattr(payload, "pricing_unit", None),
+        token_billing_supported=getattr(payload, "token_billing_supported", None),
+        input_token_price=getattr(payload, "input_token_price", None),
+        output_token_price=getattr(payload, "output_token_price", None),
+        per_resolution_price_map=getattr(payload, "per_resolution_price_map", None),
+        per_duration_price_map=getattr(payload, "per_duration_price_map", None),
+        has_tiered_pricing=getattr(payload, "has_tiered_pricing", None),
+        free_quota=getattr(payload, "free_quota", None),
+        currency=getattr(payload, "currency", None),
         deprecated=False,
         config=create_config,
-        is_active=bool(payload.is_active),
+        is_active=False,
     )
     _clear_row_billing_columns(new_setting)
     db.add(new_setting)
@@ -3485,12 +4484,8 @@ def create_system_setting_for_manage(
     )
     new_setting.api_key = effective_key
 
-    if new_setting.is_active:
-        db.query(SystemAPISetting).filter(
-            SystemAPISetting.category == new_setting.category,
-            SystemAPISetting.id != new_setting.id,
-            SystemAPISetting.is_active == True,
-        ).update({"is_active": False})
+    if bool(payload.is_active):
+        upsert_task_default_system_setting(db, new_setting.category, int(new_setting.id))
 
     db.commit()
     db.refresh(new_setting)
@@ -3522,6 +4517,7 @@ def update_system_setting_for_manage(
     payload_billing = {k: update_data.pop(k) for k in billing_keys if k in update_data}
     for key, value in update_data.items():
         setattr(target, key, value)
+    target.base_model = _resolve_base_model(getattr(target, "base_model", None), getattr(target, "model", None))
 
     existing_billing = _resolve_system_setting_billing(db, target)
     if payload_billing:
@@ -3536,12 +4532,10 @@ def update_system_setting_for_manage(
     target.config = _strip_billing_from_config(target.config)
     _clear_row_billing_columns(target)
 
-    if payload.is_active:
-        db.query(SystemAPISetting).filter(
-            SystemAPISetting.category == target.category,
-            SystemAPISetting.id != target.id,
-            SystemAPISetting.is_active == True,
-        ).update({"is_active": False})
+    if payload.is_active is True:
+        upsert_task_default_system_setting(db, target.category, int(target.id))
+    elif payload.is_active is False:
+        clear_task_default_for_category(db, target.category)
 
     # Keep provider-level key shared among system rows as well.
     effective_key = _sync_system_provider_shared_key(
@@ -3887,7 +4881,34 @@ def export_system_settings_for_manage(
             "base_url": row.base_url,
             "model": row.model,
             "base_model": row.base_model,
-            "modality": row.modality,
+            "generation_modes": getattr(row, "generation_modes", None),
+            "input_formats": getattr(row, "input_formats", None),
+            "output_format": getattr(row, "output_format", None),
+            "supported_resolutions": getattr(row, "supported_resolutions", None),
+            "aspect_ratios": getattr(row, "aspect_ratios", None),
+            "max_images_per_call": getattr(row, "max_images_per_call", None),
+            "reference_image_limit": getattr(row, "reference_image_limit", None),
+            "reference_video_limit": getattr(row, "reference_video_limit", None),
+            "durations_seconds": getattr(row, "durations_seconds", None),
+            "max_duration": getattr(row, "max_duration", None),
+            "fps_options": getattr(row, "fps_options", None),
+            "has_audio": getattr(row, "has_audio", None),
+            "mode_values": getattr(row, "mode_values", None),
+            "text_capabilities": getattr(row, "text_capabilities", None),
+            "image_capabilities": getattr(row, "image_capabilities", None),
+            "video_capabilities": getattr(row, "video_capabilities", None),
+            "digital_human_capabilities": getattr(row, "digital_human_capabilities", None),
+            "voice_capabilities": getattr(row, "voice_capabilities", None),
+            "music_capabilities": getattr(row, "music_capabilities", None),
+            "pricing_unit": getattr(row, "pricing_unit", None),
+            "token_billing_supported": getattr(row, "token_billing_supported", None),
+            "input_token_price": getattr(row, "input_token_price", None),
+            "output_token_price": getattr(row, "output_token_price", None),
+            "per_resolution_price_map": getattr(row, "per_resolution_price_map", None),
+            "per_duration_price_map": getattr(row, "per_duration_price_map", None),
+            "has_tiered_pricing": getattr(row, "has_tiered_pricing", None),
+            "free_quota": getattr(row, "free_quota", None),
+            "currency": getattr(row, "currency", None),
             "tags": getattr(row, "tags", None),
             "supplier_info": getattr(row, "supplier_info", None),
             "config": _strip_billing_from_config(row.config),
@@ -3896,12 +4917,12 @@ def export_system_settings_for_manage(
             "billing_cost_input": billing.get("cost_input", 0),
             "billing_cost_output": billing.get("cost_output", 0),
             "deprecated": bool(row.deprecated),
-            "is_active": bool(row.is_active),
+            "is_active": is_task_default_system_setting(db, int(row.id), row.category),
         })
 
     return {
         "version": 1,
-        "exported_at": datetime.utcnow().isoformat(),
+        "exported_at": now_bj_iso(),
         "count": len(rows),
         "items": items,
     }
@@ -3941,7 +4962,34 @@ def export_system_settings_to_seed_file(
             "base_url": row.base_url,
             "model": row.model,
             "base_model": row.base_model,
-            "modality": row.modality,
+            "generation_modes": getattr(row, "generation_modes", None),
+            "input_formats": getattr(row, "input_formats", None),
+            "output_format": getattr(row, "output_format", None),
+            "supported_resolutions": getattr(row, "supported_resolutions", None),
+            "aspect_ratios": getattr(row, "aspect_ratios", None),
+            "max_images_per_call": getattr(row, "max_images_per_call", None),
+            "reference_image_limit": getattr(row, "reference_image_limit", None),
+            "reference_video_limit": getattr(row, "reference_video_limit", None),
+            "durations_seconds": getattr(row, "durations_seconds", None),
+            "max_duration": getattr(row, "max_duration", None),
+            "fps_options": getattr(row, "fps_options", None),
+            "has_audio": getattr(row, "has_audio", None),
+            "mode_values": getattr(row, "mode_values", None),
+            "text_capabilities": getattr(row, "text_capabilities", None),
+            "image_capabilities": getattr(row, "image_capabilities", None),
+            "video_capabilities": getattr(row, "video_capabilities", None),
+            "digital_human_capabilities": getattr(row, "digital_human_capabilities", None),
+            "voice_capabilities": getattr(row, "voice_capabilities", None),
+            "music_capabilities": getattr(row, "music_capabilities", None),
+            "pricing_unit": getattr(row, "pricing_unit", None),
+            "token_billing_supported": getattr(row, "token_billing_supported", None),
+            "input_token_price": getattr(row, "input_token_price", None),
+            "output_token_price": getattr(row, "output_token_price", None),
+            "per_resolution_price_map": getattr(row, "per_resolution_price_map", None),
+            "per_duration_price_map": getattr(row, "per_duration_price_map", None),
+            "has_tiered_pricing": getattr(row, "has_tiered_pricing", None),
+            "free_quota": getattr(row, "free_quota", None),
+            "currency": getattr(row, "currency", None),
             "tags": getattr(row, "tags", None),
             "supplier_info": getattr(row, "supplier_info", None),
             "config": config,
@@ -3950,7 +4998,7 @@ def export_system_settings_to_seed_file(
             "billing_cost_input": billing.get("cost_input", 0),
             "billing_cost_output": billing.get("cost_output", 0),
             "deprecated": bool(row.deprecated),
-            "is_active": bool(row.is_active),
+            "is_active": is_task_default_system_setting(db, int(row.id), row.category),
         })
 
     seed_path = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "data", "system_api_seed.json"))
@@ -3958,7 +5006,7 @@ def export_system_settings_to_seed_file(
     with open(seed_path, "w", encoding="utf-8") as f:
         json.dump({
             "version": 1,
-            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "exported_at": now_bj_iso(),
             "count": len(items),
             "items": items,
         }, f, ensure_ascii=False, indent=2)
@@ -4000,7 +5048,34 @@ def export_system_provider_bundle_for_manage(
                 "base_url": row.base_url,
                 "model": row.model,
                 "base_model": row.base_model,
-                "modality": row.modality,
+                "generation_modes": getattr(row, "generation_modes", None),
+                "input_formats": getattr(row, "input_formats", None),
+                "output_format": getattr(row, "output_format", None),
+                "supported_resolutions": getattr(row, "supported_resolutions", None),
+                "aspect_ratios": getattr(row, "aspect_ratios", None),
+                "max_images_per_call": getattr(row, "max_images_per_call", None),
+                "reference_image_limit": getattr(row, "reference_image_limit", None),
+                "reference_video_limit": getattr(row, "reference_video_limit", None),
+                "durations_seconds": getattr(row, "durations_seconds", None),
+                "max_duration": getattr(row, "max_duration", None),
+                "fps_options": getattr(row, "fps_options", None),
+                "has_audio": getattr(row, "has_audio", None),
+                "mode_values": getattr(row, "mode_values", None),
+                "text_capabilities": getattr(row, "text_capabilities", None),
+                "image_capabilities": getattr(row, "image_capabilities", None),
+                "video_capabilities": getattr(row, "video_capabilities", None),
+                "digital_human_capabilities": getattr(row, "digital_human_capabilities", None),
+                "voice_capabilities": getattr(row, "voice_capabilities", None),
+                "music_capabilities": getattr(row, "music_capabilities", None),
+                "pricing_unit": getattr(row, "pricing_unit", None),
+                "token_billing_supported": getattr(row, "token_billing_supported", None),
+                "input_token_price": getattr(row, "input_token_price", None),
+                "output_token_price": getattr(row, "output_token_price", None),
+                "per_resolution_price_map": getattr(row, "per_resolution_price_map", None),
+                "per_duration_price_map": getattr(row, "per_duration_price_map", None),
+                "has_tiered_pricing": getattr(row, "has_tiered_pricing", None),
+                "free_quota": getattr(row, "free_quota", None),
+                "currency": getattr(row, "currency", None),
                 "tags": getattr(row, "tags", None),
                 "supplier_info": getattr(row, "supplier_info", None),
                 "config": _strip_billing_from_config(row.config),
@@ -4009,7 +5084,7 @@ def export_system_provider_bundle_for_manage(
                 "billing_cost_input": billing.get("cost_input", 0),
                 "billing_cost_output": billing.get("cost_output", 0),
                 "deprecated": bool(row.deprecated),
-                "is_active": bool(row.is_active),
+                "is_active": is_task_default_system_setting(db, int(row.id), row.category),
             })
         providers.append({
             "provider": provider_name,
@@ -4023,7 +5098,7 @@ def export_system_provider_bundle_for_manage(
     return {
         "version": 1,
         "format": "provider_bundle",
-        "exported_at": datetime.utcnow().isoformat(),
+        "exported_at": now_bj_iso(),
         "provider_count": len(providers),
         "providers": providers,
     }
@@ -4087,13 +5162,13 @@ def import_system_provider_bundle_for_manage(
                     target.name = (model_item.name or target.name or "System Setting").strip() or "System Setting"
                     target.base_url = model_item.base_url
                     target.model = model
-                    target.base_model = (getattr(model_item, "base_model", None) or "").strip() or None
-                    target.modality = getattr(model_item, "modality", None)
+                    target.base_model = _resolve_base_model(getattr(model_item, "base_model", None), model)
+                    _assign_wide_modality_fields(target, model_item)
                     target.tags = getattr(model_item, "tags", None)
                     target.supplier_info = getattr(model_item, "supplier_info", None) or target.supplier_info
                     target.config = clean_model_cfg
                     target.deprecated = _is_setting_deprecated(target.config, model_item.deprecated)
-                    target.is_active = bool(model_item.is_active)
+                    target.is_active = bool(target.is_active)
                     _clear_row_billing_columns(target)
                     if _is_system_api_auto_billing_sync_enabled():
                         _upsert_base_billing_rule(db, target.id, target.category, model_billing, activate=True)
@@ -4107,14 +5182,14 @@ def import_system_provider_bundle_for_manage(
                         api_key="",
                         base_url=model_item.base_url,
                         model=model,
-                        base_model=(getattr(model_item, "base_model", None) or "").strip() or None,
-                        modality=getattr(model_item, "modality", None),
+                        base_model=_resolve_base_model(getattr(model_item, "base_model", None), model),
                         tags=getattr(model_item, "tags", None),
                         supplier_info=getattr(model_item, "supplier_info", None),
                         deprecated=_is_setting_deprecated(clean_model_cfg, model_item.deprecated),
                         config=clean_model_cfg,
-                        is_active=bool(model_item.is_active),
+                        is_active=False,
                     )
+                    _assign_wide_modality_fields(target, model_item)
                     _clear_row_billing_columns(target)
                     db.add(target)
                     db.flush()
@@ -4135,11 +5210,7 @@ def import_system_provider_bundle_for_manage(
                 key_updated_providers += 1
 
         for category, keep_id in last_active_id_by_category.items():
-            db.query(SystemAPISetting).filter(
-                SystemAPISetting.category == category,
-                SystemAPISetting.id != keep_id,
-                SystemAPISetting.is_active == True,
-            ).update({"is_active": False}, synchronize_session=False)
+            upsert_task_default_system_setting(db, category, int(keep_id))
 
         db.commit()
         return {
@@ -4213,6 +5284,104 @@ _SYNC_BILLING_RULE_FIELDS = [
     "extra_conditions",
 ]
 
+_SYNC_BILLING_RULE_BOOL_FIELDS = {
+    "is_active",
+    "applies_to_text",
+    "applies_to_image",
+    "applies_to_video",
+}
+_SYNC_BILLING_RULE_INT_FIELDS = {
+    "priority",
+    "input_tokens_min",
+    "input_tokens_max",
+    "output_tokens_min",
+    "output_tokens_max",
+    "total_tokens_min",
+    "total_tokens_max",
+    "image_count_min",
+    "image_count_max",
+    "width_min",
+    "width_max",
+    "height_min",
+    "height_max",
+    "pixels_min",
+    "pixels_max",
+    "billing_cost",
+    "billing_cost_input",
+    "billing_cost_output",
+}
+_SYNC_BILLING_RULE_FLOAT_FIELDS = {
+    "duration_seconds_min",
+    "duration_seconds_max",
+    "fps_min",
+    "fps_max",
+    "charge_multiplier",
+}
+
+
+def _db_has_table(db: Session, table_name: str) -> bool:
+    try:
+        engine = db.get_bind()
+        return bool(inspect(engine).has_table(table_name))
+    except Exception:
+        return False
+
+
+def _safe_clear_transaction_action_rule_links(db: Session, *, clear_system_api_ids: Optional[List[int]] = None, clear_rule_ids: Optional[List[int]] = None) -> None:
+    # Older deployments may not have the transaction_action table or newer columns.
+    if not _db_has_table(db, "transaction_action"):
+        return
+    try:
+        if clear_system_api_ids:
+            db.query(TransactionAction).filter(
+                TransactionAction.system_api_id.in_(clear_system_api_ids),
+            ).update({"system_api_id": None}, synchronize_session=False)
+        if clear_rule_ids:
+            db.query(TransactionAction).filter(
+                TransactionAction.matched_rule_id.in_(clear_rule_ids),
+            ).update({"matched_rule_id": None}, synchronize_session=False)
+    except Exception as exc:
+        logger.warning("Skip transaction_action cleanup due to schema mismatch: %s", exc)
+
+
+def _normalize_sync_billing_rule_field(field_name: str, raw_value: Any) -> Any:
+    if field_name == "name":
+        text = str(raw_value or "").strip()
+        return text or "Rule"
+    if field_name == "description":
+        text = str(raw_value or "").strip()
+        return text or None
+    if field_name == "billing_unit_type":
+        text = str(raw_value or "").strip()
+        return text or "per_call"
+    if field_name == "has_audio":
+        if raw_value is None:
+            return None
+        if isinstance(raw_value, str) and raw_value.strip().lower() in {"", "none", "null"}:
+            return None
+        return _to_bool(raw_value)
+    if field_name == "extra_conditions":
+        return _safe_json_dict(raw_value)
+    if field_name in _SYNC_BILLING_RULE_BOOL_FIELDS:
+        return _to_bool(raw_value)
+    if field_name in _SYNC_BILLING_RULE_INT_FIELDS:
+        if raw_value is None or (isinstance(raw_value, str) and not raw_value.strip()):
+            return 0 if field_name in {"priority", "billing_cost", "billing_cost_input", "billing_cost_output"} else None
+        try:
+            return int(float(raw_value))
+        except Exception:
+            return 0 if field_name in {"priority", "billing_cost", "billing_cost_input", "billing_cost_output"} else None
+    if field_name in _SYNC_BILLING_RULE_FLOAT_FIELDS:
+        if raw_value is None or (isinstance(raw_value, str) and not raw_value.strip()):
+            return 2.0 if field_name == "charge_multiplier" else None
+        try:
+            return float(raw_value)
+        except Exception:
+            return 2.0 if field_name == "charge_multiplier" else None
+
+    text = str(raw_value or "").strip()
+    return text or None
+
 
 def _clear_non_system_settings_for_replace_all(db: Session) -> None:
     # Delete non-System API settings in FK-safe order.
@@ -4225,6 +5394,8 @@ def _clear_non_system_settings_for_replace_all(db: Session) -> None:
     if not target_ids:
         return
 
+    clear_task_defaults_for_system_api_ids(db, target_ids)
+
     rule_ids = [
         int(rule_id)
         for rule_id, in db.query(SystemAPIBillingRule.id).filter(
@@ -4232,14 +5403,11 @@ def _clear_non_system_settings_for_replace_all(db: Session) -> None:
         ).all()
     ]
 
-    db.query(TransactionAction).filter(
-        TransactionAction.system_api_id.in_(target_ids),
-    ).update({"system_api_id": None}, synchronize_session=False)
-
-    if rule_ids:
-        db.query(TransactionAction).filter(
-            TransactionAction.matched_rule_id.in_(rule_ids),
-        ).update({"matched_rule_id": None}, synchronize_session=False)
+    _safe_clear_transaction_action_rule_links(
+        db,
+        clear_system_api_ids=target_ids,
+        clear_rule_ids=rule_ids,
+    )
 
     db.query(SystemAPIBillingRule).filter(
         SystemAPIBillingRule.system_api_id.in_(target_ids),
@@ -4261,9 +5429,14 @@ def _import_provider_bundle_no_commit(db: Session, providers: List[Any], replace
     key_updated_providers = 0
     providers_processed = 0
     skipped_models = 0
-    last_active_id_by_category: Dict[str, int] = {}
 
-    for provider_item in providers:
+    def _as_object(item: Any) -> Any:
+        if isinstance(item, dict):
+            return SimpleNamespace(**item)
+        return item
+
+    for provider_item_raw in providers:
+        provider_item = _as_object(provider_item_raw)
         provider_name = str(getattr(provider_item, "provider", "") or "").strip()
         if not provider_name:
             continue
@@ -4273,8 +5446,11 @@ def _import_provider_bundle_no_commit(db: Session, providers: List[Any], replace
         strategy = _normalize_key_strategy(getattr(provider_item, "strategy", None))
         weights = _normalize_key_weights(getattr(provider_item, "weights", None), keys)
         models = getattr(provider_item, "models", []) or []
+        if isinstance(models, dict):
+            models = [models]
 
-        for model_item in models:
+        for model_item_raw in models:
+            model_item = _as_object(model_item_raw)
             category = str(getattr(model_item, "category", "LLM") or "LLM").strip() or "LLM"
             if _is_system_reserved_category(category):
                 skipped_models += 1
@@ -4294,13 +5470,13 @@ def _import_provider_bundle_no_commit(db: Session, providers: List[Any], replace
                 target.name = (getattr(model_item, "name", None) or target.name or "System Setting").strip() or "System Setting"
                 target.base_url = getattr(model_item, "base_url", None)
                 target.model = model
-                target.base_model = (getattr(model_item, "base_model", None) or "").strip() or None
-                target.modality = getattr(model_item, "modality", None)
+                target.base_model = _resolve_base_model(getattr(model_item, "base_model", None), model)
+                _assign_wide_modality_fields(target, model_item)
                 target.tags = getattr(model_item, "tags", None)
                 target.supplier_info = getattr(model_item, "supplier_info", None) or target.supplier_info
                 target.config = clean_model_cfg
                 target.deprecated = _is_setting_deprecated(target.config, getattr(model_item, "deprecated", None))
-                target.is_active = bool(getattr(model_item, "is_active", False))
+                target.is_active = bool(target.is_active)
                 _clear_row_billing_columns(target)
                 if _is_system_api_auto_billing_sync_enabled():
                     _upsert_base_billing_rule(db, target.id, target.category, model_billing, activate=True)
@@ -4314,14 +5490,14 @@ def _import_provider_bundle_no_commit(db: Session, providers: List[Any], replace
                     api_key="",
                     base_url=getattr(model_item, "base_url", None),
                     model=model,
-                    base_model=(getattr(model_item, "base_model", None) or "").strip() or None,
-                    modality=getattr(model_item, "modality", None),
+                    base_model=_resolve_base_model(getattr(model_item, "base_model", None), model),
                     tags=getattr(model_item, "tags", None),
                     supplier_info=getattr(model_item, "supplier_info", None),
                     deprecated=_is_setting_deprecated(clean_model_cfg, getattr(model_item, "deprecated", None)),
                     config=clean_model_cfg,
-                    is_active=bool(getattr(model_item, "is_active", False)),
+                    is_active=False,
                 )
+                _assign_wide_modality_fields(target, model_item)
                 _clear_row_billing_columns(target)
                 db.add(target)
                 db.flush()
@@ -4330,9 +5506,6 @@ def _import_provider_bundle_no_commit(db: Session, providers: List[Any], replace
                     _refresh_has_granular_billing_rules_flag(db, target.id)
                 created += 1
 
-            if bool(getattr(model_item, "is_active", False)):
-                last_active_id_by_category[category] = target.id
-
         provider_rows = db.query(SystemAPISetting).filter(
             SystemAPISetting.provider == provider_name,
             ~SystemAPISetting.category.like("System_%"),
@@ -4340,13 +5513,6 @@ def _import_provider_bundle_no_commit(db: Session, providers: List[Any], replace
         if provider_rows:
             _apply_provider_key_bundle_to_rows(db, provider_name, keys, strategy, weights)
             key_updated_providers += 1
-
-    for category, keep_id in last_active_id_by_category.items():
-        db.query(SystemAPISetting).filter(
-            SystemAPISetting.category == category,
-            SystemAPISetting.id != keep_id,
-            SystemAPISetting.is_active == True,
-        ).update({"is_active": False}, synchronize_session=False)
 
     return {
         "providers": providers_processed,
@@ -4399,6 +5565,7 @@ def export_system_config_sync_bundle_for_manage(
             "api_keys": _normalize_api_keys(row.api_keys),
             "strategy": _normalize_key_strategy(row.strategy),
             "weights": row.weights if row.weights else [],
+            "intro_url": _normalize_optional_http_url(getattr(row, "intro_url", None)),
             "created_at": row.created_at,
             "updated_at": row.updated_at,
         }
@@ -4416,7 +5583,8 @@ def export_system_config_sync_bundle_for_manage(
             "use_tls": bool(row.use_tls),
             "from_email": str(row.from_email or "").strip(),
             "frontend_base_url": str(row.frontend_base_url or "").strip(),
-            "is_active": bool(row.is_active),
+            # SMTP config is not a SystemAPISetting and has no category field.
+            "is_active": bool(getattr(row, "is_active", True)),
             "created_at": row.created_at,
             "updated_at": row.updated_at,
         }
@@ -4440,24 +5608,42 @@ def export_system_config_sync_bundle_for_manage(
         for row in wechat_rows
     ]
 
+    task_default_rows = db.query(TaskDefaultSystemAPI).order_by(TaskDefaultSystemAPI.task_category.asc()).all()
+    task_default_payload: List[Dict[str, Any]] = []
+    for row in task_default_rows:
+        api_row = system_map.get(int(getattr(row, "system_api_id", 0) or 0))
+        task_default_payload.append({
+            "task_category": normalize_task_category(getattr(row, "task_category", None)),
+            "system_api_id": int(getattr(row, "system_api_id", 0) or 0),
+            "system_api_ref": {
+                "provider": str(getattr(api_row, "provider", "") or "").strip() or None,
+                "category": str(getattr(api_row, "category", "") or "").strip() or None,
+                "model": str(getattr(api_row, "model", "") or "").strip() or None,
+            },
+            "created_at": getattr(row, "created_at", None),
+            "updated_at": getattr(row, "updated_at", None),
+        })
+
     data = {
         "providers": provider_bundle.get("providers", []),
         "billing_rules": billing_rules_payload,
         "provider_key_pools": provider_key_pools_payload,
         "smtp_configs": smtp_payload,
         "wechat_pay_configs": wechat_payload,
+        "task_default_apis": task_default_payload,
     }
 
     return {
         "version": 1,
         "format": "system_config_sync_bundle",
-        "exported_at": datetime.utcnow().isoformat(),
+        "exported_at": now_bj_iso(),
         "summary": {
             "providers": len(data["providers"]),
             "billing_rules": len(data["billing_rules"]),
             "provider_key_pools": len(data["provider_key_pools"]),
             "smtp_configs": len(data["smtp_configs"]),
             "wechat_pay_configs": len(data["wechat_pay_configs"]),
+            "task_default_apis": len(data["task_default_apis"]),
         },
         "data": data,
     }
@@ -4478,6 +5664,7 @@ def import_system_config_sync_bundle_for_manage(
     provider_key_pools = data.get("provider_key_pools") if isinstance(data.get("provider_key_pools"), list) else []
     smtp_configs = data.get("smtp_configs") if isinstance(data.get("smtp_configs"), list) else []
     wechat_pay_configs = data.get("wechat_pay_configs") if isinstance(data.get("wechat_pay_configs"), list) else []
+    task_default_apis = data.get("task_default_apis") if isinstance(data.get("task_default_apis"), list) else []
 
     replace_all = bool(payload.replace_all)
     if replace_all and not bool(getattr(payload, "confirm_clear_existing", False)):
@@ -4487,140 +5674,204 @@ def import_system_config_sync_bundle_for_manage(
         )
 
     try:
-        provider_items = []
-        for raw in providers:
-            if not isinstance(raw, dict):
-                continue
-            provider_items.append(raw)
-        provider_req = SystemAPIProviderImportRequest(providers=provider_items, replace_all=replace_all)
-        provider_result = _import_provider_bundle_no_commit(db, provider_req.providers or [], provider_req.replace_all)
+        tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
+        with tx_ctx:
+            provider_items = []
+            for raw in providers:
+                if not isinstance(raw, dict):
+                    continue
+                provider_items.append(raw)
+            provider_import_items: List[Any] = provider_items
+            try:
+                provider_req = SystemAPIProviderImportRequest(providers=provider_items, replace_all=replace_all)
+                provider_import_items = provider_req.providers or []
+            except Exception as parse_exc:
+                logger.warning("Provider bundle parse warning, fallback to permissive import: %s", parse_exc)
+            provider_result = _import_provider_bundle_no_commit(db, provider_import_items, replace_all)
 
-        if replace_all:
-            db.query(TransactionAction).filter(
-                TransactionAction.matched_rule_id.isnot(None),
-            ).update({"matched_rule_id": None}, synchronize_session=False)
-            db.query(SystemAPIBillingRule).delete(synchronize_session=False)
+            if replace_all:
+                if _db_has_table(db, "transaction_action"):
+                    try:
+                        db.query(TransactionAction).filter(
+                            TransactionAction.matched_rule_id.isnot(None),
+                        ).update({"matched_rule_id": None}, synchronize_session=False)
+                    except Exception as exc:
+                        logger.warning("Skip matched_rule_id reset due to schema mismatch: %s", exc)
+                db.query(SystemAPIBillingRule).delete(synchronize_session=False)
 
-        system_rows = db.query(SystemAPISetting).filter(
-            ~SystemAPISetting.category.like("System_%"),
-        ).all()
-        system_index: Dict[Tuple[str, str, str], int] = {}
-        for row in system_rows:
-            provider_name = _normalize_system_provider_name(row.provider)
-            category_name = str(row.category or "").strip()
-            model_name = str(row.model or "").strip()
-            if provider_name and category_name and model_name:
-                system_index[(provider_name, category_name, model_name)] = int(row.id)
+            system_rows = db.query(SystemAPISetting).filter(
+                ~SystemAPISetting.category.like("System_%"),
+            ).all()
+            system_index: Dict[Tuple[str, str, str], int] = {}
+            for row in system_rows:
+                provider_name = _normalize_system_provider_name(row.provider)
+                category_name = str(row.category or "").strip()
+                model_name = str(row.model or "").strip()
+                if provider_name and category_name and model_name:
+                    system_index[(provider_name, category_name, model_name)] = int(row.id)
 
-        billing_created = 0
-        billing_skipped = 0
-        now_iso = datetime.utcnow().isoformat()
-        for raw_rule in billing_rules:
-            if not isinstance(raw_rule, dict):
-                billing_skipped += 1
-                continue
+            billing_created = 0
+            billing_skipped = 0
+            default_created = 0
+            default_skipped = 0
+            now_iso = now_bj_iso()
+            for raw_rule in billing_rules:
+                if not isinstance(raw_rule, dict):
+                    billing_skipped += 1
+                    continue
 
-            ref = raw_rule.get("system_api_ref") if isinstance(raw_rule.get("system_api_ref"), dict) else {}
-            provider_name = _normalize_system_provider_name(ref.get("provider"))
-            category_name = str(ref.get("category") or "").strip()
-            model_name = str(ref.get("model") or "").strip()
+                ref = raw_rule.get("system_api_ref") if isinstance(raw_rule.get("system_api_ref"), dict) else {}
+                provider_name = _normalize_system_provider_name(ref.get("provider"))
+                category_name = str(ref.get("category") or "").strip()
+                model_name = str(ref.get("model") or "").strip()
 
-            target_api_id = None
-            if provider_name and category_name and model_name:
-                target_api_id = system_index.get((provider_name, category_name, model_name))
+                target_api_id = None
+                if provider_name and category_name and model_name:
+                    target_api_id = system_index.get((provider_name, category_name, model_name))
 
-            if not target_api_id:
-                billing_skipped += 1
-                continue
+                if not target_api_id:
+                    billing_skipped += 1
+                    continue
 
-            new_rule = SystemAPIBillingRule(system_api_id=int(target_api_id))
-            for field_name in _SYNC_BILLING_RULE_FIELDS:
-                if field_name in raw_rule:
-                    setattr(new_rule, field_name, raw_rule.get(field_name))
-            new_rule.created_at = str(raw_rule.get("created_at") or now_iso)
-            new_rule.updated_at = str(raw_rule.get("updated_at") or now_iso)
-            db.add(new_rule)
-            billing_created += 1
+                new_rule = SystemAPIBillingRule(system_api_id=int(target_api_id))
+                for field_name in _SYNC_BILLING_RULE_FIELDS:
+                    if field_name in raw_rule:
+                        setattr(new_rule, field_name, _normalize_sync_billing_rule_field(field_name, raw_rule.get(field_name)))
+                new_rule.created_at = str(raw_rule.get("created_at") or now_iso)
+                new_rule.updated_at = str(raw_rule.get("updated_at") or now_iso)
+                db.add(new_rule)
+                billing_created += 1
 
-        provider_pool_created = 0
-        provider_pool_updated = 0
-        if replace_all:
-            db.query(ProviderKeyPool).delete(synchronize_session=False)
+            provider_pool_created = 0
+            provider_pool_updated = 0
+            if replace_all:
+                db.query(ProviderKeyPool).delete(synchronize_session=False)
 
-        for raw_pool in provider_key_pools:
-            if not isinstance(raw_pool, dict):
-                continue
-            provider_name = _normalize_system_provider_name(raw_pool.get("provider"))
-            if not provider_name:
-                continue
-            keys = _normalize_api_keys(raw_pool.get("api_keys"))
-            strategy = _normalize_key_strategy(raw_pool.get("strategy"))
-            weights = _normalize_key_weights(raw_pool.get("weights"), keys)
-            record = db.query(ProviderKeyPool).filter(ProviderKeyPool.provider == provider_name).first()
-            if record:
-                record.api_keys = keys
-                record.strategy = strategy
-                record.weights = weights
-                record.updated_at = str(raw_pool.get("updated_at") or datetime.utcnow().isoformat())
-                provider_pool_updated += 1
-            else:
-                created_at = str(raw_pool.get("created_at") or datetime.utcnow().isoformat())
-                record = ProviderKeyPool(
+            for raw_pool in provider_key_pools:
+                if not isinstance(raw_pool, dict):
+                    continue
+                provider_name = _normalize_system_provider_name(raw_pool.get("provider"))
+                if not provider_name:
+                    continue
+                keys = _normalize_api_keys(raw_pool.get("api_keys"))
+                strategy = _normalize_key_strategy(raw_pool.get("strategy"))
+                weights = _normalize_key_weights(raw_pool.get("weights"), keys)
+                intro_url = _normalize_optional_http_url(raw_pool.get("intro_url"))
+                updated_at = str(raw_pool.get("updated_at") or now_bj_iso())
+
+                # Use SQL-level update first to avoid stale ORM instance updates
+                # when replace_all bulk delete has occurred in the same session.
+                updated_rows = db.query(ProviderKeyPool).filter(
+                    ProviderKeyPool.provider == provider_name,
+                ).update(
+                    {
+                        "api_keys": keys,
+                        "strategy": strategy,
+                        "weights": weights,
+                        "intro_url": intro_url,
+                        "updated_at": updated_at,
+                    },
+                    synchronize_session=False,
+                )
+
+                if int(updated_rows or 0) > 0:
+                    provider_pool_updated += 1
+                    continue
+
+                created_at = str(raw_pool.get("created_at") or now_bj_iso())
+                db.add(ProviderKeyPool(
                     provider=provider_name,
                     api_keys=keys,
                     strategy=strategy,
                     weights=weights,
+                    intro_url=intro_url,
                     created_at=created_at,
                     updated_at=str(raw_pool.get("updated_at") or created_at),
-                )
-                db.add(record)
+                ))
                 provider_pool_created += 1
 
-        smtp_created = 0
-        if replace_all:
-            db.query(SMTPSystemConfig).delete(synchronize_session=False)
-        for raw_smtp in smtp_configs:
-            if not isinstance(raw_smtp, dict):
-                continue
-            created_at = str(raw_smtp.get("created_at") or datetime.utcnow().isoformat())
-            row = SMTPSystemConfig(
-                host=str(raw_smtp.get("host") or "").strip(),
-                port=int(raw_smtp.get("port") or 587),
-                username=str(raw_smtp.get("username") or "").strip(),
-                password=str(raw_smtp.get("password") or ""),
-                use_ssl=bool(raw_smtp.get("use_ssl")),
-                use_tls=bool(raw_smtp.get("use_tls", True)),
-                from_email=str(raw_smtp.get("from_email") or "").strip(),
-                frontend_base_url=str(raw_smtp.get("frontend_base_url") or "").strip(),
-                is_active=bool(raw_smtp.get("is_active", True)),
-                created_at=created_at,
-                updated_at=str(raw_smtp.get("updated_at") or created_at),
-            )
-            db.add(row)
-            smtp_created += 1
+            smtp_created = 0
+            if replace_all:
+                db.query(SMTPSystemConfig).delete(synchronize_session=False)
+            for raw_smtp in smtp_configs:
+                if not isinstance(raw_smtp, dict):
+                    continue
+                created_at = str(raw_smtp.get("created_at") or now_bj_iso())
+                row = SMTPSystemConfig(
+                    host=str(raw_smtp.get("host") or "").strip(),
+                    port=int(raw_smtp.get("port") or 587),
+                    username=str(raw_smtp.get("username") or "").strip(),
+                    password=str(raw_smtp.get("password") or ""),
+                    use_ssl=bool(raw_smtp.get("use_ssl")),
+                    use_tls=bool(raw_smtp.get("use_tls", True)),
+                    from_email=str(raw_smtp.get("from_email") or "").strip(),
+                    frontend_base_url=str(raw_smtp.get("frontend_base_url") or "").strip(),
+                    is_active=bool(raw_smtp.get("is_active", True)),
+                    created_at=created_at,
+                    updated_at=str(raw_smtp.get("updated_at") or created_at),
+                )
+                db.add(row)
+                smtp_created += 1
 
-        wechat_created = 0
-        if replace_all:
-            db.query(WechatPayConfig).delete(synchronize_session=False)
-        for raw_wechat in wechat_pay_configs:
-            if not isinstance(raw_wechat, dict):
-                continue
-            created_at = str(raw_wechat.get("created_at") or datetime.utcnow().isoformat())
-            row = WechatPayConfig(
-                mchid=str(raw_wechat.get("mchid") or "").strip(),
-                appid=str(raw_wechat.get("appid") or "").strip(),
-                api_v3_key=str(raw_wechat.get("api_v3_key") or "").strip(),
-                cert_serial_no=str(raw_wechat.get("cert_serial_no") or "").strip(),
-                private_key=str(raw_wechat.get("private_key") or ""),
-                notify_url=str(raw_wechat.get("notify_url") or "").strip(),
-                use_mock=bool(raw_wechat.get("use_mock", True)),
-                is_active=bool(raw_wechat.get("is_active", True)),
-                created_at=created_at,
-                updated_at=str(raw_wechat.get("updated_at") or created_at),
-            )
-            db.add(row)
-            wechat_created += 1
+            wechat_created = 0
+            if replace_all:
+                db.query(WechatPayConfig).delete(synchronize_session=False)
+            for raw_wechat in wechat_pay_configs:
+                if not isinstance(raw_wechat, dict):
+                    continue
+                created_at = str(raw_wechat.get("created_at") or now_bj_iso())
+                row = WechatPayConfig(
+                    mchid=str(raw_wechat.get("mchid") or "").strip(),
+                    appid=str(raw_wechat.get("appid") or "").strip(),
+                    api_v3_key=str(raw_wechat.get("api_v3_key") or "").strip(),
+                    cert_serial_no=str(raw_wechat.get("cert_serial_no") or "").strip(),
+                    private_key=str(raw_wechat.get("private_key") or ""),
+                    notify_url=str(raw_wechat.get("notify_url") or "").strip(),
+                    use_mock=bool(raw_wechat.get("use_mock", True)),
+                    is_active=bool(raw_wechat.get("is_active", True)),
+                    created_at=created_at,
+                    updated_at=str(raw_wechat.get("updated_at") or created_at),
+                )
+                db.add(row)
+                wechat_created += 1
 
+            if replace_all:
+                db.query(TaskDefaultSystemAPI).delete(synchronize_session=False)
+
+            resolved_task_default_targets: Dict[str, int] = {}
+            for raw_default in task_default_apis:
+                if not isinstance(raw_default, dict):
+                    default_skipped += 1
+                    continue
+                task_category = normalize_task_category(raw_default.get("task_category"))
+                ref = raw_default.get("system_api_ref") if isinstance(raw_default.get("system_api_ref"), dict) else {}
+                provider_name = _normalize_system_provider_name(ref.get("provider"))
+                category_name = str(ref.get("category") or "").strip()
+                model_name = str(ref.get("model") or "").strip()
+                target_api_id = None
+                if provider_name and category_name and model_name:
+                    target_api_id = system_index.get((provider_name, category_name, model_name))
+                if not target_api_id:
+                    raw_system_api_id = int(raw_default.get("system_api_id") or 0)
+                    if raw_system_api_id > 0:
+                        exists = db.query(SystemAPISetting.id).filter(
+                            SystemAPISetting.id == raw_system_api_id,
+                            ~SystemAPISetting.category.like("System_%"),
+                        ).first()
+                        if exists:
+                            target_api_id = raw_system_api_id
+                if not target_api_id:
+                    default_skipped += 1
+                    continue
+                # Keep the latest mapping for each task category to avoid duplicate
+                # inserts against unique(task_category) when bundle contains repeats.
+                resolved_task_default_targets[task_category] = int(target_api_id)
+
+            for task_category, target_api_id in resolved_task_default_targets.items():
+                upsert_task_default_system_setting(db, task_category, int(target_api_id))
+                default_created += 1
+
+        # Ensure changes are durably committed for this request scope.
         db.commit()
         return {
             "ok": True,
@@ -4640,6 +5891,10 @@ def import_system_config_sync_bundle_for_manage(
             "wechat_pay_configs": {
                 "created": wechat_created,
             },
+            "task_default_apis": {
+                "created_or_updated": default_created,
+                "skipped": default_skipped,
+            },
         }
     except HTTPException:
         raise
@@ -4649,7 +5904,13 @@ def import_system_config_sync_bundle_for_manage(
             db.rollback()
         except Exception:
             pass
-        raise HTTPException(status_code=500, detail=f"sync bundle import failed: {type(exc).__name__}")
+        err_text = str(exc or "").strip()
+        if len(err_text) > 240:
+            err_text = f"{err_text[:240]}..."
+        detail = f"sync bundle import failed: {type(exc).__name__}"
+        if err_text:
+            detail = f"{detail}: {err_text}"
+        raise HTTPException(status_code=500, detail=detail)
 
 
 @router.post("/settings/system/manage/import")
@@ -4687,15 +5948,15 @@ def import_system_settings_for_manage(
             target.name = (item.name or target.name or "System Setting").strip() or "System Setting"
             target.base_url = item.base_url
             target.model = item.model
-            target.base_model = (getattr(item, "base_model", None) or "").strip() or None
-            target.modality = item.modality
+            target.base_model = _resolve_base_model(getattr(item, "base_model", None), item.model)
+            _assign_wide_modality_fields(target, item)
             target.tags = getattr(item, "tags", None)
             target.supplier_info = getattr(item, "supplier_info", None) or target.supplier_info
             import_raw_cfg = item.config if isinstance(item.config, dict) else {}
             import_billing = _billing_from_payload_or_config(item, import_raw_cfg)
             target.config = _strip_billing_from_config(import_raw_cfg)
             target.deprecated = _is_setting_deprecated(target.config, item.deprecated)
-            target.is_active = bool(item.is_active)
+            target.is_active = bool(target.is_active)
             _clear_row_billing_columns(target)
             if _is_system_api_auto_billing_sync_enabled():
                 _upsert_base_billing_rule(db, target.id, target.category, import_billing, activate=True)
@@ -4711,14 +5972,14 @@ def import_system_settings_for_manage(
                 api_key="",
                 base_url=item.base_url,
                 model=item.model,
-                base_model=(getattr(item, "base_model", None) or "").strip() or None,
-                modality=item.modality,
+                base_model=_resolve_base_model(getattr(item, "base_model", None), item.model),
                 tags=getattr(item, "tags", None),
                 supplier_info=getattr(item, "supplier_info", None),
                 deprecated=_is_setting_deprecated(create_raw_cfg, item.deprecated),
                 config=_strip_billing_from_config(create_raw_cfg),
-                is_active=bool(item.is_active),
+                is_active=False,
             )
+            _assign_wide_modality_fields(target, item)
             _clear_row_billing_columns(target)
             db.add(target)
             db.flush()
@@ -4739,11 +6000,7 @@ def import_system_settings_for_manage(
             last_active_id_by_category[category] = target.id
 
     for category, keep_id in last_active_id_by_category.items():
-        db.query(SystemAPISetting).filter(
-            SystemAPISetting.category == category,
-            SystemAPISetting.id != keep_id,
-            SystemAPISetting.is_active == True,
-        ).update({"is_active": False}, synchronize_session=False)
+        upsert_task_default_system_setting(db, category, int(keep_id))
 
     db.commit()
     return {
@@ -4769,6 +6026,7 @@ def delete_system_setting_for_manage(
     if not target:
         raise HTTPException(status_code=404, detail="System API setting not found")
 
+    clear_task_defaults_for_system_api_ids(db, [int(target.id)])
     db.query(SystemAPIBillingRule).filter(SystemAPIBillingRule.system_api_id == target.id).delete(synchronize_session=False)
     db.delete(target)
     db.commit()
@@ -4807,6 +6065,7 @@ def list_provider_key_pools(
             api_keys=_normalize_api_keys(row.api_keys),
             strategy=_normalize_key_strategy(row.strategy),
             weights=row.weights if row.weights else [],
+            intro_url=_normalize_optional_http_url(getattr(row, "intro_url", None)),
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
@@ -4834,13 +6093,14 @@ def create_provider_key_pool(
     keys = _normalize_api_keys(payload.api_keys)
     strategy = _normalize_key_strategy(payload.strategy)
     weights = _normalize_key_weights(payload.weights, keys)
-    now = datetime.utcnow().isoformat()
+    now = now_bj_iso()
 
     record = ProviderKeyPool(
         provider=provider_name,
         api_keys=keys,
         strategy=strategy,
         weights=weights,
+        intro_url=_normalize_optional_http_url(payload.intro_url),
         created_at=now,
         updated_at=now,
     )
@@ -4853,6 +6113,7 @@ def create_provider_key_pool(
         api_keys=_normalize_api_keys(record.api_keys),
         strategy=_normalize_key_strategy(record.strategy),
         weights=record.weights if record.weights else [],
+        intro_url=_normalize_optional_http_url(getattr(record, "intro_url", None)),
         created_at=record.created_at,
         updated_at=record.updated_at,
     )
@@ -4888,7 +6149,9 @@ def update_provider_key_pool(
     if payload.weights is not None:
         keys = _normalize_api_keys(record.api_keys)
         record.weights = _normalize_key_weights(payload.weights, keys)
-    record.updated_at = datetime.utcnow().isoformat()
+    if payload.intro_url is not None:
+        record.intro_url = _normalize_optional_http_url(payload.intro_url)
+    record.updated_at = now_bj_iso()
     db.commit()
     db.refresh(record)
     return ProviderKeyPoolOut(
@@ -4897,6 +6160,7 @@ def update_provider_key_pool(
         api_keys=_normalize_api_keys(record.api_keys),
         strategy=_normalize_key_strategy(record.strategy),
         weights=record.weights if record.weights else [],
+        intro_url=_normalize_optional_http_url(getattr(record, "intro_url", None)),
         created_at=record.created_at,
         updated_at=record.updated_at,
     )
@@ -4923,3 +6187,4 @@ def delete_provider_key_pool(
 @router.get("/settings/defaults")
 def get_defaults():
     return DEFAULTS
+
