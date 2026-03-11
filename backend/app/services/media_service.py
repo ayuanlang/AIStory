@@ -913,7 +913,11 @@ class MediaGenerationService:
                         and str(c.get("model") or "") == str(baseline_config.get("model") or "")
                     )
                 ],
-                key=lambda x: (x.get("priority", 100), x.get("id", 0)),
+                key=lambda x: (
+                    int(x.get("avg_price_estimate", 10**9) or 10**9),
+                    int(x.get("priority", 100) or 100),
+                    int(x.get("id", 0) or 0),
+                ),
             )
             # Smart default strategy: after 3 active retries, try up to 3 same-category fallbacks.
             fallback_candidates = fallback_candidates[:3]
@@ -926,7 +930,11 @@ class MediaGenerationService:
                         and str(c.get("model") or "") == str(baseline_config.get("model") or "")
                     )
                 ],
-                key=lambda x: (x.get("priority", 100), x.get("id", 0)),
+                key=lambda x: (
+                    int(x.get("avg_price_estimate", 10**9) or 10**9),
+                    int(x.get("priority", 100) or 100),
+                    int(x.get("id", 0) or 0),
+                ),
             )
             if fallback_candidate_limit and fallback_candidate_limit > 0:
                 fallback_candidates = fallback_candidates[: int(fallback_candidate_limit)]
@@ -1303,24 +1311,33 @@ class MediaGenerationService:
                     return {}
 
                 system_setting = None
-                resolved_source = f"system_by_user_provider_model:{target_provider}/{target_model}"
+                resolved_source = ""
 
-                if target_provider and target_model:
-                    system_setting = session.query(SystemAPISetting).filter(
-                        SystemAPISetting.category == resolved_category,
-                        self._provider_ci_filter(target_provider),
-                        SystemAPISetting.model == target_model,
-                    ).order_by(SystemAPISetting.id.desc()).first()
+                # Requested order (reversed):
+                # category fallback -> provider fallback -> provider+model exact match.
+                if not strict_provider and not provider_locked:
+                    system_setting = self._pick_system_setting_fallback(session, resolved_category, None)
+                    if system_setting:
+                        resolved_source = f"system_by_category_fallback:{system_setting.provider}/{system_setting.model}"
 
                 if not system_setting:
                     system_setting = self._pick_system_setting_fallback(session, resolved_category, target_provider)
                     if system_setting:
                         resolved_source = f"system_by_provider_fallback:{target_provider}/{system_setting.model}"
 
+                if not system_setting and target_provider and target_model:
+                    system_setting = session.query(SystemAPISetting).filter(
+                        SystemAPISetting.category == resolved_category,
+                        self._provider_ci_filter(target_provider),
+                        SystemAPISetting.model == target_model,
+                    ).order_by(SystemAPISetting.id.desc()).first()
+                    if system_setting:
+                        resolved_source = f"system_by_user_provider_model:{target_provider}/{target_model}"
+
                 if not system_setting:
                     if strict_provider and requested_provider:
                         logger.warning(
-                            "Explicit provider has no available system setting in media service | user_id=%s category=%s provider=%s model=%s",
+                            "Explicit provider has no available system setting after provider_fallback -> provider_model_exact in media service | user_id=%s category=%s provider=%s model=%s",
                             user_id,
                             resolved_category,
                             target_provider,
@@ -1329,16 +1346,13 @@ class MediaGenerationService:
                         return {}
                     if provider_locked:
                         logger.warning(
-                            "Provider-locked selection has no available system setting in media service | user_id=%s category=%s provider=%s model=%s",
+                            "Provider-locked selection has no available system setting after provider_fallback -> provider_model_exact in media service | user_id=%s category=%s provider=%s model=%s",
                             user_id,
                             resolved_category,
                             target_provider,
                             target_model,
                         )
                         return {}
-                    system_setting = self._pick_system_setting_fallback(session, resolved_category, None)
-                    if system_setting:
-                        resolved_source = f"system_by_category_fallback:{system_setting.provider}/{system_setting.model}"
 
                 if system_setting:
                     user_cfg = self._safe_json_dict(getattr(user_setting, "config", None)) if user_setting else {}
@@ -1378,7 +1392,7 @@ class MediaGenerationService:
                             "__blocked_reason": "该 System API 配置已弃用，禁止发起 API 调用。",
                         }
                     logger.info(
-                        "Resolved media API config | user_id=%s category=%s provider=%s source=%s selection_source=system_only setting_id=%s model=%s endpoint=%s",
+                        "Resolved media API config (order: category_fallback -> provider_fallback -> provider_model_exact) | user_id=%s category=%s provider=%s source=%s selection_source=system_only setting_id=%s model=%s endpoint=%s",
                         user_id,
                         resolved_category,
                         target_provider,

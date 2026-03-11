@@ -659,6 +659,46 @@ Output ONLY the JSON object now."""
         category_raw = str(category or "LLM").strip() or "LLM"
         model_raw = str(model or "").strip()
 
+        def _norm_provider(text: str) -> str:
+            raw = str(text or "").strip().lower()
+            if not raw:
+                return ""
+            # Tolerate LLM extracted noise like "kie provider".
+            if "kie" in raw:
+                return "kie"
+            if "wanxiang" in raw or "wanx" in raw:
+                return "wanxiang"
+            if "volc" in raw or "doubao" in raw or "ark" in raw:
+                return "doubao"
+            return raw
+
+        def _norm_model(text: str) -> str:
+            raw = str(text or "").strip().lower()
+            if not raw:
+                return ""
+            # Remove common suffix noise from extraction, keep core model slug.
+            raw = re.sub(r"\b(model|models|模型)\b", "", raw, flags=re.IGNORECASE)
+            raw = re.sub(r"\s*/\s*", "/", raw)
+            return re.sub(r"\s+", " ", raw).strip()
+
+        def _norm_category(text: str) -> str:
+            raw = str(text or "").strip().lower()
+            if raw in {"llm", "text", "chat"}:
+                return "llm"
+            if raw in {"image", "img", "t2i", "i2i"}:
+                return "image"
+            if raw in {"video", "t2v", "i2v", "v2v"}:
+                return "video"
+            if raw in {"digital_human", "digital-human", "digitalhuman", "avatar", "s2v", "数字人"}:
+                return "digitalhuman"
+            if raw in {"voice", "audio", "speech", "tts", "asr"}:
+                return "voice"
+            if raw in {"music"}:
+                return "music"
+            if raw in {"tools", "tool"}:
+                return "tools"
+            return raw
+
         # 1) exact match first
         exact = db.query(SystemAPISetting).filter(
             SystemAPISetting.provider == provider_raw,
@@ -669,23 +709,29 @@ Output ONLY the JSON object now."""
             return exact
 
         # 2) case-insensitive exact text match
-        provider_lower = provider_raw.lower()
+        provider_lower = _norm_provider(provider_raw)
         category_lower = category_raw.lower()
-        model_lower = model_raw.lower()
-        rows = db.query(SystemAPISetting).filter(
-            SystemAPISetting.category == category_raw,
-        ).order_by(SystemAPISetting.id.desc()).all()
+        category_norm = _norm_category(category_raw)
+        model_lower = _norm_model(model_raw)
+        rows = db.query(SystemAPISetting).order_by(SystemAPISetting.id.desc()).all()
 
         for row in rows:
-            if str(row.provider or "").strip().lower() == provider_lower and str(row.model or "").strip().lower() == model_lower:
+            row_category = str(row.category or "").strip()
+            row_category_lower = row_category.lower()
+            row_category_norm = _norm_category(row_category)
+            if row_category_lower != category_lower and row_category_norm != category_norm:
+                continue
+            row_provider_lower = _norm_provider(str(row.provider or "").strip())
+            row_model_lower = _norm_model(str(row.model or "").strip())
+            if row_provider_lower == provider_lower and row_model_lower == model_lower:
                 return row
 
         # 3) relaxed token match (ignore slash/dash/space differences)
         def _tokenize(text: str) -> str:
             return re.sub(r"[^a-z0-9]+", "", str(text or "").strip().lower())
 
-        model_token = _tokenize(model_raw)
-        provider_token = _tokenize(provider_raw)
+        model_token = _tokenize(model_lower)
+        provider_token = _tokenize(provider_lower)
 
         provider_aliases: Dict[str, List[str]] = {
             "alibaba": ["wan", "tongyi", "aliyun"],
@@ -693,16 +739,29 @@ Output ONLY the JSON object now."""
             "tongyi": ["wan", "alibaba", "aliyun"],
             "aliyun": ["wan", "alibaba", "tongyi"],
         }
-        alias_tokens = {_tokenize(provider_raw)}
+        alias_tokens = {_tokenize(provider_lower)}
         for alias in provider_aliases.get(provider_lower, []):
             alias_tokens.add(_tokenize(alias))
 
         relaxed_matches: List[SystemAPISetting] = []
         for row in rows:
-            row_model_token = _tokenize(str(row.model or ""))
-            if not row_model_token or row_model_token != model_token:
+            row_category = str(row.category or "").strip()
+            row_category_lower = row_category.lower()
+            row_category_norm = _norm_category(row_category)
+            if row_category_lower != category_lower and row_category_norm != category_norm:
                 continue
-            row_provider_token = _tokenize(str(row.provider or ""))
+            row_model_token = _tokenize(_norm_model(str(row.model or "")))
+            if not row_model_token:
+                continue
+            # Accept exact token match, or one token containing the other
+            # to handle strings like "hailuo / ... model".
+            if model_token and not (
+                row_model_token == model_token
+                or row_model_token in model_token
+                or model_token in row_model_token
+            ):
+                continue
+            row_provider_token = _tokenize(_norm_provider(str(row.provider or "")))
             if row_provider_token in alias_tokens or provider_token == row_provider_token:
                 relaxed_matches.append(row)
 
@@ -711,7 +770,20 @@ Output ONLY the JSON object now."""
 
         # 4) last resort: unique model token in same category
         if model_token:
-            same_model_rows = [r for r in rows if _tokenize(str(r.model or "")) == model_token]
+            same_model_rows = []
+            for r in rows:
+                r_category = str(r.category or "").strip()
+                r_category_lower = r_category.lower()
+                r_category_norm = _norm_category(r_category)
+                if r_category_lower != category_lower and r_category_norm != category_norm:
+                    continue
+                r_model_token = _tokenize(_norm_model(str(r.model or "")))
+                if model_token and (
+                    r_model_token == model_token
+                    or r_model_token in model_token
+                    or model_token in r_model_token
+                ):
+                    same_model_rows.append(r)
             if len(same_model_rows) == 1:
                 return same_model_rows[0]
 
@@ -1606,6 +1678,7 @@ Output ONLY the JSON object now."""
         * Filters by *modality* — a SystemAPISetting with modality=NULL/empty
           is considered compatible with ANY requested modality.
         * Only returns active, non-deprecated rows that have a usable API key.
+        * Prioritizes lower estimated average price, then id fallback.
         """
         results: List[Dict[str, Any]] = []
         try:
@@ -1615,11 +1688,9 @@ Output ONLY the JSON object now."""
                 ).order_by(SystemAPISetting.id.desc()).all()
 
                 from app.api.settings import DEFAULTS
+                priced_candidates: List[Dict[str, Any]] = []
 
                 for row in rows:
-                    if len(results) >= limit:
-                        break
-
                     if exclude_setting_id and row.id == exclude_setting_id:
                         continue
 
@@ -1654,17 +1725,34 @@ Output ONLY the JSON object now."""
                     merged_config["__resolved_source"] = f"fallback:{row.provider}/{row.model}->{row.id}"
                     merged_config["__resolved_category"] = category
                     merged_config["__selection_source"] = "fallback_candidate"
+                    avg_price_estimate = int((billing_service.estimate_system_api_average_price(session, int(row.id)) or {}).get("average_cost") or 0)
+                    merged_config["__avg_price_estimate"] = avg_price_estimate
 
-                    results.append({
+                    priced_candidates.append({
                         "provider": row.provider,
                         "api_key": api_key,
                         "base_url": row.base_url or default.get("base_url"),
                         "model": row.model or default.get("model"),
                         "config": merged_config,
+                        "avg_price_estimate": avg_price_estimate,
+                        "_setting_id": int(row.id),
                     })
 
+                priced_candidates.sort(
+                    key=lambda x: (
+                        int(x.get("avg_price_estimate", 10**9) or 10**9),
+                        int(x.get("_setting_id", 10**9) or 10**9),
+                    )
+                )
+                if limit and int(limit) > 0:
+                    priced_candidates = priced_candidates[: int(limit)]
+
+                for item in priced_candidates:
+                    item.pop("_setting_id", None)
+                    results.append(item)
+
                 logger.info(
-                    "[fallback_configs] category=%s exclude_id=%s modality=%s found=%d limit=%d",
+                    "[fallback_configs] category=%s exclude_id=%s modality=%s found=%d limit=%d order=avg_price_asc",
                     category, exclude_setting_id, modality, len(results), limit,
                 )
         except Exception as e:
@@ -1766,7 +1854,6 @@ Output ONLY the JSON object now."""
             "analyze_script",
             "update_project_metadata",
             "search_project_data",
-            "visualize_user_requirement",
         }
 
         if tool in project_required_tools:

@@ -3448,6 +3448,152 @@ def sanitize_llm_markdown_output(text: str) -> str:
     return "\n".join(lines).strip()
 
 
+def _split_markdown_row_escaped(row_line: str) -> List[str]:
+    """Split a markdown table row while respecting escaped pipes (\\|)."""
+    if not row_line:
+        return []
+
+    s = str(row_line).strip()
+    if not s:
+        return []
+
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|"):
+        s = s[:-1]
+
+    cells: List[str] = []
+    buf: List[str] = []
+    escaped = False
+    for ch in s:
+        if escaped:
+            buf.append(ch)
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+            continue
+        if ch == "|":
+            cells.append("".join(buf).strip())
+            buf = []
+            continue
+        buf.append(ch)
+
+    if escaped:
+        # Preserve trailing backslash if it does not escape any character.
+        buf.append("\\")
+    cells.append("".join(buf).strip())
+    return cells
+
+
+def _is_markdown_table_separator(line: str) -> bool:
+    if not line:
+        return False
+    stripped = str(line).strip()
+    if not stripped or "|" not in stripped:
+        return False
+
+    cols = _split_markdown_row_escaped(stripped)
+    if not cols:
+        return False
+
+    for col in cols:
+        token = col.replace(" ", "")
+        if not token:
+            return False
+        token = token.strip(":")
+        if len(token) < 3 or not all(ch == "-" for ch in token):
+            return False
+    return True
+
+
+def _normalize_markdown_table_cells(cells: List[str], header_count: int) -> List[str]:
+    if header_count <= 0:
+        return []
+    vals = list(cells or [])
+    if len(vals) < header_count:
+        vals.extend([""] * (header_count - len(vals)))
+        return vals
+    if len(vals) > header_count:
+        merged_tail = " | ".join(vals[header_count - 1:])
+        return vals[: header_count - 1] + [merged_tail]
+    return vals
+
+
+def parse_shots_markdown_table(markdown_text: str) -> Tuple[List[str], List[Dict[str, str]], int]:
+    """Parse a markdown shot table into headers and rows.
+
+    Returns (headers, rows, table_line_count).
+    """
+    if not markdown_text:
+        return [], [], 0
+
+    lines = str(markdown_text).splitlines()
+    header_idx = -1
+    separator_idx = -1
+
+    for i in range(len(lines) - 1):
+        header_line = lines[i].strip()
+        sep_line = lines[i + 1].strip()
+        if not header_line.startswith("|"):
+            continue
+        header_cells_raw = _split_markdown_row_escaped(header_line)
+        if len(header_cells_raw) < 2:
+            continue
+        if _is_markdown_table_separator(sep_line):
+            header_idx = i
+            separator_idx = i + 1
+            break
+
+    if header_idx < 0 or separator_idx < 0:
+        return [], [], 0
+
+    raw_headers = _split_markdown_row_escaped(lines[header_idx].strip())
+    headers = [h.replace("*", "").replace("_", "").strip() for h in raw_headers]
+    header_count = len(headers)
+    if header_count <= 0:
+        return [], [], 0
+
+    rows: List[Dict[str, str]] = []
+    partial_cells: List[str] = []
+    table_line_count = 0
+
+    for line in lines[separator_idx + 1:]:
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        if _is_markdown_table_separator(stripped):
+            continue
+
+        table_line_count += 1
+        cells = _split_markdown_row_escaped(stripped)
+        if not cells or all(not c for c in cells):
+            continue
+
+        if partial_cells and len(cells) == header_count:
+            padded = _normalize_markdown_table_cells(partial_cells, header_count)
+            rows.append({headers[i]: padded[i] for i in range(header_count)})
+            partial_cells = []
+            rows.append({headers[i]: cells[i] for i in range(header_count)})
+            continue
+
+        if not partial_cells:
+            partial_cells = list(cells)
+        else:
+            partial_cells.extend(cells)
+
+        if len(partial_cells) >= header_count:
+            normalized = _normalize_markdown_table_cells(partial_cells, header_count)
+            rows.append({headers[i]: normalized[i] for i in range(header_count)})
+            partial_cells = []
+
+    if partial_cells:
+        padded = _normalize_markdown_table_cells(partial_cells, header_count)
+        rows.append({headers[i]: padded[i] for i in range(header_count)})
+
+    return headers, rows, table_line_count
+
+
 def is_valid_markdown_output(text: str, require_h1: bool = True) -> bool:
     if not text:
         return False
@@ -8317,32 +8463,9 @@ async def ai_generate_shots(
             )
 
         # 5. Parse Table
-        lines = response_content.split('\n')
-        table_lines = [line.strip() for line in lines if line.strip().startswith('|')]
-        
-        shots_data = []
-        if len(table_lines) > 2:
-            # Robust header parsing: strip whitespace and markdown bold/italic markers
-            raw_headers = [h.strip() for h in table_lines[0].strip('|').split('|')]
-            headers = [h.replace('*', '').replace('_', '').strip() for h in raw_headers]
-            
+        headers, shots_data, table_line_count = parse_shots_markdown_table(response_content)
+        if headers:
             logger.info(f"[ai_generate_shots] headers detected: {headers}")
-
-            # Expected mappings (flexible)
-            # Shot ID, Shot Name, Start Frame, End Frame, Video Content, Duration (s), Associated Entities
-            
-            for line in table_lines[2:]: # Skip Header and Separator
-                if "---" in line: continue 
-                
-                cols = [c.strip() for c in line.strip('|').split('|')]
-                if len(cols) >= len(headers):
-                    shot_dict = {}
-                    for i, h in enumerate(headers):
-                        if i < len(cols):
-                            shot_dict[h] = cols[i]
-                    shots_data.append(shot_dict)
-                else:
-                    logger.warning(f"[ai_generate_shots] Skipping malformed line (cols={len(cols)}, headers={len(headers)}): {line[:50]}...")
 
         if not shots_data:
              logger.warning(f"DEBUG: No table found using delimiter |. Content snippet: {response_content[:200]}")
@@ -8350,7 +8473,7 @@ async def ai_generate_shots(
              pass
              
         logger.info(
-            f"[ai_generate_shots] parsed_result scene_id={scene_id} table_lines={len(table_lines)} parsed_shots={len(shots_data)}"
+            f"[ai_generate_shots] parsed_result scene_id={scene_id} table_lines={table_line_count} parsed_shots={len(shots_data)}"
         )
 
         # 6. Save to DB (Scheme A)
@@ -8433,24 +8556,7 @@ def get_scene_latest_ai_result(
             pass
 
     # Parse markdown table into list-of-dicts for the staging editor
-    lines = (raw_value or '').split('\n')
-    table_lines = [line.strip() for line in lines if line.strip().startswith('|')]
-
-    shots_data = []
-    if len(table_lines) > 2:
-        raw_headers = [h.strip() for h in table_lines[0].strip('|').split('|')]
-        headers = [h.replace('*', '').replace('_', '').strip() for h in raw_headers]
-
-        for line in table_lines[2:]:
-            if "---" in line:
-                continue
-            cols = [c.strip() for c in line.strip('|').split('|')]
-            if len(cols) >= len(headers):
-                shot_dict = {}
-                for i, h in enumerate(headers):
-                    if i < len(cols):
-                        shot_dict[h] = cols[i]
-                shots_data.append(shot_dict)
+    _, shots_data, _ = parse_shots_markdown_table(raw_value or "")
 
     return {
         "raw_text": raw_value,
@@ -8553,21 +8659,7 @@ def apply_scene_ai_result(
             except Exception:
                 pass
 
-        lines = (raw_value or '').split('\n')
-        table_lines = [line.strip() for line in lines if line.strip().startswith('|')]
-        if len(table_lines) > 2:
-            raw_headers = [h.strip() for h in table_lines[0].strip('|').split('|')]
-            headers = [h.replace('*', '').replace('_', '').strip() for h in raw_headers]
-            for line in table_lines[2:]:
-                if "---" in line:
-                    continue
-                cols = [c.strip() for c in line.strip('|').split('|')]
-                if len(cols) >= len(headers):
-                    shot_dict = {}
-                    for i, h in enumerate(headers):
-                        if i < len(cols):
-                            shot_dict[h] = cols[i]
-                    shots_data.append(shot_dict)
+        _, shots_data, _ = parse_shots_markdown_table(raw_value or "")
                  
     # 2. Extract and Auto-Link Entities (System Import Feature)
     try:

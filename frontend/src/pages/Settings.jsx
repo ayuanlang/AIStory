@@ -1726,9 +1726,9 @@ const Settings = () => {
                                                 onChange={(e) => setApiStrategyByCategory((prev) => ({ ...prev, [policyCategory]: normalizeApiStrategy(e.target.value) }))}
                                                 className="w-full px-2 py-1.5 rounded border border-white/15 bg-black/30 text-xs"
                                             >
-                                                <option value="smart_default">{t('智能选择（默认 API 重试 3 次 + 同类候选 3 个）', 'Smart default (3 retries + 3 same-category fallbacks)')}</option>
-                                                <option value="fixed">{t('固定 API（失败重试 3 次后退出）', 'Fixed API (exit after 3 retries)')}</option>
-                                                <option value="low_price_replace">{t('低价替换（失败重试 3 次后按低价候选依次尝试）', 'Low-price replace (after 3 retries, try low-price candidates)')}</option>
+                                                <option value="smart_default">{t('智能选择', 'Smart default')}</option>
+                                                <option value="fixed">{t('固定 API', 'Fixed API')}</option>
+                                                <option value="low_price_replace">{t('低价替换', 'Low-price replace')}</option>
                                             </select>
                                         </div>
                                     ))}
