@@ -31,13 +31,20 @@ from app.models.all_models import (
     APISetting,
     User,
     SystemAPISetting,
-    TaskDefaultSystemAPI,
     ProviderKeyPool,
     SystemAPIBillingRule,
     TransactionAction,
     SMTPSystemConfig,
     WechatPayConfig,
 )
+try:
+    from app.models.all_models import TaskDefaultSystemAPI
+    HAS_TASK_DEFAULT_SYSTEM_API_MODEL = True
+except Exception:
+    HAS_TASK_DEFAULT_SYSTEM_API_MODEL = False
+
+    class TaskDefaultSystemAPI:
+        pass
 try:
     from app.services.system_default_api_service import (
         get_task_default_system_setting,
@@ -1971,12 +1978,37 @@ def list_task_default_apis_for_manage(
     if not _can_manage_system_settings(current_user):
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
-    rows = db.query(TaskDefaultSystemAPI).order_by(TaskDefaultSystemAPI.task_category.asc()).all()
-    system_rows = db.query(SystemAPISetting).filter(
-        SystemAPISetting.id.in_([int(getattr(row, "system_api_id", 0) or 0) for row in rows])
-    ).all() if rows else []
-    by_id = {int(item.id): item for item in system_rows}
-    return [_task_default_row_to_out(row, by_id.get(int(getattr(row, "system_api_id", 0) or 0))) for row in rows]
+    if HAS_TASK_DEFAULT_SYSTEM_API_MODEL:
+        rows = db.query(TaskDefaultSystemAPI).order_by(TaskDefaultSystemAPI.task_category.asc()).all()
+        system_rows = db.query(SystemAPISetting).filter(
+            SystemAPISetting.id.in_([int(getattr(row, "system_api_id", 0) or 0) for row in rows])
+        ).all() if rows else []
+        by_id = {int(item.id): item for item in system_rows}
+        return [_task_default_row_to_out(row, by_id.get(int(getattr(row, "system_api_id", 0) or 0))) for row in rows]
+
+    # Legacy fallback: infer defaults from active rows when mapping table/model is unavailable.
+    active_rows = db.query(SystemAPISetting).filter(
+        SystemAPISetting.is_active == True,
+        ~SystemAPISetting.category.like("System_%"),
+    ).order_by(SystemAPISetting.id.desc()).all()
+    out = []
+    seen = set()
+    for row in active_rows:
+        task_category = normalize_task_category(getattr(row, "category", None))
+        if task_category in seen:
+            continue
+        seen.add(task_category)
+        out.append(TaskDefaultSystemAPIManageOut(
+            task_category=task_category,
+            system_api_id=int(getattr(row, "id", 0) or 0),
+            system_api_category=str(getattr(row, "category", "") or "").strip() or None,
+            system_api_provider=str(getattr(row, "provider", "") or "").strip() or None,
+            system_api_model=str(getattr(row, "model", "") or "").strip() or None,
+            system_api_name=str(getattr(row, "name", "") or "").strip() or None,
+            created_at=None,
+            updated_at=None,
+        ))
+    return out
 
 
 @router.post("/settings/system/manage/task-default-apis", response_model=TaskDefaultSystemAPIManageOut)
@@ -1993,11 +2025,23 @@ def create_task_default_api_for_manage(
     upsert_task_default_system_setting(db, category, int(target.id))
     db.commit()
 
-    record = db.query(TaskDefaultSystemAPI).filter(TaskDefaultSystemAPI.task_category == category).first()
-    if not record:
-        raise HTTPException(status_code=500, detail="failed to create task default mapping")
-    db.refresh(record)
-    return _task_default_row_to_out(record, target)
+    if HAS_TASK_DEFAULT_SYSTEM_API_MODEL:
+        record = db.query(TaskDefaultSystemAPI).filter(TaskDefaultSystemAPI.task_category == category).first()
+        if not record:
+            raise HTTPException(status_code=500, detail="failed to create task default mapping")
+        db.refresh(record)
+        return _task_default_row_to_out(record, target)
+
+    return TaskDefaultSystemAPIManageOut(
+        task_category=category,
+        system_api_id=int(target.id),
+        system_api_category=str(getattr(target, "category", "") or "").strip() or None,
+        system_api_provider=str(getattr(target, "provider", "") or "").strip() or None,
+        system_api_model=str(getattr(target, "model", "") or "").strip() or None,
+        system_api_name=str(getattr(target, "name", "") or "").strip() or None,
+        created_at=None,
+        updated_at=None,
+    )
 
 
 @router.post("/settings/system/manage/task-default-apis/{task_category}", response_model=TaskDefaultSystemAPIManageOut)
@@ -2015,11 +2059,23 @@ def update_task_default_api_for_manage(
     upsert_task_default_system_setting(db, category, int(target.id))
     db.commit()
 
-    record = db.query(TaskDefaultSystemAPI).filter(TaskDefaultSystemAPI.task_category == category).first()
-    if not record:
-        raise HTTPException(status_code=404, detail="task default mapping not found")
-    db.refresh(record)
-    return _task_default_row_to_out(record, target)
+    if HAS_TASK_DEFAULT_SYSTEM_API_MODEL:
+        record = db.query(TaskDefaultSystemAPI).filter(TaskDefaultSystemAPI.task_category == category).first()
+        if not record:
+            raise HTTPException(status_code=404, detail="task default mapping not found")
+        db.refresh(record)
+        return _task_default_row_to_out(record, target)
+
+    return TaskDefaultSystemAPIManageOut(
+        task_category=category,
+        system_api_id=int(target.id),
+        system_api_category=str(getattr(target, "category", "") or "").strip() or None,
+        system_api_provider=str(getattr(target, "provider", "") or "").strip() or None,
+        system_api_model=str(getattr(target, "model", "") or "").strip() or None,
+        system_api_name=str(getattr(target, "name", "") or "").strip() or None,
+        created_at=None,
+        updated_at=None,
+    )
 
 
 @router.delete("/settings/system/manage/task-default-apis/{task_category}")
@@ -2032,9 +2088,10 @@ def delete_task_default_api_for_manage(
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
     category = normalize_task_category(task_category)
-    existing = db.query(TaskDefaultSystemAPI).filter(TaskDefaultSystemAPI.task_category == category).first()
-    if not existing:
-        raise HTTPException(status_code=404, detail="task default mapping not found")
+    if HAS_TASK_DEFAULT_SYSTEM_API_MODEL:
+        existing = db.query(TaskDefaultSystemAPI).filter(TaskDefaultSystemAPI.task_category == category).first()
+        if not existing:
+            raise HTTPException(status_code=404, detail="task default mapping not found")
     clear_task_default_for_category(db, category)
     db.commit()
     return {"ok": True, "task_category": category}
@@ -5685,21 +5742,45 @@ def export_system_config_sync_bundle_for_manage(
         for row in wechat_rows
     ]
 
-    task_default_rows = db.query(TaskDefaultSystemAPI).order_by(TaskDefaultSystemAPI.task_category.asc()).all()
     task_default_payload: List[Dict[str, Any]] = []
-    for row in task_default_rows:
-        api_row = system_map.get(int(getattr(row, "system_api_id", 0) or 0))
-        task_default_payload.append({
-            "task_category": normalize_task_category(getattr(row, "task_category", None)),
-            "system_api_id": int(getattr(row, "system_api_id", 0) or 0),
-            "system_api_ref": {
-                "provider": str(getattr(api_row, "provider", "") or "").strip() or None,
-                "category": str(getattr(api_row, "category", "") or "").strip() or None,
-                "model": str(getattr(api_row, "model", "") or "").strip() or None,
-            },
-            "created_at": getattr(row, "created_at", None),
-            "updated_at": getattr(row, "updated_at", None),
-        })
+    if HAS_TASK_DEFAULT_SYSTEM_API_MODEL:
+        task_default_rows = db.query(TaskDefaultSystemAPI).order_by(TaskDefaultSystemAPI.task_category.asc()).all()
+        for row in task_default_rows:
+            api_row = system_map.get(int(getattr(row, "system_api_id", 0) or 0))
+            task_default_payload.append({
+                "task_category": normalize_task_category(getattr(row, "task_category", None)),
+                "system_api_id": int(getattr(row, "system_api_id", 0) or 0),
+                "system_api_ref": {
+                    "provider": str(getattr(api_row, "provider", "") or "").strip() or None,
+                    "category": str(getattr(api_row, "category", "") or "").strip() or None,
+                    "model": str(getattr(api_row, "model", "") or "").strip() or None,
+                },
+                "created_at": getattr(row, "created_at", None),
+                "updated_at": getattr(row, "updated_at", None),
+            })
+    else:
+        # Legacy fallback: export inferred defaults from active settings.
+        active_rows = db.query(SystemAPISetting).filter(
+            SystemAPISetting.is_active == True,
+            ~SystemAPISetting.category.like("System_%"),
+        ).order_by(SystemAPISetting.id.desc()).all()
+        seen = set()
+        for row in active_rows:
+            task_category = normalize_task_category(getattr(row, "category", None))
+            if task_category in seen:
+                continue
+            seen.add(task_category)
+            task_default_payload.append({
+                "task_category": task_category,
+                "system_api_id": int(getattr(row, "id", 0) or 0),
+                "system_api_ref": {
+                    "provider": str(getattr(row, "provider", "") or "").strip() or None,
+                    "category": str(getattr(row, "category", "") or "").strip() or None,
+                    "model": str(getattr(row, "model", "") or "").strip() or None,
+                },
+                "created_at": None,
+                "updated_at": None,
+            })
 
     data = {
         "providers": provider_bundle.get("providers", []),
@@ -5913,7 +5994,13 @@ def import_system_config_sync_bundle_for_manage(
                 wechat_created += 1
 
             if replace_all:
-                db.query(TaskDefaultSystemAPI).delete(synchronize_session=False)
+                if HAS_TASK_DEFAULT_SYSTEM_API_MODEL:
+                    db.query(TaskDefaultSystemAPI).delete(synchronize_session=False)
+                else:
+                    db.query(SystemAPISetting).filter(~SystemAPISetting.category.like("System_%")).update(
+                        {"is_active": False},
+                        synchronize_session=False,
+                    )
 
             resolved_task_default_targets: Dict[str, int] = {}
             for raw_default in task_default_apis:
