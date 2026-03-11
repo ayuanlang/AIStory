@@ -15,7 +15,10 @@ from app.models.all_models import (
     TransactionAction,
     SMTPSystemConfig,
     WechatPayConfig,
+    TaskDefaultSystemAPI,
 )
+from app.services.system_default_api_service import normalize_task_category
+from app.core.time_utils import now_bj_iso
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +95,28 @@ def check_and_migrate_tables():
                 logger.info("Created provider_key_pool table")
         except Exception as e:
             logger.error(f"Failed to ensure provider_key_pool table: {e}")
+
+        # Ensure provider_key_pool.intro_url exists for supplier analysis context.
+        try:
+            inspector = inspect(engine)
+            existing_pool_cols = {c['name'] for c in inspector.get_columns('provider_key_pool')} if inspector.has_table('provider_key_pool') else set()
+            if 'intro_url' not in existing_pool_cols:
+                with engine.begin() as conn:
+                    if is_postgres:
+                        conn.execute(text("ALTER TABLE provider_key_pool ADD COLUMN IF NOT EXISTS intro_url TEXT"))
+                    else:
+                        conn.execute(text("ALTER TABLE provider_key_pool ADD COLUMN intro_url TEXT"))
+                logger.info("Ensured provider_key_pool.intro_url column")
+        except Exception as e:
+            logger.error(f"Failed to ensure provider_key_pool.intro_url column: {e}")
+
+        # Ensure dedicated default API mapping table exists.
+        try:
+            if not inspector.has_table("system_task_default_apis"):
+                TaskDefaultSystemAPI.__table__.create(bind=engine, checkfirst=True)
+                logger.info("Created system_task_default_apis table")
+        except Exception as e:
+            logger.error(f"Failed to ensure system_task_default_apis table: {e}")
 
         # Ensure system_api_billing_rules table exists
         try:
@@ -190,6 +215,37 @@ def check_and_migrate_tables():
                 ("base_model", "VARCHAR"),
                 ("tags", "JSON"),
                 ("supplier_info", "JSON"),
+                # Wide modality columns (normalized fields)
+                ("generation_modes", "JSON"),
+                ("input_formats", "JSON"),
+                ("output_format", "VARCHAR"),
+                ("supported_resolutions", "JSON"),
+                ("aspect_ratios", "JSON"),
+                ("max_images_per_call", "INTEGER"),
+                ("reference_image_limit", "VARCHAR"),
+                ("reference_video_limit", "VARCHAR"),
+                ("durations_seconds", "JSON"),
+                ("max_duration", "INTEGER"),
+                ("fps_options", "JSON"),
+                ("has_audio", "BOOLEAN"),
+                ("mode_values", "JSON"),
+                # Category-specific capability objects
+                ("text_capabilities", "JSON"),
+                ("image_capabilities", "JSON"),
+                ("video_capabilities", "JSON"),
+                ("digital_human_capabilities", "JSON"),
+                ("voice_capabilities", "JSON"),
+                ("music_capabilities", "JSON"),
+                # Billing hint columns
+                ("pricing_unit", "VARCHAR"),
+                ("token_billing_supported", "BOOLEAN"),
+                ("input_token_price", "FLOAT"),
+                ("output_token_price", "FLOAT"),
+                ("per_resolution_price_map", "JSON"),
+                ("per_duration_price_map", "JSON"),
+                ("has_tiered_pricing", "BOOLEAN"),
+                ("free_quota", "VARCHAR"),
+                ("currency", "VARCHAR"),
             ]
             # Only add modality column if it doesn't exist yet (new installs)
             if 'modality' not in existing_system_cols:
@@ -273,6 +329,37 @@ def check_and_migrate_tables():
         except Exception as e:
             logger.error(f"Failed to migrate system_api_settings schema: {e}")
 
+        # --- Migrate legacy category defaults from system_api_settings.is_active ---
+        try:
+            with SessionLocal() as session:
+                existing_default_count = session.query(TaskDefaultSystemAPI).count()
+                if existing_default_count == 0:
+                    active_rows = session.query(SystemAPISetting).filter(
+                        SystemAPISetting.is_active == True,
+                        ~SystemAPISetting.category.like("System_%"),
+                    ).order_by(SystemAPISetting.category.asc(), SystemAPISetting.id.desc()).all()
+
+                    seen_task_categories = set()
+                    created = 0
+                    for row in active_rows:
+                        task_category = normalize_task_category(row.category)
+                        if task_category in seen_task_categories:
+                            continue
+                        seen_task_categories.add(task_category)
+                        now = now_bj_iso()
+                        session.add(TaskDefaultSystemAPI(
+                            task_category=task_category,
+                            system_api_id=int(row.id),
+                            created_at=now,
+                            updated_at=now,
+                        ))
+                        created += 1
+                    if created > 0:
+                        session.commit()
+                        logger.info("Migrated %s legacy system defaults into system_task_default_apis", created)
+        except Exception as e:
+            logger.error(f"Failed to migrate task default api mappings: {e}")
+
         # --- Migrate provider key pool data from config JSON to dedicated table ---
         try:
             with SessionLocal() as session:
@@ -347,8 +434,8 @@ def check_and_migrate_tables():
                             from_email=str(cfg.get("from_email", "") or "").strip(),
                             frontend_base_url=str(cfg.get("frontend_base_url", "") or "").strip(),
                             is_active=True,
-                            created_at=datetime.utcnow().isoformat(),
-                            updated_at=datetime.utcnow().isoformat(),
+                            created_at=now_bj_iso(),
+                            updated_at=now_bj_iso(),
                         ))
                         session.commit()
                         logger.info("Migrated legacy SMTP config into smtp_system_configs")
@@ -375,8 +462,8 @@ def check_and_migrate_tables():
                             notify_url=str(cfg.get("notify_url", "") or "").strip(),
                             use_mock=bool(cfg.get("use_mock", True)),
                             is_active=True,
-                            created_at=datetime.utcnow().isoformat(),
-                            updated_at=datetime.utcnow().isoformat(),
+                            created_at=now_bj_iso(),
+                            updated_at=now_bj_iso(),
                         ))
                         session.commit()
                         logger.info("Migrated legacy WeChat config into wechat_pay_configs")
@@ -446,7 +533,7 @@ def check_and_migrate_tables():
                         continue
 
                     applies_to_text, applies_to_image, applies_to_video = _mode_flags(row.category)
-                    now_iso = datetime.utcnow().isoformat()
+                    now_iso = now_bj_iso()
                     session.add(SystemAPIBillingRule(
                         system_api_id=int(row.id),
                         name="Base Pricing",
@@ -693,6 +780,20 @@ def check_and_migrate_tables():
 
         except Exception as e:
              logger.error(f"Failed to migrate scenes table: {e}")
+
+        # --- MIGRATE ENTITIES TABLE ---
+        try:
+            inspector = inspect(engine)
+            existing_entity_columns = [c['name'] for c in inspector.get_columns('entities')]
+            if 'generation_prompt_cn' not in existing_entity_columns:
+                with engine.begin() as conn:
+                    if engine.dialect.name == 'postgresql':
+                        conn.execute(text("ALTER TABLE entities ADD COLUMN IF NOT EXISTS generation_prompt_cn TEXT"))
+                    else:
+                        conn.execute(text("ALTER TABLE entities ADD COLUMN generation_prompt_cn TEXT"))
+                logger.info("Ensured entities.generation_prompt_cn exists")
+        except Exception as e:
+            logger.error(f"Failed to migrate entities table: {e}")
         
     except Exception as e:
         logger.critical(f"Migration CRITICAL FAILURE: {e}")
@@ -1182,118 +1283,6 @@ def init_system_api_settings(db):
         logger.info("System kie models already initialized")
 
 
-SYSTEM_API_SEED_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "system_api_seed.json")
-
-
-def sync_system_api_from_seed(db):
-    """
-    Import system_api_settings from the seed JSON file committed in the repo.
-    Uses (provider, category, model) as the match key – same as the UI import.
-    Existing rows are updated in-place; new rows are created; rows not in the
-    seed file are left untouched (no deletions) so payment settings etc. survive.
-    """
-    seed_path = os.path.normpath(SYSTEM_API_SEED_FILE)
-    if not os.path.isfile(seed_path):
-        logger.info("No system API seed file found at %s — skipping sync", seed_path)
-        return
-
-    try:
-        with open(seed_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception as e:
-        logger.error("Failed to read system API seed file: %s", e)
-        return
-
-    items = data.get("items", [])
-    if not items:
-        logger.info("System API seed file is empty — skipping sync")
-        return
-
-    existing_rows = db.query(SystemAPISetting).all()
-    lookup = {}
-    for row in existing_rows:
-        key = (
-            (row.provider or "").strip().lower(),
-            (row.category or "").strip().lower(),
-            (row.model or "").strip().lower(),
-        )
-        lookup[key] = row
-
-    created = 0
-    updated = 0
-    for item in items:
-        provider = (item.get("provider") or "").strip()
-        category = (item.get("category") or "LLM").strip() or "LLM"
-        model = (item.get("model") or "").strip()
-        if not provider:
-            continue
-
-        key = (provider.lower(), category.lower(), model.lower())
-        target = lookup.get(key)
-
-        api_key = (item.get("api_key") or "").strip()
-        base_url = item.get("base_url")
-        name = (item.get("name") or "System Setting").strip() or "System Setting"
-        config = item.get("config") or {}
-        deprecated = bool(item.get("deprecated", False))
-        is_active = bool(item.get("is_active", False))
-
-        # Handle modality: accept both legacy string and new JSON format
-        raw_modality = item.get("modality")
-        if isinstance(raw_modality, str):
-            from app.services.modality_utils import migrate_legacy_modality_string
-            modality = migrate_legacy_modality_string(raw_modality)
-        elif isinstance(raw_modality, dict):
-            modality = raw_modality
-        else:
-            modality = None
-
-        tags = item.get("tags")
-        if not isinstance(tags, list):
-            tags = None
-
-        if target:
-            target.name = name
-            target.base_url = base_url
-            target.model = model  # preserve original casing
-            # Key pools are now stored in provider_key_pool table; no need to preserve in config
-            target.config = dict(config)
-            target.deprecated = deprecated
-            # is_active is NOT overwritten — activation state is managed on the server
-            target.modality = modality
-            target.tags = tags
-            # api_key is never overwritten — keys are managed on the server
-            updated += 1
-            lookup[key] = target
-        else:
-            # For new rows, try to inherit api_key from same-provider siblings
-            inherited_key = api_key
-            if not inherited_key:
-                for existing in lookup.values():
-                    if (existing.provider or "").strip().lower() == provider.lower() and (existing.api_key or "").strip():
-                        inherited_key = existing.api_key.strip()
-                        break
-            target = SystemAPISetting(
-                name=name,
-                category=category,
-                provider=provider,
-                api_key=inherited_key,
-                base_url=base_url,
-                model=model,
-                modality=modality,
-                tags=tags,
-                config=config,
-                deprecated=deprecated,
-                is_active=is_active,
-            )
-            db.add(target)
-            created += 1
-            lookup[key] = target
-
-    db.commit()
-    logger.info("System API seed sync done — created: %s, updated: %s, total in seed: %s", created, updated, len(items))
-
-
 def init_initial_data():
     db = SessionLocal()
     try:
@@ -1303,7 +1292,7 @@ def init_initial_data():
             normalize_grsai_user_api_settings(db)
             init_system_api_settings(db)
         else:
-            sync_system_api_from_seed(db)
+            logger.info("Skipping system API init sync because MANAGE_API_SETTINGS_ON_INIT is disabled")
     except Exception as e:
         logger.error(f"Failed to initialize data: {e}")
     finally:
@@ -1319,3 +1308,4 @@ def init_db():
     check_and_migrate_tables()
     create_default_superuser()
     init_initial_data()
+
