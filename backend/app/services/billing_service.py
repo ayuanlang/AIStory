@@ -12,6 +12,7 @@ import math
 import re
 import json
 from typing import Any, Dict, List, Optional
+from app.services.system_default_api_service import list_task_default_system_settings
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,85 @@ class BillingService:
     MINIMUM_CHARGE_BY_TASK = {
         "llm_chat": 1,
     }
+
+    @staticmethod
+    def _task_type_for_category(category: str) -> str:
+        normalized = str(category or "").strip().lower()
+        if normalized == "image":
+            return "image_gen"
+        if normalized == "video":
+            return "video_gen"
+        if normalized == "vision":
+            return "analysis"
+        if normalized == "llm":
+            return "llm_chat"
+        return "llm_chat"
+
+    @staticmethod
+    def _default_usage_profiles_for_category(category: str, generation_mode: Optional[str] = None) -> List[Dict[str, Any]]:
+        cat = str(category or "").strip().lower()
+        gm = str(generation_mode or "").strip().lower()
+
+        if cat == "image":
+            if gm in {"i2i", "image-to-image", "image2image", "img2img"}:
+                return [{"image_count": 1, "width": 1024, "height": 1024, "generation_mode": "i2i"}]
+            return [{"image_count": 1, "width": 1024, "height": 1024, "generation_mode": "t2i"}]
+
+        if cat == "video":
+            if gm in {"i2v", "image-to-video", "image2video", "img2video"}:
+                return [{"duration_seconds": 5, "width": 1280, "height": 720, "fps": 24, "generation_mode": "i2v"}]
+            return [{"duration_seconds": 5, "width": 1280, "height": 720, "fps": 24, "generation_mode": "t2v"}]
+
+        if cat == "vision":
+            return [{"input_tokens": 1000, "output_tokens": 300, "total_tokens": 1300}]
+
+        return [{"input_tokens": 1500, "output_tokens": 700, "total_tokens": 2200}]
+
+    @staticmethod
+    def estimate_system_api_average_price(
+        db: Session,
+        system_api_id: int,
+        generation_mode: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        try:
+            api_id = int(system_api_id or 0)
+        except Exception:
+            api_id = 0
+        if api_id <= 0:
+            return {"average_cost": 0, "source": "invalid_system_api_id", "samples": 0}
+
+        system_row = db.query(SystemAPISetting).filter(SystemAPISetting.id == api_id).first()
+        if not system_row:
+            return {"average_cost": 0, "source": "system_api_not_found", "samples": 0}
+
+        category = str(getattr(system_row, "category", "") or "").strip()
+        task_type = BillingService._task_type_for_category(category)
+        profiles = BillingService._default_usage_profiles_for_category(category, generation_mode=generation_mode)
+
+        costs: List[int] = []
+        sources: List[str] = []
+        for usage in profiles:
+            breakdown = BillingService.estimate_cost_breakdown(
+                db,
+                task_type=task_type,
+                provider=str(getattr(system_row, "provider", "") or "").strip(),
+                model=str(getattr(system_row, "model", "") or "").strip(),
+                details={**dict(usage or {}), "system_api_id": api_id},
+                phase="reserve",
+            )
+            costs.append(int(breakdown.get("api_cost") or 0))
+            sources.append(str(breakdown.get("api_pricing_source") or "").strip() or "unknown")
+
+        if not costs:
+            return {"average_cost": 0, "source": "no_profiles", "samples": 0}
+
+        avg_cost = int(round(sum(costs) / float(len(costs))))
+        source = sources[0] if sources and all(s == sources[0] for s in sources) else "mixed"
+        return {
+            "average_cost": max(0, avg_cost),
+            "source": source,
+            "samples": len(costs),
+        }
 
     @staticmethod
     def _to_int(value: Any, default: int = 0) -> int:
@@ -302,10 +382,13 @@ class BillingService:
         if not categories:
             return []
 
-        rows = db.query(SystemAPISetting).filter(
-            SystemAPISetting.is_active == True,
-            SystemAPISetting.category.in_(categories),
-        ).order_by(SystemAPISetting.id.desc()).all()
+        default_rows_map = list_task_default_system_settings(db)
+        rows: List[SystemAPISetting] = []
+        for cat in categories:
+            normalized = str(cat or "").strip().upper()
+            row = default_rows_map.get(normalized)
+            if row:
+                rows.append(row)
 
         out: List[Dict[str, Any]] = []
         for row in rows:
