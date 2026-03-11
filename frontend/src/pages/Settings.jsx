@@ -1405,7 +1405,7 @@ const Settings = () => {
     };
 
     return (
-        <div className="w-full max-w-7xl mx-auto space-y-6 h-full overflow-y-auto p-4 flex flex-col text-white relative">
+        <div className="w-full max-w-7xl mx-auto space-y-6 h-full overflow-y-auto p-3 sm:p-4 flex flex-col text-white relative">
             {/* Notification Toast */}
             {notification && (
                 <div className={`fixed top-10 left-1/2 transform -translate-x-1/2 z-[200] px-6 py-3 rounded-lg shadow-2xl border font-bold flex items-center gap-2 animate-in slide-in-from-top-4 fade-in duration-300 ${
@@ -1415,38 +1415,38 @@ const Settings = () => {
                     {notification.message}
                 </div>
             )}
-            <header className="flex flex-col md:flex-row justify-between items-center gap-4 bg-card p-4 rounded-xl border border-white/10 shadow-sm bg-black/20">
+            <header className="flex flex-col md:flex-row justify-between items-stretch md:items-center gap-3 sm:gap-4 bg-card p-3 sm:p-4 rounded-xl border border-white/10 shadow-sm bg-black/20">
                 <div className="flex items-center gap-6 overflow-x-auto w-full md:w-auto no-scrollbar">
                     <div className="flex bg-white/5 p-1 rounded-lg shrink-0">
                             <button 
                                 onClick={() => trackMenuAction('settings.tab.general', t('常规', 'General'), () => setActiveTab('general'))}
-                                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'general' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
+                                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all whitespace-nowrap ${activeTab === 'general' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
                             >
                                          {t('常规', 'General')}
                             </button>
                             <button 
                                 onClick={() => trackMenuAction('settings.tab.api_settings', t('默认 API 激活', 'Default API Activation'), () => setActiveTab('api_settings'))}
-                                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'api_settings' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
+                                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all whitespace-nowrap ${activeTab === 'api_settings' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
                             >
                                          {t('默认 API 激活', 'Default API Activation')}
                             </button>
                             <button
                                 onClick={() => trackMenuAction('settings.tab.account', t('用户管理', 'Account'), () => setActiveTab('account'))}
-                                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'account' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
+                                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all whitespace-nowrap ${activeTab === 'account' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
                             >
                                 {t('用户管理', 'Account')}
                             </button>
                         <button 
                              onClick={() => trackMenuAction('settings.tab.usage', t('用量', 'Usage'), () => setActiveTab('usage'))}
-                             className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'usage' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
+                             className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all whitespace-nowrap ${activeTab === 'usage' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
                         >
                             <span className="flex items-center gap-2"><Coins size={14}/> {t('用量', 'Usage')}</span>
                         </button>
                     </div>
                 </div>
 
-                <div className="flex gap-2 shrink-0 items-center">
-                    <div className="flex items-center gap-2 bg-white/5 border border-white/10 px-2 py-1.5 rounded-lg">
+                <div className="flex flex-wrap gap-2 w-full md:w-auto shrink-0 items-center justify-start md:justify-end">
+                    <div className="w-full sm:w-auto flex items-center gap-2 bg-white/5 border border-white/10 px-2 py-1.5 rounded-lg">
                         <span className="text-[11px] text-muted-foreground">{t('界面语言', 'UI Language')}</span>
                         <div className="flex bg-black/20 rounded-md p-0.5 border border-white/10">
                             <button
@@ -1465,7 +1465,7 @@ const Settings = () => {
                     </div>
                     <button 
                         onClick={() => trackMenuAction('settings.action.import', t('导入', 'Import'), handleImportClick)}
-                        className="flex items-center space-x-2 bg-white/5 border border-white/10 px-3 py-1.5 rounded-lg hover:bg-white/10 text-xs transition-colors"
+                        className="flex-1 sm:flex-none flex items-center justify-center space-x-2 bg-white/5 border border-white/10 px-3 py-1.5 rounded-lg hover:bg-white/10 text-xs transition-colors whitespace-nowrap"
                         title={t('导入设置 JSON', 'Import Settings JSON')}
                     >
                         <Upload size={14} />
@@ -1473,7 +1473,7 @@ const Settings = () => {
                     </button>
                     <button 
                         onClick={() => trackMenuAction('settings.action.export', t('导出', 'Export'), handleExportSettings)}
-                        className="flex items-center space-x-2 bg-white/5 border border-white/10 px-3 py-1.5 rounded-lg hover:bg-white/10 text-xs transition-colors"
+                        className="flex-1 sm:flex-none flex items-center justify-center space-x-2 bg-white/5 border border-white/10 px-3 py-1.5 rounded-lg hover:bg-white/10 text-xs transition-colors whitespace-nowrap"
                         title={t('导出设置 JSON', 'Export Settings JSON')}
                     >
                         <Download size={14} />
@@ -1481,7 +1481,7 @@ const Settings = () => {
                     </button>
                     <button
                         onClick={() => trackMenuAction('settings.action.exit', t('退出', 'Exit'), handleExitSettings)}
-                        className="flex items-center space-x-2 bg-white/5 border border-white/10 px-3 py-1.5 rounded-lg hover:bg-white/10 text-xs transition-colors"
+                        className="flex-1 sm:flex-none flex items-center justify-center space-x-2 bg-white/5 border border-white/10 px-3 py-1.5 rounded-lg hover:bg-white/10 text-xs transition-colors whitespace-nowrap"
                         title={t('退出设置并返回来源页面', 'Exit settings and return to caller page')}
                     >
                         <ArrowLeft size={14} />
@@ -1498,7 +1498,7 @@ const Settings = () => {
             </header>
 
             {activeTab === 'general' && (
-            <section className="bg-black/20 p-6 rounded-xl border border-white/10 space-y-4 shadow-sm">
+            <section className="bg-black/20 p-4 sm:p-6 rounded-xl border border-white/10 space-y-4 shadow-sm">
                 <h2 className="text-lg font-semibold flex items-center gap-2">
                     <Palette className="w-5 h-5 text-primary" />
                     {t('页面风格', 'Page Appearance')}
@@ -1557,7 +1557,7 @@ const Settings = () => {
 
             {activeTab === 'account' && (
                 <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                    <section className="bg-black/20 p-6 rounded-xl border border-white/10 space-y-4 shadow-sm">
+                    <section className="bg-black/20 p-4 sm:p-6 rounded-xl border border-white/10 space-y-4 shadow-sm">
                         <h2 className="text-lg font-semibold flex items-center gap-2">
                             <User className="w-5 h-5 text-primary" />
                             {t('用户资料', 'Profile')}
@@ -1615,7 +1615,7 @@ const Settings = () => {
                         </button>
                     </section>
 
-                    <section className="bg-black/20 p-6 rounded-xl border border-white/10 space-y-4 shadow-sm">
+                    <section className="bg-black/20 p-4 sm:p-6 rounded-xl border border-white/10 space-y-4 shadow-sm">
                         <h2 className="text-lg font-semibold flex items-center gap-2">
                             <KeyRound className="w-5 h-5 text-primary" />
                             {t('修改密码', 'Change Password')}
@@ -1675,8 +1675,8 @@ const Settings = () => {
             {activeTab === 'usage' ? (
                 <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
                     <div className="grid grid-cols-1 gap-6">
-                        <div className="bg-black/20 p-6 rounded-xl border border-white/10 shadow-sm flex flex-col items-center justify-center text-center relative">
-                             <div className="absolute top-4 right-4">
+                            <div className="bg-black/20 p-4 sm:p-6 rounded-xl border border-white/10 shadow-sm flex flex-col items-center justify-center text-center relative">
+                                <div className="mb-3 self-end sm:mb-0 sm:absolute sm:top-4 sm:right-4">
                                 <button
                                     onClick={() => setShowRecharge(true)}
                                     className="bg-green-500 hover:bg-green-600 text-white font-medium py-1.5 px-3 rounded-lg transition-colors flex items-center justify-center gap-1 text-xs shadow-lg shadow-green-500/20"
@@ -1697,7 +1697,7 @@ const Settings = () => {
                                 {t('充值套餐', 'Recharge Bundle')}
                              </button>
                         </div>
-                        <div className="bg-black/20 p-6 rounded-xl border border-white/10 shadow-sm">
+                        <div className="bg-black/20 p-4 sm:p-6 rounded-xl border border-white/10 shadow-sm">
                              <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
                                 <History className="w-5 h-5" /> {t('最近交易', 'Recent Transactions')}
                              </h3>
@@ -1726,7 +1726,7 @@ const Settings = () => {
                                                         <span className="bg-white/5 px-2 py-0.5 rounded text-xs uppercase border border-white/10">{t.task_type}</span>
                                                     </td>
                                                     <td className="p-3 text-xs opacity-70">
-                                                        <div className="max-h-[120px] overflow-y-auto whitespace-pre-wrap break-all w-[300px] bg-black/20 p-2 rounded border border-white/10 font-mono text-[10px]">
+                                                        <div className="max-h-[120px] overflow-y-auto whitespace-pre-wrap break-all w-[220px] sm:w-[300px] bg-black/20 p-2 rounded border border-white/10 font-mono text-[10px]">
                                                             {JSON.stringify(aliasifyProviderInDetails(t.details, t.provider_alias), null, 2)}
                                                         </div>
                                                     </td>
@@ -1759,7 +1759,7 @@ const Settings = () => {
                             <h2 className="text-2xl font-extrabold tracking-wide text-cyan-200">{t('默认 API 激活', 'Default API Activation')}</h2>
                             <p className="text-xs text-cyan-100/80 mt-1">{t('仅用于当前用户选择每个类别的默认激活 API 配置。', 'Only used for current user default active API selection by category.')}</p>
                         </div>
-                        <div className="bg-black/20 p-6 rounded-xl border border-cyan-400/20 space-y-4 shadow-sm">
+                        <div className="bg-black/20 p-4 sm:p-6 rounded-xl border border-cyan-400/20 space-y-4 shadow-sm">
                             <div className="flex items-center justify-between gap-3">
                                 <h3 className="text-base font-medium">{t('选择默认激活的 API 配置', 'Select Default Activated API Config')}</h3>
                                 <span className={`text-xs px-2 py-0.5 rounded border ${userCredits > 0 ? 'text-green-300 border-green-500/40 bg-green-500/10' : 'text-yellow-300 border-yellow-500/40 bg-yellow-500/10'}`}>

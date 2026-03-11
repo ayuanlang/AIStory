@@ -1868,16 +1868,16 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                 </div>
             )}
 
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-8 w-full">
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 sm:gap-8 w-full">
                 {mode === 'overview' && (
-                <div className="bg-card border border-white/10 p-6 rounded-xl space-y-6">
+                <div className="bg-card border border-white/10 p-4 sm:p-6 rounded-xl space-y-6">
                     <h3 className="text-lg font-semibold text-primary border-b border-white/10 pb-2">{t('基本信息', 'Basic Information')}</h3>
 
                     <div className="grid grid-cols-1 gap-4">
                         <InputGroup idPrefix={prefix} label={t('剧本标题', 'Script Title')} value={info.script_title} onChange={v => updateField('script_title', v)} placeholder={t('例如：我的科幻史诗', 'e.g. My Sci-Fi Epic')} />
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <InputGroup idPrefix={prefix}
                             label={t('类型', 'Type')}
                             value={info.type}
@@ -1900,7 +1900,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                         placeholder={t('例如：都市爱情 / 科幻', 'e.g. Urban Romance / Sci-Fi')}
                     />
 
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <InputGroup idPrefix={prefix}
                             label={t('画幅比例', 'Aspect Ratio')}
                             value={info.tech_params?.visual_standard?.aspect_ratio}
@@ -1929,13 +1929,13 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
 
                 {/* Technical & Visual Params */}
                 {mode === 'overview' && (
-                <div className="bg-card border border-white/10 p-6 rounded-xl space-y-6">
+                <div className="bg-card border border-white/10 p-4 sm:p-6 rounded-xl space-y-6">
                     <h3 className="text-lg font-semibold text-primary border-b border-white/10 pb-2 flex items-center justify-between gap-3">
                         <span>{t('技术与视觉参数', 'Technical & Visual Parameters')}</span>
                         <span className="text-xs font-medium text-muted-foreground normal-case">{t('建议不改动，待大模型回填。', 'Recommended to keep unchanged, waiting for LLM backfill.')}</span>
                     </h3>
                     
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <InputGroup idPrefix={prefix}
                             label={t('横向分辨率', 'H. Resolution')} 
                             value={info.tech_params?.visual_standard?.horizontal_resolution} 
@@ -1952,7 +1952,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                         />
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <InputGroup idPrefix={prefix}
                             label={t('帧率', 'Frame Rate')} 
                             value={info.tech_params?.visual_standard?.frame_rate} 
@@ -1985,7 +1985,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                         />
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <InputGroup idPrefix={prefix}
                             label={t('色调', 'Tone')} 
                             value={info.tone} 
@@ -2007,7 +2007,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
 
                 {/* Story Generator (Global) */}
                 {mode === 'generator' && projectTab === 'story_generator' && (
-                <div className="bg-card border border-white/10 p-6 rounded-xl space-y-4 xl:col-span-2">
+                <div className="bg-card border border-white/10 p-4 sm:p-6 rounded-xl space-y-4 xl:col-span-2">
                     <div className="flex items-center justify-between gap-3">
                         <h3 className="text-lg font-semibold text-primary">{t('故事生成器（全局 / 项目）', 'Story Generator (Global / Project)')}</h3>
                         <div className="flex items-center gap-2">
@@ -3298,29 +3298,29 @@ const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'en', mer
     }
 
     return (
-        <div className="p-4 sm:p-6 lg:p-8 w-full h-full overflow-y-auto">
-             <div className="flex justify-between items-center mb-8">
+           <div className="p-3 sm:p-6 lg:p-8 w-full h-full overflow-y-auto">
+               <div className="flex flex-wrap justify-between items-center gap-3 mb-6 sm:mb-8">
                 <h2 className="text-2xl font-bold">{t('分集全局信息', 'Episode Global Info')}</h2>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
                     <button
                         onClick={handleSyncFromProjectOverview}
-                        className="px-4 py-2 bg-white/10 text-white rounded-lg text-sm font-bold hover:bg-white/20 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="flex-1 sm:flex-none px-4 py-2 bg-white/10 text-white rounded-lg text-sm font-bold hover:bg-white/20 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                         disabled={!projectId && !project?.global_info}
                     >
                         <RefreshCw className="w-4 h-4" /> {t('从项目总览同步', 'Sync from Project Overview')}
                     </button>
-                    <button onClick={handleSave} className="px-4 py-2 bg-primary text-black rounded-lg text-sm font-bold hover:bg-primary/90 flex items-center gap-2">
+                    <button onClick={handleSave} className="flex-1 sm:flex-none px-4 py-2 bg-primary text-black rounded-lg text-sm font-bold hover:bg-primary/90 flex items-center justify-center gap-2">
                         <SettingsIcon className="w-4 h-4" /> {t('保存修改', 'Save Changes')}
                     </button>
                 </div>
             </div>
 
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-8 w-full">
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 sm:gap-8 w-full">
                  {/* Basic Info */}
-                <div className="bg-card border border-white/10 p-6 rounded-xl space-y-6">
+                <div className="bg-card border border-white/10 p-4 sm:p-6 rounded-xl space-y-6">
                     <h3 className="text-lg font-semibold text-primary border-b border-white/10 pb-2">{t('基本信息', 'Basic Information')}</h3>
                     
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <InputGroup idPrefix={prefix} label={t('剧本标题', 'Script Title')} value={data.script_title} onChange={v => updateField('script_title', v)} placeholder={t('分集剧本标题', 'Episode Script Title')} />
                         <InputGroup idPrefix={prefix} label={t('系列/分集', 'Series/Episode')} value={data.series_episode} onChange={v => updateField('series_episode', v)} placeholder={t('例如：S01E01', 'e.g. S01E01')} />
                     </div>
@@ -3333,7 +3333,7 @@ const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'en', mer
                         placeholder={t('例如：悬疑 / 惊悚', 'e.g. Mystery / Thriller')}
                     />
                     
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <InputGroup idPrefix={prefix}
                             label={t('类型', 'Type')} 
                             value={data.type} 
@@ -3369,22 +3369,22 @@ const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'en', mer
                 </div>
 
                 {/* Tech Params */}
-                 <div className="bg-card border border-white/10 p-6 rounded-xl space-y-6">
+                 <div className="bg-card border border-white/10 p-4 sm:p-6 rounded-xl space-y-6">
                     <h3 className="text-lg font-semibold text-primary border-b border-white/10 pb-2">{t('技术与氛围', 'Technical & Mood')}</h3>
                     
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                          <InputGroup idPrefix={prefix} label={t('横向分辨率', 'H. Resolution')} value={data.tech_params?.visual_standard?.horizontal_resolution} onChange={v => updateTech('horizontal_resolution', v)} placeholder="3840" list={["3840", "1920", "1280", "1080"]}/>
                          <InputGroup idPrefix={prefix} label={t('纵向分辨率', 'V. Resolution')} value={data.tech_params?.visual_standard?.vertical_resolution} onChange={v => updateTech('vertical_resolution', v)} placeholder="2160" list={["2160", "1920", "1080", "720"]}/>
                     </div>
                     
-                    <div className="grid grid-cols-3 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                          <InputGroup idPrefix={prefix} label={t('帧率', 'Frame Rate')} value={data.tech_params?.visual_standard?.frame_rate} onChange={v => updateTech('frame_rate', v)} list={["24", "30", "60"]} />
                          <InputGroup idPrefix={prefix} label={t('画幅比例', 'Aspect Ratio')} value={data.tech_params?.visual_standard?.aspect_ratio} onChange={v => updateTech('aspect_ratio', v)} list={["16:9", "2.35:1", "4:3", "9:16", "1:1"]} />
                          <InputGroup idPrefix={prefix} label={t('质量等级', 'Quality')} value={data.tech_params?.visual_standard?.quality} onChange={v => updateTech('quality', v)} list={PROJECT_EP_QUALITY_OPTIONS} />
                         <InputGroup idPrefix={prefix} label={t('图像尺寸', 'Image Size')} value={data.tech_params?.visual_standard?.image_size} onChange={v => updateTech('image_size', v)} list={["1K", "2K", "4K"]} />
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                          <InputGroup idPrefix={prefix}
                             label={t('色调', 'Tone')} 
                             value={data.tone} 
@@ -8140,8 +8140,8 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                                     <tr>
                                         <th className="p-4 border-b border-white/10 font-medium text-muted-foreground w-16">{t('编号', 'ID')}</th>
                                         <th className="p-4 border-b border-white/10 font-medium text-muted-foreground w-48">{t('标题', 'Title')}</th>
-                                        <th className="p-4 border-b border-white/10 font-medium text-muted-foreground min-w-[300px]">{t('内容（修订）', 'Content (Revised)')}</th>
-                                        <th className="p-4 border-b border-white/10 font-medium text-muted-foreground min-w-[300px]">{t('内容（原始）', 'Content (Original)')}</th>
+                                        <th className="p-4 border-b border-white/10 font-medium text-muted-foreground min-w-[220px] sm:min-w-[300px]">{t('内容（修订）', 'Content (Revised)')}</th>
+                                        <th className="p-4 border-b border-white/10 font-medium text-muted-foreground min-w-[220px] sm:min-w-[300px]">{t('内容（原始）', 'Content (Original)')}</th>
                                         <th className="p-4 border-b border-white/10 font-medium text-muted-foreground w-48">{t('叙事功能', 'Narrative Function')}</th>
                                         <th className="p-4 border-b border-white/10 font-medium text-muted-foreground w-64">{t('分析与改编备注', 'Analysis & Adaptation Notes')}</th>
                                     </tr>
@@ -8236,9 +8236,9 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                                     </button>
                                 </div>
                             </div>
-                            <div className="h-[320px] overflow-auto custom-scrollbar px-6 pb-6">
+                            <div className="h-[260px] sm:h-[320px] overflow-auto custom-scrollbar px-4 sm:px-6 pb-4 sm:pb-6">
                                 {llmMarkdownTable ? (
-                                    <table className="w-full text-left border-collapse text-xs font-mono min-w-[900px]">
+                                    <table className="w-full text-left border-collapse text-xs font-mono min-w-[720px] sm:min-w-[900px]">
                                         <thead className="sticky top-0 z-10 bg-black/50 backdrop-blur-sm">
                                             <tr>
                                                 {llmMarkdownTable.headers.map((header, idx) => (
@@ -8553,7 +8553,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             )}
 
             {showAnalysisModal && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm" onClick={() => setShowAnalysisModal(false)}>
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm" onClick={() => setShowAnalysisModal(false)}>
                     <div className="bg-[#1a1a1a] border border-white/10 rounded-xl w-full max-w-6xl h-[90vh] flex flex-col shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
                         <div className="flex items-center justify-between p-4 border-b border-white/10 bg-white/5">
                             <h3 className="text-lg font-bold flex items-center gap-2">
@@ -8565,7 +8565,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                             </button>
                         </div>
                         
-                        <div className="flex-1 p-6 grid grid-cols-2 gap-6 overflow-hidden">
+                        <div className="flex-1 p-3 sm:p-6 grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 overflow-hidden">
                             <div className="flex flex-col h-full">
                                 <label className="text-sm font-bold text-muted-foreground mb-2 flex items-center justify-between">
                                     System Prompt
@@ -8698,9 +8698,9 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                                 <X className="w-5 h-5" />
                             </button>
                         </div>
-                        <div className="flex-1 p-6 overflow-hidden">
+                        <div className="flex-1 p-4 sm:p-6 overflow-hidden">
                             <textarea
-                                className="w-full h-full bg-black/30 border border-white/10 text-white p-4 font-serif text-lg leading-relaxed rounded-lg focus:outline-none focus:border-primary/50 resize-none custom-scrollbar"
+                                className="w-full h-full bg-black/30 border border-white/10 text-white p-3 sm:p-4 font-serif text-base sm:text-lg leading-relaxed rounded-lg focus:outline-none focus:border-primary/50 resize-none custom-scrollbar"
                                 value={mergedContent}
                                 readOnly
                             />
@@ -8734,10 +8734,10 @@ const MediaDetailModal = ({ media, onClose }) => {
     if (!media) return null;
 
     return (
-        <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-8" onClick={onClose}>
-             <div className="bg-[#1a1a1a] border border-white/10 rounded-xl overflow-hidden max-w-6xl w-full max-h-[90vh] flex shadow-2xl" onClick={e => e.stopPropagation()}>
+           <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 sm:p-8" onClick={onClose}>
+               <div className="bg-[#1a1a1a] border border-white/10 rounded-xl overflow-hidden max-w-6xl w-full max-h-[90vh] flex flex-col lg:flex-row shadow-2xl" onClick={e => e.stopPropagation()}>
                 {/* Media Area */}
-                <div className="flex-1 bg-black/50 flex items-center justify-center p-4 relative group/modal min-h-[400px]">
+                <div className="flex-1 bg-black/50 flex items-center justify-center p-3 sm:p-4 relative group/modal min-h-[260px] sm:min-h-[400px]">
                     {media.type === 'video' ? (
                         <video src={getFullUrl(media.url)} controls autoPlay className="max-w-full max-h-full shadow-lg rounded" />
                     ) : (
@@ -8753,7 +8753,7 @@ const MediaDetailModal = ({ media, onClose }) => {
                 </div>
 
                 {/* Metadata Sidebar */}
-                <div className="w-80 bg-[#151515] border-l border-white/10 p-6 flex flex-col gap-4 overflow-y-auto shrink-0">
+                <div className="w-full lg:w-80 bg-[#151515] border-t lg:border-t-0 lg:border-l border-white/10 p-4 sm:p-6 flex flex-col gap-4 overflow-y-auto shrink-0 max-h-[40vh] lg:max-h-none">
                     <div>
                         <h3 className="text-xl font-bold text-white mb-1 truncate" title={media.title || 'Media Details'}>{media.title || 'Media Details'}</h3>
                         <div className="text-xs text-muted-foreground uppercase font-bold">{media.type || 'Image'} Asset</div>
@@ -9576,8 +9576,8 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
         const entity = getEntityInfo(selectedImage);
         
         return (
-            <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-8" onClick={() => setSelectedImage(null)}>
-                 <div className="bg-[#1a1a1a] border border-white/10 rounded-xl overflow-hidden max-w-5xl w-full max-h-[90vh] flex shadow-2xl" onClick={e => e.stopPropagation()}>
+              <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 sm:p-8" onClick={() => setSelectedImage(null)}>
+                  <div className="bg-[#1a1a1a] border border-white/10 rounded-xl overflow-hidden max-w-5xl w-full max-h-[90vh] flex flex-col lg:flex-row shadow-2xl" onClick={e => e.stopPropagation()}>
                     {/* Image Area */}
                     <div className="flex-1 bg-black/50 flex items-center justify-center p-4 relative group/modal">
                         <img src={getFullUrl(selectedImage)} className="max-w-full max-h-full object-contain shadow-lg rounded" alt="Detail" />
@@ -9590,7 +9590,7 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
                     </div>
 
                     {/* Metadata Sidebar */}
-                    <div className="w-80 bg-[#151515] border-l border-white/10 p-6 flex flex-col gap-4 overflow-y-auto">
+                    <div className="w-full lg:w-80 bg-[#151515] border-t lg:border-t-0 lg:border-l border-white/10 p-4 sm:p-6 flex flex-col gap-4 overflow-y-auto max-h-[40vh] lg:max-h-none">
                         <div>
                             <h3 className="text-xl font-bold text-white mb-1">{entity?.name || 'External Image'}</h3>
                             {entity?.name_en && <div className="text-sm text-muted-foreground">{entity.name_en}</div>}
@@ -11408,13 +11408,91 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                             </div>
                                         ) : (
                                             <div className="bg-black/30 border border-white/10 rounded-md overflow-hidden">
-                                                <div className="max-h-[320px] overflow-auto custom-scrollbar">
-                                                    <table className="w-full text-xs text-left border-collapse">
+                                                <div className="md:hidden max-h-[420px] overflow-auto custom-scrollbar p-3 space-y-3">
+                                                    {(aiShotsStaging.content || []).map((shot, idx) => (
+                                                        <div key={`mobile-shot-${idx}`} className="bg-white/5 border border-white/10 rounded-lg p-3 space-y-2.5">
+                                                            <div className="text-[11px] font-bold text-white/90 truncate">
+                                                                {(shot['Shot ID'] || shot.shot_id || `#${idx + 1}`)} · {(shot['Shot Name'] || shot.shot_name || t('未命名镜头', 'Untitled Shot'))}
+                                                            </div>
+                                                            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{t('镜头逻辑', 'Shot Logic')}</div>
+                                                            <input
+                                                                className="w-full bg-black/30 border border-white/10 rounded-md px-2.5 py-2.5 text-[13px]"
+                                                                value={shot['Shot Logic (CN)'] || shot.shot_logic_cn || ''}
+                                                                onChange={e => {
+                                                                    const newData = [...(aiShotsStaging.content || [])];
+                                                                    newData[idx] = { ...shot, 'Shot Logic (CN)': e.target.value };
+                                                                    setAiShotsStaging(prev => ({ ...prev, content: newData }));
+                                                                }}
+                                                                placeholder={t('镜头逻辑', 'Shot logic')}
+                                                            />
+                                                            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{t('镜头内容', 'Video Content')}</div>
+                                                            <textarea
+                                                                className="w-full bg-black/30 border border-white/10 rounded-md px-2.5 py-2.5 text-[13px] min-h-[88px]"
+                                                                value={shot['Video Content'] || shot.video_content || ''}
+                                                                onChange={e => {
+                                                                    const newData = [...(aiShotsStaging.content || [])];
+                                                                    newData[idx] = { ...shot, 'Video Content': e.target.value };
+                                                                    setAiShotsStaging(prev => ({ ...prev, content: newData }));
+                                                                }}
+                                                                placeholder={t('镜头内容', 'Video content')}
+                                                            />
+                                                            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{t('基础字段', 'Basic Fields')}</div>
+                                                            <div className="grid grid-cols-2 gap-2">
+                                                                <input
+                                                                    className="bg-black/30 border border-white/10 rounded-md px-2.5 py-2.5 text-[13px]"
+                                                                    value={shot['Duration (s)'] || shot.duration || ''}
+                                                                    onChange={e => {
+                                                                        const newData = [...(aiShotsStaging.content || [])];
+                                                                        newData[idx] = { ...shot, 'Duration (s)': e.target.value };
+                                                                        setAiShotsStaging(prev => ({ ...prev, content: newData }));
+                                                                    }}
+                                                                    placeholder={t('时长(s)', 'Duration(s)')}
+                                                                />
+                                                                <input
+                                                                    className="bg-black/30 border border-white/10 rounded-md px-2.5 py-2.5 text-[13px]"
+                                                                    value={shot['Shot Name'] || shot.shot_name || ''}
+                                                                    onChange={e => {
+                                                                        const newData = [...(aiShotsStaging.content || [])];
+                                                                        newData[idx] = { ...shot, 'Shot Name': e.target.value };
+                                                                        setAiShotsStaging(prev => ({ ...prev, content: newData }));
+                                                                    }}
+                                                                    placeholder={t('镜头名', 'Shot name')}
+                                                                />
+                                                            </div>
+                                                            <div className="grid grid-cols-2 gap-2 pt-1 border-t border-white/10">
+                                                                <button
+                                                                    onClick={() => openAiShotRowEditor(shot, idx)}
+                                                                    className="px-2 py-2.5 rounded-md bg-white/10 hover:bg-white/20 text-[12px] font-semibold"
+                                                                >
+                                                                    {t('更多字段', 'More Fields')}
+                                                                </button>
+                                                                <button
+                                                                    onClick={() => {
+                                                                        const newData = (aiShotsStaging.content || []).filter((_, i) => i !== idx);
+                                                                        setAiShotsStaging(prev => ({ ...prev, content: newData }));
+                                                                    }}
+                                                                    className="px-2 py-2.5 rounded-md bg-red-500/10 hover:bg-red-500/20 text-red-200 text-[12px] font-semibold"
+                                                                >
+                                                                    {t('删除', 'Delete')}
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                                <div className="hidden md:block max-h-[320px] overflow-auto custom-scrollbar">
+                                                    <table className="w-full min-w-[980px] text-xs text-left border-collapse">
                                                         <thead className="sticky top-0 bg-[#252525] z-10 shadow-md">
                                                             <tr>
-                                                                {['Shot ID', 'Shot Name', 'Scene ID', 'Shot Logic (CN)', 'Start Frame', 'Video Content', 'Duration (s)', 'Keyframes', 'End Frame', 'Associated Entities'].map(h => (
-                                                                    <th key={h} className="p-2 border-b border-white/10 font-bold text-white/70">{h}</th>
-                                                                ))}
+                                                                <th className="p-2 border-b border-white/10 font-bold text-white/70">Shot ID</th>
+                                                                <th className="p-2 border-b border-white/10 font-bold text-white/70">Shot Name</th>
+                                                                <th className="hidden md:table-cell p-2 border-b border-white/10 font-bold text-white/70">Scene ID</th>
+                                                                <th className="p-2 border-b border-white/10 font-bold text-white/70">Shot Logic (CN)</th>
+                                                                <th className="hidden lg:table-cell p-2 border-b border-white/10 font-bold text-white/70">Start Frame</th>
+                                                                <th className="p-2 border-b border-white/10 font-bold text-white/70">Video Content</th>
+                                                                <th className="p-2 border-b border-white/10 font-bold text-white/70">Duration (s)</th>
+                                                                <th className="hidden lg:table-cell p-2 border-b border-white/10 font-bold text-white/70">Keyframes</th>
+                                                                <th className="hidden lg:table-cell p-2 border-b border-white/10 font-bold text-white/70">End Frame</th>
+                                                                <th className="hidden md:table-cell p-2 border-b border-white/10 font-bold text-white/70">Associated Entities</th>
                                                                 <th className="p-2 border-b border-white/10 w-10"></th>
                                                             </tr>
                                                         </thead>
@@ -11448,7 +11526,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                                                             }}
                                                                         />
                                                                     </td>
-                                                                    <td className="p-1">
+                                                                    <td className="hidden md:table-cell p-1">
                                                                         <input
                                                                             className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded"
                                                                             value={shot['Scene ID'] || shot.scene_id || ''}
@@ -11470,7 +11548,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                                                             }}
                                                                         />
                                                                     </td>
-                                                                    <td className="p-1">
+                                                                    <td className="hidden lg:table-cell p-1">
                                                                         <textarea
                                                                             className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded resize-y min-h-[40px]"
                                                                             value={shot['Start Frame'] || shot.start_frame || ''}
@@ -11481,7 +11559,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                                                             }}
                                                                         />
                                                                     </td>
-                                                                    <td className="p-1">
+                                                                    <td className="hidden lg:table-cell p-1">
                                                                         <textarea
                                                                             className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded resize-y min-h-[40px]"
                                                                             value={shot['Video Content'] || shot.video_content || ''}
@@ -11503,7 +11581,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                                                             }}
                                                                         />
                                                                     </td>
-                                                                    <td className="p-1">
+                                                                    <td className="hidden lg:table-cell p-1">
                                                                         <input
                                                                             className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded"
                                                                             value={shot['Keyframes'] || shot.keyframes || ''}
@@ -11514,7 +11592,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                                                             }}
                                                                         />
                                                                     </td>
-                                                                    <td className="p-1">
+                                                                    <td className="hidden md:table-cell p-1">
                                                                         <textarea
                                                                             className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded resize-y min-h-[40px]"
                                                                             value={shot['End Frame'] || shot.end_frame || ''}
@@ -11553,13 +11631,13 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                                         </tbody>
                                                     </table>
                                                 </div>
-                                                <div className="p-2 border-t border-white/10 flex items-center justify-between">
+                                                <div className="p-2 border-t border-white/10 flex flex-wrap items-center justify-between gap-2">
                                                     <button
                                                         onClick={() => {
                                                             const newData = [...(aiShotsStaging.content || []), { 'Shot ID': (aiShotsStaging.content?.length || 0) + 1, 'Video Content': '' }];
                                                             setAiShotsStaging(prev => ({ ...prev, content: newData }));
                                                         }}
-                                                        className="px-3 py-1 bg-white/5 hover:bg-white/10 rounded flex items-center gap-2 text-xs"
+                                                        className="w-full md:w-auto px-3 py-2 bg-white/5 hover:bg-white/10 rounded flex items-center justify-center gap-2 text-xs font-semibold"
                                                     >
                                                         <Plus size={14}/> {t('新增一行', 'Add Row')}
                                                     </button>
@@ -13436,7 +13514,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                             </button>
                                         </div>
 
-                                        <div className="grid grid-cols-4 gap-4">
+                                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
                                         {filteredAssets.map(asset => (
                                             <div 
                                                 key={asset.id} 
@@ -13707,7 +13785,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                                              </select>
                                                          </div>
                                                          <div className="flex-1 overflow-y-auto p-2 custom-scrollbar">
-                                                             <div className="grid grid-cols-4 gap-2">
+                                                             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
                                                                  {filteredAssets.map(asset => (
                                                                      <div 
                                                                          key={asset.id} 
@@ -17010,7 +17088,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
                         {/* Progress Indicator */}
                         {isBatchGenerating && batchProgress.total > 0 && (
-                            <div className="fixed right-4 top-20 z-[70] bg-black/90 px-4 py-3 rounded-lg border border-primary/30 backdrop-blur-md shadow-2xl w-[1120px] max-w-[92vw]">
+                            <div className="fixed right-2 sm:right-4 top-16 sm:top-20 z-[70] bg-black/90 px-3 sm:px-4 py-2.5 sm:py-3 rounded-lg border border-primary/30 backdrop-blur-md shadow-2xl w-[1120px] max-w-[95vw] sm:max-w-[92vw]">
                                 <div className="flex items-center justify-between mb-2">
                                     <span className="text-xs font-bold text-primary tracking-wide">{t('批处理进度', 'Batch Processing')}</span>
                                     <span className="text-xs text-white font-mono">{batchProgress.current}/{batchProgress.total} · {Math.round((batchProgress.current / batchProgress.total) * 100)}%</span>
@@ -17235,7 +17313,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                             </div>
                         )}
 
-                        <div className="p-4 border-b border-white/10 flex items-center justify-between sticky top-0 bg-[#09090b] z-10">
+                        <div className="p-3 sm:p-4 border-b border-white/10 flex flex-wrap items-center justify-between gap-2 sticky top-0 bg-[#09090b] z-10">
                             <h3 className="font-bold text-lg flex items-center gap-2">
                                 {t('编辑镜头', 'Edit Shot')} {editingShot.shot_id}
                                 {editingShot.shot_name && <span className="text-base font-normal text-muted-foreground">- {editingShot.shot_name}</span>}
@@ -17254,7 +17332,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                 <button onClick={() => setEditingShot(null)} className="p-2 hover:bg-white/10 rounded-full"><X className="w-5 h-5"/></button>
                             </div>
                         </div>
-                        <div className="p-6 space-y-6">
+                        <div className="p-4 sm:p-6 space-y-6">
 
                             <div>
                                 <label className="text-[10px] uppercase font-bold text-muted-foreground block mb-1">{t('镜头逻辑（中文）', 'Shot Logic (CN)')}</label>
@@ -17270,7 +17348,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                             <div className="space-y-6">
                                 
                                 {/* 3 Column Layout: Start | End | Video */}
-                                <div className="grid grid-cols-3 gap-4">
+                                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                                     {/* Start Frame */}
                                     <div className="space-y-2">
                                         <div className="flex justify-between items-center">
@@ -18492,7 +18570,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                 value={shotIdFilter}
                                 onChange={(e) => setShotIdFilter(e.target.value)}
                                 placeholder={t('筛选镜头ID（EPxx_SCyy_SHzz）', 'Filter Shot ID (EPxx_SCyy_SHzz)')}
-                                className="bg-black/40 border border-white/20 rounded px-2.5 py-1.5 text-xs min-w-[220px] text-white"
+                                className="bg-black/40 border border-white/20 rounded px-2.5 py-1.5 text-xs w-full sm:w-auto sm:min-w-[220px] text-white"
                             />
                             <button
                                 onClick={() => { setSceneCodeFilter(''); setShotIdFilter(''); }}
@@ -18518,20 +18596,48 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                         
                         <div className="flex-1 overflow-hidden relative bg-[#121212]">
                             <div className="absolute inset-0 overflow-auto p-4 custom-scrollbar">
-                                <table className="w-full text-xs text-left border-collapse">
+                                <div className="md:hidden space-y-3">
+                                    {(shotReviewModal.data || []).map((shot, idx) => (
+                                        <div key={`review-mobile-${idx}`} className="bg-white/5 border border-white/10 rounded-lg p-3 space-y-2.5">
+                                            <div className="text-[11px] font-bold text-white/90 truncate">
+                                                {(shot['Shot ID'] || shot.shot_id || `#${idx + 1}`)} · {(shot['Shot Name'] || shot.shot_name || t('未命名镜头', 'Untitled Shot'))}
+                                            </div>
+                                            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{t('内容', 'Content')}</div>
+                                            <textarea className="w-full bg-black/30 border border-white/10 rounded-md px-2.5 py-2.5 text-[13px] min-h-[88px]" value={shot["Video Content"] || shot.video_content || ''} onChange={e => {
+                                                const newData = [...shotReviewModal.data];
+                                                newData[idx] = { ...shot, "Video Content": e.target.value };
+                                                setShotReviewModal(prev => ({...prev, data: newData}));
+                                            }} placeholder={t('内容', 'Content')} />
+                                            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{t('基础字段', 'Basic Fields')}</div>
+                                            <div className="grid grid-cols-2 gap-2">
+                                                <input className="bg-black/30 border border-white/10 rounded-md px-2.5 py-2.5 text-[13px]" value={shot["Duration (s)"] || shot.duration || ''} onChange={e => {
+                                                    const newData = [...shotReviewModal.data];
+                                                    newData[idx] = { ...shot, "Duration (s)": e.target.value };
+                                                    setShotReviewModal(prev => ({...prev, data: newData}));
+                                                }} placeholder={t('时长', 'Duration')} />
+                                                <input className="bg-black/30 border border-white/10 rounded-md px-2.5 py-2.5 text-[13px]" value={shot["Shot Logic (CN)"] || shot.shot_logic_cn || ''} onChange={e => {
+                                                    const newData = [...shotReviewModal.data];
+                                                    newData[idx] = { ...shot, "Shot Logic (CN)": e.target.value };
+                                                    setShotReviewModal(prev => ({...prev, data: newData}));
+                                                }} placeholder={t('逻辑', 'Logic')} />
+                                            </div>
+                                            <button onClick={() => {
+                                                const newData = shotReviewModal.data.filter((_, i) => i !== idx);
+                                                setShotReviewModal(prev => ({...prev, data: newData}));
+                                            }} className="w-full px-2 py-2.5 rounded-md bg-red-500/10 hover:bg-red-500/20 text-red-200 text-[12px] font-semibold">{t('删除', 'Delete')}</button>
+                                        </div>
+                                    ))}
+                                </div>
+                                <table className="hidden md:table w-full min-w-[900px] text-xs text-left border-collapse">
                                     <thead className="sticky top-0 bg-[#252525] z-10 shadow-md">
                                         <tr>
-                                            {[
-                                                t('镜头 ID', 'Shot ID'),
-                                                t('镜头名称', 'Shot Name'),
-                                                t('内容', 'Content'),
-                                                t('时长', 'Duration'),
-                                                t('关联实体', 'Entities'),
-                                                t('逻辑', 'Logic'),
-                                                t('关键帧', 'Keyframes')
-                                            ].map(h => (
-                                                <th key={h} className="p-2 border-b border-white/10 font-bold text-white/70">{h}</th>
-                                            ))}
+                                            <th className="p-2 border-b border-white/10 font-bold text-white/70">{t('镜头 ID', 'Shot ID')}</th>
+                                            <th className="p-2 border-b border-white/10 font-bold text-white/70">{t('镜头名称', 'Shot Name')}</th>
+                                            <th className="p-2 border-b border-white/10 font-bold text-white/70">{t('内容', 'Content')}</th>
+                                            <th className="p-2 border-b border-white/10 font-bold text-white/70">{t('时长', 'Duration')}</th>
+                                            <th className="hidden md:table-cell p-2 border-b border-white/10 font-bold text-white/70">{t('关联实体', 'Entities')}</th>
+                                            <th className="hidden md:table-cell p-2 border-b border-white/10 font-bold text-white/70">{t('逻辑', 'Logic')}</th>
+                                            <th className="hidden lg:table-cell p-2 border-b border-white/10 font-bold text-white/70">{t('关键帧', 'Keyframes')}</th>
                                             <th className="p-2 border-b border-white/10 w-10"></th>
                                         </tr>
                                     </thead>
@@ -18558,17 +18664,17 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                     newData[idx] = { ...shot, "Duration (s)": e.target.value };
                                                     setShotReviewModal(prev => ({...prev, data: newData}));
                                                 }} /></td>
-                                                <td className="p-1"><input className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded" value={shot["Associated Entities"] || shot.associated_entities || ''} onChange={e => {
+                                                <td className="hidden md:table-cell p-1"><input className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded" value={shot["Associated Entities"] || shot.associated_entities || ''} onChange={e => {
                                                     const newData = [...shotReviewModal.data];
                                                     newData[idx] = { ...shot, "Associated Entities": e.target.value };
                                                     setShotReviewModal(prev => ({...prev, data: newData}));
                                                 }} /></td>
-                                                <td className="p-1"><input className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded" value={shot["Shot Logic (CN)"] || shot.shot_logic_cn || ''} onChange={e => {
+                                                <td className="hidden md:table-cell p-1"><input className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded" value={shot["Shot Logic (CN)"] || shot.shot_logic_cn || ''} onChange={e => {
                                                     const newData = [...shotReviewModal.data];
                                                     newData[idx] = { ...shot, "Shot Logic (CN)": e.target.value };
                                                     setShotReviewModal(prev => ({...prev, data: newData}));
                                                 }} /></td>
-                                                <td className="p-1"><input className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded" value={shot["Keyframes"] || shot.keyframes || ''} onChange={e => {
+                                                <td className="hidden lg:table-cell p-1"><input className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded" value={shot["Keyframes"] || shot.keyframes || ''} onChange={e => {
                                                     const newData = [...shotReviewModal.data];
                                                     newData[idx] = { ...shot, "Keyframes": e.target.value };
                                                     setShotReviewModal(prev => ({...prev, data: newData}));
@@ -18583,16 +18689,16 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                         ))}
                                     </tbody>
                                 </table>
-                                <button onClick={() => {
+                                  <button onClick={() => {
                                      const newData = [...(shotReviewModal.data || []), { "Shot ID": (shotReviewModal.data?.length||0)+1, "Video Content": "" }];
                                      setShotReviewModal(prev => ({...prev, data: newData}));
-                                }} className="mt-4 px-3 py-1 bg-white/5 hover:bg-white/10 rounded flex items-center gap-2 text-xs">
+                                }} className="mt-4 w-full md:w-auto px-3 py-2 bg-white/5 hover:bg-white/10 rounded flex items-center justify-center gap-2 text-xs font-semibold">
                                     <Plus size={14}/> {t('新增一行', 'Add Row')}
                                 </button>
                             </div>
                         </div>
 
-                        <div className="p-4 border-t border-white/10 flex justify-end gap-3 bg-black/20">
+                        <div className="p-4 border-t border-white/10 flex flex-col sm:flex-row justify-end gap-3 bg-black/20">
                              <button
                                 onClick={async () => {
                                     try {
@@ -18602,7 +18708,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                         onLog?.(t('保存草稿失败。', 'Failed to save draft.'), "error");
                                     }
                                 }}
-                                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded text-sm font-medium"
+                                className="w-full sm:w-auto px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded text-sm font-medium"
                             >
                                 {t('保存草稿', 'Save Draft')}
                             </button>
@@ -18621,7 +18727,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                     }
                                 }}
                                 disabled={shotReviewModal.loading}
-                                className="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-sm font-medium flex items-center gap-2"
+                                className="w-full sm:w-auto px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-sm font-medium flex items-center justify-center gap-2"
                             >
                                 {shotReviewModal.loading ? <Loader2 className="animate-spin" size={16}/> : <CheckCircle size={16}/>}
                                 {t('应用到场景', 'Apply to Scene')}
@@ -18632,7 +18738,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             )}
 
             {isSettingsOpen && (
-                 <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-8">
+                 <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 sm:p-8">
                      <div className="bg-[#09090b] w-full max-w-6xl h-[90vh] rounded-2xl border border-white/10 shadow-2xl flex flex-col relative overflow-hidden">
                           <button 
                              onClick={() => setIsSettingsOpen(false)}
@@ -18725,15 +18831,15 @@ const ImportModal = ({ isOpen, onClose, onImport, defaultType = 'auto', project,
     };
 
     return (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm">
-            <div className="bg-[#09090b] border border-white/20 rounded-xl p-6 w-[800px] shadow-2xl flex flex-col max-h-[90vh]">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm">
+            <div className="bg-[#09090b] border border-white/20 rounded-xl p-4 sm:p-6 w-full max-w-3xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden">
                 <div className="flex justify-between items-center mb-4 shrink-0">
                      <h3 className="font-bold text-white flex items-center gap-2"><Upload className="w-5 h-5 text-primary"/> {t('导入与 AI 分析', 'Import & AI Analysis')}</h3>
                      <button onClick={onClose}><X className="w-5 h-5 text-muted-foreground hover:text-white"/></button>
                 </div>
                 
                 {/* Type Selection */}
-                <div className="flex gap-4 mb-4 text-xs font-semibold text-gray-400 shrink-0">
+                <div className="flex flex-wrap gap-3 sm:gap-4 mb-4 text-xs font-semibold text-gray-400 shrink-0">
                     <label className="flex items-center gap-1 cursor-pointer">
                         <input type="radio" name="itype" value="auto" checked={importType === 'auto'} onChange={e => setImportType(e.target.value)} />
                         {t('自动识别（兼容）', 'Auto-Detect (Legacy)')}
@@ -21090,7 +21196,7 @@ const Editor = ({
                                     <option value="all">{t('全部', 'All')}</option>
                                 </select>
                             </label>
-                            <div className="ml-auto text-muted-foreground">
+                            <div className="w-full md:w-auto md:ml-auto text-muted-foreground">
                                 {t('任务数', 'Tasks')}: <b className="text-white">{Number(jobPoolData?.total || 0)}</b>
                                 <span className="ml-3">{t('可停止', 'Stoppable')}: <b className="text-white">{runningJobPoolItems.length}</b></span>
                                 <span className="ml-3">{t('本次目标', 'Target now')}: <b className="text-white">{stopAllTargetItems.length}</b></span>
@@ -21102,15 +21208,47 @@ const Editor = ({
                         </div>
 
                         <div className="flex-1 overflow-auto custom-scrollbar">
-                            <table className="w-full text-xs">
+                            <div className="md:hidden p-3 space-y-3">
+                                {(jobPoolData?.items || []).map((item) => {
+                                    const rowKey = `${item.kind}:${item.job_id}`;
+                                    const stopping = jobPoolStoppingId === rowKey;
+                                    const canStop = isJobPoolItemStoppable(item);
+                                    return (
+                                        <div key={`mobile-${rowKey}`} className="bg-white/5 border border-white/10 rounded-lg p-3 space-y-2.5">
+                                            <div className="flex items-start justify-between gap-2">
+                                                <div className="text-[12px] font-semibold text-white/90 break-all">{item.kind}</div>
+                                                <span className="text-[11px] px-2.5 py-1 rounded bg-white/10 border border-white/10 text-white/80">{item.status || '-'}</span>
+                                            </div>
+                                            <div className="text-[12px] font-mono text-white/80 break-all">{item.job_id || '-'}</div>
+                                            <div className="text-[11px] text-muted-foreground">{item.created_at || '-'}</div>
+                                            {item.error ? (
+                                                <div className="text-[11px] text-amber-300/80 bg-black/30 border border-white/10 rounded px-2.5 py-1.5 break-all">{item.error}</div>
+                                            ) : null}
+                                            <div className="flex justify-end">
+                                                <button
+                                                    onClick={() => handleStopJobFromPool(item)}
+                                                    disabled={stopping || jobPoolStoppingAll || !canStop}
+                                                    className={`px-3 py-2 rounded-md text-[12px] font-semibold ${(stopping || jobPoolStoppingAll || !canStop) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-red-500/20 text-red-200 hover:bg-red-500/30'}`}
+                                                >
+                                                    {stopping ? t('停止中...', 'Stopping...') : t('强制停止', 'Force Stop')}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                                {(!jobPoolData?.items || jobPoolData.items.length === 0) && (
+                                    <div className="px-3 py-8 text-center text-muted-foreground text-xs">{t('暂无任务', 'No tasks')}</div>
+                                )}
+                            </div>
+                            <table className="hidden md:table w-full min-w-[760px] text-xs">
                                 <thead className="sticky top-0 bg-[#111] border-b border-white/10">
                                     <tr className="text-muted-foreground">
                                         <th className="px-3 py-2 text-left">kind</th>
                                         <th className="px-3 py-2 text-left">job_id</th>
                                         <th className="px-3 py-2 text-left">status</th>
-                                        <th className="px-3 py-2 text-left">user</th>
+                                        <th className="hidden md:table-cell px-3 py-2 text-left">user</th>
                                         <th className="px-3 py-2 text-left">created_at</th>
-                                        <th className="px-3 py-2 text-left">error</th>
+                                        <th className="hidden lg:table-cell px-3 py-2 text-left">error</th>
                                         <th className="px-3 py-2 text-right">action</th>
                                     </tr>
                                 </thead>
@@ -21124,9 +21262,9 @@ const Editor = ({
                                                 <td className="px-3 py-2 text-white/80">{item.kind}</td>
                                                 <td className="px-3 py-2 font-mono text-[11px] text-white/80">{item.job_id}</td>
                                                 <td className="px-3 py-2 text-white">{item.status}</td>
-                                                <td className="px-3 py-2 text-white/70">{item.username || item.user_id || '-'}</td>
+                                                <td className="hidden md:table-cell px-3 py-2 text-white/70">{item.username || item.user_id || '-'}</td>
                                                 <td className="px-3 py-2 text-white/60">{item.created_at || '-'}</td>
-                                                <td className="px-3 py-2 text-amber-300/80 max-w-[220px] truncate" title={item.error || ''}>{item.error || '-'}</td>
+                                                <td className="hidden lg:table-cell px-3 py-2 text-amber-300/80 max-w-[220px] truncate" title={item.error || ''}>{item.error || '-'}</td>
                                                 <td className="px-3 py-2 text-right">
                                                     <button
                                                         onClick={() => handleStopJobFromPool(item)}

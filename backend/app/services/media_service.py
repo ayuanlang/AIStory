@@ -3230,10 +3230,18 @@ class MediaGenerationService:
             payload_input["aspect_ratio"] = normalized_ar
 
         if gen_type == "image":
-            # KIE Market API expects image_size as aspect ratio enum
-            # (e.g. "16:9", "1:1", "9:16", "auto"), NOT resolution like "1K"/"2K"/"4K".
-            kie_image_size = normalized_ar or "auto"
-            payload_input["image_size"] = kie_image_size
+            # z-image family requires aspect_ratio in input (per KIE API examples).
+            # Keep a safe default to avoid "This field is required" errors when ratio
+            # is not provided by upstream context.
+            is_z_image_model = str(model_lower or "").startswith("z-image")
+            if is_z_image_model:
+                payload_input["aspect_ratio"] = str(payload_input.get("aspect_ratio") or "1:1").strip() or "1:1"
+                payload_input.pop("image_size", None)
+            else:
+                # Other KIE market image models may still expect image_size-style input.
+                # Map to ratio enum when available; fallback to auto.
+                kie_image_size = normalized_ar or "auto"
+                payload_input["image_size"] = kie_image_size
         else:
             duration_value = 5
             try:
@@ -3293,6 +3301,16 @@ class MediaGenerationService:
             or tool_conf.get("callbackUrl")
             or ""
         ).strip()
+
+        # KIE z-image createTask may enforce callback field in some regions/accounts.
+        # Provide a safe default URL when caller did not configure one so submission
+        # does not fail with generic "This field is required".
+        if gen_type == "image" and str(model_lower or "").startswith("z-image") and not callback_url:
+            callback_url = str(
+                os.getenv("KIE_CALLBACK_URL")
+                or os.getenv("AISTORY_KIE_CALLBACK_URL")
+                or "https://example.com/api/generate/callback/kie-z-image"
+            ).strip()
         if use_veo_api:
             raw_model = str(model or "").strip()
             # According to KIE API, REFERENCE_2_VIDEO only works with "veo3_fast"
