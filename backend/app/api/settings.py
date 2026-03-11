@@ -144,11 +144,6 @@ from app.schemas.settings import (
     ExchangeRateResponse,
     FetchPricingPageRequest,
     FetchPricingPageResponse,
-    SupplierApiFeatureAnalyzeRequest,
-    SupplierApiFeatureAnalyzeResponse,
-    SupplierApiFeatureApplyRequest,
-    SupplierApiFeatureApplyResponse,
-    SupplierApiFeatureModel,
     KIEPricingGenerateRequest,
     KIEPricingApplyRequest,
     KIEPricingFetchRequest,
@@ -193,6 +188,72 @@ except Exception:
         system_api_name: Optional[str] = None
         created_at: Optional[str] = None
         updated_at: Optional[str] = None
+
+try:
+    from app.schemas.settings import (
+        SupplierApiFeatureAnalyzeRequest,
+        SupplierApiFeatureAnalyzeResponse,
+        SupplierApiFeatureApplyRequest,
+        SupplierApiFeatureApplyResponse,
+        SupplierApiFeatureModel,
+    )
+except Exception:
+    from pydantic import BaseModel
+
+    class SupplierApiFeatureAnalyzeRequest(BaseModel):
+        provider: str
+        source_urls: Optional[list[str]] = None
+        selected_system_api_ids: Optional[list[int]] = None
+        include_provider_intro_url: Optional[bool] = True
+        search_keywords: Optional[list[str]] = None
+        user_supplement: Optional[str] = None
+        max_length: Optional[int] = 40000
+        max_pages: Optional[int] = 6
+        save_to_db: Optional[bool] = True
+        create_missing_models: Optional[bool] = True
+
+    class SupplierApiFeatureModel(BaseModel):
+        provider: str
+        category: str
+        model: str
+        base_model: Optional[str] = None
+        generation_modes: Optional[list[str]] = None
+        image_capabilities: Optional[Dict[str, Any]] = None
+        video_capabilities: Optional[Dict[str, Any]] = None
+        digital_human_capabilities: Optional[Dict[str, Any]] = None
+        text_capabilities: Optional[Dict[str, Any]] = None
+        voice_capabilities: Optional[Dict[str, Any]] = None
+        music_capabilities: Optional[Dict[str, Any]] = None
+        notes: Optional[str] = None
+        confidence: Optional[float] = 0.0
+
+    class SupplierApiFeatureAnalyzeResponse(BaseModel):
+        provider: str
+        analyzed_url_count: Optional[int] = 0
+        selected_system_api_count: Optional[int] = 0
+        selected_system_api_ids: Optional[list[int]] = None
+        source_urls_used: Optional[list[str]] = None
+        models: Optional[list[SupplierApiFeatureModel]] = None
+        saved_created: Optional[int] = 0
+        saved_updated: Optional[int] = 0
+        warnings: Optional[list[str]] = None
+        provider_summary: Optional[str] = None
+        llm_input: Optional[str] = None
+        llm_output: Optional[str] = None
+        llm_raw: Optional[str] = None
+
+    class SupplierApiFeatureApplyRequest(BaseModel):
+        provider: str
+        models: Optional[list[SupplierApiFeatureModel]] = None
+        create_missing_models: Optional[bool] = True
+
+    class SupplierApiFeatureApplyResponse(BaseModel):
+        provider: str
+        requested_count: Optional[int] = 0
+        saved_created: Optional[int] = 0
+        saved_updated: Optional[int] = 0
+        skipped_count: Optional[int] = 0
+        warnings: Optional[list[str]] = None
 from app.api.deps import get_current_user
 from app.services.billing_service import BillingService
 from typing import List, Dict, Tuple, Any, Optional
