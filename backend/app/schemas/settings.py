@@ -67,6 +67,9 @@ class SystemAPIModelOption(BaseModel):
     api_key_masked: Optional[str] = None
     avg_price_estimate: Optional[int] = None
     avg_price_source: Optional[str] = None
+    price_range_min: Optional[int] = None
+    price_range_max: Optional[int] = None
+    sample_prices: Optional[List[int]] = None
 
 
 class SystemAPIProviderSettings(BaseModel):

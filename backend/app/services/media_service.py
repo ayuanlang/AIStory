@@ -3585,6 +3585,53 @@ class MediaGenerationService:
         if not use_veo_api and gen_type == "video":
             model_lower = str(model or "").strip().lower()
 
+            if model_lower in {"hailuo/2-3-image-to-video-standard", "hailuo/2-3-image-to-video-pro"}:
+                # KIE Hailuo 2.3 i2v contract:
+                # - duration: "6" or "10"
+                # - resolution: "768P" or "1080P"
+                # - 1080P does not support 10s
+                req_duration_text = str(
+                    payload_input.get("duration")
+                    or tool_conf.get("duration")
+                    or duration
+                    or ""
+                ).strip()
+                try:
+                    req_duration_val = float(req_duration_text) if req_duration_text else 6.0
+                except Exception:
+                    req_duration_val = 6.0
+
+                raw_resolution = str(
+                    payload_input.get("resolution")
+                    or tool_conf.get("resolution")
+                    or "768P"
+                ).strip().upper()
+
+                req_res_val = 768.0
+                if raw_resolution in {"768P", "1080P"}:
+                    req_res_val = float(int(raw_resolution.replace("P", "")))
+                else:
+                    try:
+                        digits = ''.join(ch for ch in raw_resolution if ch.isdigit())
+                        req_res_val = float(int(digits)) if digits else 768.0
+                    except Exception:
+                        req_res_val = 768.0
+
+                # Choose the closest valid pair to the requested duration/resolution.
+                valid_pairs = [(6, 768), (10, 768), (6, 1080)]
+                best_duration, best_resolution = min(
+                    valid_pairs,
+                    key=lambda pair: (
+                        abs(float(pair[0]) - float(req_duration_val))
+                        + abs(float(pair[1]) - float(req_res_val)) / 100.0,
+                        abs(float(pair[0]) - float(req_duration_val)),
+                        abs(float(pair[1]) - float(req_res_val)),
+                    ),
+                )
+
+                payload_input["duration"] = str(int(best_duration))
+                payload_input["resolution"] = f"{int(best_resolution)}P"
+
             if model_lower == "bytedance/v1-pro-text-to-video":
                 payload_input.setdefault("aspect_ratio", normalized_ar or "16:9")
                 payload_input.setdefault("resolution", str(tool_conf.get("resolution") or "720p"))

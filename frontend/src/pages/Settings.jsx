@@ -101,16 +101,57 @@ const THEMES = {
 const Settings = () => {
     const [uiLang, setUiLang] = useState(getUiLang());
     const t = (zh, en) => tUI(uiLang, zh, en);
-    const formatAvgPriceSource = (source) => {
-        const key = String(source || '').trim().toLowerCase();
-        if (!key) return t('未知来源', 'Unknown');
-        if (key === 'system_api_rule_price_average') return t('规则均价', 'Rule Avg');
-        if (key === 'system_api_billing_rule') return t('命中计费规则', 'Matched Rule');
-        if (key === 'system_api_base_rule') return t('基础规则', 'Base Rule');
-        if (key === 'default_api_pricing') return t('默认定价兜底', 'Default Fallback');
-        if (key === 'mixed') return t('混合来源', 'Mixed');
-        if (key === 'no_profiles') return t('无样本', 'No Profiles');
-        return key;
+    const formatSamplePrices = (samplePrices) => {
+        const safe = (Array.isArray(samplePrices) ? samplePrices : [])
+            .map((v) => Number(v || 0))
+            .filter((v) => Number.isFinite(v) && v > 0);
+        if (safe.length === 0) {
+            return '-';
+        }
+        return safe.join(' / ');
+    };
+    const normalizePositiveNumber = (value) => {
+        const num = Number(value || 0);
+        return Number.isFinite(num) && num > 0 ? num : 0;
+    };
+    const pickFirst = (obj, keys = []) => {
+        for (const key of keys) {
+            if (obj && Object.prototype.hasOwnProperty.call(obj, key) && obj[key] !== undefined && obj[key] !== null) {
+                return obj[key];
+            }
+        }
+        return undefined;
+    };
+    const buildPriceDisplay = (row) => {
+        const avg = normalizePositiveNumber(
+            pickFirst(row, ['avg_price_estimate', 'avgPriceEstimate'])
+        );
+        const rawSamples = pickFirst(row, ['sample_prices', 'samplePrices']);
+        const samples = (Array.isArray(rawSamples) ? rawSamples : [])
+            .map((v) => normalizePositiveNumber(v))
+            .filter((v) => v > 0);
+        const rangeMin = normalizePositiveNumber(
+            pickFirst(row, ['price_range_min', 'priceRangeMin'])
+        );
+        const rangeMax = normalizePositiveNumber(
+            pickFirst(row, ['price_range_max', 'priceRangeMax'])
+        );
+        const hasRange = rangeMin > 0 || rangeMax > 0;
+        const rangeLabelMin = rangeMin > 0 ? rangeMin : '-';
+        const rangeLabelMax = rangeMax > 0 ? rangeMax : '-';
+        const avgLabel = avg > 0 ? avg : '-';
+
+        return {
+            avg,
+            avgLabel,
+            rangeMin,
+            rangeMax,
+            hasRange,
+            rangeLabelMin,
+            rangeLabelMax,
+            samples,
+            hasAny: avg > 0 || hasRange || samples.length > 0,
+        };
     };
     const aliasifyProviderInDetails = (payload, fallbackAlias = '') => {
         const fallback = String(fallbackAlias || '').trim();
@@ -479,6 +520,21 @@ const Settings = () => {
         setIsSystemSettingsLoading(true);
         try {
             const [userRes, systemRes] = await Promise.all([fetchMe(), getSystemSettings()]);
+            if (import.meta.env.DEV) {
+                const firstGroup = Array.isArray(systemRes) && systemRes.length > 0 ? systemRes[0] : null;
+                const firstModel = firstGroup && Array.isArray(firstGroup.models) && firstGroup.models.length > 0 ? firstGroup.models[0] : null;
+                // Dev-only visibility: confirm which backend is used and what pricing fields arrive.
+                console.debug('[Settings][SystemPricing] API_URL=', API_URL, 'group=', firstGroup, 'firstModelPricing=', firstModel ? {
+                    id: firstModel.id,
+                    provider: firstModel.provider,
+                    model: firstModel.model,
+                    avg_price_estimate: firstModel.avg_price_estimate,
+                    price_range_min: firstModel.price_range_min,
+                    price_range_max: firstModel.price_range_max,
+                    sample_prices: firstModel.sample_prices,
+                    avg_price_source: firstModel.avg_price_source,
+                } : null);
+            }
             if (userRes && userRes.credits !== undefined) {
                 setUserCredits(userRes.credits);
             }
@@ -1848,6 +1904,9 @@ const Settings = () => {
 
                                                         <div className="space-y-2">
                                                             {(group.models || []).map((row) => (
+                                                                (() => {
+                                                                    const pricing = buildPriceDisplay(row);
+                                                                    return (
                                                                 <div
                                                                     key={row.id}
                                                                     className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center p-2 rounded border border-white/10 bg-black/20"
@@ -1856,16 +1915,15 @@ const Settings = () => {
                                                                         <div className="text-muted-foreground">{t('模型', 'Model')}</div>
                                                                         <div className="font-mono break-all flex flex-wrap items-center gap-2">
                                                                             <span>{row.model || '-'}</span>
-                                                                            {Number.isFinite(Number(row.avg_price_estimate)) && (
-                                                                                <>
-                                                                                    <span className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-400/30 bg-emerald-500/10 text-emerald-200">
-                                                                                        {t('均价估算', 'Avg')}: {Number(row.avg_price_estimate || 0)}
-                                                                                    </span>
-                                                                                    <span className="text-[10px] px-1.5 py-0.5 rounded border border-slate-400/30 bg-slate-500/10 text-slate-200">
-                                                                                        {t('来源', 'Source')}: {formatAvgPriceSource(row.avg_price_source)}
-                                                                                    </span>
-                                                                                </>
-                                                                            )}
+                                                                            <span className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-400/30 bg-emerald-500/10 text-emerald-200">
+                                                                                {t('平均价格', 'Avg Price')}: {pricing.avgLabel}
+                                                                            </span>
+                                                                            <span className="text-[10px] px-1.5 py-0.5 rounded border border-sky-400/30 bg-sky-500/10 text-sky-200">
+                                                                                {t('价格区间', 'Price Range')}: {pricing.rangeLabelMin} ~ {pricing.rangeLabelMax}
+                                                                            </span>
+                                                                            <span className="text-[10px] px-1.5 py-0.5 rounded border border-slate-400/30 bg-slate-500/10 text-slate-200">
+                                                                                {t('样本价格', 'Sample Prices')}: {formatSamplePrices(pricing.samples)}
+                                                                            </span>
                                                                         </div>
                                                                     </div>
                                                                     <div className="md:col-span-2 flex md:justify-end">
@@ -1883,6 +1941,8 @@ const Settings = () => {
                                                                         </div>
                                                                     </div>
                                                                 </div>
+                                                                    );
+                                                                })()
                                                             ))}
                                                         </div>
                                                     </div>

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import cast, String, func, inspect
+from sqlalchemy import cast, String, func, inspect, or_, and_
 import logging
 import json
 import asyncio
@@ -21,6 +21,7 @@ from app.core.prompts.supplier_feature_analysis_prompt import get_supplier_featu
 from app.models.all_models import (
     APISetting,
     User,
+    TransactionHistory,
     SystemAPISetting,
     TaskDefaultSystemAPI,
     ProviderKeyPool,
@@ -2149,6 +2150,93 @@ def _rule_cost_score(rule: SystemAPIBillingRule) -> int:
     return int(max(cost, cost_input, cost_output))
 
 
+def _system_api_pricing_from_rules_and_audit(
+    db: Session,
+    system_api_id: int,
+) -> Dict[str, Any]:
+    """Settings pricing summary from rules + audit only.
+
+    - price range: system_api_billing_rules by system_api_id
+    - sample/average: transaction_action audit by system_api_id
+    """
+    sid = _safe_int(system_api_id, 0)
+    if sid <= 0:
+        return {
+            "average_cost": 0,
+            "source": "rules_and_audit_only",
+            "min_cost": 0,
+            "max_cost": 0,
+            "sample_prices": [],
+        }
+
+    rule_rows = db.query(SystemAPIBillingRule).filter(
+        SystemAPIBillingRule.system_api_id == sid,
+    ).all()
+    rule_costs: List[int] = []
+    for row in rule_rows:
+        c = _rule_cost_score(row)
+        if c > 0:
+            rule_costs.append(int(c))
+
+    range_min = int(min(rule_costs)) if rule_costs else 0
+    range_max = int(max(rule_costs)) if rule_costs else 0
+
+    rule_ids = [int(getattr(row, "id", 0) or 0) for row in rule_rows if int(getattr(row, "id", 0) or 0) > 0]
+
+    if rule_ids:
+        audit_rows = db.query(TransactionAction).filter(
+            or_(
+                TransactionAction.system_api_id == sid,
+                and_(
+                    TransactionAction.system_api_id.is_(None),
+                    TransactionAction.matched_rule_id.in_(rule_ids),
+                ),
+            )
+        ).order_by(TransactionAction.id.desc()).limit(500).all()
+    else:
+        audit_rows = db.query(TransactionAction).filter(
+            TransactionAction.system_api_id == sid,
+        ).order_by(TransactionAction.id.desc()).limit(500).all()
+
+    audit_costs: List[int] = []
+    for row in audit_rows or []:
+        # Prefer actual_cost; fallback to reserved_cost for older audit rows.
+        c = _safe_int(getattr(row, "actual_cost", 0), 0)
+        if c <= 0:
+            c = _safe_int(getattr(row, "reserved_cost", 0), 0)
+        if c > 0:
+            audit_costs.append(int(c))
+
+    # Fallback audit source: transaction_history entries linked by system_api_id in details.
+    if not audit_costs:
+        tx_rows = db.query(TransactionHistory).order_by(TransactionHistory.id.desc()).limit(2000).all()
+        for tx in tx_rows or []:
+            amount = _safe_int(getattr(tx, "amount", 0), 0)
+            if amount >= 0:
+                # Keep charge rows only; skip refill/refund/zero.
+                continue
+            details = _safe_json_dict(getattr(tx, "details", {}))
+            bb = details.get("billing_breakdown") if isinstance(details.get("billing_breakdown"), dict) else {}
+            tx_sid = _safe_int(
+                bb.get("system_api_id") if bb.get("system_api_id") is not None else details.get("system_api_id"),
+                0,
+            )
+            if tx_sid != sid:
+                continue
+            audit_costs.append(abs(int(amount)))
+
+    avg_cost = int(round(sum(audit_costs) / float(len(audit_costs)))) if audit_costs else 0
+    sample_prices = sorted(set(audit_costs))[:5] if audit_costs else []
+
+    return {
+        "average_cost": max(0, int(avg_cost)),
+        "source": "rules_and_audit_only",
+        "min_cost": max(0, int(range_min)),
+        "max_cost": max(0, int(range_max)),
+        "sample_prices": sample_prices,
+    }
+
+
 def _compute_cost_scaled_multiplier(cost_score: int, min_cost: int, max_cost: int, min_multiplier: float, max_multiplier: float) -> float:
     if max_cost <= min_cost:
         return float(round((float(min_multiplier) + float(max_multiplier)) / 2.0, 4))
@@ -2902,13 +2990,16 @@ def get_system_settings(
                 api_key_masked=_mask_api_key(runtime_key) if has_key else "",
             )
 
-            avg_pricing = BillingService.estimate_system_api_average_price(
-                db,
-                int(item.id),
-                generation_mode=_primary_generation_mode_from_wide(getattr(item, "generation_modes", None)),
-            )
+            avg_pricing = _system_api_pricing_from_rules_and_audit(db, int(item.id))
             option.avg_price_estimate = int(avg_pricing.get("average_cost") or 0)
             option.avg_price_source = str(avg_pricing.get("source") or "") or None
+            option.price_range_min = int(avg_pricing.get("min_cost") or 0)
+            option.price_range_max = int(avg_pricing.get("max_cost") or 0)
+            option.sample_prices = [
+                int(v)
+                for v in (avg_pricing.get("sample_prices") or [])
+                if int(v or 0) > 0
+            ]
 
             if option.deprecated:
                 continue

@@ -95,17 +95,60 @@ class BillingService:
         except Exception:
             api_id = 0
         if api_id <= 0:
-            return {"average_cost": 0, "source": "invalid_system_api_id", "samples": 0}
+            return {
+                "average_cost": 0,
+                "source": "invalid_system_api_id",
+                "samples": 0,
+                "min_cost": 0,
+                "max_cost": 0,
+                "sample_prices": [],
+            }
 
         system_row = db.query(SystemAPISetting).filter(SystemAPISetting.id == api_id).first()
         if not system_row:
-            return {"average_cost": 0, "source": "system_api_not_found", "samples": 0}
+            return {
+                "average_cost": 0,
+                "source": "system_api_not_found",
+                "samples": 0,
+                "min_cost": 0,
+                "max_cost": 0,
+                "sample_prices": [],
+            }
 
         category = str(getattr(system_row, "category", "") or "").strip()
+        rule_range = BillingService._estimate_price_range_from_billing_rules(
+            db,
+            api_id,
+            category,
+        )
+
+        # Preferred source: real billing audit records from transaction_action.
+        audit_avg = BillingService._estimate_average_price_from_audit_records(db, api_id)
+        if audit_avg is not None:
+            if rule_range is not None:
+                audit_avg["min_cost"] = int(rule_range.get("min_cost") or 0)
+                audit_avg["max_cost"] = int(rule_range.get("max_cost") or 0)
+            return audit_avg
+
+        # Fallback source: paid transaction history rows when action audit rows are missing.
+        history_avg = BillingService._estimate_average_price_from_transaction_history(
+            db,
+            api_id,
+            provider=str(getattr(system_row, "provider", "") or "").strip(),
+            model=str(getattr(system_row, "model", "") or "").strip(),
+        )
+        if history_avg is not None:
+            if rule_range is not None:
+                history_avg["min_cost"] = int(rule_range.get("min_cost") or 0)
+                history_avg["max_cost"] = int(rule_range.get("max_cost") or 0)
+            return history_avg
 
         # Media categories: prefer averaging this API's own active rule prices.
         media_avg = BillingService._estimate_media_average_price_from_rules(db, api_id, category)
         if media_avg is not None:
+            if rule_range is not None:
+                media_avg["min_cost"] = int(rule_range.get("min_cost") or 0)
+                media_avg["max_cost"] = int(rule_range.get("max_cost") or 0)
             return media_avg
 
         task_type = BillingService._task_type_for_category(category)
@@ -125,15 +168,105 @@ class BillingService:
             costs.append(int(breakdown.get("api_cost") or 0))
             sources.append(str(breakdown.get("api_pricing_source") or "").strip() or "unknown")
 
-        if not costs:
-            return {"average_cost": 0, "source": "no_profiles", "samples": 0}
+        # Exclude zero-cost values to avoid misleading ranges/samples in UI.
+        non_zero_costs = [int(c) for c in costs if int(c) > 0]
+        if not non_zero_costs:
+            # Fallback 1: if billing-rule range exists, derive a display average from range midpoint.
+            if rule_range is not None:
+                range_min = int(rule_range.get("min_cost") or 0)
+                range_max = int(rule_range.get("max_cost") or 0)
+                if range_min > 0 or range_max > 0:
+                    if range_min <= 0:
+                        range_min = range_max
+                    if range_max <= 0:
+                        range_max = range_min
+                    avg_from_range = int(round((float(range_min) + float(range_max)) / 2.0))
+                    return {
+                        "average_cost": max(0, avg_from_range),
+                        "source": "billing_rule_range_midpoint",
+                        "samples": 1,
+                        "min_cost": int(range_min),
+                        "max_cost": int(range_max),
+                        "sample_prices": [],
+                    }
 
-        avg_cost = int(round(sum(costs) / float(len(costs))))
+            # Fallback 2: use default pricing map representative cost for this task category.
+            default_cfg = BillingService._default_api_pricing_config(db, task_type)
+            default_cost = max(
+                0,
+                BillingService._to_int(default_cfg.get("cost"), 0),
+                BillingService._to_int(default_cfg.get("cost_input"), 0),
+                BillingService._to_int(default_cfg.get("cost_output"), 0),
+            )
+            if default_cost > 0:
+                return {
+                    "average_cost": int(default_cost),
+                    "source": "default_api_pricing_fallback",
+                    "samples": 1,
+                    "min_cost": int(default_cost),
+                    "max_cost": int(default_cost),
+                    "sample_prices": [],
+                }
+
+            return {
+                "average_cost": 0,
+                "source": "no_profiles",
+                "samples": 0,
+                "min_cost": 0,
+                "max_cost": 0,
+                "sample_prices": [],
+            }
+
+        avg_cost = int(round(sum(non_zero_costs) / float(len(non_zero_costs))))
         source = sources[0] if sources and all(s == sources[0] for s in sources) else "mixed"
+        sample_prices = sorted(set(non_zero_costs))[:5]
         return {
             "average_cost": max(0, avg_cost),
             "source": source,
-            "samples": len(costs),
+            "samples": len(non_zero_costs),
+            "min_cost": int((rule_range or {}).get("min_cost") or min(non_zero_costs)),
+            "max_cost": int((rule_range or {}).get("max_cost") or max(non_zero_costs)),
+            "sample_prices": [],
+        }
+
+    @staticmethod
+    def _estimate_price_range_from_billing_rules(
+        db: Session,
+        system_api_id: int,
+        category: str,
+    ) -> Optional[Dict[str, int]]:
+        rows = db.query(SystemAPIBillingRule).filter(
+            SystemAPIBillingRule.system_api_id == int(system_api_id),
+            SystemAPIBillingRule.is_active == True,
+        ).order_by(SystemAPIBillingRule.priority.desc(), SystemAPIBillingRule.id.desc()).all()
+
+        if not rows:
+            return None
+
+        def _rule_effective_cost(rule: SystemAPIBillingRule) -> int:
+            # Rule range should reflect effective billable value of each rule.
+            return max(
+                0,
+                BillingService._to_int(getattr(rule, "billing_cost", 0), 0),
+                BillingService._to_int(getattr(rule, "billing_cost_input", 0), 0),
+                BillingService._to_int(getattr(rule, "billing_cost_output", 0), 0),
+            )
+
+        # Price range for settings page is sourced directly from billing rules table
+        # by system_api_id, without any key/category/runtime gating.
+        costs: List[int] = []
+        for row in rows:
+            cost = _rule_effective_cost(row)
+            if cost <= 0:
+                continue
+            costs.append(int(cost))
+
+        if not costs:
+            return None
+
+        return {
+            "min_cost": int(min(costs)),
+            "max_cost": int(max(costs)),
         }
 
     @staticmethod
@@ -154,14 +287,130 @@ class BillingService:
         if not rows:
             return None
 
-        costs: List[int] = []
+        strict_costs: List[int] = []
+        all_costs: List[int] = []
         for row in rows:
-            if cat == "image" and not bool(getattr(row, "applies_to_image", False)):
+            cost = max(
+                0,
+                BillingService._to_int(getattr(row, "billing_cost", 0), 0),
+                BillingService._to_int(getattr(row, "billing_cost_input", 0), 0),
+                BillingService._to_int(getattr(row, "billing_cost_output", 0), 0),
+            )
+            if cost <= 0:
                 continue
-            if cat == "video" and not bool(getattr(row, "applies_to_video", False)):
+            all_costs.append(int(cost))
+
+            if cat == "image" and bool(getattr(row, "applies_to_image", False)):
+                strict_costs.append(int(cost))
+            elif cat == "video" and bool(getattr(row, "applies_to_video", False)):
+                strict_costs.append(int(cost))
+
+        # Keep category-aware preference, but support legacy rows without applies flags.
+        costs = strict_costs or all_costs
+
+        if not costs:
+            return None
+
+        avg_cost = int(round(sum(costs) / float(len(costs))))
+        sample_prices = sorted(set(costs))[:5]
+        return {
+            "average_cost": max(0, avg_cost),
+            "source": "system_api_rule_price_average",
+            "samples": len(costs),
+            "min_cost": min(costs),
+            "max_cost": max(costs),
+            "sample_prices": [],
+        }
+
+    @staticmethod
+    def _estimate_average_price_from_audit_records(
+        db: Session,
+        system_api_id: int,
+    ) -> Optional[Dict[str, Any]]:
+        """Estimate prices from real transaction audit rows for one system API.
+
+        Uses settled/direct-deduct stages and actual_cost to reflect real billed costs.
+        """
+        try:
+            rows = db.query(TransactionAction).filter(
+                TransactionAction.system_api_id == int(system_api_id),
+                TransactionAction.stage.in_(["SETTLED", "DEDUCTED"]),
+            ).order_by(TransactionAction.id.desc()).limit(200).all()
+        except Exception:
+            return None
+
+        costs: List[int] = []
+        for row in rows or []:
+            cost = max(0, BillingService._to_int(getattr(row, "actual_cost", 0), 0))
+            if cost <= 0:
+                continue
+            costs.append(int(cost))
+
+        if not costs:
+            return None
+
+        avg_cost = int(round(sum(costs) / float(len(costs))))
+        sample_prices = sorted(set(costs))[:5]
+        return {
+            "average_cost": max(0, avg_cost),
+            "source": "transaction_action_audit",
+            "samples": len(costs),
+            "min_cost": min(costs),
+            "max_cost": max(costs),
+            "sample_prices": sample_prices,
+        }
+
+    @staticmethod
+    def _estimate_average_price_from_transaction_history(
+        db: Session,
+        system_api_id: int,
+        provider: str,
+        model: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Fallback average from paid transaction history rows.
+
+        Uses negative (cost) records and prefers rows explicitly linked to this
+        system_api_id in billing details. This helps when transaction_action rows
+        are missing in older data.
+        """
+        provider_text = str(provider or "").strip()
+        model_text = str(model or "").strip()
+
+        try:
+            query = db.query(TransactionHistory).filter(TransactionHistory.amount < 0)
+            if provider_text:
+                query = query.filter(TransactionHistory.provider == provider_text)
+            if model_text:
+                query = query.filter(TransactionHistory.model == model_text)
+            rows = query.order_by(TransactionHistory.id.desc()).limit(400).all()
+        except Exception:
+            return None
+
+        costs: List[int] = []
+        for row in rows or []:
+            details = BillingService._safe_json_dict(getattr(row, "details", {}))
+            billing_breakdown = details.get("billing_breakdown") if isinstance(details.get("billing_breakdown"), dict) else {}
+            phase = str(billing_breakdown.get("phase") or details.get("phase") or "").strip().lower()
+            status = str(details.get("status") or "").strip().upper()
+            reason = str(details.get("reason") or "").strip().upper()
+
+            # Skip reserve hold rows; keep direct deduction and settlement charges.
+            if phase == "reserve" or status == "RESERVED":
+                continue
+            if reason == "RESERVATION_SETTLEMENT" and status not in {"CHARGE"}:
                 continue
 
-            cost = max(0, BillingService._to_int(getattr(row, "billing_cost", 0), 0))
+            row_system_api_id = (
+                BillingService._to_int(billing_breakdown.get("system_api_id"), 0)
+                or BillingService._to_int(details.get("system_api_id"), 0)
+            )
+            if row_system_api_id > 0 and row_system_api_id != int(system_api_id):
+                continue
+
+            total_cost = BillingService._to_int(billing_breakdown.get("total_cost"), 0)
+            actual_cost = BillingService._to_int(details.get("actual_cost"), 0)
+            amount_cost = abs(BillingService._to_int(getattr(row, "amount", 0), 0))
+            cost = max(0, total_cost, actual_cost, amount_cost)
             if cost <= 0:
                 continue
             costs.append(int(cost))
@@ -172,8 +421,11 @@ class BillingService:
         avg_cost = int(round(sum(costs) / float(len(costs))))
         return {
             "average_cost": max(0, avg_cost),
-            "source": "system_api_rule_price_average",
+            "source": "transaction_history_paid_average",
             "samples": len(costs),
+            "min_cost": min(costs),
+            "max_cost": max(costs),
+            "sample_prices": [],
         }
 
     @staticmethod
