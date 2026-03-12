@@ -1296,6 +1296,134 @@ def init_system_api_settings(db):
     else:
         logger.info("System kie models already initialized")
 
+    # Seed baseline Vidu models for system-level configuration.
+    vidu_provider = "vidu"
+    vidu_base_url = "https://api.vidu.studio/open/v1/creation/video"
+
+    def _vidu_item(name: str, model: str, modality: str = None) -> dict:
+        from app.services.modality_utils import migrate_legacy_modality_string
+        item = {
+            "name": name,
+            "category": "Video",
+            "model": model,
+            "config": {
+                "provider_api_key_strategy": "random",
+            },
+        }
+        if modality is not None:
+            item["modality"] = migrate_legacy_modality_string(modality)
+        return item
+
+    vidu_models = [
+        _vidu_item("Vidu 2.0", "vidu2.0", "text-to-video,image-to-video"),
+        _vidu_item("Vidu Q2 Pro", "viduq2-pro", "text-to-video,image-to-video"),
+    ]
+
+    existing_vidu_rows = db.query(SystemAPISetting).filter(
+        SystemAPISetting.provider == vidu_provider
+    ).all()
+
+    vidu_shared_api_key = ""
+    for row in existing_vidu_rows:
+        if (row.api_key or "").strip():
+            vidu_shared_api_key = row.api_key.strip()
+            break
+
+    existing_vidu_keys = {
+        ((row.category or "").strip().lower(), (row.model or "").strip().lower())
+        for row in existing_vidu_rows
+    }
+
+    vidu_added = 0
+    for item in vidu_models:
+        key = (item["category"].strip().lower(), item["model"].strip().lower())
+        if key in existing_vidu_keys:
+            continue
+
+        db.add(SystemAPISetting(
+            name=item["name"],
+            category=item["category"],
+            provider=vidu_provider,
+            api_key=vidu_shared_api_key,
+            base_url=vidu_base_url,
+            model=item["model"],
+            modality=item.get("modality"),
+            config=item.get("config") or {},
+            is_active=False,
+        ))
+        existing_vidu_keys.add(key)
+        vidu_added += 1
+
+    if vidu_added > 0:
+        db.commit()
+        logger.info("Seeded %s vidu models into system_api_settings", vidu_added)
+    else:
+        logger.info("System vidu models already initialized")
+
+    # Seed default Vidu granular billing rules for audio-on/off matching.
+    try:
+        vidu_rows = db.query(SystemAPISetting).filter(
+            SystemAPISetting.provider == vidu_provider,
+            SystemAPISetting.category == "Video",
+        ).all()
+
+        rules_added = 0
+        for row in vidu_rows:
+            existing_rule_names = {
+                str(rule.name or "").strip().lower()
+                for rule in db.query(SystemAPIBillingRule).filter(
+                    SystemAPIBillingRule.system_api_id == int(row.id)
+                ).all()
+            }
+
+            rule_specs = [
+                {
+                    "name": "Vidu Sound On",
+                    "description": "Vidu pricing rule when generated video has audio.",
+                    "has_audio": True,
+                    "priority": 20,
+                },
+                {
+                    "name": "Vidu Sound Off",
+                    "description": "Vidu pricing rule when generated video has no audio.",
+                    "has_audio": False,
+                    "priority": 19,
+                },
+            ]
+
+            now_iso = now_bj_iso()
+            for spec in rule_specs:
+                normalized_name = str(spec["name"]).strip().lower()
+                if normalized_name in existing_rule_names:
+                    continue
+
+                db.add(SystemAPIBillingRule(
+                    system_api_id=int(row.id),
+                    name=str(spec["name"]),
+                    description=str(spec["description"]),
+                    is_active=True,
+                    priority=int(spec["priority"]),
+                    applies_to_text=False,
+                    applies_to_image=False,
+                    applies_to_video=True,
+                    has_audio=bool(spec["has_audio"]),
+                    billing_unit_type="per_second",
+                    billing_cost=30,
+                    billing_cost_input=0,
+                    billing_cost_output=0,
+                    charge_multiplier=2.0,
+                    extra_conditions={"provider": "vidu"},
+                    created_at=now_iso,
+                    updated_at=now_iso,
+                ))
+                rules_added += 1
+
+        if rules_added > 0:
+            db.commit()
+            logger.info("Seeded %s default vidu billing rules", rules_added)
+    except Exception as e:
+        logger.warning(f"Failed to seed default vidu billing rules: {e}")
+
 
 def init_initial_data():
     db = SessionLocal()

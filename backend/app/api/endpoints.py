@@ -56,6 +56,7 @@ import asyncio
 import hashlib
 import hmac
 import base64
+import random
 
 # Import limiter from main app state or create a local reference if needed
 # We will use the request.app.state.limiter in the endpoints
@@ -3259,6 +3260,10 @@ class ProjectOut(BaseModel):
     aspectRatio: Optional[str] = None
     cover_image: Optional[str] = None
     is_owner: Optional[bool] = True
+    generation_seed: Optional[int] = None
+    seed_initialized: Optional[bool] = False
+    missing_basic_fields: Optional[List[str]] = None
+    has_missing_basic_info: Optional[bool] = False
     
     class Config:
         from_attributes = True
@@ -4685,13 +4690,68 @@ def read_project(
     current_user: User = Depends(get_current_user)
 ):
     project = _require_project_access(db, project_id, current_user)
+
+    raw_info = project.global_info
+    if isinstance(raw_info, dict):
+        global_info = dict(raw_info)
+    elif isinstance(raw_info, str):
+        try:
+            parsed = json.loads(raw_info)
+            global_info = parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            global_info = {}
+    else:
+        global_info = {}
+
+    existing_seed = _normalize_seed_value(
+        global_info.get("generation_seed")
+        or global_info.get("seed")
+        or ((global_info.get("generation") or {}).get("seed") if isinstance(global_info.get("generation"), dict) else None)
+    )
+    resolved_seed = _ensure_project_generation_seed(db, project_id, current_user)
+    seed_initialized = bool(resolved_seed and not existing_seed)
+
+    basic_info = global_info.get("basic_info") if isinstance(global_info.get("basic_info"), dict) else {}
+    e_global_info = global_info.get("e_global_info") if isinstance(global_info.get("e_global_info"), dict) else {}
+    story_input = global_info.get("story_generator_global_input") if isinstance(global_info.get("story_generator_global_input"), dict) else {}
+
+    def _pick_non_empty_text(*values: Any) -> str:
+        for value in values:
+            text = str(value or "").strip()
+            if text:
+                return text
+        return ""
+
+    type_value = _pick_non_empty_text(
+        global_info.get("type"),
+        basic_info.get("type"),
+        e_global_info.get("type"),
+        story_input.get("type"),
+    )
+    language_value = _pick_non_empty_text(
+        global_info.get("language"),
+        basic_info.get("language"),
+        e_global_info.get("language"),
+        story_input.get("language"),
+    )
+
+    missing_basic_fields: List[str] = []
+    if not type_value:
+        missing_basic_fields.append("type")
+    if not language_value:
+        missing_basic_fields.append("language")
     
     project.cover_image = get_project_cover_image(db, project.id)
     if project.global_info:
         project.aspectRatio = project.global_info.get('aspectRatio')
     project.description = (project.global_info or {}).get("notes")
+    project.generation_seed = resolved_seed
+    project.seed_initialized = seed_initialized
+    project.missing_basic_fields = missing_basic_fields
+    project.has_missing_basic_info = bool(missing_basic_fields)
     _attach_project_flags(project, current_user)
     return project
+
 
 @router.put("/projects/{project_id}", response_model=ProjectOut)
 def update_project(
@@ -8662,6 +8722,7 @@ def update_scene_latest_ai_result(
         "Keyframes",
         "End Frame",
         "Associated Entities",
+        "Prompt (CN)",
     ]
 
     def esc(val: str) -> str:
@@ -8770,12 +8831,41 @@ def apply_scene_ai_result(
     
     db.query(Shot).filter(Shot.scene_id == scene_id).delete()
     
+    def _pick_shot_cell(s_data: Dict[str, Any], aliases: List[str], default: str = "") -> str:
+        if not isinstance(s_data, dict):
+            return default
+        for key in aliases:
+            if key in s_data and s_data.get(key) is not None:
+                return str(s_data.get(key) or "").strip()
+        return default
+
+    def _split_combined_cn_prompt(raw_text: str) -> Tuple[str, str]:
+        text = str(raw_text or "").strip()
+        if not text:
+            return "", ""
+        lines = [ln.strip() for ln in re.split(r"\n|<br\\s*/?>", text) if ln and ln.strip()]
+        image_cn = ""
+        video_cn = ""
+        for ln in lines:
+            lower_ln = ln.lower()
+            if lower_ln.startswith("image:") or lower_ln.startswith("image cn:") or ln.startswith("图片:") or ln.startswith("图片提示词:") or ln.startswith("图像:"):
+                image_cn = re.sub(r"^(image\s*(cn)?\s*:|图片提示词\s*[:：]|图片\s*[:：]|图像\s*[:：])", "", ln, flags=re.IGNORECASE).strip()
+                continue
+            if lower_ln.startswith("video:") or lower_ln.startswith("video cn:") or ln.startswith("视频:") or ln.startswith("视频提示词:"):
+                video_cn = re.sub(r"^(video\s*(cn)?\s*:|视频提示词\s*[:：]|视频\s*[:：])", "", ln, flags=re.IGNORECASE).strip()
+                continue
+        if not image_cn and not video_cn:
+            # Backward-compatible fallback: treat one-line CN as shared CN prompt.
+            return text, text
+        return image_cn, video_cn
+
     for idx, s_data in enumerate(shots_data):
         # Dur parsing
         try:
             dur_val = 2.0
-            if "Duration (s)" in s_data:
-                match = re.search(r"[\d\.]+", str(s_data["Duration (s)"]))
+            raw_duration = _pick_shot_cell(s_data, ["Duration (s)", "Duration", "duration", "时长", "时长(s)"], "")
+            if raw_duration:
+                match = re.search(r"[\d\.]+", str(raw_duration))
                 dur_val = float(match.group()) if match else 2.0
         except:
             dur_val = 2.0
@@ -8783,26 +8873,65 @@ def apply_scene_ai_result(
         # Mapping Keys from LLM Table Headers to DB Columns
         # Headers: Shot ID, Shot Name, Start Frame, End Frame, Video Content, Duration (s), Keyframes, Associated Entities, Shot Logic (CN)
         
+        start_frame_text = _pick_shot_cell(s_data, ["Start Frame", "start_frame", "起始帧"], "")
+        end_frame_text = _pick_shot_cell(s_data, ["End Frame", "end_frame", "结束帧"], "")
+        video_content_text = _pick_shot_cell(s_data, ["Video Content", "video_content", "视频内容"], "")
+        associated_entities_text = _pick_shot_cell(s_data, ["Associated Entities", "associated_entities", "关联实体"], "")
+        shot_logic_cn_text = _pick_shot_cell(s_data, ["Shot Logic (CN)", "shot_logic_cn", "镜头逻辑", "镜头逻辑（中文）"], "")
+        keyframes_text = _pick_shot_cell(s_data, ["Keyframes", "keyframes", "关键帧"], "NO")
+        scene_code_text = _pick_shot_cell(s_data, ["Scene ID", "scene_id", "Scene Code", "scene_code", "场景ID", "场次号"], scene.scene_no or "")
+        shot_id_text = _pick_shot_cell(s_data, ["Shot ID", "shot_id", "镜头ID"], str(idx + 1))
+        shot_name_text = _pick_shot_cell(s_data, ["Shot Name", "shot_name", "镜头名称"], "Shot")
+
+        prompt_cn_combined = _pick_shot_cell(
+            s_data,
+            ["Prompt (CN)", "Prompts (CN)", "Prompt CN", "prompt_cn", "提示词（中文）", "中文提示词"],
+            "",
+        )
+        start_frame_cn_text = _pick_shot_cell(s_data, ["Start Frame (CN)", "start_frame_cn", "起始帧（中文）"], "")
+        video_prompt_cn_text = _pick_shot_cell(s_data, ["Video Content (CN)", "video_prompt_cn", "视频内容（中文）"], "")
+        end_frame_cn_text = _pick_shot_cell(s_data, ["End Frame (CN)", "end_frame_cn", "结束帧（中文）"], "")
+
+        if prompt_cn_combined:
+            image_cn_fallback, video_cn_fallback = _split_combined_cn_prompt(prompt_cn_combined)
+            if not start_frame_cn_text:
+                start_frame_cn_text = image_cn_fallback
+            if not end_frame_cn_text:
+                end_frame_cn_text = image_cn_fallback
+            if not video_prompt_cn_text:
+                video_prompt_cn_text = video_cn_fallback
+
+        technical_notes_payload: Dict[str, Any] = {}
+        if prompt_cn_combined:
+            technical_notes_payload["shot_prompt_cn"] = prompt_cn_combined
+        if start_frame_cn_text:
+            technical_notes_payload["start_frame_cn"] = start_frame_cn_text
+        if video_prompt_cn_text:
+            technical_notes_payload["video_prompt_cn"] = video_prompt_cn_text
+        if end_frame_cn_text:
+            technical_notes_payload["end_frame_cn"] = end_frame_cn_text
+
         shot = Shot(
             scene_id=scene_id,
             project_id=project.id,
             episode_id=episode.id,
             
-            shot_id=s_data.get("Shot ID", str(idx+1)),
-            shot_name=s_data.get("Shot Name", "Shot"),
-            scene_code=scene.scene_no,
+            shot_id=shot_id_text,
+            shot_name=shot_name_text,
+            scene_code=scene_code_text,
             
-            start_frame=s_data.get("Start Frame", ""),
-            end_frame=s_data.get("End Frame", ""),
-            video_content=s_data.get("Video Content", ""),
+            start_frame=start_frame_text,
+            end_frame=end_frame_text,
+            video_content=video_content_text,
             duration=str(dur_val),
             
-            associated_entities=s_data.get("Associated Entities", ""),
-            shot_logic_cn=s_data.get("Shot Logic (CN)", ""),
-            keyframes=s_data.get("Keyframes", "NO"),
+            associated_entities=associated_entities_text,
+            shot_logic_cn=shot_logic_cn_text,
+            keyframes=keyframes_text,
             
             # Legacy/Internal
-            prompt=s_data.get("Video Content", "") 
+            prompt=video_content_text,
+            technical_notes=(json.dumps(technical_notes_payload, ensure_ascii=False) if technical_notes_payload else None),
         )
         db.add(shot)
         
@@ -12180,6 +12309,7 @@ class GenerationRequest(BaseModel):
     callback_url: Optional[str] = None
     callbackUrl: Optional[str] = None
     callBackUrl: Optional[str] = None
+    seed: Optional[int] = None
 
 class VideoGenerationRequest(BaseModel):
     prompt: str
@@ -12207,6 +12337,7 @@ class VideoGenerationRequest(BaseModel):
     callback_url: Optional[str] = None
     callbackUrl: Optional[str] = None
     callBackUrl: Optional[str] = None
+    seed: Optional[int] = None
 
 
 class VoiceGenerationRequest(BaseModel):
@@ -12222,6 +12353,94 @@ class VoiceGenerationRequest(BaseModel):
     use_llm_param_planning: Optional[bool] = False
     language_code: Optional[str] = None
     project_language: Optional[str] = None
+    seed: Optional[int] = None
+
+
+def _normalize_seed_value(value: Any) -> Optional[int]:
+    try:
+        seed_num = int(value)
+    except Exception:
+        return None
+    # Keep in common signed 32-bit positive range.
+    if seed_num <= 0 or seed_num > 2147483647:
+        return None
+    return seed_num
+
+
+def _resolve_project_id_for_generation(req: Any, db: Session) -> Optional[int]:
+    direct_project_id = _normalize_seed_value(getattr(req, "project_id", None))
+    if direct_project_id:
+        return direct_project_id
+
+    episode_id = _normalize_seed_value(getattr(req, "episode_id", None))
+    if episode_id:
+        ep = db.query(Episode).filter(Episode.id == int(episode_id)).first()
+        if ep and ep.project_id:
+            return int(ep.project_id)
+
+    shot_id = _normalize_seed_value(getattr(req, "shot_id", None))
+    if shot_id:
+        shot = db.query(Shot).filter(Shot.id == int(shot_id)).first()
+        if shot:
+            shot_project_id = _normalize_seed_value(getattr(shot, "project_id", None))
+            if shot_project_id:
+                return shot_project_id
+
+            if getattr(shot, "scene_id", None):
+                scene = db.query(Scene).filter(Scene.id == shot.scene_id).first()
+                if scene and scene.episode_id:
+                    ep = db.query(Episode).filter(Episode.id == scene.episode_id).first()
+                    if ep and ep.project_id:
+                        return int(ep.project_id)
+
+    return None
+
+
+def _ensure_project_generation_seed(db: Session, project_id: Optional[int], current_user: Optional[User] = None) -> Optional[int]:
+    stable_project_id = _normalize_seed_value(project_id)
+    if not stable_project_id:
+        return None
+
+    project = _require_project_access(db, int(stable_project_id), current_user) if current_user else db.query(Project).filter(Project.id == int(stable_project_id)).first()
+    if not project:
+        return None
+
+    raw_info = project.global_info
+    if isinstance(raw_info, dict):
+        global_info = dict(raw_info)
+    elif isinstance(raw_info, str):
+        try:
+            parsed = json.loads(raw_info)
+            global_info = parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            global_info = {}
+    else:
+        global_info = {}
+
+    existing_seed = _normalize_seed_value(
+        global_info.get("generation_seed")
+        or global_info.get("seed")
+        or ((global_info.get("generation") or {}).get("seed") if isinstance(global_info.get("generation"), dict) else None)
+    )
+    if existing_seed:
+        return existing_seed
+
+    new_seed = random.SystemRandom().randint(10000, 2147483647)
+    global_info["generation_seed"] = int(new_seed)
+    if "seed" not in global_info:
+        global_info["seed"] = int(new_seed)
+
+    project.global_info = global_info
+    db.add(project)
+    db.commit()
+
+    logger.info(
+        "[ProjectSeed] initialized | project_id=%s user_id=%s seed=%s",
+        stable_project_id,
+        getattr(current_user, "id", None),
+        new_seed,
+    )
+    return int(new_seed)
 
 
 def _build_runtime_llm_config(provider: Optional[str], model: Optional[str], media_type: str = "media") -> Optional[Dict[str, str]]:
@@ -12246,6 +12465,11 @@ def _build_runtime_llm_config(provider: Optional[str], model: Optional[str], med
 
 def _build_video_provider_options(req: VideoGenerationRequest) -> Dict[str, Any]:
     options: Dict[str, Any] = {}
+
+    explicit_seed = _normalize_seed_value(getattr(req, "seed", None))
+    if explicit_seed:
+        options["seed"] = int(explicit_seed)
+        options["seeds"] = int(explicit_seed)
 
     callback_candidate = (
         req.callback_url
@@ -12274,6 +12498,10 @@ def _build_video_provider_options(req: VideoGenerationRequest) -> Dict[str, Any]
 
     if req.multi_shots is not None:
         options["multi_shots"] = bool(req.multi_shots)
+
+    # Kling 3.0 API requires input.sound=true when multi_shots=true.
+    if bool(options.get("multi_shots")):
+        options["sound"] = True
 
     if isinstance(req.multi_prompt, list):
         options["multi_prompt"] = req.multi_prompt
@@ -12349,28 +12577,37 @@ async def _plan_voice_params_with_llm(user_id: int, video_prompt: str) -> Dict[s
         pass
 
     system_prompt = (
-        "You are a TTS planning engine focused on dialogue extraction. Analyze the video prompt and output ONLY one JSON object. "
-        "Do not include markdown, comments, or extra text."
+        "You are a TTS planning engine with two strict phases: "
+        "(1) extract spoken dialogue from the video prompt, "
+        "(2) infer voice parameters from character traits and scene intent. "
+        "Output ONLY one JSON object. Do not include markdown, comments, or extra text."
     )
     supported_voices_hint = (
         "Rachel, Aria, Roger, Sarah, Laura, Charlie, George, Callum, River, Liam, Charlotte, Alice, "
         "Matilda, Will, Jessica, Eric, Chris, Brian, Daniel, Lily, Bill"
     )
     user_prompt = (
-        "Generate voice planning params with dialogue extraction as the top priority.\\n"
+        "Generate TTS planning params from a video prompt.\\n"
+        "Core objective: extract dialogue text first; then tune voice parameters by character traits.\\n"
         "Rules:\\n"
-        "1) Extract ONLY explicit spoken dialogue lines from the prompt (quoted lines, speaker: line).\n"
-        "2) NEVER convert action/narration into speech. Never paraphrase plot description as dialogue.\n"
-        "3) If no explicit dialogue is present, set text to an empty string.\n"
-        "4) Keep original wording and language of extracted dialogue as much as possible.\n"
-        "5) Voice must be one of the supported names (or a valid official voice id).\n"
-        "6) If uncertain, use conservative defaults: voice=Rachel, stability=0.5, similarity_boost=0.75, style=0, speed=1.0, timestamps=false.\n"
-        "7) language_code should be ISO 639-1 (en/zh/ja/ko/es/fr/de/it/pt/ru/ar/hi etc).\n"
+        "A. Dialogue extraction (highest priority):\n"
+        "1) Extract ONLY explicit spoken lines (quoted lines or speaker: line).\n"
+        "2) NEVER convert action/narration/camera description into speech text.\n"
+        "3) Keep wording close to original spoken content; do not rewrite plot into dialogue.\n"
+        "4) If no explicit spoken dialogue exists, set text to an empty string.\n"
+        "B. Parameter inference (secondary):\n"
+        "5) Use character context ONLY to infer voice and style-related params: voice, stability, similarity_boost, style, speed, language_code.\n"
+        "6) Character traits/context MUST NOT be copied into text.\n"
+        "7) If multiple characters are present, choose one coherent voice profile that best matches dominant speaker tone in extracted dialogue.\n"
+        "8) Voice must be one of the supported names (or a valid official voice id).\n"
+        "9) If uncertain, use conservative defaults: voice=Rachel, stability=0.5, similarity_boost=0.75, style=0, speed=1.0, timestamps=false.\n"
+        "10) language_code should be ISO 639-1 (en/zh/ja/ko/es/fr/de/it/pt/ru/ar/hi etc).\n"
         "Supported voice names include:\n"
         f"{supported_voices_hint}\n"
         "Examples:\n"
         "- Input: 伊莎贝拉向后跌倒，老板冲进大楼。 -> text: \"\"\n"
         "- Input: 老板：\"滚出去！\" -> text: \"滚出去！\"\n"
+        "- Input includes [Character Context] only -> text must still be \"\" unless explicit dialogue exists.\n"
         "Return JSON schema exactly:\\n"
         "{\\n"
         "  \"text\": \"string\",\\n"
@@ -13086,6 +13323,56 @@ def _bind_generated_media_to_shot(db: Session, current_user: User, req: Any, med
     db.add(shot)
     db.commit()
 
+
+def _bind_generated_media_to_entity(db: Session, current_user: User, req: Any, media_url: Optional[str]) -> None:
+    if not media_url:
+        return
+
+    def get_attr(obj, key):
+        if isinstance(obj, dict):
+            return obj.get(key)
+        return getattr(obj, key, None)
+
+    asset_type = str(get_attr(req, "asset_type") or "").strip().lower()
+    if asset_type != "subject":
+        return
+
+    entity = None
+    entity_id_raw = get_attr(req, "entity_id")
+    if entity_id_raw is not None:
+        try:
+            entity = db.query(Entity).filter(Entity.id == int(entity_id_raw)).first()
+        except Exception:
+            entity = None
+
+    if not entity:
+        subject_label = str(get_attr(req, "entity_name") or get_attr(req, "subject_name") or "").strip()
+        project_id_raw = get_attr(req, "project_id")
+        try:
+            project_id = int(project_id_raw) if project_id_raw is not None else None
+        except Exception:
+            project_id = None
+        if subject_label and project_id:
+            entity = db.query(Entity).filter(
+                Entity.project_id == project_id,
+                or_(Entity.name == subject_label, Entity.name_en == subject_label),
+            ).order_by(Entity.id.desc()).first()
+
+    if not entity:
+        return
+
+    try:
+        _require_project_access(db, int(entity.project_id), current_user)
+    except Exception:
+        return
+
+    if str(entity.image_url or "").strip() == str(media_url or "").strip():
+        return
+
+    entity.image_url = media_url
+    db.add(entity)
+    db.commit()
+
 @router.post("/generate/image")
 async def generate_image_endpoint(
     req: GenerationRequest,
@@ -13107,6 +13394,9 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
     billing_service.check_can_proceed(current_user, cost)
 
     try:
+        resolved_project_id = _resolve_project_id_for_generation(req, db)
+        project_seed = _ensure_project_generation_seed(db, resolved_project_id, current_user)
+
         # 1. Resolve Context for Resolution/Ratio
         aspect_ratio = None
         width = None
@@ -13199,6 +13489,8 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
                 "width": width,
                 "height": height,
                 "image_size": image_size,
+                "resolved_project_id": resolved_project_id,
+                "project_seed": project_seed,
                 "user_id": current_user.id,
             },
         )
@@ -13208,6 +13500,15 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
             db.rollback()
         except Exception:
             pass
+
+        image_provider_options: Dict[str, Any] = {}
+        explicit_seed = _normalize_seed_value(getattr(req, "seed", None))
+        if explicit_seed:
+            image_provider_options["seed"] = int(explicit_seed)
+            image_provider_options["seeds"] = int(explicit_seed)
+        elif project_seed:
+            image_provider_options["seed"] = int(project_seed)
+            image_provider_options["seeds"] = int(project_seed)
 
         # Assuming generate_image returns {"url": "...", ...}
         result = await media_service.generate_image(
@@ -13223,7 +13524,18 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
             user_credits=(current_user.credits or 0),
             filename_base=_build_generation_filename_base(req, db),
             asset_type=req.asset_type,
+            provider_options=image_provider_options,
         )
+
+        if isinstance(result, dict):
+            stable_meta = result.get("metadata")
+            if not isinstance(stable_meta, dict):
+                stable_meta = {}
+            active_seed = explicit_seed or project_seed
+            if active_seed:
+                stable_meta.setdefault("seed", int(active_seed))
+                result["metadata"] = stable_meta
+
         result_meta = result.get("metadata") if isinstance(result, dict) else {}
         if not isinstance(result_meta, dict):
             result_meta = {}
@@ -13288,6 +13600,7 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
             # Only register if not error? result.get("url") check handles it.
             _register_asset_helper(db, current_user.id, result["url"], req, result.get("metadata"))
             _bind_generated_media_to_shot(db, current_user, req, result.get("url"))
+            _bind_generated_media_to_entity(db, current_user, req, result.get("url"))
 
         return result
     except asyncio.CancelledError:
@@ -13985,7 +14298,13 @@ async def generate_voice_endpoint(
         if not stable_prompt:
             raise HTTPException(status_code=400, detail="Voice prompt is empty")
 
+        resolved_project_id = _resolve_project_id_for_generation(req, db)
+        project_seed = _ensure_project_generation_seed(db, resolved_project_id, current_user)
+        explicit_seed = _normalize_seed_value(getattr(req, "seed", None))
+
         extracted_dialogue = _extract_dialogue_text_for_tts(stable_prompt)
+        extracted_dialogue_lines = [line for line in str(extracted_dialogue or "").splitlines() if str(line or "").strip()]
+        has_explicit_dialogue = bool(extracted_dialogue_lines)
 
         provider_options: Dict[str, Any] = {}
         planned_payload: Dict[str, Any] = {}
@@ -14007,9 +14326,11 @@ async def generate_voice_endpoint(
                 non_dialogue_text_stripped = bool(raw_planned_text) and (raw_planned_text != planned_text)
                 fallback_dialogue_used = bool(extracted_dialogue) and planned_text == extracted_dialogue
                 logger.warning(
-                    "[GenerateVoice] dialogue extraction | user_id=%s prompt_chars=%s dialogue_chars=%s planned_text_chars=%s fallback_dialogue_used=%s non_dialogue_text_stripped=%s",
+                    "[GenerateVoice] dialogue extraction | user_id=%s prompt_chars=%s has_explicit_dialogue=%s dialogue_line_count=%s dialogue_chars=%s planned_text_chars=%s fallback_dialogue_used=%s non_dialogue_text_stripped=%s",
                     current_user.id,
                     len(stable_prompt),
+                    has_explicit_dialogue,
+                    len(extracted_dialogue_lines),
                     len(extracted_dialogue),
                     len(planned_text),
                     fallback_dialogue_used,
@@ -14033,15 +14354,24 @@ async def generate_voice_endpoint(
                         provider_options[key] = planned_payload.get(key)
             else:
                 logger.warning(
-                    "[GenerateVoice] dialogue extraction | user_id=%s prompt_chars=%s dialogue_chars=%s planned_text_chars=0 fallback_dialogue_used=%s",
+                    "[GenerateVoice] dialogue extraction | user_id=%s prompt_chars=%s has_explicit_dialogue=%s dialogue_line_count=%s dialogue_chars=%s planned_text_chars=0 fallback_dialogue_used=%s",
                     current_user.id,
                     len(stable_prompt),
+                    has_explicit_dialogue,
+                    len(extracted_dialogue_lines),
                     len(extracted_dialogue),
                     bool(extracted_dialogue),
                 )
 
         if explicit_language_code:
             provider_options["language_code"] = explicit_language_code
+
+        if explicit_seed:
+            provider_options["seed"] = int(explicit_seed)
+            provider_options["seeds"] = int(explicit_seed)
+        elif project_seed:
+            provider_options["seed"] = int(project_seed)
+            provider_options["seeds"] = int(project_seed)
 
         if explicit_project_language:
             logger.warning(
@@ -14052,7 +14382,7 @@ async def generate_voice_endpoint(
             )
 
         logger.warning(
-            "[GenerateVoice] planned params | user_id=%s voice=%s language_code=%s stability=%s similarity_boost=%s style=%s speed=%s timestamps=%s",
+            "[GenerateVoice] planned params | user_id=%s voice=%s language_code=%s stability=%s similarity_boost=%s style=%s speed=%s timestamps=%s seed=%s",
             current_user.id,
             provider_options.get("voice"),
             provider_options.get("language_code"),
@@ -14061,6 +14391,7 @@ async def generate_voice_endpoint(
             provider_options.get("style"),
             provider_options.get("speed"),
             provider_options.get("timestamps"),
+            provider_options.get("seed") or provider_options.get("seeds"),
         )
 
         result = await media_service.generate_voice(
@@ -14072,6 +14403,15 @@ async def generate_voice_endpoint(
             user_id=current_user.id,
             user_credits=(current_user.credits or 0),
         )
+
+        if isinstance(result, dict):
+            stable_meta = result.get("metadata")
+            if not isinstance(stable_meta, dict):
+                stable_meta = {}
+            active_seed = explicit_seed or project_seed
+            if active_seed:
+                stable_meta.setdefault("seed", int(active_seed))
+                result["metadata"] = stable_meta
 
         if "error" in result:
             detail = result["error"]
@@ -14151,6 +14491,8 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
                 "duration_seconds": req.duration,
                 "billing_mode": "RESERVE",
             }
+        if req.sound is not None:
+            reserve_details["has_audio"] = bool(req.sound)
         reservation_tx = billing_service.reserve_credits(
             db,
             current_user.id,
@@ -14234,6 +14576,9 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
             aspect_ratio = project_ratio
             aspect_ratio_source = "project_global_info"
 
+        project_seed = _ensure_project_generation_seed(db, resolved_project_id, current_user)
+        explicit_seed = _normalize_seed_value(getattr(req, "seed", None))
+
         logger.info(
             "[GenerateVideo] Resolved aspect ratio=%s source=%s project_id=%s shot_id=%s",
             aspect_ratio,
@@ -14251,6 +14596,7 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
                 "aspect_ratio": aspect_ratio,
                 "aspect_ratio_source": aspect_ratio_source,
                 "resolved_project_id": resolved_project_id,
+                "project_seed": explicit_seed or project_seed,
                 "keyframes_count": len(req.keyframes or []),
                 "user_id": current_user.id,
             },
@@ -14291,6 +14637,14 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
         except Exception:
             pass
 
+        video_provider_options = _build_video_provider_options(req)
+        if explicit_seed:
+            video_provider_options["seed"] = int(explicit_seed)
+            video_provider_options["seeds"] = int(explicit_seed)
+        elif project_seed:
+            video_provider_options["seed"] = int(project_seed)
+            video_provider_options["seeds"] = int(project_seed)
+
         result = await media_service.generate_video(
             prompt=prompt_text,
             negative_prompt=req.negative_prompt,
@@ -14300,11 +14654,20 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
             duration=req.duration,
             aspect_ratio=aspect_ratio,
             keyframes=req.keyframes,
-            provider_options=_build_video_provider_options(req),
+            provider_options=video_provider_options,
             user_id=current_user.id,
             user_credits=(current_user.credits or 0),
             filename_base=_build_generation_filename_base(req, db),
         )
+
+        if isinstance(result, dict):
+            stable_meta = result.get("metadata")
+            if not isinstance(stable_meta, dict):
+                stable_meta = {}
+            active_seed = explicit_seed or project_seed
+            if active_seed:
+                stable_meta.setdefault("seed", int(active_seed))
+                result["metadata"] = stable_meta
         print(
             "[GenerateVideo][Config] req_provider=%s req_model=%s runtime_llm_config=%s"
             % (
@@ -14384,6 +14747,12 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
                     "duration_seconds": req.duration,
                     "status": "SETTLED",
                 }
+
+                final_has_audio = final_meta.get("has_audio") if isinstance(final_meta, dict) else None
+                if final_has_audio is None and req.sound is not None:
+                    final_has_audio = bool(req.sound)
+                if final_has_audio is not None:
+                    settle_details["has_audio"] = bool(final_has_audio)
 
             if final_provider:
                 settle_details["provider"] = final_provider

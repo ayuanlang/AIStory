@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, getAdminLlmLogFiles, getAdminLlmLogView, getAdminStorageUsage, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, generateKiePricingRulesManage, applyKiePricingRulesManage, getAdminUsersPage, aiAssistantAnalyzeSupplierFeatures, aiAssistantApplySupplierFeatures } from '../services/api';
+import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, getAdminLlmLogFiles, getAdminLlmLogView, getAdminStorageUsage, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, generateKiePricingRulesManage, applyKiePricingRulesManage, getAdminUsersPage, aiAssistantAnalyzeSupplierFeatures, aiAssistantApplySupplierFeatures } from '../services/api';
 import Footer from '../components/Footer';
 import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive, Database } from 'lucide-react';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
@@ -86,6 +86,13 @@ const UserAdmin = () => {
     const [isMissingBillingRuleCheckLoading, setIsMissingBillingRuleCheckLoading] = useState(false);
     const [isBillingRuleLoading, setIsBillingRuleLoading] = useState(false);
     const [isBatchResetMultiplierLoading, setIsBatchResetMultiplierLoading] = useState(false);
+    const [batchResetMinMultiplier, setBatchResetMinMultiplier] = useState('1.1');
+    const [batchResetMaxMultiplier, setBatchResetMaxMultiplier] = useState('2.0');
+    const [batchResetDefaultMultiplier, setBatchResetDefaultMultiplier] = useState('2.0');
+    const [batchResetBinSizeCredits, setBatchResetBinSizeCredits] = useState('10');
+    const [batchResetBinDropMultiplier, setBatchResetBinDropMultiplier] = useState('0.1');
+    const [batchResetMaxIncreaseCredits, setBatchResetMaxIncreaseCredits] = useState('50');
+    const [isBatchResetConfigSaving, setIsBatchResetConfigSaving] = useState(false);
     const [isBillingRuleEditing, setIsBillingRuleEditing] = useState(false);
     const [billingRuleEditToast, setBillingRuleEditToast] = useState('');
     const [selectedBillingRuleId, setSelectedBillingRuleId] = useState('');
@@ -863,6 +870,73 @@ const UserAdmin = () => {
         }
     }, [activeTab]);
 
+    const fetchBillingRuleResetConfig = async () => {
+        try {
+            const cfg = await getBillingRuleResetConfigManage();
+            const minMul = Number(cfg?.min_multiplier);
+            const maxMul = Number(cfg?.max_multiplier);
+            const defaultMul = Number(cfg?.default_multiplier);
+            const binSize = Number.parseInt(String(cfg?.bin_size_credits ?? 10), 10);
+            const binDrop = Number(cfg?.bin_drop_multiplier);
+            const cap = Number.parseInt(String(cfg?.max_total_increase_credits ?? 50), 10);
+            setBatchResetMinMultiplier(String(Number.isFinite(minMul) ? minMul : 1.1));
+            setBatchResetMaxMultiplier(String(Number.isFinite(maxMul) ? maxMul : 2.0));
+            setBatchResetDefaultMultiplier(String(Number.isFinite(defaultMul) ? defaultMul : 2.0));
+            setBatchResetBinSizeCredits(String(Number.isFinite(binSize) && binSize > 0 ? binSize : 10));
+            setBatchResetBinDropMultiplier(String(Number.isFinite(binDrop) && binDrop > 0 ? binDrop : 0.1));
+            setBatchResetMaxIncreaseCredits(String(Number.isFinite(cap) && cap >= 0 ? cap : 50));
+        } catch (e) {
+            console.error('Failed to load billing reset config', e);
+        }
+    };
+
+    const saveBillingRuleResetConfig = async (nextValue) => {
+        const parsedCap = Math.max(0, Number.parseInt(String(nextValue || batchResetMaxIncreaseCredits || '').trim(), 10) || 0);
+        const parsedMin = Number.parseFloat(String(batchResetMinMultiplier || '').trim());
+        const parsedMax = Number.parseFloat(String(batchResetMaxMultiplier || '').trim());
+        const parsedDefault = Number.parseFloat(String(batchResetDefaultMultiplier || '').trim());
+        const parsedBinSize = Math.max(1, Number.parseInt(String(batchResetBinSizeCredits || '').trim(), 10) || 10);
+        const parsedBinDrop = Number.parseFloat(String(batchResetBinDropMultiplier || '').trim());
+
+        const payload = {
+            min_multiplier: Number.isFinite(parsedMin) ? parsedMin : 1.1,
+            max_multiplier: Number.isFinite(parsedMax) ? parsedMax : 2.0,
+            default_multiplier: Number.isFinite(parsedDefault) ? parsedDefault : 2.0,
+            bin_size_credits: parsedBinSize,
+            bin_drop_multiplier: Number.isFinite(parsedBinDrop) && parsedBinDrop > 0 ? parsedBinDrop : 0.1,
+            max_total_increase_credits: parsedCap,
+        };
+
+        setIsBatchResetConfigSaving(true);
+        try {
+            const saved = await updateBillingRuleResetConfigManage(payload);
+            const minMul = Number(saved?.min_multiplier);
+            const maxMul = Number(saved?.max_multiplier);
+            const defaultMul = Number(saved?.default_multiplier);
+            const binSize = Number.parseInt(String(saved?.bin_size_credits ?? parsedBinSize), 10);
+            const binDrop = Number(saved?.bin_drop_multiplier);
+            const cap = Number.parseInt(String(saved?.max_total_increase_credits ?? parsedCap), 10);
+
+            setBatchResetMinMultiplier(String(Number.isFinite(minMul) ? minMul : payload.min_multiplier));
+            setBatchResetMaxMultiplier(String(Number.isFinite(maxMul) ? maxMul : payload.max_multiplier));
+            setBatchResetDefaultMultiplier(String(Number.isFinite(defaultMul) ? defaultMul : payload.default_multiplier));
+            setBatchResetBinSizeCredits(String(Number.isFinite(binSize) && binSize > 0 ? binSize : payload.bin_size_credits));
+            setBatchResetBinDropMultiplier(String(Number.isFinite(binDrop) && binDrop > 0 ? binDrop : payload.bin_drop_multiplier));
+            setBatchResetMaxIncreaseCredits(String(Number.isFinite(cap) && cap >= 0 ? cap : payload.max_total_increase_credits));
+        } catch (e) {
+            console.error('Failed to save billing reset config', e);
+            alert(e?.response?.data?.detail || e?.message || t('保存增幅上限失败', 'Failed to save increase cap'));
+        } finally {
+            setIsBatchResetConfigSaving(false);
+        }
+    };
+
+    useEffect(() => {
+        if (activeTab === 'pricing_rules') {
+            fetchBillingRuleResetConfig();
+        }
+    }, [activeTab]);
+
     const getSystemApiConfig = (row) => {
         const raw = row?.config;
         if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
@@ -1318,11 +1392,27 @@ const UserAdmin = () => {
 
     const handleBatchResetBillingRuleChargeMultiplier = async () => {
         const selectedApiId = Number(selectedSystemApiId || 0);
+        const parsedMinMul = Number.parseFloat(String(batchResetMinMultiplier || '').trim());
+        const parsedMaxMul = Number.parseFloat(String(batchResetMaxMultiplier || '').trim());
+        const parsedDefaultMul = Number.parseFloat(String(batchResetDefaultMultiplier || '').trim());
+        const parsedBinSize = Number.parseInt(String(batchResetBinSizeCredits || '').trim(), 10);
+        const parsedBinDrop = Number.parseFloat(String(batchResetBinDropMultiplier || '').trim());
+        const parsedMax = Number.parseInt(String(batchResetMaxIncreaseCredits || '').trim(), 10);
+
+        const minMul = Number.isFinite(parsedMinMul) ? parsedMinMul : 1.1;
+        const maxMul = Number.isFinite(parsedMaxMul) ? parsedMaxMul : 2.0;
+        const defaultMul = Number.isFinite(parsedDefaultMul) ? parsedDefaultMul : 2.0;
+        const binSize = Number.isFinite(parsedBinSize) && parsedBinSize > 0 ? parsedBinSize : 10;
+        const binDrop = Number.isFinite(parsedBinDrop) && parsedBinDrop > 0 ? parsedBinDrop : 0.1;
+        const maxIncreaseCredits = Number.isFinite(parsedMax) && parsedMax >= 0 ? parsedMax : 50;
         const scopeHint = selectedApiId > 0
             ? t('当前筛选 API 的规则', 'rules under current selected API')
             : t('全部规则', 'all rules');
         const ok = await confirmUiMessage(
-            t(`确认按成本积分批量重置${scopeHint}的扣费倍率？高成本规则将得到更低倍率，范围 1.1-2.0。`, `Reset charge multipliers for ${scopeHint} by cost score? Higher-cost rules will get lower multipliers in range 1.1-2.0.`)
+            t(
+                `确认重置${scopeHint}倍率？区间 ${minMul}-${maxMul}，每 ${binSize} 积分一箱，按每箱降幅 ${binDrop} 线性下降；单条规则相对原积分增幅上限 ${maxIncreaseCredits}。`,
+                `Reset multipliers for ${scopeHint}? Range ${minMul}-${maxMul}, ${binSize} credits per bin with linear drop ${binDrop} per bin; per-rule increase cap is ${maxIncreaseCredits}.`
+            )
         );
         if (!ok) return;
 
@@ -1330,15 +1420,18 @@ const UserAdmin = () => {
         try {
             const result = await resetSystemApiBillingRuleChargeMultipliersManage({
                 system_api_ids: selectedApiId > 0 ? [selectedApiId] : [],
-                min_multiplier: 1.1,
-                max_multiplier: 2.0,
-                default_multiplier: 2.0,
+                min_multiplier: minMul,
+                max_multiplier: maxMul,
+                default_multiplier: defaultMul,
+                bin_size_credits: binSize,
+                bin_drop_multiplier: binDrop,
+                max_total_increase_credits: maxIncreaseCredits,
             });
             await fetchBillingRulesForSystemApi(selectedSystemApiId);
             alert(
                 t(
-                    `重置完成：共 ${Number(result?.total_rules || 0)} 条，更新 ${Number(result?.updated_rules || 0)} 条。成本范围 ${Number(result?.min_cost || 0)}-${Number(result?.max_cost || 0)}。`,
-                    `Reset completed: total ${Number(result?.total_rules || 0)}, updated ${Number(result?.updated_rules || 0)}. Cost range ${Number(result?.min_cost || 0)}-${Number(result?.max_cost || 0)}.`
+                    `重置完成：共 ${Number(result?.total_rules || 0)} 条，更新 ${Number(result?.updated_rules || 0)} 条。成本范围 ${Number(result?.min_cost || 0)}-${Number(result?.max_cost || 0)}。分箱参数：每箱 ${Number(result?.bin_size_credits || binSize)} 积分，降幅 ${Number(result?.bin_drop_multiplier || binDrop)}。单条最大增幅 ${Number(result?.max_rule_increase_credits || 0).toFixed(2)} / ${Number(result?.max_total_increase_credits || maxIncreaseCredits)} 积分。`,
+                    `Reset completed: total ${Number(result?.total_rules || 0)}, updated ${Number(result?.updated_rules || 0)}. Cost range ${Number(result?.min_cost || 0)}-${Number(result?.max_cost || 0)}. Binning params: ${Number(result?.bin_size_credits || binSize)} credits/bin, drop ${Number(result?.bin_drop_multiplier || binDrop)}. Max per-rule increase ${Number(result?.max_rule_increase_credits || 0).toFixed(2)} / ${Number(result?.max_total_increase_credits || maxIncreaseCredits)}.`
                 )
             );
         } catch (e) {
@@ -3862,14 +3955,13 @@ const UserAdmin = () => {
                             <table className="w-full text-left border-collapse">
                                 <thead>
                                     <tr className="border-b border-gray-800 text-gray-400 text-sm">
+                                        <th className="p-3">{t('用户ID', 'User ID')}</th>
                                         <th className="p-3">{t('用户', 'User')}</th>
                                         <th className="p-3">{t('姓名', 'Full Name')}</th>
                                         <th className="p-3">{t('积分', 'Credits')}</th>
                                         <th className="p-3 text-center">{t('启用', 'Active')}</th>
                                         <th className="p-3 text-center">{t('状态', 'Status')}</th>
                                         <th className="p-3 text-center">{t('邮箱已验证', 'Email Verified')}</th>
-                                        <th className="p-3 text-center">{t('授权', 'Authorized')}</th>
-                                        <th className="p-3 text-center">{t('系统密钥提供方', 'System Key Provider')}</th>
                                         <th className="p-3 text-center">{t('超级管理员', 'Superuser')}</th>
                                         <th className="p-3">{t('操作', 'Actions')}</th>
                                     </tr>
@@ -3882,6 +3974,7 @@ const UserAdmin = () => {
                                             onDoubleClick={() => setUserEditModal(toUserEditDraft(user))}
                                             title={t('双击可快速编辑该用户', 'Double-click to edit this user quickly')}
                                         >
+                                            <td className="p-3 font-mono text-xs text-gray-300">{user.id}</td>
                                             <td className="p-3">
                                                 <input
                                                     className="w-full bg-black/30 border border-gray-700 rounded px-2 py-1 text-sm"
@@ -3935,20 +4028,6 @@ const UserAdmin = () => {
                                                     active={!!user.email_verified}
                                                     color="bg-amber-500"
                                                     onClick={() => updateUser(user.id, { email_verified: !user.email_verified })}
-                                                />
-                                            </td>
-                                            <td className="p-3 text-center">
-                                                <Toggle 
-                                                    active={user.is_authorized} 
-                                                    color="bg-blue-500"
-                                                    onClick={() => updateUser(user.id, { is_authorized: !user.is_authorized })}
-                                                />
-                                            </td>
-                                            <td className="p-3 text-center">
-                                                <Toggle 
-                                                    active={user.is_system} 
-                                                    color="bg-purple-500"
-                                                    onClick={() => updateUser(user.id, { is_system: !user.is_system })}
                                                 />
                                             </td>
                                             <td className="p-3 text-center">
@@ -5496,6 +5575,94 @@ const UserAdmin = () => {
                             <div className="flex items-center justify-between gap-2">
                                 <h3 className="text-lg font-bold">{t('计费规则 CRUD（独立页）', 'Pricing Rule CRUD (Dedicated Tab)')}</h3>
                                 <div className="flex items-center gap-2">
+                                    <div className="flex items-center gap-1 rounded border border-white/10 bg-black/30 px-2 py-1">
+                                        <span className="text-[11px] text-gray-300 whitespace-nowrap">{t('最小倍率', 'Min Mul')}</span>
+                                        <input
+                                            type="number"
+                                            min="1.1"
+                                            max="2"
+                                            step="0.01"
+                                            value={batchResetMinMultiplier}
+                                            onChange={(e) => setBatchResetMinMultiplier(e.target.value)}
+                                            onBlur={() => saveBillingRuleResetConfig(batchResetMaxIncreaseCredits)}
+                                            disabled={isBatchResetConfigSaving}
+                                            className="w-14 bg-black/50 border border-gray-700 rounded px-1 py-0.5 text-xs text-white"
+                                        />
+                                    </div>
+                                    <div className="flex items-center gap-1 rounded border border-white/10 bg-black/30 px-2 py-1">
+                                        <span className="text-[11px] text-gray-300 whitespace-nowrap">{t('最大倍率', 'Max Mul')}</span>
+                                        <input
+                                            type="number"
+                                            min="1.1"
+                                            max="2"
+                                            step="0.01"
+                                            value={batchResetMaxMultiplier}
+                                            onChange={(e) => setBatchResetMaxMultiplier(e.target.value)}
+                                            onBlur={() => saveBillingRuleResetConfig(batchResetMaxIncreaseCredits)}
+                                            disabled={isBatchResetConfigSaving}
+                                            className="w-14 bg-black/50 border border-gray-700 rounded px-1 py-0.5 text-xs text-white"
+                                        />
+                                    </div>
+                                    <div className="flex items-center gap-1 rounded border border-white/10 bg-black/30 px-2 py-1">
+                                        <span className="text-[11px] text-gray-300 whitespace-nowrap">{t('默认倍率', 'Default')}</span>
+                                        <input
+                                            type="number"
+                                            min="0"
+                                            step="0.01"
+                                            value={batchResetDefaultMultiplier}
+                                            onChange={(e) => setBatchResetDefaultMultiplier(e.target.value)}
+                                            onBlur={() => saveBillingRuleResetConfig(batchResetMaxIncreaseCredits)}
+                                            disabled={isBatchResetConfigSaving}
+                                            className="w-14 bg-black/50 border border-gray-700 rounded px-1 py-0.5 text-xs text-white"
+                                        />
+                                    </div>
+                                    <div className="flex items-center gap-1 rounded border border-white/10 bg-black/30 px-2 py-1">
+                                        <span className="text-[11px] text-gray-300 whitespace-nowrap">{t('分箱(积分)', 'Bin Size')}</span>
+                                        <input
+                                            type="number"
+                                            min="1"
+                                            step="1"
+                                            value={batchResetBinSizeCredits}
+                                            onChange={(e) => setBatchResetBinSizeCredits(e.target.value)}
+                                            onBlur={() => saveBillingRuleResetConfig(batchResetMaxIncreaseCredits)}
+                                            disabled={isBatchResetConfigSaving}
+                                            className="w-14 bg-black/50 border border-gray-700 rounded px-1 py-0.5 text-xs text-white"
+                                        />
+                                    </div>
+                                    <div className="flex items-center gap-1 rounded border border-white/10 bg-black/30 px-2 py-1">
+                                        <span className="text-[11px] text-gray-300 whitespace-nowrap">{t('每箱降幅', 'Drop/Bin')}</span>
+                                        <input
+                                            type="number"
+                                            min="0.0001"
+                                            step="0.01"
+                                            value={batchResetBinDropMultiplier}
+                                            onChange={(e) => setBatchResetBinDropMultiplier(e.target.value)}
+                                            onBlur={() => saveBillingRuleResetConfig(batchResetMaxIncreaseCredits)}
+                                            disabled={isBatchResetConfigSaving}
+                                            className="w-14 bg-black/50 border border-gray-700 rounded px-1 py-0.5 text-xs text-white"
+                                        />
+                                    </div>
+                                    <div className="flex items-center gap-1 rounded border border-white/10 bg-black/30 px-2 py-1">
+                                        <span className="text-[11px] text-gray-300 whitespace-nowrap">{t('单条增幅上限', 'Per-Rule Cap')}</span>
+                                        <input
+                                            type="number"
+                                            min="0"
+                                            step="1"
+                                            value={batchResetMaxIncreaseCredits}
+                                            onChange={(e) => setBatchResetMaxIncreaseCredits(e.target.value)}
+                                            onBlur={(e) => saveBillingRuleResetConfig(e.target.value)}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter') {
+                                                    e.preventDefault();
+                                                    saveBillingRuleResetConfig(batchResetMaxIncreaseCredits);
+                                                }
+                                            }}
+                                            disabled={isBatchResetConfigSaving}
+                                            className="w-16 bg-black/50 border border-gray-700 rounded px-1 py-0.5 text-xs text-white"
+                                            title={t('批量重置后，单条规则相对原积分的增幅不得超过该值', 'Per-rule increase over original credits cannot exceed this value')}
+                                        />
+                                        {isBatchResetConfigSaving && <span className="text-[10px] text-gray-400">{t('保存中', 'Saving')}</span>}
+                                    </div>
                                     <button
                                         onClick={fetchSystemApiManageRows}
                                         className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded flex items-center gap-2"

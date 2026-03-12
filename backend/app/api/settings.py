@@ -59,6 +59,8 @@ from app.schemas.settings import (
     TaskDefaultSystemAPIManageOut,
     AgentToolPolicyUpdate,
     AgentToolPolicyOut,
+    BillingRuleResetConfigOut,
+    BillingRuleResetConfigUpdate,
     SystemAIAssistantRequest,
     SystemAIAssistantResponse,
     SystemAIAssistantSuggestion,
@@ -102,6 +104,13 @@ logger.setLevel(logging.INFO)
 _AGENT_POLICY_CATEGORY = "System_Payment"
 _AGENT_POLICY_PROVIDER = "agent_policy"
 _AGENT_POLICY_MODEL = "tool_acl"
+_BILLING_RESET_CONFIG_KEY = "billing_rule_reset_config"
+_BILLING_RESET_MAX_INCREASE_DEFAULT = 50
+_BILLING_RESET_MIN_MULTIPLIER_DEFAULT = 1.1
+_BILLING_RESET_MAX_MULTIPLIER_DEFAULT = 2.0
+_BILLING_RESET_DEFAULT_MULTIPLIER_DEFAULT = 2.0
+_BILLING_RESET_BIN_SIZE_CREDITS_DEFAULT = 10
+_BILLING_RESET_BIN_DROP_MULTIPLIER_DEFAULT = 0.1
 _BASE_BILLING_RULE_KIND = "base_pricing"
 _BASE_BILLING_RULE_PRIORITY = -100000
 _KIE_GRANULAR_RULE_KIND = "kie_granular_pricing"
@@ -195,6 +204,70 @@ def _get_or_create_agent_policy_row(db: Session) -> SystemAPISetting:
     db.add(row)
     db.flush()
     return row
+
+
+def _default_billing_rule_reset_config() -> Dict[str, Any]:
+    return {
+        "min_multiplier": float(_BILLING_RESET_MIN_MULTIPLIER_DEFAULT),
+        "max_multiplier": float(_BILLING_RESET_MAX_MULTIPLIER_DEFAULT),
+        "default_multiplier": float(_BILLING_RESET_DEFAULT_MULTIPLIER_DEFAULT),
+        "bin_size_credits": int(_BILLING_RESET_BIN_SIZE_CREDITS_DEFAULT),
+        "bin_drop_multiplier": float(_BILLING_RESET_BIN_DROP_MULTIPLIER_DEFAULT),
+        "max_total_increase_credits": int(_BILLING_RESET_MAX_INCREASE_DEFAULT),
+    }
+
+
+def _normalize_billing_rule_reset_config(value: Any) -> Dict[str, Any]:
+    base = _default_billing_rule_reset_config()
+    payload = _safe_json_dict(value)
+    min_multiplier = _safe_non_negative_float(payload.get("min_multiplier")) or _BILLING_RESET_MIN_MULTIPLIER_DEFAULT
+    max_multiplier = _safe_non_negative_float(payload.get("max_multiplier")) or _BILLING_RESET_MAX_MULTIPLIER_DEFAULT
+    if min_multiplier > max_multiplier:
+        min_multiplier, max_multiplier = max_multiplier, min_multiplier
+    min_multiplier = max(1.1, min(2.0, float(min_multiplier)))
+    max_multiplier = max(1.1, min(2.0, float(max_multiplier)))
+    if min_multiplier > max_multiplier:
+        min_multiplier, max_multiplier = max_multiplier, min_multiplier
+
+    default_multiplier = _normalize_rule_charge_multiplier(payload.get("default_multiplier"), default=_BILLING_RESET_DEFAULT_MULTIPLIER_DEFAULT)
+    default_multiplier = max(1.0, min(float(max_multiplier), float(default_multiplier)))
+
+    bin_size_credits = max(1, _non_negative_int(payload.get("bin_size_credits"), _BILLING_RESET_BIN_SIZE_CREDITS_DEFAULT))
+    bin_drop_multiplier = _safe_non_negative_float(payload.get("bin_drop_multiplier")) or _BILLING_RESET_BIN_DROP_MULTIPLIER_DEFAULT
+
+    base["min_multiplier"] = float(round(min_multiplier, 4))
+    base["max_multiplier"] = float(round(max_multiplier, 4))
+    base["default_multiplier"] = float(round(default_multiplier, 4))
+    base["bin_size_credits"] = int(bin_size_credits)
+    base["bin_drop_multiplier"] = float(round(bin_drop_multiplier, 6))
+
+    max_total = _non_negative_int(payload.get("max_total_increase_credits"), _BILLING_RESET_MAX_INCREASE_DEFAULT)
+    base["max_total_increase_credits"] = int(max_total)
+    return base
+
+
+def _compute_binned_multiplier(score: int, min_multiplier: float, max_multiplier: float, bin_size_credits: int, bin_drop_multiplier: float) -> float:
+    if score <= 0:
+        return float(max_multiplier)
+
+    # Use absolute credit bins (0..bin-1, bin..2*bin-1, ...) so the distribution
+    # remains stable regardless of the current dataset's minimum score.
+    span_from_zero = max(0.0, float(score))
+    safe_bin = max(1.0, float(bin_size_credits))
+    bin_index = math.floor(span_from_zero / safe_bin)
+    within_bin = (span_from_zero % safe_bin) / safe_bin
+    drop = (float(bin_index) + float(within_bin)) * float(bin_drop_multiplier)
+    raw = float(max_multiplier) - drop
+    return float(max(float(min_multiplier), min(float(max_multiplier), raw)))
+
+
+def _get_billing_rule_reset_config(db: Session) -> Dict[str, Any]:
+    row = _get_or_create_agent_policy_row(db)
+    cfg = _safe_json_dict(row.config)
+    normalized = _normalize_billing_rule_reset_config(cfg.get(_BILLING_RESET_CONFIG_KEY, {}))
+    cfg[_BILLING_RESET_CONFIG_KEY] = normalized
+    row.config = cfg
+    return normalized
 
 
 def _normalize_unit_type_for_system_ai(raw: Any) -> str:
@@ -2371,6 +2444,122 @@ def _ensure_builtin_system_settings(db: Session) -> None:
 
     db.flush()
 
+    # Ensure Vidu built-ins exist as first-class system settings.
+    vidu_base_url = "https://api.vidu.studio/open/v1/creation/video"
+    vidu_builtins = [
+        {
+            "name": "Vidu 2.0",
+            "category": "Video",
+            "provider": "vidu",
+            "base_url": vidu_base_url,
+            "model": "vidu2.0",
+            "config": {"provider_api_key_strategy": "random"},
+        },
+        {
+            "name": "Vidu Q2 Pro",
+            "category": "Video",
+            "provider": "vidu",
+            "base_url": vidu_base_url,
+            "model": "viduq2-pro",
+            "config": {"provider_api_key_strategy": "random"},
+        },
+    ]
+
+    existing_vidu = db.query(SystemAPISetting.category, SystemAPISetting.provider, SystemAPISetting.model).filter(
+        _system_provider_case_insensitive_filter("vidu")
+    ).all()
+    existing_vidu_keys = {
+        ((c or "").strip().lower(), (p or "").strip().lower(), (m or "").strip().lower())
+        for c, p, m in existing_vidu
+    }
+
+    vidu_key_row = db.query(SystemAPISetting.api_key).filter(
+        _system_provider_case_insensitive_filter("vidu"),
+        SystemAPISetting.api_key.isnot(None),
+        SystemAPISetting.api_key != "",
+    ).order_by(SystemAPISetting.id.desc()).first()
+    vidu_shared_key = vidu_key_row[0].strip() if vidu_key_row and (vidu_key_row[0] or "").strip() else ""
+
+    for item in vidu_builtins:
+        key = (
+            item["category"].strip().lower(),
+            item["provider"].strip().lower(),
+            item["model"].strip().lower(),
+        )
+        if key in existing_vidu_keys:
+            continue
+
+        db.add(SystemAPISetting(
+            name=item["name"],
+            category=item["category"],
+            provider=item["provider"],
+            api_key=vidu_shared_key,
+            base_url=item["base_url"],
+            model=item["model"],
+            base_model=_derive_base_model_from_model(item["model"]),
+            deprecated=False,
+            config=item["config"],
+            is_active=False,
+        ))
+        existing_vidu_keys.add(key)
+
+    db.flush()
+
+    # Ensure default Vidu has-audio granular billing rules exist.
+    vidu_rows = db.query(SystemAPISetting).filter(
+        _system_provider_case_insensitive_filter("vidu"),
+        SystemAPISetting.category == "Video",
+    ).all()
+
+    now_iso = now_bj_iso()
+    for row in vidu_rows:
+        existing_rule_names = {
+            str(rule.name or "").strip().lower()
+            for rule in db.query(SystemAPIBillingRule).filter(
+                SystemAPIBillingRule.system_api_id == int(row.id)
+            ).all()
+        }
+
+        specs = [
+            {
+                "name": "Vidu Sound On",
+                "description": "Vidu pricing rule when generated video has audio.",
+                "has_audio": True,
+                "priority": 20,
+            },
+            {
+                "name": "Vidu Sound Off",
+                "description": "Vidu pricing rule when generated video has no audio.",
+                "has_audio": False,
+                "priority": 19,
+            },
+        ]
+
+        for spec in specs:
+            normalized = str(spec["name"]).strip().lower()
+            if normalized in existing_rule_names:
+                continue
+
+            db.add(SystemAPIBillingRule(
+                system_api_id=int(row.id),
+                name=str(spec["name"]),
+                description=str(spec["description"]),
+                is_active=True,
+                priority=int(spec["priority"]),
+                applies_to_text=False,
+                applies_to_image=False,
+                applies_to_video=True,
+                has_audio=bool(spec["has_audio"]),
+                billing_unit_type="per_second",
+                billing_cost=30,
+                billing_cost_input=0,
+                billing_cost_output=0,
+                charge_multiplier=2.0,
+                extra_conditions={"provider": "vidu"},
+                created_at=now_iso,
+                updated_at=now_iso,
+            ))
+
 DEFAULTS = {
     "openai": {
         "category": "LLM",
@@ -2992,6 +3181,42 @@ def get_agent_tool_policy(
     return AgentToolPolicyOut(**normalized)
 
 
+@router.get("/settings/system/manage/billing-rules/reset-config", response_model=BillingRuleResetConfigOut)
+def get_billing_rule_reset_config(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage billing reset config")
+
+    cfg = _get_billing_rule_reset_config(db)
+    db.commit()
+    return BillingRuleResetConfigOut(**cfg)
+
+
+@router.put("/settings/system/manage/billing-rules/reset-config", response_model=BillingRuleResetConfigOut)
+def update_billing_rule_reset_config(
+    payload: BillingRuleResetConfigUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage billing reset config")
+
+    row = _get_or_create_agent_policy_row(db)
+    cfg = _safe_json_dict(row.config)
+    current_cfg = _normalize_billing_rule_reset_config(cfg.get(_BILLING_RESET_CONFIG_KEY, {}))
+    patch = payload.model_dump(exclude_unset=True) if hasattr(payload, "model_dump") else payload.dict(exclude_unset=True)
+    merged_cfg = {**current_cfg, **_safe_json_dict(patch)}
+    cfg[_BILLING_RESET_CONFIG_KEY] = _normalize_billing_rule_reset_config(merged_cfg)
+    row.config = cfg
+    db.commit()
+    db.refresh(row)
+
+    normalized = _normalize_billing_rule_reset_config(_safe_json_dict(row.config).get(_BILLING_RESET_CONFIG_KEY, {}))
+    return BillingRuleResetConfigOut(**normalized)
+
+
 @router.get("/settings/system/manage/{system_api_id}/billing-rules", response_model=List[SystemAPIBillingRuleOut])
 def list_system_api_billing_rules(
     system_api_id: int,
@@ -3140,17 +3365,33 @@ def reset_system_api_billing_rule_charge_multipliers(
 ):
     """Batch reset charge_multiplier by rule cost level.
 
-    Algorithm:
-    - Build cost score = max(billing_cost, billing_cost_input, billing_cost_output)
-    - Map score to multiplier range [min_multiplier, max_multiplier]
-    - Higher score => lower multiplier
+    Rules:
+    - Multiplier target range is [1.1, 2.0].
+    - Lower base score => higher multiplier (absolute-score binned linear decay).
+    - Per-rule increase cap: score * multiplier - score <= configured cap.
     """
     if not _can_manage_system_settings(current_user):
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
-    min_multiplier = float(payload.min_multiplier if payload.min_multiplier is not None else 1.1)
-    max_multiplier = float(payload.max_multiplier if payload.max_multiplier is not None else 2.0)
-    default_multiplier = _normalize_rule_charge_multiplier(payload.default_multiplier, default=2.0)
+    reset_cfg = _get_billing_rule_reset_config(db)
+    min_multiplier = float(payload.min_multiplier if payload.min_multiplier is not None else reset_cfg.get("min_multiplier", _BILLING_RESET_MIN_MULTIPLIER_DEFAULT))
+    max_multiplier = float(payload.max_multiplier if payload.max_multiplier is not None else reset_cfg.get("max_multiplier", _BILLING_RESET_MAX_MULTIPLIER_DEFAULT))
+    default_multiplier = _normalize_rule_charge_multiplier(
+        payload.default_multiplier if payload.default_multiplier is not None else reset_cfg.get("default_multiplier", _BILLING_RESET_DEFAULT_MULTIPLIER_DEFAULT),
+        default=_BILLING_RESET_DEFAULT_MULTIPLIER_DEFAULT,
+    )
+    bin_size_credits = max(1, _non_negative_int(
+        payload.bin_size_credits if payload.bin_size_credits is not None else reset_cfg.get("bin_size_credits", _BILLING_RESET_BIN_SIZE_CREDITS_DEFAULT),
+        _BILLING_RESET_BIN_SIZE_CREDITS_DEFAULT,
+    ))
+    bin_drop_multiplier = _safe_non_negative_float(
+        payload.bin_drop_multiplier if payload.bin_drop_multiplier is not None else reset_cfg.get("bin_drop_multiplier", _BILLING_RESET_BIN_DROP_MULTIPLIER_DEFAULT)
+    )
+    if bin_drop_multiplier <= 0:
+        bin_drop_multiplier = float(_BILLING_RESET_BIN_DROP_MULTIPLIER_DEFAULT)
+
+    configured_cap = _non_negative_int(reset_cfg.get("max_total_increase_credits"), _BILLING_RESET_MAX_INCREASE_DEFAULT)
+    max_total_increase_credits = _non_negative_int(getattr(payload, "max_total_increase_credits", None), configured_cap)
 
     if min_multiplier <= 0 or max_multiplier <= 0:
         raise HTTPException(status_code=400, detail="Multiplier bounds must be positive")
@@ -3179,6 +3420,12 @@ def reset_system_api_billing_rule_charge_multipliers(
             min_multiplier=min_multiplier,
             max_multiplier=max_multiplier,
             default_multiplier=default_multiplier,
+            bin_size_credits=int(bin_size_credits),
+            bin_drop_multiplier=float(round(bin_drop_multiplier, 6)),
+            max_total_increase_credits=int(max_total_increase_credits),
+            total_increase_credits=0.0,
+            max_rule_increase_credits=0.0,
+            increase_cap_applied=False,
             preview=[],
         )
 
@@ -3186,26 +3433,75 @@ def reset_system_api_billing_rule_charge_multipliers(
     min_cost = min(score for _, score in scored)
     max_cost = max(score for _, score in scored)
 
+    planned_rows: List[Dict[str, Any]] = []
+    per_rule_cap_applied = False
+
+    for row, score in scored:
+        if score <= 0:
+            target_multiplier = float(default_multiplier)
+        else:
+            target_multiplier = _compute_binned_multiplier(
+                score,
+                min_multiplier,
+                max_multiplier,
+                bin_size_credits,
+                bin_drop_multiplier,
+            )
+
+        old_multiplier = _normalize_rule_charge_multiplier(getattr(row, "charge_multiplier", None), default=default_multiplier)
+
+        # 1) Keep base mapping in configured multiplier band.
+        target_multiplier = max(float(min_multiplier), min(float(max_multiplier), float(target_multiplier)))
+
+        # 2) Per-rule cap against original score baseline:
+        #    score * multiplier - score <= cap  => multiplier <= 1 + cap/score
+        if score > 0 and max_total_increase_credits >= 0:
+            cap_upper = 1.0 + (float(max_total_increase_credits) / float(score))
+            capped_multiplier = min(float(target_multiplier), float(cap_upper))
+            if capped_multiplier < float(target_multiplier) - 1e-9:
+                per_rule_cap_applied = True
+            target_multiplier = capped_multiplier
+
+        # Final safe clamp.
+        target_multiplier = max(0.0, min(float(max_multiplier), float(target_multiplier)))
+
+        baseline_increase_credits = float(score) * max(0.0, float(target_multiplier) - 1.0) if score > 0 else 0.0
+
+        delta_multiplier = float(target_multiplier) - float(old_multiplier)
+
+        planned_rows.append({
+            "row": row,
+            "score": int(score),
+            "old_multiplier": float(old_multiplier),
+            "new_multiplier": float(target_multiplier),
+            "delta_multiplier": float(delta_multiplier),
+            "increase_credits": max(0.0, float(baseline_increase_credits)),
+        })
+
+    increase_cap_applied = bool(per_rule_cap_applied)
+
+    total_increase_credits = 0.0
+    max_rule_increase_credits = 0.0
     updated = 0
     now_iso = now_bj_iso()
     preview: List[Dict[str, Any]] = []
 
-    for row, score in scored:
-        if score <= 0:
-            new_multiplier = float(default_multiplier)
-        else:
-            new_multiplier = _compute_cost_scaled_multiplier(
-                score,
-                min_cost,
-                max_cost,
-                min_multiplier,
-                max_multiplier,
-            )
-        old_multiplier = _normalize_rule_charge_multiplier(getattr(row, "charge_multiplier", None), default=default_multiplier)
+    for item in planned_rows:
+        row = item["row"]
+        score = int(item["score"])
+        old_multiplier = float(item["old_multiplier"])
+        new_multiplier = _normalize_rule_charge_multiplier(item["new_multiplier"], default=default_multiplier)
+
+        if score > 0:
+            rule_inc = float(score) * max(0.0, float(new_multiplier) - 1.0)
+            total_increase_credits += rule_inc
+            if rule_inc > max_rule_increase_credits:
+                max_rule_increase_credits = rule_inc
+
         if abs(float(old_multiplier) - float(new_multiplier)) > 1e-9:
             updated += 1
-        row.charge_multiplier = float(new_multiplier)
-        row.updated_at = now_iso
+            row.charge_multiplier = float(new_multiplier)
+            row.updated_at = now_iso
 
         if len(preview) < 50:
             preview.append({
@@ -3227,6 +3523,12 @@ def reset_system_api_billing_rule_charge_multipliers(
         min_multiplier=float(min_multiplier),
         max_multiplier=float(max_multiplier),
         default_multiplier=float(default_multiplier),
+        bin_size_credits=int(bin_size_credits),
+        bin_drop_multiplier=float(round(bin_drop_multiplier, 6)),
+        max_total_increase_credits=int(max_total_increase_credits),
+        total_increase_credits=float(round(total_increase_credits, 4)),
+        max_rule_increase_credits=float(round(max_rule_increase_credits, 4)),
+        increase_cap_applied=bool(increase_cap_applied),
         preview=preview,
     )
 

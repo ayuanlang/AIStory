@@ -454,9 +454,12 @@ class SystemAPIMissingBillingRuleOut(BaseModel):
 class SystemAPIBillingRuleMultiplierResetRequest(BaseModel):
     """批量按成本重置计费规则倍率。"""
     system_api_ids: List[int] = Field(default_factory=list)
-    min_multiplier: float = 1.1
-    max_multiplier: float = 2.0
-    default_multiplier: float = 2.0
+    min_multiplier: Optional[float] = None
+    max_multiplier: Optional[float] = None
+    default_multiplier: Optional[float] = None
+    bin_size_credits: Optional[int] = None
+    bin_drop_multiplier: Optional[float] = None
+    max_total_increase_credits: Optional[int] = None
 
 
 class SystemAPIBillingRuleMultiplierResetResponse(BaseModel):
@@ -468,6 +471,12 @@ class SystemAPIBillingRuleMultiplierResetResponse(BaseModel):
     min_multiplier: float = 1.1
     max_multiplier: float = 2.0
     default_multiplier: float = 2.0
+    bin_size_credits: int = 10
+    bin_drop_multiplier: float = 0.1
+    max_total_increase_credits: int = 50
+    total_increase_credits: float = 0
+    max_rule_increase_credits: float = 0
+    increase_cap_applied: bool = False
     preview: List[Dict[str, Any]] = Field(default_factory=list)
 
 
@@ -524,6 +533,24 @@ class AgentToolPolicyUpdate(BaseModel):
 class AgentToolPolicyOut(BaseModel):
     default_allow: bool = True
     roles: Dict[str, Dict[str, List[str]]] = Field(default_factory=dict)
+
+
+class BillingRuleResetConfigOut(BaseModel):
+    min_multiplier: float = 1.1
+    max_multiplier: float = 2.0
+    default_multiplier: float = 2.0
+    bin_size_credits: int = 10
+    bin_drop_multiplier: float = 0.1
+    max_total_increase_credits: int = 50
+
+
+class BillingRuleResetConfigUpdate(BaseModel):
+    min_multiplier: Optional[float] = None
+    max_multiplier: Optional[float] = None
+    default_multiplier: Optional[float] = None
+    bin_size_credits: Optional[int] = None
+    bin_drop_multiplier: Optional[float] = None
+    max_total_increase_credits: int = 50
 
 
 class SystemAIAssistantModelInput(BaseModel):

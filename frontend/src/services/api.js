@@ -1348,6 +1348,24 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
     return result;
 }
 
+export const submitImageGenerationJob = async (prompt, provider = null, ref_image_url = null, options = {}, negative_prompt = null) => {
+    const effectiveNegativePrompt = String(negative_prompt ?? options?.negative_prompt ?? '').trim();
+    const payload = {
+        prompt,
+        provider,
+        ref_image_url,
+        ...(options || {}),
+        ...(effectiveNegativePrompt ? { negative_prompt: effectiveNegativePrompt } : {}),
+    };
+    const response = await api.post('/generate/image/submit', payload);
+    return response.data;
+};
+
+export const getImageGenerationJobStatus = async (jobId) => {
+    const response = await api.get(`/generate/image/jobs/${jobId}`);
+    return response.data;
+};
+
 export const generateVideo = async (prompt, provider = null, ref_image_url = null, last_frame_url = null, duration = 5, options = {}, keyframes = [], negative_prompt = null) => {
     const effectiveNegativePrompt = String(negative_prompt ?? options?.negative_prompt ?? '').trim();
     const {
@@ -2103,6 +2121,8 @@ export const getAdminUsersPage = async (page = 1, pageSize = 20) => (
 ).data;
 export const getAgentToolPolicy = async () => (await api.get('/settings/system/agent/tools-policy')).data;
 export const updateAgentToolPolicy = async (payload = {}) => (await api.put('/settings/system/agent/tools-policy', payload || {})).data;
+export const getBillingRuleResetConfigManage = async () => (await api.get('/settings/system/manage/billing-rules/reset-config')).data;
+export const updateBillingRuleResetConfigManage = async (payload = {}) => (await api.put('/settings/system/manage/billing-rules/reset-config', payload || {})).data;
 export const getSystemAIAssistantAnalyze = async (payload = {}) => (await api.post('/settings/system/ai-assistant/analyze', payload || {})).data;
 export const getSystemAIAssistantApply = async (payload = {}) => (await api.post('/settings/system/ai-assistant/apply', payload || {})).data;
 export const aiAssistantExchangeRate = async (payload = {}) => (await api.post('/settings/system/ai-assistant/tools/exchange-rate', payload || {})).data;

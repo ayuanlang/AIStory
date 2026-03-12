@@ -1522,7 +1522,7 @@ class MediaGenerationService:
 
         return {}
 
-    async def generate_image(self, prompt: str, negative_prompt: Optional[str] = None, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, width: int = None, height: int = None, image_size: Optional[str] = None, aspect_ratio: str = None, user_id: int = 1, user_credits: int = 0, filename_base: Optional[str] = None, asset_type: Optional[str] = None):
+    async def generate_image(self, prompt: str, negative_prompt: Optional[str] = None, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, width: int = None, height: int = None, image_size: Optional[str] = None, aspect_ratio: str = None, provider_options: Optional[Dict[str, Any]] = None, user_id: int = 1, user_credits: int = 0, filename_base: Optional[str] = None, asset_type: Optional[str] = None):
         explicit_provider_selected = bool((llm_config or {}).get("provider"))
         provider = None
         if llm_config and "provider" in llm_config and llm_config["provider"]:
@@ -1559,6 +1559,11 @@ class MediaGenerationService:
         resolved_provider = self._normalize_provider_name((api_config or {}).get("provider"), "Image") if api_config else None
         if resolved_provider:
             provider = resolved_provider
+
+        if api_config is not None and isinstance(provider_options, dict) and provider_options:
+            merged_config = dict((api_config.get("config") or {}))
+            merged_config.update(provider_options)
+            api_config["config"] = merged_config
 
         logger.info(
             "Generate image provider resolution | user_id=%s strict_provider=%s requested_provider=%s requested_model=%s resolved_provider=%s resolved_model=%s resolved_source=%s",
@@ -2087,6 +2092,25 @@ class MediaGenerationService:
         if "creation" not in endpoint: endpoint += "/open/v1/creation"
         
         model = config.get("model") or "vidu2.0"
+        tool_conf = config.get("config", {}) or {}
+
+        def _normalize_bool(raw: Any, default: bool) -> bool:
+            if raw is None:
+                return default
+            if isinstance(raw, bool):
+                return raw
+            text = str(raw).strip().lower()
+            if text in {"1", "true", "yes", "y", "on"}:
+                return True
+            if text in {"0", "false", "no", "n", "off"}:
+                return False
+            return default
+
+        # Vidu sound switch: prefer explicit `sound`, then legacy `is_rec`, default enabled.
+        sound_enabled = _normalize_bool(
+            tool_conf.get("sound") if "sound" in tool_conf else tool_conf.get("is_rec"),
+            True,
+        )
         
         # Check for Multi-Frame Mode (Keyframes present)
         is_multiframe = keyframes and len(keyframes) >= 1
@@ -2190,10 +2214,14 @@ class MediaGenerationService:
         if config.get("config"):
              cf = config.get("config")
              if cf.get("seed"): payload["seed"] = int(cf.get("seed"))
-             if cf.get("is_rec") is not None: payload["is_rec"] = bool(cf.get("is_rec"))
              if cf.get("resolution"): payload["resolution"] = cf.get("resolution")
 
-        _debug_log(f"[Vidu] Job Submission: Model={model}, Dur={payload.get('duration')}, Res={payload.get('resolution')}, MultiFrame={is_multiframe}")
+        # Always pass the resolved audio flag to Vidu payload.
+        payload["is_rec"] = bool(sound_enabled)
+
+        _debug_log(
+            f"[Vidu] Job Submission: Model={model}, Dur={payload.get('duration')}, Res={payload.get('resolution')}, MultiFrame={is_multiframe}, Sound={payload.get('is_rec')}"
+        )
         
         headers = {
             "Content-Type": "application/json",
@@ -2222,7 +2250,16 @@ class MediaGenerationService:
                        if status == "success" or status == "SUCCESS":
                             vid_url = p_data.get("valid_video_url") or p_data.get("video_url") or p_data.get("url")
                             if vid_url:
-                                 return {"url": vid_url, "metadata": {"raw": p_data, "provider": "vidu"}}
+                                 return {
+                                     "url": vid_url,
+                                     "metadata": {
+                                         "raw": p_data,
+                                         "provider": "vidu",
+                                         "model": model,
+                                         "has_audio": bool(sound_enabled),
+                                         "sound": bool(sound_enabled),
+                                     },
+                                 }
                        elif status == "failed" or status == "FAILED":
                             return {"error": "Vidu Generation Failed", "details": str(p_data)}
              
@@ -3806,7 +3843,13 @@ class MediaGenerationService:
                 kling_mode = "pro"
 
             multi_shots = _normalize_bool(tool_conf.get("multi_shots"), False)
-            sound_enabled = _normalize_bool(tool_conf.get("sound"), True if multi_shots else False)
+            # KIE Kling 3.0 requires input.sound and defaults to enabled.
+            sound_enabled = _normalize_bool(tool_conf.get("sound"), True)
+            if multi_shots and not sound_enabled:
+                logger.info(
+                    "KIE Kling3 sound overridden to true because multi_shots=true requires sound=true"
+                )
+                sound_enabled = True
 
             duration_int = 5
             try:

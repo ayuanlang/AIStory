@@ -419,6 +419,8 @@ import {
     deleteEntity,
     deleteAllEntities,
     generateImage,
+    submitImageGenerationJob,
+    getImageGenerationJobStatus,
     generateVideo,
     generateVoice,
     fetchAssets, 
@@ -1086,6 +1088,26 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
             try {
                 const data = await fetchProject(id);
                 setProject(data);
+
+                try {
+                    const missing = Array.isArray(data?.missing_basic_fields) ? data.missing_basic_fields : [];
+                    if (missing.length > 0) {
+                        const labels = missing.map((field) => {
+                            if (field === 'type') return t('类型', 'Type');
+                            if (field === 'language') return t('语言', 'Language');
+                            return String(field || '');
+                        }).filter(Boolean).join(' / ');
+
+                        await confirmUiMessage(
+                            `${t('项目基本信息缺失，请先设置：', 'Project basic info is missing, please set: ')}${labels}\n${t('将为你自动跳转到项目概览页。', 'You will be redirected to Project Overview.')}`
+                        );
+                        setProjectTab('overview');
+                        try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch {}
+                    }
+                } catch (healthErr) {
+                    console.warn('Project health reminder failed:', healthErr);
+                }
+
                 if (data.global_info) {
                      // Merger with defaults to ensure structure
                      const merged = {
@@ -7716,7 +7738,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             if (followupIssues.length > 0) {
                 setAnalysisFlowStatus({
                     phase: 'warning',
-                    message: t('首轮检测到问题，已写入补充说明。请点击“补充内容”。', 'First-pass issues were saved to attention notes. Click "Supplement Content" for a second pass.'),
+                    message: t('首轮检测到问题，已写入补充说明。请点击“修正生成结果”。', 'First-pass issues were saved to attention notes. Click "Refine Generated Result" for a second pass.'),
                 });
                 if (onLog) onLog(`First-pass issues detected (${followupIssues.length}). Waiting for manual supplement submit.`, 'warning');
             }
@@ -7822,7 +7844,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         if (isAnalyzing) return;
         const generatedContent = String(llmRawResultContent || llmResultContent || '').trim();
         if (!generatedContent) {
-            alert(t('请先完成第一次 AI 场景分析，再进行补充内容。', 'Please run the first AI Scene Analysis before submitting supplement content.'));
+            alert(t('请先完成第一次 AI 场景分析，再执行“修正生成结果”。', 'Please finish the first AI Scene Analysis before running "Refine Generated Result".'));
             return;
         }
 
@@ -8041,7 +8063,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             if (followupIssues.length > 0) {
                 setAnalysisFlowStatus({
                     phase: 'warning',
-                    message: t('首轮检测到问题，已写入补充说明。请点击“补充内容”。', 'First-pass issues were saved to attention notes. Click "Supplement Content" for a second pass.'),
+                    message: t('首轮检测到问题，已写入补充说明。请点击“修正生成结果”。', 'First-pass issues were saved to attention notes. Click "Refine Generated Result" for a second pass.'),
                 });
                 if (onLog) onLog(`First-pass issues detected (${followupIssues.length}). Waiting for manual supplement submit.`, 'warning');
             }
@@ -8167,6 +8189,13 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                         </button>
                     )}
                     <button onClick={handleSave} className="px-4 py-2 bg-primary text-black rounded-lg text-sm font-bold hover:bg-primary/90">{t('保存修改', 'Save Changes')}</button>
+                    <button
+                        onClick={() => doImportText(llmRawResultContent || llmResultContent || '', 'auto')}
+                        className="px-4 py-2 bg-white/10 text-white rounded-lg text-sm font-bold hover:bg-white/20"
+                        title={t('按 LLM 原始返回结果导入', 'Import from LLM raw response')}
+                    >
+                        {t('手工导入模型分析结果', 'Manual Import Model Analysis Result')}
+                    </button>
                 </div>
             </div>
 
@@ -8210,9 +8239,14 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                             const phase = analysisFlowStatus.phase || 'idle';
                             const currentIndex = stepOrder.indexOf(phase);
                             const stepIndex = stepOrder.indexOf(step.key);
+                            const hasFinalReport = !!(analysisUiReport && analysisUiReport.status !== 'running');
                             const isTerminalWarning = phase === 'warning';
                             const isTerminalFailed = phase === 'failed';
-                            const isDone = !isTerminalFailed && (isTerminalWarning ? stepIndex <= 2 : currentIndex > stepIndex || phase === 'completed');
+                            const isDone = !isTerminalFailed && (
+                                hasFinalReport
+                                    ? stepIndex <= 3
+                                    : (isTerminalWarning ? stepIndex <= 2 : currentIndex > stepIndex || phase === 'completed')
+                            );
                             const isActive = !isTerminalFailed && !isTerminalWarning && currentIndex === stepIndex;
                             const isFailed = isTerminalFailed && step.key === 'analyzing';
                             return (
@@ -8274,35 +8308,33 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                     {analysisUiReport && analysisUiReport.status !== 'running' && (
                         <div className="rounded-lg border border-white/15 bg-black/20 p-3 text-xs space-y-1.5">
                             <div className="font-semibold text-white/90">{t('分析报告', 'Analysis Report')}</div>
-                            <div>{t('结果', 'Result')}: {analysisUiReport.status}</div>
-                            <div>{t('总耗时', 'Duration')}: {formatDurationMs(analysisUiReport.durationMs)}</div>
-                            {analysisUiReport.phaseTimings && (
-                                <div>
-                                    {t('阶段耗时', 'Stage Timing')}: {`Submit ${formatDurationMs(analysisUiReport.phaseTimings.submitMs)} | LLM ${formatDurationMs(analysisUiReport.phaseTimings.llmMs)} | Import ${formatDurationMs(analysisUiReport.phaseTimings.importMs)} | Save ${formatDurationMs(analysisUiReport.phaseTimings.persistMs)} | Post ${formatDurationMs(analysisUiReport.phaseTimings.postProcessMs)}`}
-                                </div>
-                            )}
-                            <div>{t('Finish Reason', 'Finish Reason')}: {analysisUiReport.runtimeMeta?.finishReason || '-'}</div>
-                            <div>{t('输出段数', 'Output Segments')}: {analysisUiReport.runtimeMeta?.segmentsCount ?? '-'}</div>
-                            <div>{t('Import 变更', 'Import Changes')}: {analysisUiReport.importReport?.changed === false ? t('无', 'No') : t('有', 'Yes')}</div>
                             <div>
-                                {t('Subjects', 'Subjects')}: {`C=${analysisUiReport.importReport?.importedSubjectCounts?.character || 0}, P=${analysisUiReport.importReport?.importedSubjectCounts?.prop || 0}, E=${analysisUiReport.importReport?.importedSubjectCounts?.environment || 0}`}
+                                {t('实体生成', 'Entity Generation')}: {t('已生成', 'Generated')}
+                                {` ${analysisUiReport.importReport?.importedSubjectCounts?.character || 0} ${t('个角色', 'characters')},`}
+                                {` ${analysisUiReport.importReport?.importedSubjectCounts?.environment || 0} ${t('个场景', 'environments')},`}
+                                {` ${analysisUiReport.importReport?.importedSubjectCounts?.prop || 0} ${t('个道具', 'props')}。`}
                             </div>
                             <div>
-                                {t('Scenes', 'Scenes')}: {`create=${analysisUiReport.importReport?.importStats?.scenesCreated || 0}, update=${analysisUiReport.importReport?.importStats?.scenesUpdated || 0}`}
+                                {t('一致性检查', 'Consistency Check')}: {
+                                    subjectConsistencyReport
+                                        ? (subjectConsistencyReport.ok ? t('已通过，可继续使用。', 'Passed, ready to use.') : t('有告警，请先核对后再继续。', 'Warnings found, please review before continuing.'))
+                                        : t('已完成基础检查。', 'Basic check completed.')
+                                }
                             </div>
-                            <div>{t('Shots', 'Shots')}: {analysisUiReport.importReport?.importStats?.shotsCreated || 0}</div>
-                            {analysisUiReport.importReport?.importDiagnostics && (
+                            <div className="text-[11px] text-white/75 pt-1 space-y-1">
                                 <div>
-                                    {t('Import 诊断', 'Import Diagnostics')}: {`source=${analysisUiReport.importReport.importDiagnostics?.entitiesPayloadSource || 'none'}, subject_index_rows=${analysisUiReport.importReport.importDiagnostics?.subjectIndexTableRows || 0}, subject_index_extracted=${analysisUiReport.importReport.importDiagnostics?.subjectIndexExtracted || 0}`}
+                                    {t('若仅缺少少量不重要资产（尤其过程性道具），一般可先忽略并继续制作。', 'If only a few low-priority assets are missing (especially transitional props), you can usually ignore them and continue.')}
                                 </div>
-                            )}
-                            {analysisUiReport.importReport?.importDiagnostics?.markers && (
                                 <div>
-                                    {t('识别标记', 'Detected Markers')}: {`script=${analysisUiReport.importReport.importDiagnostics.markers.script ? 'Y' : 'N'}, scene=${analysisUiReport.importReport.importDiagnostics.markers.scene ? 'Y' : 'N'}, shot=${analysisUiReport.importReport.importDiagnostics.markers.shot ? 'Y' : 'N'}`}
+                                    {t('若缺失资产较多，建议换模型重新生成，推荐 G1-Gemini2.5 Pro（可在设置菜单选择，非必须，也可继续使用系统默认）。', 'If many assets are missing, try regenerating with another model. Recommended: G1-Gemini2.5 Pro (set in Settings, optional; system default is also fine).')}
                                 </div>
-                            )}
-                            {analysisUiReport.warning ? <div>{t('告警', 'Warning')}: {analysisUiReport.warning}</div> : null}
-                            {analysisUiReport.error ? <div>{t('错误', 'Error')}: {analysisUiReport.error}</div> : null}
+                                <div>
+                                    {t('也可以在“补充说明”里强调要修改的内容，然后点击“修正生成结果”重新生成，可复用之前成果。', 'You can also emphasize required fixes in Attention Notes, then click "Refine Generated Result" to regenerate while reusing previous output.')}
+                                </div>
+                                <div>
+                                    {t('你可以前往“角色资产与场景”查看分析结果；若没有结果，可在“剧本”页点击“手工导入模型分析结果”。', 'You can review the results in "Character Assets & Scenes". If they are missing, use "Manual Import Model Analysis Result" on the Script page.')}
+                                </div>
+                            </div>
                         </div>
                     )}
                 </div>
@@ -8340,9 +8372,9 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                                             onClick={handleSupplementSubmitClick}
                                             disabled={isAnalyzing || !String(llmRawResultContent || llmResultContent || '').trim()}
                                             className={`px-3 py-2 rounded-md text-xs font-bold ${isAnalyzing || !String(llmRawResultContent || llmResultContent || '').trim() ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-100 border border-amber-400/30'}`}
-                                            title={t('使用“已生成内容 + 补充说明”执行补充内容', 'Run supplement content using generated result + attention notes')}
+                                            title={t('使用“已生成内容 + 补充说明”执行修正生成结果', 'Refine generated result using existing output + attention notes')}
                                         >
-                                            {t('补充内容', 'Supplement Content')}
+                                            {t('修正生成结果', 'Refine Generated Result')}
                                         </button>
                                         <button
                                             onClick={handleSaveAnalysisAttentionNotes}
@@ -8438,13 +8470,6 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                                     )}
                                 </div>
                                 <div className="flex items-center gap-2">
-                                    <button
-                                        onClick={() => doImportText(llmRawResultContent || llmResultContent || '', 'auto')}
-                                        className="px-3 py-1.5 rounded-md text-[10px] font-bold bg-white/5 hover:bg-white/10 border border-white/10 text-white/80"
-                                        title={t('按 LLM 原始返回结果导入', 'Import from LLM raw response')}
-                                    >
-                                        {t('导入 LLM 返回结果', 'Import LLM Result')}
-                                    </button>
                                     <button
                                         onClick={() => {
                                             const textToCopy = llmMarkdownTableText || llmResultContent || '';
@@ -10333,6 +10358,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
             associated_entities: ['Associated Entities', 'associated_entities'],
             shot_logic_cn: ['Shot Logic (CN)', 'shot_logic_cn'],
             keyframes: ['Keyframes', 'keyframes'],
+            prompt_cn: ['Prompt (CN)', 'prompt_cn'],
         };
         const keys = map[field] || [];
         for (const key of keys) {
@@ -10357,6 +10383,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                 associated_entities: getStagingShotField(shot, 'associated_entities'),
                 shot_logic_cn: getStagingShotField(shot, 'shot_logic_cn'),
                 keyframes: getStagingShotField(shot, 'keyframes'),
+                prompt_cn: getStagingShotField(shot, 'prompt_cn'),
             },
         });
     };
@@ -10379,6 +10406,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
             'Associated Entities': edited.associated_entities || '',
             'Shot Logic (CN)': edited.shot_logic_cn || '',
             'Keyframes': edited.keyframes || '',
+            'Prompt (CN)': edited.prompt_cn || '',
         };
 
         setAiShotsStaging(prev => ({ ...prev, content: currentRows }));
@@ -11658,6 +11686,17 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                                                 }}
                                                                 placeholder={t('镜头内容', 'Video content')}
                                                             />
+                                                            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{t('中文提示词', 'Prompt (CN)')}</div>
+                                                            <textarea
+                                                                className="w-full bg-black/30 border border-white/10 rounded-md px-2.5 py-2.5 text-[13px] min-h-[88px]"
+                                                                value={shot['Prompt (CN)'] || shot.prompt_cn || ''}
+                                                                onChange={e => {
+                                                                    const newData = [...(aiShotsStaging.content || [])];
+                                                                    newData[idx] = { ...shot, 'Prompt (CN)': e.target.value };
+                                                                    setAiShotsStaging(prev => ({ ...prev, content: newData }));
+                                                                }}
+                                                                placeholder={t('图片+视频中文提示词（可合并）', 'Chinese prompts for image + video (combined allowed)')}
+                                                            />
                                                             <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{t('基础字段', 'Basic Fields')}</div>
                                                             <div className="grid grid-cols-2 gap-2">
                                                                 <input
@@ -11702,7 +11741,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                                     ))}
                                                 </div>
                                                 <div className="hidden md:block max-h-[320px] overflow-auto custom-scrollbar">
-                                                    <table className="w-full min-w-[980px] text-xs text-left border-collapse">
+                                                    <table className="w-full min-w-[1120px] text-xs text-left border-collapse">
                                                         <thead className="sticky top-0 bg-[#252525] z-10 shadow-md">
                                                             <tr>
                                                                 <th className="p-2 border-b border-white/10 font-bold text-white/70">Shot ID</th>
@@ -11715,6 +11754,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                                                 <th className="hidden lg:table-cell p-2 border-b border-white/10 font-bold text-white/70">Keyframes</th>
                                                                 <th className="hidden lg:table-cell p-2 border-b border-white/10 font-bold text-white/70">End Frame</th>
                                                                 <th className="hidden md:table-cell p-2 border-b border-white/10 font-bold text-white/70">Associated Entities</th>
+                                                                <th className="hidden lg:table-cell p-2 border-b border-white/10 font-bold text-white/70">Prompt (CN)</th>
                                                                 <th className="p-2 border-b border-white/10 w-10"></th>
                                                             </tr>
                                                         </thead>
@@ -11836,6 +11876,17 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                                                             }}
                                                                         />
                                                                     </td>
+                                                                    <td className="hidden lg:table-cell p-1">
+                                                                        <textarea
+                                                                            className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded resize-y min-h-[40px]"
+                                                                            value={shot['Prompt (CN)'] || shot.prompt_cn || ''}
+                                                                            onChange={e => {
+                                                                                const newData = [...(aiShotsStaging.content || [])];
+                                                                                newData[idx] = { ...shot, 'Prompt (CN)': e.target.value };
+                                                                                setAiShotsStaging(prev => ({ ...prev, content: newData }));
+                                                                            }}
+                                                                        />
+                                                                    </td>
                                                                     <td className="p-1 text-center">
                                                                         <button
                                                                             onClick={() => {
@@ -11856,7 +11907,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                                 <div className="p-2 border-t border-white/10 flex flex-wrap items-center justify-between gap-2">
                                                     <button
                                                         onClick={() => {
-                                                            const newData = [...(aiShotsStaging.content || []), { 'Shot ID': (aiShotsStaging.content?.length || 0) + 1, 'Video Content': '' }];
+                                                            const newData = [...(aiShotsStaging.content || []), { 'Shot ID': (aiShotsStaging.content?.length || 0) + 1, 'Video Content': '', 'Prompt (CN)': '' }];
                                                             setAiShotsStaging(prev => ({ ...prev, content: newData }));
                                                         }}
                                                         className="w-full md:w-auto px-3 py-2 bg-white/5 hover:bg-white/10 rounded flex items-center justify-center gap-2 text-xs font-semibold"
@@ -11979,6 +12030,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                 <InputGroup label={t('时长（秒）', 'Duration (s)')} value={aiShotRowEditor.data?.duration || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), duration: v } }))} />
                             </div>
                             <InputGroup label={t('镜头逻辑（中文）', 'Shot Logic (CN)')} value={aiShotRowEditor.data?.shot_logic_cn || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), shot_logic_cn: v } }))} />
+                            <InputGroup label={t('中文提示词', 'Prompt (CN)')} value={aiShotRowEditor.data?.prompt_cn || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), prompt_cn: v } }))} />
                             <InputGroup label={t('关联实体', 'Associated Entities')} value={aiShotRowEditor.data?.associated_entities || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), associated_entities: v } }))} />
                             <InputGroup label={t('关键帧', 'Keyframes')} value={aiShotRowEditor.data?.keyframes || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), keyframes: v } }))} />
                             <div>
@@ -12099,6 +12151,57 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     const [isReconstructingEntity, setIsReconstructingEntity] = useState(false);
     const [reconstructProgress, setReconstructProgress] = useState(null);
     const [pickerConfig, setPickerConfig] = useState({ isOpen: false, callback: null });
+    const [subjectImageJobs, setSubjectImageJobs] = useState({});
+    const subjectImageJobPollingRef = useRef(false);
+    const subjectImageJobStorageKey = useMemo(() => {
+        const pid = String(projectId || '').trim();
+        return pid ? `aistory.subjectImageJobs.${pid}` : '';
+    }, [projectId]);
+    const SUBJECT_IMAGE_JOB_TTL_MS = 1000 * 60 * 60 * 6;
+
+    const normalizeSubjectImageJobs = useCallback((raw) => {
+        if (!raw || typeof raw !== 'object') return {};
+        const now = Date.now();
+        const cleaned = {};
+        Object.entries(raw).forEach(([entityId, value]) => {
+            const stableEntityId = String(entityId || '').trim();
+            const jobId = String(value?.jobId || '').trim();
+            const startedAt = Number(value?.startedAt || 0) || now;
+            if (!stableEntityId || !jobId) return;
+            if ((now - startedAt) > SUBJECT_IMAGE_JOB_TTL_MS) return;
+            cleaned[stableEntityId] = {
+                jobId,
+                startedAt,
+                entityName: String(value?.entityName || '').trim(),
+            };
+        });
+        return cleaned;
+    }, []);
+
+    const readSubjectImageJobsStorage = useCallback(() => {
+        if (!subjectImageJobStorageKey) return {};
+        try {
+            const raw = localStorage.getItem(subjectImageJobStorageKey);
+            if (!raw) return {};
+            return normalizeSubjectImageJobs(JSON.parse(raw));
+        } catch {
+            return {};
+        }
+    }, [normalizeSubjectImageJobs, subjectImageJobStorageKey]);
+
+    const writeSubjectImageJobsStorage = useCallback((jobs) => {
+        if (!subjectImageJobStorageKey) return;
+        try {
+            const normalized = normalizeSubjectImageJobs(jobs);
+            if (Object.keys(normalized).length === 0) {
+                localStorage.removeItem(subjectImageJobStorageKey);
+                return;
+            }
+            localStorage.setItem(subjectImageJobStorageKey, JSON.stringify(normalized));
+        } catch {
+            // ignore storage failures
+        }
+    }, [normalizeSubjectImageJobs, subjectImageJobStorageKey]);
 
     const resolvedPromptSubmitLang = useMemo(() => {
         return resolvePromptSubmitLanguage(uiLang, promptSubmitLangPref);
@@ -12205,6 +12308,94 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
             isMountedRef.current = false;
         };
     }, []);
+
+    useEffect(() => {
+        setSubjectImageJobs(readSubjectImageJobsStorage());
+    }, [readSubjectImageJobsStorage]);
+
+    useEffect(() => {
+        writeSubjectImageJobsStorage(subjectImageJobs);
+    }, [subjectImageJobs, writeSubjectImageJobsStorage]);
+
+    useEffect(() => {
+        const jobEntries = Object.entries(subjectImageJobs || {});
+        if (jobEntries.length === 0) return;
+
+        let disposed = false;
+        const pollOnce = async () => {
+            if (disposed || subjectImageJobPollingRef.current) return;
+            subjectImageJobPollingRef.current = true;
+            try {
+                const completed = [];
+                for (const [entityId, job] of jobEntries) {
+                    const jobId = String(job?.jobId || '').trim();
+                    if (!jobId) {
+                        completed.push(entityId);
+                        continue;
+                    }
+
+                    let statusResp = null;
+                    try {
+                        statusResp = await getImageGenerationJobStatus(jobId);
+                    } catch {
+                        continue;
+                    }
+
+                    const status = String(statusResp?.status || '').trim().toLowerCase();
+                    if (status === 'queued' || status === 'running') {
+                        continue;
+                    }
+
+                    if (status === 'succeeded') {
+                        const generatedUrl = String(statusResp?.result?.url || '').trim();
+                        if (generatedUrl) {
+                            try {
+                                await updateEntity(Number(entityId), { image_url: generatedUrl });
+                            } catch {
+                                // Best effort; local refresh still updates UX.
+                            }
+                            if (!disposed && isMountedRef.current) {
+                                setAllEntities(prev => prev.map(item => String(item?.id) === String(entityId) ? { ...item, image_url: generatedUrl } : item));
+                                setEntities(prev => prev.map(item => String(item?.id) === String(entityId) ? { ...item, image_url: generatedUrl } : item));
+                                setViewingEntity(prev => (String(prev?.id || '') === String(entityId) ? { ...prev, image_url: generatedUrl } : prev));
+                                setSelectedEntity(prev => (String(prev?.id || '') === String(entityId) ? { ...prev, image_url: generatedUrl } : prev));
+                            }
+                        }
+                        if (onLog) onLog(t(`主体生成完成：${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
+                        completed.push(entityId);
+                        continue;
+                    }
+
+                    if (status === 'failed' || status === 'canceled' || status === 'cancelled' || status === 'error') {
+                        if (onLog) onLog(t(`主体生成失败：${job?.entityName || entityId} - ${statusResp?.error || status}`, `Subject generation failed: ${job?.entityName || entityId} - ${statusResp?.error || status}`), 'error');
+                        completed.push(entityId);
+                    }
+                }
+
+                if (!disposed && completed.length > 0) {
+                    setSubjectImageJobs(prev => {
+                        const next = { ...(prev || {}) };
+                        completed.forEach((entityId) => {
+                            delete next[String(entityId)];
+                        });
+                        return next;
+                    });
+                }
+            } finally {
+                subjectImageJobPollingRef.current = false;
+            }
+        };
+
+        void pollOnce();
+        const timer = setInterval(() => {
+            void pollOnce();
+        }, 2500);
+
+        return () => {
+            disposed = true;
+            clearInterval(timer);
+        };
+    }, [onLog, subjectImageJobs, t]);
 
     useEffect(() => {
         const applySnapshot = (snapshot) => {
@@ -12769,6 +12960,9 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     };
 
     const handleGenerate = async () => {
+        const targetEntityId = Number(selectedEntity?.id || 0);
+        if (!Number.isFinite(targetEntityId) || targetEntityId <= 0) return;
+        const targetEntityName = String(selectedEntity?.name || selectedEntity?.name_en || targetEntityId);
         const currentLang = effectivePromptSubmitLang === 'cn' ? 'cn' : 'en';
         const selectedLangPrompt = getEntityPromptByLang(selectedEntity, currentLang);
         const draftPrompt = String(promptDrafts?.[currentLang] || '').trim();
@@ -12833,10 +13027,10 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                 );
             }
 
-            const asset = await generateImage(finalPrompt, provider || null, uniqueRefs.length > 0 ? uniqueRefs : null, {
+            const submitResult = await submitImageGenerationJob(finalPrompt, provider || null, uniqueRefs.length > 0 ? uniqueRefs : null, {
                 project_id: projectId,
                 episode_id: currentEpisode?.id,
-                entity_id: selectedEntity?.id,
+                entity_id: targetEntityId,
                 entity_name: selectedEntity?.name || selectedEntity?.name_en,
                 subject_name: selectedEntity?.name || selectedEntity?.name_en,
                 subject_type: selectedEntity?.type,
@@ -12844,14 +13038,31 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                 prompt_language: effectivePromptSubmitLang,
                 asset_type: 'subject',
                 ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
-                negative_prompt: buildEntityNegativePrompt(finalPrompt, selectedEntity, allEntities)
+                negative_prompt: buildEntityNegativePrompt(finalPrompt, selectedEntity, allEntities),
             });
-            await updateEntityImage(asset.url);
+
+            const jobId = String(submitResult?.job_id || '').trim();
+            if (!jobId) throw new Error('Missing image job id');
+
+            if (isMountedRef.current) {
+                setSubjectImageJobs(prev => ({
+                    ...(prev || {}),
+                    [String(targetEntityId)]: {
+                        jobId,
+                        startedAt: Date.now(),
+                        entityName: targetEntityName,
+                    },
+                }));
+            }
+
+            if (onLog) onLog(`Subject generation started in background: entity=${targetEntityName}, job_id=${jobId}`, 'process');
         } catch (e) {
             console.error(e);
             alert("Generation Failed: " + (e.response?.data?.detail || e.message));
         } finally {
-            setGenerating(false);
+            if (isMountedRef.current) {
+                setGenerating(false);
+            }
         }
     };
 
@@ -13157,6 +13368,12 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                         onClick={() => setViewingEntity(entity)}
                         className="aspect-[3/4] bg-card border border-white/10 rounded-xl overflow-hidden relative group w-full cursor-pointer hover:border-primary/50 transition-all"
                     >
+                        {subjectImageJobs[String(entity.id)] && (
+                            <div className="absolute top-2 left-2 z-30 px-2 py-1 rounded-md bg-amber-500/20 border border-amber-400/40 text-amber-100 text-[10px] font-bold flex items-center gap-1">
+                                <RefreshCw className="animate-spin" size={10} />
+                                {t('生成中', 'Generating')}
+                            </div>
+                        )}
                         <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent z-10 pointer-events-none"></div>
                         {entity.image_url ? (
                             <img src={getFullUrl(entity.image_url)} alt={entity.name} className="absolute inset-0 object-cover w-full h-full" />
@@ -13828,6 +14045,12 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
 
                                 {imageModalTab === 'generate' && (
                                     <div className="flex flex-col h-full">
+                                        {selectedEntity?.id && subjectImageJobs[String(selectedEntity.id)] && (
+                                            <div className="mb-3 rounded border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100 flex items-center gap-2">
+                                                <RefreshCw className="animate-spin" size={12} />
+                                                {t('该主体正在生成中，即使关闭窗口也会继续。', 'This subject is generating in background and will continue even if you close this window.')}
+                                            </div>
+                                        )}
                                         <textarea
                                             value={prompt}
                                             onChange={(e) => {
@@ -14043,15 +14266,15 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                         <div className="flex justify-end items-center gap-2">
                                             <button 
                                                 onClick={handleGenerate}
-                                                disabled={generating || !String((effectivePromptSubmitLang === 'cn' ? promptDrafts.cn : promptDrafts.en) || getEntityPromptByLang(selectedEntity, effectivePromptSubmitLang) || '').trim()}
+                                                disabled={generating || !!(selectedEntity?.id && subjectImageJobs[String(selectedEntity.id)]) || !String((effectivePromptSubmitLang === 'cn' ? promptDrafts.cn : promptDrafts.en) || getEntityPromptByLang(selectedEntity, effectivePromptSubmitLang) || '').trim()}
                                                 className="flex items-center space-x-2 bg-primary text-black px-6 py-2 rounded-lg font-bold hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
                                             >
-                                                {generating ? (
+                                                {generating || !!(selectedEntity?.id && subjectImageJobs[String(selectedEntity.id)]) ? (
                                                     <RefreshCw className="animate-spin" size={18} />
                                                 ) : (
                                                     <Wand2 size={18} />
                                                 )}
-                                                <span>{generating ? 'Generating...' : 'Generate Image'}</span>
+                                                <span>{(generating || !!(selectedEntity?.id && subjectImageJobs[String(selectedEntity.id)])) ? t('生成中...', 'Generating...') : t('生成图片', 'Generate Image')}</span>
                                             </button>
                                             <div className="relative">
                                                 <button
@@ -14135,6 +14358,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const resolvedPromptSubmitLang = useMemo(() => {
         return resolvePromptSubmitLanguage(uiLang, promptSubmitLangPref);
     }, [promptSubmitLangPref, uiLang]);
+    const shotPromptDisplayLang = resolvedPromptSubmitLang === 'cn' ? 'cn' : 'en';
     const [scenes, setScenes] = useState([]);
     const [shotSortMode, setShotSortMode] = useState('updated_desc');
     const [shotSortDirection, setShotSortDirection] = useState('desc');
@@ -15811,6 +16035,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                              return val;
                          })(),
                          keyframes: useMap ? getVal(['keyframes', 'key frames', '关键帧', 'kf'], 8) : '',
+                         prompt_cn: useMap ? getVal(['promptcn', 'prompt(cn)', 'cnprompt', '中文提示词', '中文提示', 'prompt中文'], 9) : '',
 
                          // Clear unused
                          shot_type: '',
@@ -15859,6 +16084,19 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                  try {
                     // Ensure the shot object has scene_code
                     if (!s.scene_code && currentScene) s.scene_code = currentScene.scene_no;
+
+                    const promptCnRaw = String(s.prompt_cn || '').trim();
+                    if (promptCnRaw) {
+                        let techObj = {};
+                        try {
+                            techObj = s.technical_notes ? JSON.parse(s.technical_notes) : {};
+                            if (!techObj || typeof techObj !== 'object') techObj = {};
+                        } catch (e) {
+                            techObj = {};
+                        }
+                        techObj.shot_prompt_cn = promptCnRaw;
+                        s.technical_notes = JSON.stringify(techObj);
+                    }
                     
                     if (count === 0) {
                         if (!s.shot_logic_cn) {
@@ -15866,7 +16104,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                         }
                     }
 
-                    await createShot(selectedSceneId, s);
+                          const { prompt_cn, ...createPayload } = s;
+                          await createShot(selectedSceneId, createPayload);
                     count++;
                  } catch(e) {
                      console.error("Failed to create shot", e);
@@ -18424,6 +18663,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                     const nextTech = { ...tech, [key]: value };
                                                     setEditingShot(prev => ({ ...(prev || {}), technical_notes: JSON.stringify(nextTech) }));
                                                 };
+                                                const showCnPrompt = shotPromptDisplayLang === 'cn';
+                                                const startPromptText = showCnPrompt ? String(tech.start_frame_cn || '') : String(editingShot.start_frame || '');
+                                                const endPromptText = showCnPrompt ? String(tech.end_frame_cn || '') : String(editingShot.end_frame || '');
+                                                const videoPromptText = showCnPrompt ? String(tech.video_prompt_cn || '') : String(editingShot.prompt || editingShot.video_content || '');
                                                 const modalType = assetDetailModal.type;
                                                 const keyframe = modalType === 'keyframe' ? localKeyframes[assetDetailModal.keyframeIndex] : null;
                                                 const endFrameUrl = String(tech.end_frame_url || '');
@@ -18540,36 +18783,49 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                         {currentGeneratingState.start ? t('生成中...', 'Generating...') : t('生成', 'Generate')}
                                                                     </button>
                                                                 </div>
-                                                                <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('英文提示词', 'Prompt (EN)')}</div>
-                                                                <textarea className="w-full h-48 bg-black/30 border border-white/10 rounded p-2 text-sm" value={editingShot.start_frame || ''} onChange={(e) => setEditingShot({...editingShot, start_frame: e.target.value})} />
-                                                                <div className="flex items-center justify-center gap-2">
-                                                                    <button
-                                                                        onClick={() => translatePromptToChinese('start')}
-                                                                        disabled={translatingPromptField.startsWith('start:')}
-                                                                        className={`text-xs px-2 py-1 rounded ${translatingPromptField.startsWith('start:') ? 'bg-purple-500/10 text-purple-300/50 cursor-wait' : 'bg-purple-500/20 text-purple-200 hover:bg-purple-500/30'}`}
-                                                                    >
-                                                                        {translatingPromptField === 'start:to-cn' ? t('翻译中...', 'Translating...') : t('翻译成中文', 'To Chinese')}
-                                                                    </button>
-                                                                    <button
-                                                                        onClick={() => translatePromptToEnglish('start')}
-                                                                        disabled={translatingPromptField.startsWith('start:')}
-                                                                        className={`text-xs px-2 py-1 rounded ${translatingPromptField.startsWith('start:') ? 'bg-white/10 text-white/50 cursor-wait' : 'bg-white/10 text-white hover:bg-white/20'}`}
-                                                                    >
-                                                                        {translatingPromptField === 'start:to-en' ? t('翻译中...', 'Translating...') : t('翻译成英文', 'To English')}
-                                                                    </button>
+                                                                <div className="space-y-3 rounded-lg border border-white/10 bg-black/20 p-4">
+                                                                    <div className="text-[11px] text-muted-foreground uppercase font-bold">
+                                                                        {showCnPrompt ? t('中文提示词', 'Prompt (CN)') : t('英文提示词', 'Prompt (EN)')}
+                                                                    </div>
+                                                                    <textarea
+                                                                        className="w-full h-56 bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                        value={startPromptText}
+                                                                        onChange={(e) => {
+                                                                            if (showCnPrompt) {
+                                                                                updateTechField('start_frame_cn', e.target.value);
+                                                                                return;
+                                                                            }
+                                                                            setEditingShot({...editingShot, start_frame: e.target.value});
+                                                                        }}
+                                                                    />
+                                                                    <div className="flex items-center justify-center gap-2">
+                                                                        <button
+                                                                            onClick={() => translatePromptToChinese('start')}
+                                                                            disabled={translatingPromptField.startsWith('start:')}
+                                                                            className={`text-xs px-2 py-1 rounded ${translatingPromptField.startsWith('start:') ? 'bg-purple-500/10 text-purple-300/50 cursor-wait' : 'bg-purple-500/20 text-purple-200 hover:bg-purple-500/30'}`}
+                                                                        >
+                                                                            {translatingPromptField === 'start:to-cn' ? t('翻译中...', 'Translating...') : t('翻译成中文', 'To Chinese')}
+                                                                        </button>
+                                                                        <button
+                                                                            onClick={() => translatePromptToEnglish('start')}
+                                                                            disabled={translatingPromptField.startsWith('start:')}
+                                                                            className={`text-xs px-2 py-1 rounded ${translatingPromptField.startsWith('start:') ? 'bg-white/10 text-white/50 cursor-wait' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                                                        >
+                                                                            {translatingPromptField === 'start:to-en' ? t('翻译中...', 'Translating...') : t('翻译成英文', 'To English')}
+                                                                        </button>
+                                                                    </div>
+                                                                    <RefineControl originalText={startPromptText} onUpdate={(v) => {
+                                                                        if (showCnPrompt) {
+                                                                            updateTechField('start_frame_cn', v);
+                                                                            return;
+                                                                        }
+                                                                        setEditingShot({...editingShot, start_frame: v});
+                                                                    }} type="image" currentImage={editingShot.image_url} onImageUpdate={async (url) => {
+                                                                        const newData = { image_url: url };
+                                                                        await onUpdateShot(editingShot.id, newData);
+                                                                        setEditingShot(prev => ({...prev, ...newData}));
+                                                                    }} projectId={projectId} shotId={editingShot.id} assetType="start_frame" featureInjector={injectEntityFeatures} onPickMedia={openMediaPicker} />
                                                                 </div>
-                                                                <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('中文对照提示词', 'Prompt (CN)')}</div>
-                                                                <textarea
-                                                                    className="w-full h-40 bg-black/30 border border-white/10 rounded p-2 text-sm"
-                                                                    value={tech.start_frame_cn || ''}
-                                                                    onChange={(e) => updateTechField('start_frame_cn', e.target.value)}
-                                                                    placeholder={t('填写起始帧中文对照提示词...', 'Add Chinese counterpart prompt for start frame...')}
-                                                                />
-                                                                <RefineControl originalText={editingShot.start_frame || ''} onUpdate={(v) => setEditingShot({...editingShot, start_frame: v})} type="image" currentImage={editingShot.image_url} onImageUpdate={async (url) => {
-                                                                    const newData = { image_url: url };
-                                                                    await onUpdateShot(editingShot.id, newData);
-                                                                    setEditingShot(prev => ({...prev, ...newData}));
-                                                                }} projectId={projectId} shotId={editingShot.id} assetType="start_frame" featureInjector={injectEntityFeatures} onPickMedia={openMediaPicker} />
                                                                 <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（起始帧）', 'Refs (Start)')} promptText={editingShot.start_frame || ''} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="ref_image_urls" strictPromptOnly={true} />
                                                             </div>
                                                         </div>
@@ -18611,8 +18867,20 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                         {t('取视频尾帧', 'Last Frame')}
                                                                     </button>
                                                                 </div>
-                                                                <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('英文提示词', 'Prompt (EN)')}</div>
-                                                                <textarea className="w-full h-48 bg-black/30 border border-white/10 rounded p-2 text-sm" value={editingShot.end_frame || ''} onChange={(e) => setEditingShot({...editingShot, end_frame: e.target.value})} />
+                                                                <div className="text-[11px] text-muted-foreground uppercase font-bold">
+                                                                    {showCnPrompt ? t('中文提示词', 'Prompt (CN)') : t('英文提示词', 'Prompt (EN)')}
+                                                                </div>
+                                                                <textarea
+                                                                    className="w-full h-56 bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                    value={endPromptText}
+                                                                    onChange={(e) => {
+                                                                        if (showCnPrompt) {
+                                                                            updateTechField('end_frame_cn', e.target.value);
+                                                                            return;
+                                                                        }
+                                                                        setEditingShot({...editingShot, end_frame: e.target.value});
+                                                                    }}
+                                                                />
                                                                 <div className="flex items-center justify-center gap-2">
                                                                     <button
                                                                         onClick={() => translatePromptToChinese('end')}
@@ -18629,14 +18897,13 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                         {translatingPromptField === 'end:to-en' ? t('翻译中...', 'Translating...') : t('翻译成英文', 'To English')}
                                                                     </button>
                                                                 </div>
-                                                                <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('中文对照提示词', 'Prompt (CN)')}</div>
-                                                                <textarea
-                                                                    className="w-full h-40 bg-black/30 border border-white/10 rounded p-2 text-sm"
-                                                                    value={tech.end_frame_cn || ''}
-                                                                    onChange={(e) => updateTechField('end_frame_cn', e.target.value)}
-                                                                    placeholder={t('填写结束帧中文对照提示词...', 'Add Chinese counterpart prompt for end frame...')}
-                                                                />
-                                                                <RefineControl originalText={editingShot.end_frame || ''} onUpdate={(v) => setEditingShot({...editingShot, end_frame: v})} type="image" currentImage={endFrameUrl} onImageUpdate={async (url) => {
+                                                                <RefineControl originalText={endPromptText} onUpdate={(v) => {
+                                                                    if (showCnPrompt) {
+                                                                        updateTechField('end_frame_cn', v);
+                                                                        return;
+                                                                    }
+                                                                    setEditingShot({...editingShot, end_frame: v});
+                                                                }} type="image" currentImage={endFrameUrl} onImageUpdate={async (url) => {
                                                                     const nextTech = { ...tech, end_frame_url: url, video_gen_mode: 'start_end' };
                                                                     const newData = { technical_notes: JSON.stringify(nextTech) };
                                                                     await onUpdateShot(editingShot.id, newData);
@@ -18737,8 +19004,20 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                         <option value="refs_video">{t('视频参考图模式', 'Refs (Video) As Ref')}</option>
                                                                     </select>
                                                                 </div>
-                                                                <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('英文提示词', 'Prompt (EN)')}</div>
-                                                                <textarea className="w-full h-48 bg-black/30 border border-white/10 rounded p-2 text-sm" value={editingShot.prompt || editingShot.video_content || ''} onChange={(e) => setEditingShot({...editingShot, prompt: e.target.value})} />
+                                                                <div className="text-[11px] text-muted-foreground uppercase font-bold">
+                                                                    {showCnPrompt ? t('中文提示词', 'Prompt (CN)') : t('英文提示词', 'Prompt (EN)')}
+                                                                </div>
+                                                                <textarea
+                                                                    className="w-full h-56 bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                    value={videoPromptText}
+                                                                    onChange={(e) => {
+                                                                        if (showCnPrompt) {
+                                                                            updateTechField('video_prompt_cn', e.target.value);
+                                                                            return;
+                                                                        }
+                                                                        setEditingShot({...editingShot, prompt: e.target.value});
+                                                                    }}
+                                                                />
                                                                 <div className="flex items-center justify-center gap-2">
                                                                     <button
                                                                         onClick={() => translatePromptToChinese('video')}
@@ -18755,14 +19034,13 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                         {translatingPromptField === 'video:to-en' ? t('翻译中...', 'Translating...') : t('翻译成英文', 'To English')}
                                                                     </button>
                                                                 </div>
-                                                                <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('中文对照提示词', 'Prompt (CN)')}</div>
-                                                                <textarea
-                                                                    className="w-full h-40 bg-black/30 border border-white/10 rounded p-2 text-sm"
-                                                                    value={tech.video_prompt_cn || ''}
-                                                                    onChange={(e) => updateTechField('video_prompt_cn', e.target.value)}
-                                                                    placeholder={t('填写视频中文对照提示词...', 'Add Chinese counterpart prompt for video...')}
-                                                                />
-                                                                <RefineControl originalText={editingShot.prompt || editingShot.video_content || ''} onUpdate={(v) => setEditingShot({...editingShot, prompt: v})} type="video" />
+                                                                <RefineControl originalText={videoPromptText} onUpdate={(v) => {
+                                                                    if (showCnPrompt) {
+                                                                        updateTechField('video_prompt_cn', v);
+                                                                        return;
+                                                                    }
+                                                                    setEditingShot({...editingShot, prompt: v});
+                                                                }} type="video" />
                                                                 <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（视频）', 'Refs (Video)')} promptText={editingShot.prompt || editingShot.video_content || ''} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="video_ref_image_urls" strictPromptOnly={true} />
                                                             </div>
                                                         </div>
@@ -18795,7 +19073,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                 </button>
                                                             </div>
                                                             <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('英文提示词', 'Prompt (EN)')}</div>
-                                                            <textarea className="w-full h-48 bg-black/30 border border-white/10 rounded p-2 text-sm" value={keyframe?.prompt || ''} onChange={(e) => {
+                                                            <textarea className="w-full h-56 bg-black/30 border border-white/10 rounded p-3 text-sm" value={keyframe?.prompt || ''} onChange={(e) => {
                                                                 const updated = [...localKeyframes];
                                                                 if (!updated[assetDetailModal.keyframeIndex]) return;
                                                                 updated[assetDetailModal.keyframeIndex].prompt = e.target.value;
@@ -18819,7 +19097,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                             </div>
                                                             <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('中文对照提示词', 'Prompt (CN)')}</div>
                                                             <textarea
-                                                                className="w-full h-40 bg-black/30 border border-white/10 rounded p-2 text-sm"
+                                                                className="w-full h-48 bg-black/30 border border-white/10 rounded p-3 text-sm"
                                                                 value={(tech.keyframe_prompt_cn_map && keyframe?.time) ? (tech.keyframe_prompt_cn_map[keyframe.time] || '') : ''}
                                                                 onChange={(e) => {
                                                                     const nextMap = { ...(tech.keyframe_prompt_cn_map || {}) };
