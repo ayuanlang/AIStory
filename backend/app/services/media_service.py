@@ -3632,6 +3632,18 @@ class MediaGenerationService:
                 payload_input["duration"] = str(int(best_duration))
                 payload_input["resolution"] = f"{int(best_resolution)}P"
 
+                # Keep only documented hailuo 2.3 i2v fields to avoid 422 Invalid parameter.
+                payload_input.pop("aspect_ratio", None)
+                payload_input.pop("image_urls", None)
+                payload_input.pop("last_frame_url", None)
+
+                # image_url is required by this endpoint.
+                primary_image_url = str(payload_input.get("image_url") or "").strip()
+                if not primary_image_url:
+                    fallback_ref = resolved_refs[0] if resolved_refs else None
+                    if fallback_ref:
+                        payload_input["image_url"] = str(fallback_ref)
+
             if model_lower == "bytedance/v1-pro-text-to-video":
                 payload_input.setdefault("aspect_ratio", normalized_ar or "16:9")
                 payload_input.setdefault("resolution", str(tool_conf.get("resolution") or "720p"))
