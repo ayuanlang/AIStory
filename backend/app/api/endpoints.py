@@ -14466,6 +14466,26 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
     _is_token_billing = billing_service.is_token_pricing(db, "video_gen", req.provider, req.model)
     _video_token_cfg = {}
     _estimated_tokens = 0
+    runtime_llm_config = _build_runtime_llm_config(req.provider, req.model, media_type="video")
+
+    if not runtime_llm_config:
+        try:
+            strict_provider = bool(str(req.provider or "").strip())
+            pre_api_cfg = media_service.get_api_config(
+                provider=req.provider,
+                user_id=current_user.id,
+                category="Video",
+                requested_model=req.model,
+                user_credits=(current_user.credits or 0),
+                strict_provider=strict_provider,
+            )
+            pre_provider = str((pre_api_cfg or {}).get("provider") or "").strip()
+            pre_model = str((pre_api_cfg or {}).get("model") or "").strip()
+            if pre_provider and pre_model:
+                runtime_llm_config = {"provider": pre_provider, "model": pre_model}
+        except Exception:
+            # Keep reserve path resilient; fallback to request provider/model handling.
+            runtime_llm_config = runtime_llm_config or None
 
     try:
         if _is_token_billing:
@@ -14491,14 +14511,43 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
                 "duration_seconds": req.duration,
                 "billing_mode": "RESERVE",
             }
+        if isinstance(runtime_llm_config, dict):
+            reserve_provider = str(runtime_llm_config.get("provider") or "").strip()
+            reserve_model = str(runtime_llm_config.get("model") or "").strip()
+            if reserve_provider:
+                reserve_details["provider"] = reserve_provider
+                reserve_details["resolved_provider"] = reserve_provider
+            if reserve_model:
+                reserve_details["model"] = reserve_model
+                reserve_details["resolved_model"] = reserve_model
         if req.sound is not None:
             reserve_details["has_audio"] = bool(req.sound)
+        reserve_system_api_id = None
+        try:
+            if isinstance(runtime_llm_config, dict):
+                reserve_provider = str(runtime_llm_config.get("provider") or "").strip()
+                reserve_model = str(runtime_llm_config.get("model") or "").strip()
+                if reserve_provider and reserve_model:
+                    reserve_row = billing_service._resolve_system_api_row(db, "video_gen", reserve_provider, reserve_model)
+                    if reserve_row is not None:
+                        reserve_system_api_id = int(getattr(reserve_row, "id", 0) or 0) or None
+        except Exception:
+            reserve_system_api_id = None
+        if reserve_system_api_id is not None:
+            reserve_details["system_api_id"] = reserve_system_api_id
+            reserve_details["resolved_system_api_id"] = reserve_system_api_id
+
+        reserve_provider_arg = req.provider
+        reserve_model_arg = req.model
+        if isinstance(runtime_llm_config, dict):
+            reserve_provider_arg = runtime_llm_config.get("provider") or reserve_provider_arg
+            reserve_model_arg = runtime_llm_config.get("model") or reserve_model_arg
         reservation_tx = billing_service.reserve_credits(
             db,
             current_user.id,
             "video_gen",
-            req.provider,
-            req.model,
+            reserve_provider_arg,
+            reserve_model_arg,
             reserve_details,
         )
 
@@ -14648,7 +14697,7 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
         result = await media_service.generate_video(
             prompt=prompt_text,
             negative_prompt=req.negative_prompt,
-            llm_config=_build_runtime_llm_config(req.provider, req.model, media_type="video"),
+            llm_config=runtime_llm_config,
             reference_image_url=req.ref_image_url,
             last_frame_url=req.last_frame_url,
             duration=req.duration,
@@ -14673,7 +14722,7 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
             % (
                 req.provider,
                 req.model,
-                _build_runtime_llm_config(req.provider, req.model, media_type="video"),
+                runtime_llm_config,
             )
         )
         if "error" in result:

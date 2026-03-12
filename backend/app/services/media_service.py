@@ -3570,6 +3570,28 @@ class MediaGenerationService:
                 if resolved:
                     resolved_refs.append(resolved)
 
+        # Fallback: some callers pass reference images through provider_options only.
+        if not resolved_refs:
+            option_refs = tool_conf.get("image_urls") or tool_conf.get("imageUrls") or []
+            if isinstance(option_refs, str):
+                option_refs = [option_refs]
+            for ref in option_refs if isinstance(option_refs, list) else []:
+                if use_veo_api:
+                    resolved = self._process_veo_image(ref, normalized_ar or "16:9")
+                else:
+                    resolved = self._resolve_ref_for_api(ref, force_data_uri_for_local=True)
+                if resolved:
+                    resolved_refs.append(resolved)
+
+            single_ref = tool_conf.get("image_url") or tool_conf.get("imageUrl")
+            if single_ref and not resolved_refs:
+                if use_veo_api:
+                    resolved = self._process_veo_image(single_ref, normalized_ar or "16:9")
+                else:
+                    resolved = self._resolve_ref_for_api(single_ref, force_data_uri_for_local=True)
+                if resolved:
+                    resolved_refs.append(resolved)
+
         if resolved_refs:
             payload_input["image_urls"] = resolved_refs
             payload_input["image_url"] = resolved_refs[0]
@@ -3643,6 +3665,14 @@ class MediaGenerationService:
                     fallback_ref = resolved_refs[0] if resolved_refs else None
                     if fallback_ref:
                         payload_input["image_url"] = str(fallback_ref)
+
+                if not str(payload_input.get("image_url") or "").strip():
+                    return {
+                        "error": "KIE submission validation failed",
+                        "details": "image_url is required for hailuo 2.3 image-to-video",
+                        "submit_failed": True,
+                        "runtime_model": model,
+                    }
 
             if model_lower == "bytedance/v1-pro-text-to-video":
                 payload_input.setdefault("aspect_ratio", normalized_ar or "16:9")

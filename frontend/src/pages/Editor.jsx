@@ -18919,6 +18919,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                     const pendingVideoJobId = getPendingVideoJobId(editingShot?.id);
                                                     const isStoppingCurrentVideo = Boolean(stoppingVideoByShot[String(editingShot?.id || '')]);
                                                     const voiceoverUrl = String(tech.voiceover_url || '').trim();
+                                                    const rawVoiceoverPrompt = String(tech.voiceover_prompt || '').trim();
+                                                    const llmDialogueBackfillText = String(
+                                                        tech.voiceover_dialogue_text || tech.voiceover_dialogue || ''
+                                                    ).trim() || extractDialogueOnlyFromPrompt(rawVoiceoverPrompt) || rawVoiceoverPrompt;
                                                     const voiceAsset = resolveShotAssetByUrl(voiceoverUrl, 'audio');
                                                     const voiceAssetDetail = buildShotAssetDetail(voiceAsset, 'audio', voiceoverUrl);
                                                     const voiceAssetMeta = voiceAssetDetail.rawMeta;
@@ -18943,10 +18947,26 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                 <div className="text-xs text-muted-foreground break-all">{t('配音 URL', 'Voice URL')}: {String(tech.voiceover_url || '') || '-'}</div>
                                                                 <div className="text-xs text-muted-foreground">{t('时长', 'Duration')}: {editingShot.duration || '5'}</div>
                                                                 <div className="text-xs text-muted-foreground">{t('模式', 'Mode')}: {tech.video_mode_unified || tech.video_gen_mode || 'start'}</div>
-                                                                {voiceoverUrl && (
+                                                                {(voiceoverUrl || llmDialogueBackfillText) && (
                                                                     <div className="space-y-2 rounded-lg border border-white/10 bg-black/30 p-3">
                                                                         <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('配音预览', 'Voiceover Preview')}</div>
-                                                                        <audio src={getFullUrl(voiceoverUrl)} controls className="w-full" />
+                                                                        {voiceoverUrl ? (
+                                                                            <audio src={getFullUrl(voiceoverUrl)} controls className="w-full" />
+                                                                        ) : (
+                                                                            <div className="text-xs text-muted-foreground">{t('暂无配音音频', 'No voiceover audio yet')}</div>
+                                                                        )}
+                                                                        {llmDialogueBackfillText && (
+                                                                            <div className="space-y-1 pt-1">
+                                                                                <div className="text-[11px] text-muted-foreground uppercase font-bold">
+                                                                                    {t('大模型抽取对话回填', 'LLM Dialogue Backfill')}
+                                                                                </div>
+                                                                                <textarea
+                                                                                    className="w-full min-h-[92px] bg-black/40 border border-white/10 rounded p-2 text-xs leading-relaxed text-white/90 resize-y"
+                                                                                    value={llmDialogueBackfillText}
+                                                                                    readOnly
+                                                                                />
+                                                                            </div>
+                                                                        )}
                                                                     </div>
                                                                 )}
                                                                 {voiceoverUrl && renderAssetMetaPanel(voiceAssetDetail, resolvedVoiceMeta, t('配音元信息', 'Voice Metadata'))}
