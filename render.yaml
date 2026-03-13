@@ -10,11 +10,18 @@ services:
       pip install --no-cache-dir -r requirements.txt
     startCommand: |
       cd backend
+      echo "[boot] backend pre-start migrations begin"
       python add_users_credits_column.py || echo "[WARN] add_users_credits_column.py failed, continuing"
       python add_scene_ai_shots_result_column.py || echo "[WARN] add_scene_ai_shots_result_column.py failed, continuing"
       python add_users_email_verification_columns.py || echo "[WARN] add_users_email_verification_columns.py failed, continuing"
       python backfill_user_verification_for_active.py || echo "[WARN] backfill_user_verification_for_active.py failed, continuing"
-      python apply_kie_system_data_standard_seed.py || echo "[WARN] apply_kie_system_data_standard_seed.py failed, continuing"
+      if [ "${RUN_KIE_SEED_ON_BOOT:-0}" = "1" ]; then
+        echo "[boot] RUN_KIE_SEED_ON_BOOT=1, applying KIE standard seed"
+        python apply_kie_system_data_standard_seed.py || echo "[WARN] apply_kie_system_data_standard_seed.py failed, continuing"
+      else
+        echo "[boot] RUN_KIE_SEED_ON_BOOT!=1, skip KIE standard seed"
+      fi
+      echo "[boot] starting gunicorn on PORT=${PORT}"
       exec gunicorn app.main:app \
         -k uvicorn.workers.UvicornWorker \
         --bind 0.0.0.0:$PORT \
