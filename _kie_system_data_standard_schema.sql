@@ -34,6 +34,15 @@ CREATE TABLE IF NOT EXISTS kie_system_data_standard_mappings (
     UNIQUE(provider, model_key_inferred, source_field, source_enum_value, standard_dimension, standard_value)
 );
 
+CREATE TABLE IF NOT EXISTS kie_system_data_standard_mapping_rules (
+    rule_code TEXT PRIMARY KEY,
+    rule_name TEXT,
+    rule_description TEXT,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS ix_kie_std_values_dim
 ON kie_system_data_standard_values(standard_dimension, is_active);
 

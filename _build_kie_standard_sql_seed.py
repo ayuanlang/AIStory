@@ -9,6 +9,19 @@ MAP_CSV = ROOT / "_kie_system_to_model_enum_mapping.csv"
 OUT_SCHEMA = ROOT / "_kie_system_data_standard_schema.sql"
 OUT_SEED = ROOT / "_kie_system_data_standard_seed.sql"
 
+EXCLUDED_STANDARD_DIMENSIONS = {"MODEL_ID", "VOICE_ID"}
+
+RULE_DESCRIPTIONS = {
+    "exact": "标准值与API枚举值精确匹配",
+    "semantic_token": "按语义token匹配",
+    "semantic_alias": "按别名语义匹配",
+    "nearest_lower": "按数值就近取不高于标准值",
+    "nearest_ratio": "按比例最接近匹配",
+    "semantic_prefix": "按前缀语义匹配",
+    "fallback_baseline": "回退到基线枚举值",
+    "fallback_min": "回退到最小可用枚举值",
+}
+
 
 def esc(v: str) -> str:
     return str(v or "").replace("'", "''")
@@ -56,6 +69,15 @@ CREATE TABLE IF NOT EXISTS kie_system_data_standard_mappings (
     UNIQUE(provider, model_key_inferred, source_field, source_enum_value, standard_dimension, standard_value)
 );
 
+CREATE TABLE IF NOT EXISTS kie_system_data_standard_mapping_rules (
+    rule_code TEXT PRIMARY KEY,
+    rule_name TEXT,
+    rule_description TEXT,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS ix_kie_std_values_dim
 ON kie_system_data_standard_values(standard_dimension, is_active);
 
@@ -69,11 +91,29 @@ COMMIT;
     lines = []
     lines.append("-- Generated seed SQL for KIE data standard tables")
     lines.append("BEGIN TRANSACTION;")
+    lines.append(
+        "CREATE TABLE IF NOT EXISTS kie_system_data_standard_mapping_rules "
+        "(rule_code TEXT PRIMARY KEY, rule_name TEXT, rule_description TEXT, "
+        "is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT (datetime('now')), "
+        "updated_at TEXT NOT NULL DEFAULT (datetime('now')));"
+    )
+    excluded_list = ", ".join(f"'{esc(v)}'" for v in sorted(EXCLUDED_STANDARD_DIMENSIONS))
+    lines.append(
+        "DELETE FROM kie_system_data_standard_mappings "
+        f"WHERE standard_dimension IN ({excluded_list});"
+    )
+    lines.append(
+        "DELETE FROM kie_system_data_standard_values "
+        f"WHERE standard_dimension IN ({excluded_list});"
+    )
 
     dict_count = 0
     with DICT_CSV.open("r", encoding="utf-8-sig", newline="") as f:
         rd = csv.DictReader(f)
         for r in rd:
+            dim = str(r.get("standard_dimension") or "").strip().upper()
+            if dim in EXCLUDED_STANDARD_DIMENSIONS:
+                continue
             lines.append(
                 "INSERT INTO kie_system_data_standard_values "
                 "(standard_dimension, standard_value, value_type, definition, alias_values, is_active, updated_at) VALUES "
@@ -86,9 +126,16 @@ COMMIT;
             dict_count += 1
 
     map_count = 0
+    rule_codes = set()
     with MAP_CSV.open("r", encoding="utf-8-sig", newline="") as f:
         rd = csv.DictReader(f)
         for r in rd:
+            dim = str(r.get("standard_dimension") or "").strip().upper()
+            if dim in EXCLUDED_STANDARD_DIMENSIONS:
+                continue
+            note_text = str(r.get("note") or "")
+            if note_text.startswith("std_to_api:"):
+                rule_codes.add(note_text.split(":", 1)[1].strip())
             lines.append(
                 "INSERT INTO kie_system_data_standard_mappings "
                 "(provider, model_key_inferred, model_title, model_url, source_field, source_enum_value, "
@@ -102,6 +149,17 @@ COMMIT;
                 "note=excluded.note, is_active=excluded.is_active, updated_at=datetime('now');"
             )
             map_count += 1
+
+    for rule_code in sorted(rc for rc in rule_codes if rc):
+        rule_desc = RULE_DESCRIPTIONS.get(rule_code, "映射规则")
+        lines.append(
+            "INSERT INTO kie_system_data_standard_mapping_rules "
+            "(rule_code, rule_name, rule_description, is_active, updated_at) VALUES "
+            f"('{esc(rule_code)}', '{esc(rule_code)}', '{esc(rule_desc)}', 1, datetime('now')) "
+            "ON CONFLICT(rule_code) DO UPDATE SET "
+            "rule_name=excluded.rule_name, rule_description=excluded.rule_description, "
+            "is_active=excluded.is_active, updated_at=datetime('now');"
+        )
 
     lines.append("COMMIT;")
     OUT_SEED.write_text("\n".join(lines), encoding="utf-8")
