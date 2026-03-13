@@ -64,6 +64,10 @@ class MediaGenerationService:
     USER_API_STRATEGY_FIXED = "fixed"
     USER_API_STRATEGY_SMART_DEFAULT = "smart_default"
     USER_API_STRATEGY_LOW_PRICE_REPLACE = "low_price_replace"
+    _AGENT_POLICY_CATEGORY = "System_Payment"
+    _AGENT_POLICY_PROVIDER = "agent_policy"
+    _AGENT_POLICY_MODEL = "tool_acl"
+    _SORA_MENTION_CONFIG_KEY = "sora_mention_config"
     _provider_key_cursors: Dict[str, int] = {}
 
     def _normalize_api_strategy(self, value: Any, default: str = USER_API_STRATEGY_SMART_DEFAULT) -> str:
@@ -258,6 +262,52 @@ class MediaGenerationService:
             return raw
         return None
 
+    def _sanitize_sora_prompt_mentions(self, prompt: Any) -> str:
+        text = str(prompt or "")
+        if not text:
+            return ""
+
+        # Sora family may interpret @mentions as user cameo references and reject
+        # requests with "Mentioned a user who does not have a cameo".
+        cleaned = re.sub(r"@(?=[A-Za-z0-9_\u4e00-\u9fff])", "", text)
+        cleaned = re.sub(r"\bCHAR\s*:\s*\[\s*", "CHAR:[", cleaned, flags=re.IGNORECASE)
+        return cleaned
+
+    def _resolve_sora_mention_config(self, tool_conf: Dict[str, Any]) -> Dict[str, bool]:
+        cfg = {
+            "auto_use_sora_mention": False,
+            "auto_upload_character": False,
+        }
+
+        # Model-level override from System API config.
+        if isinstance(tool_conf, dict):
+            if tool_conf.get("auto_use_sora_mention") is not None:
+                cfg["auto_use_sora_mention"] = bool(self._normalize_bool_value(tool_conf.get("auto_use_sora_mention")))
+            if tool_conf.get("auto_upload_character") is not None:
+                cfg["auto_upload_character"] = bool(self._normalize_bool_value(tool_conf.get("auto_upload_character")))
+
+        # Global fallback from settings/system/manage/sora-mention-config.
+        if not cfg["auto_use_sora_mention"] and not cfg["auto_upload_character"]:
+            try:
+                with SessionLocal() as session:
+                    row = session.query(SystemAPISetting).filter(
+                        SystemAPISetting.category == self._AGENT_POLICY_CATEGORY,
+                        SystemAPISetting.provider == self._AGENT_POLICY_PROVIDER,
+                        SystemAPISetting.model == self._AGENT_POLICY_MODEL,
+                    ).order_by(SystemAPISetting.id.desc()).first()
+                    row_cfg = self._safe_json_dict(getattr(row, "config", {}) if row else {})
+                    sora_cfg = self._safe_json_dict(row_cfg.get(self._SORA_MENTION_CONFIG_KEY, {}))
+                    if sora_cfg:
+                        cfg["auto_use_sora_mention"] = bool(self._normalize_bool_value(sora_cfg.get("auto_use_sora_mention")))
+                        cfg["auto_upload_character"] = bool(self._normalize_bool_value(sora_cfg.get("auto_upload_character")))
+            except Exception:
+                pass
+
+        if not cfg["auto_use_sora_mention"]:
+            cfg["auto_upload_character"] = False
+
+        return cfg
+
     def _normalize_bool_value(self, value: Any) -> Optional[bool]:
         if isinstance(value, bool):
             return value
@@ -377,6 +427,255 @@ class MediaGenerationService:
             out.append(text_item)
         return out
 
+    def _normalize_duration_enum_values(self, values: Any) -> List[int]:
+        normalized = self._normalize_str_list(values)
+        out: List[int] = []
+        for item in normalized:
+            try:
+                num = int(float(item))
+            except Exception:
+                continue
+            if num > 0:
+                out.append(num)
+        return sorted(set(out))
+
+    def _map_duration_nearest_lower(self, requested: Any, allowed_values: Any) -> Optional[int]:
+        allowed = self._normalize_duration_enum_values(allowed_values)
+        if not allowed:
+            return None
+        try:
+            requested_num = float(requested)
+        except Exception:
+            requested_num = float(allowed[0])
+
+        lower_or_equal = [x for x in allowed if float(x) <= requested_num]
+        if lower_or_equal:
+            return max(lower_or_equal)
+        return allowed[0]
+
+    def _normalize_enum_token(self, value: Any) -> str:
+        text = str(value or "").strip().lower()
+        if not text:
+            return ""
+        return re.sub(r"[^a-z0-9]", "", text)
+
+    def _parse_aspect_ratio_number(self, value: Any) -> Optional[float]:
+        text = str(value or "").strip().lower()
+        if not text:
+            return None
+        text = text.replace(" ", "")
+        if text in {"adaptive", "auto"}:
+            return None
+
+        m = re.match(r"^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$", text)
+        if m:
+            try:
+                a = float(m.group(1))
+                b = float(m.group(2))
+                if a > 0 and b > 0:
+                    return a / b
+            except Exception:
+                return None
+
+        m = re.match(r"^(\d+(?:\.\d+)?)/(\d+(?:\.\d+)?)$", text)
+        if m:
+            try:
+                a = float(m.group(1))
+                b = float(m.group(2))
+                if a > 0 and b > 0:
+                    return a / b
+            except Exception:
+                return None
+
+        try:
+            num = float(text)
+            return num if num > 0 else None
+        except Exception:
+            return None
+
+    def _parse_resolution_tier(self, value: Any) -> Optional[int]:
+        text = str(value or "").strip().lower().replace(" ", "")
+        if not text:
+            return None
+
+        m = re.match(r"^(\d+)(?:p)?$", text)
+        if m:
+            try:
+                num = int(m.group(1))
+                return num if num > 0 else None
+            except Exception:
+                return None
+
+        m = re.match(r"^(\d+)[x:](\d+)$", text)
+        if m:
+            try:
+                a = int(m.group(1))
+                b = int(m.group(2))
+                if a > 0 and b > 0:
+                    return min(a, b)
+            except Exception:
+                return None
+
+        m = re.match(r"^(\d+(?:\.\d+)?)k$", text)
+        if m:
+            try:
+                return int(float(m.group(1)) * 1000)
+            except Exception:
+                return None
+
+        return None
+
+    def _parse_image_size_rank(self, value: Any) -> Optional[int]:
+        text = str(value or "").strip().lower().replace(" ", "")
+        if not text:
+            return None
+
+        m = re.match(r"^(\d+(?:\.\d+)?)k$", text)
+        if m:
+            try:
+                return int(float(m.group(1)) * 1000)
+            except Exception:
+                return None
+
+        m = re.match(r"^k(\d+(?:\.\d+)?)$", text)
+        if m:
+            try:
+                return int(float(m.group(1)) * 1000)
+            except Exception:
+                return None
+
+        m = re.match(r"^(\d+)[x:](\d+)$", text)
+        if m:
+            try:
+                a = int(m.group(1))
+                b = int(m.group(2))
+                if a > 0 and b > 0:
+                    return min(a, b)
+            except Exception:
+                return None
+
+        m = re.match(r"^(\d+)(?:p)?$", text)
+        if m:
+            try:
+                num = int(m.group(1))
+                return num if num > 0 else None
+            except Exception:
+                return None
+
+        return None
+
+    def _map_mode_to_allowed(self, requested: Any, allowed_values: Any) -> Optional[str]:
+        allowed = self._normalize_str_list(allowed_values)
+        if not allowed:
+            return None
+
+        req_text = str(requested or "").strip()
+        if not req_text:
+            return None
+
+        exact_map = {item.lower(): item for item in allowed}
+        req_lower = req_text.lower()
+        if req_lower in exact_map:
+            return exact_map[req_lower]
+
+        req_std = self._normalize_kie_standard_value("MODE", req_text)
+        if req_std:
+            for item in allowed:
+                if self._normalize_kie_standard_value("MODE", item) == req_std:
+                    return item
+
+        req_token = self._normalize_enum_token(req_text)
+        if req_token:
+            token_map = {self._normalize_enum_token(item): item for item in allowed}
+            mapped = token_map.get(req_token)
+            if mapped:
+                return mapped
+
+        return allowed[0]
+
+    def _map_aspect_ratio_to_allowed(self, requested: Any, allowed_values: Any) -> Optional[str]:
+        allowed = self._normalize_str_list(allowed_values)
+        if not allowed:
+            return None
+
+        req_text = self._normalize_aspect_ratio_value(str(requested or "").strip())
+        if not req_text:
+            return None
+
+        exact_map = {item.lower(): item for item in allowed}
+        if req_text.lower() in exact_map:
+            return exact_map[req_text.lower()]
+
+        req_ratio = self._parse_aspect_ratio_number(req_text)
+        if req_ratio is None:
+            return allowed[0]
+
+        best_item: Optional[str] = None
+        best_diff: Optional[float] = None
+        for item in allowed:
+            ratio_val = self._parse_aspect_ratio_number(item)
+            if ratio_val is None:
+                continue
+            diff = abs(ratio_val - req_ratio)
+            if best_diff is None or diff < best_diff:
+                best_diff = diff
+                best_item = item
+
+        return best_item or allowed[0]
+
+    def _map_numeric_enum_nearest_lower(
+        self,
+        requested: Any,
+        allowed_values: Any,
+        parser: Any,
+    ) -> Optional[str]:
+        allowed = self._normalize_str_list(allowed_values)
+        if not allowed:
+            return None
+
+        req_text = str(requested or "").strip()
+        if not req_text:
+            return None
+
+        exact_map = {item.lower(): item for item in allowed}
+        req_lower = req_text.lower()
+        if req_lower in exact_map:
+            return exact_map[req_lower]
+
+        req_num = parser(req_text)
+        numeric_allowed: List[tuple[str, int]] = []
+        for item in allowed:
+            parsed = parser(item)
+            if parsed is None:
+                continue
+            try:
+                numeric_allowed.append((item, int(parsed)))
+            except Exception:
+                continue
+
+        if req_num is None or not numeric_allowed:
+            return allowed[0]
+
+        lower_or_equal = [pair for pair in numeric_allowed if pair[1] <= int(req_num)]
+        if lower_or_equal:
+            best_val = max(pair[1] for pair in lower_or_equal)
+            for item, val in lower_or_equal:
+                if val == best_val:
+                    return item
+
+        min_val = min(pair[1] for pair in numeric_allowed)
+        for item, val in numeric_allowed:
+            if val == min_val:
+                return item
+
+        return allowed[0]
+
+    def _map_image_size_to_allowed(self, requested: Any, allowed_values: Any) -> Optional[str]:
+        return self._map_numeric_enum_nearest_lower(requested, allowed_values, self._parse_image_size_rank)
+
+    def _map_resolution_to_allowed(self, requested: Any, allowed_values: Any) -> Optional[str]:
+        return self._map_numeric_enum_nearest_lower(requested, allowed_values, self._parse_resolution_tier)
+
     def _load_system_api_runtime_enum_catalog(self, setting_id: Any) -> Dict[str, Any]:
         try:
             sid = int(setting_id or 0)
@@ -476,65 +775,33 @@ class MediaGenerationService:
         except Exception:
             effective_duration = None
 
-        def _allowed_map(values: Any, to_lower: bool = False) -> Dict[str, str]:
-            mapped: Dict[str, str] = {}
-            if not isinstance(values, list):
-                return mapped
-            for item in values:
-                text_item = str(item or "").strip()
-                if not text_item:
-                    continue
-                key = text_item.lower() if to_lower else text_item
-                if key not in mapped:
-                    mapped[key] = text_item
-            return mapped
+        mapped_mode = self._map_mode_to_allowed(tool_conf.get("mode"), runtime_enum_catalog.get("mode"))
+        if mapped_mode:
+            tool_conf["mode"] = str(mapped_mode).strip().lower()
 
-        allowed_modes = _allowed_map(runtime_enum_catalog.get("mode"), to_lower=True)
-        if allowed_modes:
-            current_mode = str(tool_conf.get("mode") or "").strip().lower()
-            if current_mode and current_mode not in allowed_modes:
-                tool_conf["mode"] = list(allowed_modes.values())[0]
-            elif current_mode:
-                tool_conf["mode"] = allowed_modes[current_mode]
+        mapped_ar = self._map_aspect_ratio_to_allowed(effective_aspect_ratio, runtime_enum_catalog.get("aspect_ratio"))
+        if mapped_ar:
+            effective_aspect_ratio = mapped_ar
 
-        allowed_aspect_ratios = _allowed_map(runtime_enum_catalog.get("aspect_ratio"))
-        if allowed_aspect_ratios and effective_aspect_ratio:
-            if effective_aspect_ratio not in allowed_aspect_ratios:
-                effective_aspect_ratio = list(allowed_aspect_ratios.values())[0]
-            else:
-                effective_aspect_ratio = allowed_aspect_ratios[effective_aspect_ratio]
+        current_image_size = str(
+            effective_image_size or tool_conf.get("image_size") or tool_conf.get("imageSize") or ""
+        ).strip()
+        mapped_image_size = self._map_image_size_to_allowed(current_image_size, runtime_enum_catalog.get("image_size"))
+        if mapped_image_size:
+            effective_image_size = mapped_image_size
+            tool_conf["image_size"] = effective_image_size
+            tool_conf["imageSize"] = effective_image_size
 
-        allowed_image_sizes = _allowed_map(runtime_enum_catalog.get("image_size"), to_lower=True)
-        if allowed_image_sizes:
-            current_image_size = str(
-                effective_image_size or tool_conf.get("image_size") or tool_conf.get("imageSize") or ""
-            ).strip()
-            if current_image_size:
-                lookup = current_image_size.lower()
-                if lookup not in allowed_image_sizes:
-                    effective_image_size = list(allowed_image_sizes.values())[0]
-                else:
-                    effective_image_size = allowed_image_sizes[lookup]
-                tool_conf["image_size"] = effective_image_size
-                tool_conf["imageSize"] = effective_image_size
-
-        allowed_resolutions = _allowed_map(runtime_enum_catalog.get("resolution"), to_lower=True)
-        if allowed_resolutions:
-            current_resolution = str(tool_conf.get("resolution") or "").strip().lower()
-            if current_resolution and current_resolution not in allowed_resolutions:
-                tool_conf["resolution"] = list(allowed_resolutions.values())[0]
-            elif current_resolution:
-                tool_conf["resolution"] = allowed_resolutions[current_resolution]
+        mapped_resolution = self._map_resolution_to_allowed(tool_conf.get("resolution"), runtime_enum_catalog.get("resolution"))
+        if mapped_resolution:
+            tool_conf["resolution"] = mapped_resolution
 
         if category in {"Video", "Voice"}:
             allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
             if isinstance(allowed_durations, list) and allowed_durations and effective_duration is not None:
-                try:
-                    allowed_duration_nums = sorted(set([int(float(item)) for item in allowed_durations if int(float(item)) > 0]))
-                except Exception:
-                    allowed_duration_nums = []
-                if allowed_duration_nums and effective_duration not in allowed_duration_nums:
-                    effective_duration = allowed_duration_nums[0]
+                mapped_duration = self._map_duration_nearest_lower(effective_duration, allowed_durations)
+                if mapped_duration is not None:
+                    effective_duration = int(mapped_duration)
             max_duration = runtime_enum_catalog.get("max_duration")
             if effective_duration is not None and max_duration is not None:
                 try:
@@ -3923,7 +4190,9 @@ class MediaGenerationService:
         use_4o_image_api = bool(gen_type == "image" and ("gpt4o-image" in model_lower or "4o-image" in model_lower))
         use_flux_kontext_api = bool(gen_type == "image" and ("flux-kontext" in model_lower or "flux/kontext" in model_lower))
         use_suno_api = bool(gen_type == "audio" and "suno" in model_lower)
+        is_sora2_video_model = bool(gen_type == "video" and model_lower.startswith("sora-2"))
         is_kling_3_video = bool(gen_type == "video" and ("kling-3.0" in model_lower or model_lower == "kling3"))
+        is_kling_26_i2v_model = bool(gen_type == "video" and model_lower == "kling-2.6/image-to-video")
 
         base_url = (config.get("base_url") or tool_conf.get("base_url") or "https://api.kie.ai").strip().rstrip("/")
         if "/api/v1/jobs" in base_url:
@@ -3970,6 +4239,24 @@ class MediaGenerationService:
             "prompt": prompt,
         }
 
+        if is_sora2_video_model:
+            sora_mention_cfg = self._resolve_sora_mention_config(tool_conf if isinstance(tool_conf, dict) else {})
+            if sora_mention_cfg.get("auto_use_sora_mention"):
+                logger.info(
+                    "Sora mention mode enabled | model=%s auto_upload_character=%s",
+                    model,
+                    bool(sora_mention_cfg.get("auto_upload_character")),
+                )
+            else:
+                sanitized_prompt = self._sanitize_sora_prompt_mentions(prompt)
+                if sanitized_prompt and sanitized_prompt != str(prompt or ""):
+                    payload_input["prompt"] = sanitized_prompt
+                    logger.warning(
+                        "Sora prompt mention sanitizer applied | model=%s removed_at_mentions=%s",
+                        model,
+                        str(prompt or "").count("@"),
+                    )
+
         requested_mode = str(tool_conf.get("mode") or "").strip().lower()
         mode_source_hint = str(tool_conf.get("__mode_source") or "").strip().lower()
 
@@ -4000,17 +4287,31 @@ class MediaGenerationService:
                         break
 
         allowed_modes = [str(item or "").strip().lower() for item in runtime_enum_catalog.get("mode") or [] if str(item or "").strip()]
-        if requested_mode and allowed_modes and requested_mode not in allowed_modes:
-            fallback_mode = allowed_modes[0]
-            logger.warning(
-                "KIE mode enum fallback | model=%s requested=%s allowed=%s fallback=%s",
-                model,
-                requested_mode,
-                allowed_modes,
-                fallback_mode,
-            )
-            requested_mode = fallback_mode
-            mode_source_hint = "enum_fallback"
+        if requested_mode and allowed_modes:
+            mapped_mode = self._map_mode_to_allowed(requested_mode, runtime_enum_catalog.get("mode"))
+            mapped_mode_lower = str(mapped_mode or "").strip().lower()
+            if mapped_mode_lower and mapped_mode_lower != requested_mode:
+                fallback_mode = mapped_mode_lower
+                logger.warning(
+                    "KIE mode enum remap | model=%s requested=%s allowed=%s mapped=%s",
+                    model,
+                    requested_mode,
+                    allowed_modes,
+                    fallback_mode,
+                )
+                requested_mode = fallback_mode
+                mode_source_hint = "enum_fallback"
+            elif requested_mode not in allowed_modes:
+                fallback_mode = allowed_modes[0]
+                logger.warning(
+                    "KIE mode enum fallback | model=%s requested=%s allowed=%s fallback=%s",
+                    model,
+                    requested_mode,
+                    allowed_modes,
+                    fallback_mode,
+                )
+                requested_mode = fallback_mode
+                mode_source_hint = "enum_fallback"
 
         if requested_mode:
             payload_input["mode"] = requested_mode
@@ -4062,9 +4363,17 @@ class MediaGenerationService:
             normalized_ar = "Auto"
         allowed_aspect_ratios = [str(item or "").strip() for item in runtime_enum_catalog.get("aspect_ratio") or [] if str(item or "").strip()]
         if normalized_ar and allowed_aspect_ratios:
-            allowed_aspect_ratios_lower = {item.lower(): item for item in allowed_aspect_ratios}
-            matched = allowed_aspect_ratios_lower.get(str(normalized_ar).lower())
-            if not matched:
+            mapped_ar = self._map_aspect_ratio_to_allowed(normalized_ar, runtime_enum_catalog.get("aspect_ratio"))
+            if mapped_ar and str(mapped_ar).strip() and str(mapped_ar).strip().lower() != str(normalized_ar).strip().lower():
+                logger.warning(
+                    "KIE aspect_ratio enum remap | model=%s requested=%s allowed=%s mapped=%s",
+                    model,
+                    normalized_ar,
+                    allowed_aspect_ratios,
+                    mapped_ar,
+                )
+                normalized_ar = str(mapped_ar).strip()
+            elif not mapped_ar:
                 fallback_ar = allowed_aspect_ratios[0]
                 logger.warning(
                     "KIE aspect_ratio enum fallback | model=%s requested=%s allowed=%s fallback=%s",
@@ -4074,8 +4383,6 @@ class MediaGenerationService:
                     fallback_ar,
                 )
                 normalized_ar = fallback_ar
-            else:
-                normalized_ar = matched
         if normalized_ar:
             payload_input["aspect_ratio"] = normalized_ar
 
@@ -4086,6 +4393,10 @@ class MediaGenerationService:
         is_seedream_5_lite_i2i = bool(
             gen_type == "image"
             and str(model_lower or "").strip().lower() in {"seedream/5-lite-image-to-image"}
+        )
+        is_grok_imagine_i2i = bool(
+            gen_type == "image"
+            and str(model_lower or "").strip().lower() in {"grok-imagine/image-to-image"}
         )
 
         if gen_type == "image":
@@ -4132,8 +4443,18 @@ class MediaGenerationService:
                 kie_image_size = normalized_ar or "auto"
                 allowed_image_sizes = [str(item or "").strip().lower() for item in runtime_enum_catalog.get("image_size") or [] if str(item or "").strip()]
                 if allowed_image_sizes:
-                    if str(kie_image_size).strip().lower() in allowed_image_sizes:
-                        kie_image_size = str(kie_image_size).strip().lower()
+                    mapped_image_size = self._map_image_size_to_allowed(kie_image_size, runtime_enum_catalog.get("image_size"))
+                    if mapped_image_size and str(mapped_image_size).strip().lower() != str(kie_image_size).strip().lower():
+                        logger.warning(
+                            "KIE image_size enum remap | model=%s requested=%s allowed=%s mapped=%s",
+                            model,
+                            kie_image_size,
+                            allowed_image_sizes,
+                            mapped_image_size,
+                        )
+                        kie_image_size = str(mapped_image_size).strip().lower()
+                    elif mapped_image_size:
+                        kie_image_size = str(mapped_image_size).strip().lower()
                     else:
                         fallback_image_size = allowed_image_sizes[0]
                         logger.warning(
@@ -4153,10 +4474,9 @@ class MediaGenerationService:
                 duration_value = 5
             allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
             if isinstance(allowed_durations, list) and allowed_durations:
-                try:
-                    duration_value = min(allowed_durations, key=lambda x: abs(int(x) - int(duration_value)))
-                except Exception:
-                    pass
+                mapped_duration = self._map_duration_nearest_lower(duration_value, allowed_durations)
+                if mapped_duration is not None:
+                    duration_value = int(mapped_duration)
             max_duration = runtime_enum_catalog.get("max_duration")
             try:
                 if max_duration is not None:
@@ -4164,6 +4484,35 @@ class MediaGenerationService:
             except Exception:
                 pass
             payload_input["duration"] = str(max(1, duration_value))
+
+            # Propagate project/request-level sound setting to all video models.
+            # Previously only kling 2.6 explicitly consumed this flag.
+            sound_raw = tool_conf.get("sound")
+            if sound_raw is not None:
+                if isinstance(sound_raw, bool):
+                    payload_input["sound"] = sound_raw
+                else:
+                    payload_input["sound"] = str(sound_raw).strip().lower() in {"1", "true", "yes", "on", "y"}
+
+            if is_kling_26_i2v_model:
+                kling_allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
+                kling_allowed_durations = self._normalize_duration_enum_values(kling_allowed_durations)
+                # KIE Kling 2.6 i2v rejects non-enum durations; use a safe fallback
+                # when runtime enum catalog is missing or incomplete.
+                if not kling_allowed_durations:
+                    kling_allowed_durations = [5, 10]
+                mapped_duration = self._map_duration_nearest_lower(duration_value, kling_allowed_durations)
+                if mapped_duration is not None:
+                    duration_value = int(mapped_duration)
+                payload_input["duration"] = str(int(duration_value))
+
+                sound_raw = tool_conf.get("sound")
+                if sound_raw is None:
+                    payload_input["sound"] = True
+                elif isinstance(sound_raw, bool):
+                    payload_input["sound"] = sound_raw
+                else:
+                    payload_input["sound"] = str(sound_raw).strip().lower() in {"1", "true", "yes", "on", "y"}
 
         if gen_type == "audio":
             payload_input.pop("duration", None)
@@ -4182,7 +4531,11 @@ class MediaGenerationService:
         # Fallback: some callers pass reference images through provider_options only.
         if not resolved_refs:
             option_refs = (
-                tool_conf.get("input_urls")
+                tool_conf.get("filesUrl")
+                or tool_conf.get("files_url")
+                or tool_conf.get("fileUrl")
+                or tool_conf.get("file_url")
+                or tool_conf.get("input_urls")
                 or tool_conf.get("image_urls")
                 or tool_conf.get("imageUrls")
                 or []
@@ -4329,6 +4682,16 @@ class MediaGenerationService:
                 upload_method_value = "s3"
             payload_input["upload_method"] = upload_method_value
 
+        if is_kling_26_i2v_model:
+            kling_refs = payload_input.get("image_urls")
+            if not isinstance(kling_refs, list) or not kling_refs:
+                return {
+                    "error": "KIE submission validation failed",
+                    "details": "kling-2.6/image-to-video requires input.image_urls (at least one image URL)",
+                    "submit_failed": True,
+                    "runtime_model": model,
+                }
+
         if is_gpt_image_15_i2i and not isinstance(payload_input.get("input_urls"), list):
             return {
                 "error": "KIE submission validation failed",
@@ -4343,6 +4706,15 @@ class MediaGenerationService:
                 "submit_failed": True,
                 "runtime_model": model,
             }
+        if is_grok_imagine_i2i:
+            grok_refs = payload_input.get("image_urls")
+            if not isinstance(grok_refs, list) or not [str(item).strip() for item in grok_refs if str(item).strip()]:
+                return {
+                    "error": "KIE submission validation failed",
+                    "details": "grok-imagine/image-to-image requires input.image_urls (at least one image URL)",
+                    "submit_failed": True,
+                    "runtime_model": model,
+                }
 
         if last_frame_url and not is_sora2_i2v_model:
             if use_veo_api:
@@ -4487,15 +4859,74 @@ class MediaGenerationService:
             or ""
         ).strip()
 
-        # KIE z-image createTask may enforce callback field in some regions/accounts.
-        # Provide a safe default URL when caller did not configure one so submission
-        # does not fail with generic "This field is required".
-        if gen_type == "image" and str(model_lower or "").startswith("z-image") and not callback_url:
+        # KIE callbacks:
+        # - Local deployment: disable callbacks and rely on polling.
+        # - Public deployment: auto-assign callback URL when caller did not provide one.
+        if not callback_url:
             callback_url = str(
                 os.getenv("KIE_CALLBACK_URL")
                 or os.getenv("AISTORY_KIE_CALLBACK_URL")
-                or "https://example.com/api/generate/callback/kie-z-image"
+                or ""
             ).strip()
+
+        callback_required_by_model = (
+            (gen_type == "image" and str(model_lower or "").startswith("z-image"))
+            or bool(is_kling_26_i2v_model)
+        )
+
+        deployment_public_hint = bool(
+            str(os.getenv("AISTORY_PUBLIC_BASE_URL") or "").strip()
+            or str(os.getenv("PUBLIC_BASE_URL") or "").strip()
+            or str(getattr(settings, "RENDER_EXTERNAL_URL", "") or "").strip()
+            or str(os.getenv("RENDER_EXTERNAL_URL") or "").strip()
+            or str(os.getenv("RAILWAY_STATIC_URL") or "").strip()
+            or str(os.getenv("RENDER") or "").strip()
+        )
+
+        if callback_required_by_model and not deployment_public_hint:
+            callback_url = "-1"
+            logger.info("KIE callback disabled for local deployment | model=%s gen_type=%s", model, gen_type)
+
+        if callback_required_by_model and not callback_url:
+            public_base = str(
+                os.getenv("AISTORY_PUBLIC_BASE_URL")
+                or os.getenv("PUBLIC_BASE_URL")
+                or str(getattr(settings, "RENDER_EXTERNAL_URL", "") or "")
+                or os.getenv("RENDER_EXTERNAL_URL")
+                or os.getenv("RAILWAY_STATIC_URL")
+                or ""
+            ).strip()
+
+            if not public_base:
+                frontend_url = str(
+                    os.getenv("AISTORY_FRONTEND_BASE_URL")
+                    or os.getenv("FRONTEND_BASE_URL")
+                    or str(getattr(settings, "FRONTEND_BASE_URL", "") or "")
+                    or "https://aistory-frontend.onrender.com/projects"
+                ).strip()
+                try:
+                    m = re.match(r"^https?://[^/]+", frontend_url, flags=re.IGNORECASE)
+                    frontend_origin = m.group(0) if m else ""
+                except Exception:
+                    frontend_origin = ""
+
+                if frontend_origin:
+                    backend_origin = frontend_origin
+                    backend_origin = backend_origin.replace("-frontend.", "-backend.")
+                    backend_origin = backend_origin.replace("frontend.onrender.com", "backend.onrender.com")
+                    public_base = backend_origin
+
+            if public_base:
+                if not re.match(r"^https?://", public_base, flags=re.IGNORECASE):
+                    public_base = f"https://{public_base}"
+                api_prefix = str(getattr(settings, "API_V1_STR", "/api/v1") or "/api/v1").strip("/")
+                callback_ticket = "kie-z-image" if gen_type == "image" else "kie-kling-2-6-i2v"
+                callback_url = f"{public_base.rstrip('/')}/{api_prefix}/generate/callback/{callback_ticket}"
+                logger.info("KIE callback auto-assigned | callback_url=%s", callback_url)
+
+        if callback_required_by_model and not callback_url:
+            callback_url = "-1"
+            logger.info("KIE callback fallback to disabled mode (-1) | model=%s gen_type=%s", model, gen_type)
         if use_veo_api:
             raw_model = str(model or "").strip()
             # According to KIE API, REFERENCE_2_VIDEO only works with "veo3_fast"
@@ -4653,18 +5084,48 @@ class MediaGenerationService:
             logger.info("KIE Runway submit payload | endpoint=%s", submit_url)
         elif use_4o_image_api:
             # Handle 4o image payload
+            allowed_4o_sizes = {"1:1", "3:2", "2:3"}
+            size_candidate = str(tool_conf.get("size") or payload_input.get("aspect_ratio") or "").strip()
+            if size_candidate not in allowed_4o_sizes:
+                size_candidate = "1:1"
+
+            prompt_candidate = str(prompt or "").strip()
+            fallback_model_value = str(tool_conf.get("fallbackModel") or "FLUX_MAX").strip().upper()
+            if fallback_model_value not in {"GPT_IMAGE_1", "FLUX_MAX"}:
+                fallback_model_value = "FLUX_MAX"
+
             payload = {
-                "prompt": prompt,
-                "size": tool_conf.get("size") or "1:1",
+                "size": size_candidate,
                 "isEnhance": bool(tool_conf.get("isEnhance")),
                 "uploadCn": bool(tool_conf.get("uploadCn")),
                 "enableFallback": bool(tool_conf.get("enableFallback")),
-                "fallbackModel": tool_conf.get("fallbackModel", "FLUX_MAX"),
+                "fallbackModel": fallback_model_value,
             }
+
+            if prompt_candidate:
+                payload["prompt"] = prompt_candidate
+
             if callback_url and callback_url != "-1":
                 payload["callBackUrl"] = callback_url
+
             if resolved_refs:
-                payload["filesUrl"] = resolved_refs
+                payload["filesUrl"] = resolved_refs[:5]
+
+            file_url_candidate = str(tool_conf.get("fileUrl") or tool_conf.get("file_url") or "").strip()
+            if file_url_candidate and "filesUrl" not in payload:
+                payload["fileUrl"] = file_url_candidate
+
+            mask_url_candidate = str(tool_conf.get("maskUrl") or tool_conf.get("mask_url") or "").strip()
+            if mask_url_candidate and len(payload.get("filesUrl") or []) <= 1:
+                payload["maskUrl"] = mask_url_candidate
+
+            if not str(payload.get("prompt") or "").strip() and not (payload.get("filesUrl") or payload.get("fileUrl")):
+                return {
+                    "error": "KIE submission validation failed",
+                    "details": "gpt4o-image requires prompt or filesUrl/fileUrl",
+                    "submit_failed": True,
+                    "runtime_model": model,
+                }
             
             logger.info("KIE 4o Image submit payload | endpoint=%s", submit_url)
         elif use_flux_kontext_api:
@@ -4860,24 +5321,39 @@ class MediaGenerationService:
         if isinstance(payload_input_obj, dict) and runtime_enum_catalog:
             allowed_modes = [str(item or "").strip().lower() for item in runtime_enum_catalog.get("mode") or [] if str(item or "").strip()]
             current_mode = str(payload_input_obj.get("mode") or "").strip().lower()
-            if current_mode and allowed_modes and current_mode not in allowed_modes:
-                payload_input_obj["mode"] = allowed_modes[0]
+            if current_mode and allowed_modes:
+                mapped_mode = self._map_mode_to_allowed(current_mode, runtime_enum_catalog.get("mode"))
+                if mapped_mode:
+                    payload_input_obj["mode"] = str(mapped_mode).strip().lower()
 
             allowed_aspect_ratios = [str(item or "").strip() for item in runtime_enum_catalog.get("aspect_ratio") or [] if str(item or "").strip()]
             current_ar = str(payload_input_obj.get("aspect_ratio") or "").strip()
             if current_ar and allowed_aspect_ratios:
-                match_map = {item.lower(): item for item in allowed_aspect_ratios}
-                payload_input_obj["aspect_ratio"] = match_map.get(current_ar.lower(), allowed_aspect_ratios[0])
+                mapped_ar = self._map_aspect_ratio_to_allowed(current_ar, runtime_enum_catalog.get("aspect_ratio"))
+                if mapped_ar:
+                    payload_input_obj["aspect_ratio"] = str(mapped_ar).strip()
 
             allowed_image_sizes = [str(item or "").strip().lower() for item in runtime_enum_catalog.get("image_size") or [] if str(item or "").strip()]
             current_image_size = str(payload_input_obj.get("image_size") or "").strip().lower()
-            if current_image_size and allowed_image_sizes and current_image_size not in allowed_image_sizes:
-                payload_input_obj["image_size"] = allowed_image_sizes[0]
+            if current_image_size and allowed_image_sizes:
+                mapped_image_size = self._map_image_size_to_allowed(current_image_size, runtime_enum_catalog.get("image_size"))
+                if mapped_image_size:
+                    payload_input_obj["image_size"] = str(mapped_image_size).strip().lower()
 
             allowed_resolutions = [str(item or "").strip().lower() for item in runtime_enum_catalog.get("resolution") or [] if str(item or "").strip()]
-            current_resolution = str(payload_input_obj.get("resolution") or "").strip().lower()
-            if current_resolution and allowed_resolutions and current_resolution not in allowed_resolutions:
-                payload_input_obj["resolution"] = allowed_resolutions[0]
+            current_resolution = str(payload_input_obj.get("resolution") or "").strip()
+            if current_resolution and allowed_resolutions:
+                mapped_resolution = self._map_resolution_to_allowed(current_resolution, runtime_enum_catalog.get("resolution"))
+                if mapped_resolution:
+                    payload_input_obj["resolution"] = str(mapped_resolution).strip()
+
+            # Hailuo 2.3 i2v requires uppercase-P literals (768P / 1080P).
+            if str(model_lower or "") in {"hailuo/2-3-image-to-video-standard", "hailuo/2-3-image-to-video-pro"}:
+                normalized_resolution = str(payload_input_obj.get("resolution") or "").strip()
+                if normalized_resolution:
+                    digits = ''.join(ch for ch in normalized_resolution if ch.isdigit())
+                    if digits in {"768", "1080"}:
+                        payload_input_obj["resolution"] = f"{digits}P"
 
             current_duration_text = str(payload_input_obj.get("duration") or "").strip()
             if current_duration_text:
@@ -4885,7 +5361,9 @@ class MediaGenerationService:
                     current_duration_int = int(float(current_duration_text))
                     allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
                     if isinstance(allowed_durations, list) and allowed_durations:
-                        current_duration_int = min(allowed_durations, key=lambda x: abs(int(x) - int(current_duration_int)))
+                        mapped_duration = self._map_duration_nearest_lower(current_duration_int, allowed_durations)
+                        if mapped_duration is not None:
+                            current_duration_int = int(mapped_duration)
                     max_duration = runtime_enum_catalog.get("max_duration")
                     if max_duration is not None:
                         current_duration_int = min(int(current_duration_int), int(max_duration))
@@ -5406,27 +5884,78 @@ class MediaGenerationService:
                 deduped.append(stable)
             return deduped
 
+        callback_enabled = bool(callback_url and callback_url != "-1")
+        is_public_deploy = bool(
+            str(os.getenv("RENDER_EXTERNAL_URL") or "").strip()
+            or str(os.getenv("RENDER") or "").strip()
+            or str(os.getenv("RAILWAY_STATIC_URL") or "").strip()
+        )
+
+        poll_timeout_seconds = 600
+        try:
+            if tool_conf.get("poll_timeout_seconds") is not None:
+                poll_timeout_seconds = max(120, int(tool_conf.get("poll_timeout_seconds")))
+            elif tool_conf.get("timeout") is not None:
+                poll_timeout_seconds = max(120, int(tool_conf.get("timeout")))
+        except Exception:
+            poll_timeout_seconds = 600
+
+        # Strategy:
+        # - local deploy: polling-first, slightly tighter interval
+        # - public deploy with callback: keep polling as fallback with lower frequency
+        # - public deploy without callback: normal polling
+        poll_interval_seconds = 3
+        if callback_enabled and is_public_deploy:
+            poll_interval_seconds = 8
+        elif callback_enabled:
+            poll_interval_seconds = 5
+        try:
+            if tool_conf.get("poll_interval_seconds") is not None:
+                poll_interval_seconds = max(2, int(tool_conf.get("poll_interval_seconds")))
+        except Exception:
+            pass
+
+        poll_attempts = max(1, int(poll_timeout_seconds / max(1, poll_interval_seconds)))
+
         def _poll_status():
-            candidates = [
+            param_candidates = [
                 {"taskId": task_id},
                 {"task_id": task_id},
                 {"id": task_id},
             ]
+            endpoint_candidates = [query_url]
+            if "/recordInfo" in query_url:
+                endpoint_candidates.append(query_url.replace("/recordInfo", "/record-info"))
+            elif "/record-info" in query_url:
+                endpoint_candidates.append(query_url.replace("/record-info", "/recordInfo"))
+
             last_resp = None
-            for params in candidates:
-                try:
-                    resp = requests.get(query_url, params=params, headers=headers, timeout=45, verify=False)
-                    last_resp = resp
-                    if resp.status_code == 200:
-                        return resp
-                except Exception:
-                    continue
+            for endpoint in endpoint_candidates:
+                for params in param_candidates:
+                    try:
+                        resp = requests.get(endpoint, params=params, headers=headers, timeout=45, verify=False)
+                        last_resp = resp
+                        if resp.status_code == 200:
+                            return resp
+                    except Exception:
+                        continue
+
+                # Some KIE routes are POST query APIs in specific deployments.
+                for body in param_candidates:
+                    try:
+                        resp = requests.post(endpoint, json=body, headers=headers, timeout=45, verify=False)
+                        last_resp = resp
+                        if resp.status_code == 200:
+                            return resp
+                    except Exception:
+                        continue
+
             if last_resp is not None:
                 return last_resp
             return requests.get(query_url, params={"taskId": task_id}, headers=headers, timeout=45, verify=False)
 
-        for i in range(120):
-            await asyncio.sleep(3)
+        for i in range(poll_attempts):
+            await asyncio.sleep(poll_interval_seconds)
             try:
                 poll_resp = await asyncio.to_thread(_poll_status)
             except requests.exceptions.Timeout:
@@ -5449,26 +5978,46 @@ class MediaGenerationService:
             if not _is_ok_code(poll_code):
                 continue
 
-            record = poll_data.get("data") or poll_data.get("result") or poll_data
-            state = str(record.get("state") or record.get("status") or "").strip().lower()
+            record_raw = poll_data.get("data") or poll_data.get("result") or poll_data
+            if isinstance(record_raw, list):
+                record = record_raw[0] if (record_raw and isinstance(record_raw[0], dict)) else {}
+            elif isinstance(record_raw, dict):
+                record = record_raw
+            else:
+                record = {}
+
+            state = str(record.get("state") or record.get("status") or poll_data.get("state") or poll_data.get("status") or "").strip().lower()
             success_flag = record.get("successFlag")
             if success_flag is None:
                 success_flag = record.get("success_flag")
             if success_flag is None and isinstance(record.get("response"), dict):
                 success_flag = record.get("response", {}).get("successFlag")
 
-            if state in {"waiting", "queued", "queuing", "processing", "running", "generating", "pending"}:
+            if isinstance(success_flag, str):
+                success_flag = success_flag.strip().lower()
+
+            if state in {"waiting", "queued", "queuing", "processing", "running", "generating", "pending", "submitted", "in_progress", "in-progress"}:
                 continue
-            if success_flag in {0, "0"}:
+            if success_flag in {0, "0", False, "false", "failed", "error"}:
                 continue
 
-            if state in {"success", "succeeded", "completed", "done"}:
-                result_payload = record.get("resultJson")
-                video_urls = _extract_kie_video_urls(result_payload)
-                if not video_urls:
-                    video_urls = _extract_kie_video_urls(record)
-                if not video_urls and isinstance(record.get("response"), dict):
-                    video_urls = _extract_kie_video_urls(record.get("response"))
+            result_payload = record.get("resultJson")
+            video_urls = _extract_kie_video_urls(result_payload)
+            if not video_urls:
+                video_urls = _extract_kie_video_urls(record)
+            if not video_urls and isinstance(record.get("response"), dict):
+                video_urls = _extract_kie_video_urls(record.get("response"))
+
+            # Upstream may omit/lag status while URLs are already ready.
+            if video_urls and state not in {"fail", "failed", "error", "canceled", "cancelled"}:
+                if gen_type == "video" or gen_type == "audio":
+                    selected_video_url = _pick_preferred_kie_media_url(video_urls)
+                    if selected_video_url:
+                        meta = {"raw": poll_data}
+                        meta.update(base_metadata)
+                        return {"url": selected_video_url, "metadata": meta}
+
+            if state in {"success", "succeeded", "completed", "done", "finish", "finished", "complete", "successed"}:
 
                 if gen_type == "video" or gen_type == "audio":
                     selected_video_url = _pick_preferred_kie_media_url(video_urls)
@@ -5487,7 +6036,7 @@ class MediaGenerationService:
                 meta = {"raw": poll_data}
                 meta.update(base_metadata)
                 return {"url": selected_url, "metadata": meta}
-            if success_flag in {1, "1"}:
+            if success_flag in {1, "1", True, "true", "success", "succeeded"}:
                 video_urls = _extract_kie_video_urls(record.get("resultUrls"))
                 if not video_urls:
                     video_urls = _extract_kie_video_urls(record)
@@ -5513,13 +6062,13 @@ class MediaGenerationService:
                 meta.update(base_metadata)
                 return {"url": selected_url, "metadata": meta}
 
-            if state in {"fail", "failed", "error", "canceled", "cancelled"}:
+            if state in {"fail", "failed", "error", "canceled", "cancelled", "abort", "aborted", "timeout"}:
                 return {
                     "error": "KIE generation failed",
                     "details": record.get("failMsg") or record.get("message") or poll_data,
                     "runtime_model": submitted_model,
                 }
-            if success_flag in {2, "2", 3, "3"}:
+            if success_flag in {2, "2", 3, "3", "2", "3", "cancelled", "canceled"}:
                 return {
                     "error": "KIE generation failed",
                     "details": record.get("failMsg") or record.get("message") or poll_data,

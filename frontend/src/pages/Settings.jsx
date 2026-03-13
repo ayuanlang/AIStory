@@ -259,6 +259,8 @@ const Settings = () => {
         Vision: 'none',
     });
     const [apiStrategyByCategory, setApiStrategyByCategory] = useState({});
+    const [activeModeByCategory, setActiveModeByCategory] = useState({});
+    const [systemModeSelectionById, setSystemModeSelectionById] = useState({});
 
     // Unified Top Up entry: support /settings?tab=billing and cross-app 402 redirects.
     useEffect(() => {
@@ -594,6 +596,26 @@ const Settings = () => {
         return 'smart_default';
     };
 
+    const normalizeModeValue = (value) => {
+        const text = String(value == null ? '' : value).trim();
+        return text;
+    };
+
+    const collectModeOptionsFromRow = (row) => {
+        const merged = Array.isArray(row?.mode_values) ? row.mode_values : [];
+        const out = [];
+        const seen = new Set();
+        for (const item of merged) {
+            const text = normalizeModeValue(item);
+            if (!text) continue;
+            const key = text.toLowerCase();
+            if (seen.has(key)) continue;
+            seen.add(key);
+            out.push(text);
+        }
+        return out;
+    };
+
     const refreshActiveSettingSources = async () => {
         try {
             const all = await getSettings();
@@ -604,6 +626,7 @@ const Settings = () => {
                 Vision: 'none',
             };
             const strategyMap = {};
+            const modeMap = {};
             (all || []).forEach((item) => {
                 if (!item?.is_active || !item?.category) return;
                 const source = item?.config?.selection_source === 'system' || item?.config?.use_system_setting_id ? 'system' : 'user';
@@ -611,9 +634,14 @@ const Settings = () => {
                     next[item.category] = source;
                 }
                 strategyMap[item.category] = normalizeApiStrategy(item?.config?.api_strategy);
+                const activeMode = normalizeModeValue(item?.mode);
+                if (activeMode) {
+                    modeMap[item.category] = activeMode;
+                }
             });
             setActiveSettingSources(next);
             setApiStrategyByCategory(strategyMap);
+            setActiveModeByCategory(modeMap);
         } catch (err) {
             console.error('Failed to refresh active setting sources', err);
         }
@@ -708,6 +736,51 @@ const Settings = () => {
         if (selectedSystemCategory === 'All') return categorizedSystemSettings;
         return categorizedSystemSettings.filter((block) => block.category === selectedSystemCategory);
     }, [categorizedSystemSettings, selectedSystemCategory]);
+
+    useEffect(() => {
+        setSystemModeSelectionById((prev) => {
+            const next = { ...(prev || {}) };
+            const validIds = new Set();
+
+            for (const categoryBlock of categorizedSystemSettings || []) {
+                const category = String(categoryBlock?.category || '').trim();
+                const activeMode = normalizeModeValue(activeModeByCategory?.[category]);
+
+                for (const group of categoryBlock?.groups || []) {
+                    for (const row of group?.models || []) {
+                        const rowId = Number(row?.id || 0);
+                        if (!rowId) continue;
+                        validIds.add(rowId);
+
+                        const modeOptions = collectModeOptionsFromRow(row);
+                        if (modeOptions.length === 0) {
+                            delete next[rowId];
+                            continue;
+                        }
+
+                        const current = normalizeModeValue(next[rowId]);
+                        const hasCurrent = current && modeOptions.some((opt) => opt.toLowerCase() === current.toLowerCase());
+                        if (hasCurrent) continue;
+
+                        const preferredActive =
+                            row?.is_active && activeMode
+                                ? modeOptions.find((opt) => opt.toLowerCase() === activeMode.toLowerCase())
+                                : '';
+
+                        next[rowId] = preferredActive || modeOptions[0];
+                    }
+                }
+            }
+
+            Object.keys(next).forEach((key) => {
+                if (!validIds.has(Number(key))) {
+                    delete next[key];
+                }
+            });
+
+            return next;
+        });
+    }, [categorizedSystemSettings, activeModeByCategory]);
 
     useEffect(() => {
         if (activeTab === 'usage') {
@@ -1382,12 +1455,17 @@ const Settings = () => {
         addLog("Generation settings & credentials saved", "success");
     };
 
-    const handleSelectSystemSetting = async (setting, category, providerAlias = '') => {
+    const handleSelectSystemSetting = async (setting, category, providerAlias = '', selectedMode = '') => {
         if (!setting?.id) return;
         setSelectingSystemId(setting.id);
         try {
             const chosenStrategy = normalizeApiStrategy(apiStrategyByCategory?.[category]);
-            const selected = await selectSystemSetting(setting.id, chosenStrategy);
+            const normalizedSelectedMode = normalizeModeValue(selectedMode);
+            const selected = await selectSystemSetting(
+                setting.id,
+                chosenStrategy,
+                normalizedSelectedMode || null,
+            );
             if (selected?.category === 'LLM') {
                 const resolvedEndpoint = selected.base_url || setting.base_url || '';
                 setProvider(selected.provider || 'openai');
@@ -1405,7 +1483,9 @@ const Settings = () => {
                 selected?.provider || setting.provider,
                 providerAlias || selected?.provider_alias || setting.provider_alias,
             );
-            showNotification(`System setting activated: ${providerLabel} / ${selected?.model || setting.model || ''}`, 'success');
+            const activeModeText = normalizeModeValue(selected?.mode) || normalizedSelectedMode;
+            const modeSuffix = activeModeText ? ` / mode=${activeModeText}` : '';
+            showNotification(`System setting activated: ${providerLabel} / ${selected?.model || setting.model || ''}${modeSuffix}`, 'success');
             addLog(`Activated system API setting: ${providerLabel} (${selected?.category || setting.category}), strategy=${chosenStrategy}`, 'success');
             await loadSystemSettingsCatalog();
             await refreshActiveSettingSources();
@@ -2084,15 +2164,23 @@ const Settings = () => {
                                                             {(group.models || []).map((row, rowIndex) => (
                                                                 (() => {
                                                                     const pricing = buildPriceDisplay(row);
+                                                                    const modeOptions = collectModeOptionsFromRow(row);
+                                                                    const selectedMode = normalizeModeValue(systemModeSelectionById?.[row?.id]);
+                                                                    const activeMode = normalizeModeValue(activeModeByCategory?.[categoryBlock.category]);
                                                                     return (
                                                                 <div
                                                                     key={`system-row-${group.category}-${group.provider}-${String(row?.id ?? '')}-${String(row?.model || '')}-${rowIndex}`}
                                                                     className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center p-2 rounded border border-white/10 bg-black/20"
                                                                 >
-                                                                    <div className="md:col-span-9 text-xs">
+                                                                    <div className="md:col-span-8 text-xs">
                                                                         <div className="text-muted-foreground">{t('模型', 'Model')}</div>
                                                                         <div className="font-mono break-all flex flex-wrap items-center gap-2">
                                                                             <span>{row.model || '-'}</span>
+                                                                            {row.is_active && activeMode && (
+                                                                                <span className="text-[10px] px-1.5 py-0.5 rounded border border-fuchsia-400/30 bg-fuchsia-500/10 text-fuchsia-200">
+                                                                                    {t('当前 mode', 'Current mode')}: {activeMode}
+                                                                                </span>
+                                                                            )}
                                                                             <span className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-400/30 bg-emerald-500/10 text-emerald-200">
                                                                                 {t('平均价格', 'Avg Price')}: {pricing.avgLabel}
                                                                             </span>
@@ -2104,12 +2192,39 @@ const Settings = () => {
                                                                             </span>
                                                                         </div>
                                                                     </div>
+                                                                    <div className="md:col-span-2 text-xs">
+                                                                        <div className="text-muted-foreground mb-1">{t('Mode', 'Mode')}</div>
+                                                                        {modeOptions.length > 0 ? (
+                                                                            <select
+                                                                                value={selectedMode || modeOptions[0]}
+                                                                                onChange={(e) => {
+                                                                                    const nextMode = normalizeModeValue(e.target.value);
+                                                                                    setSystemModeSelectionById((prev) => ({
+                                                                                        ...(prev || {}),
+                                                                                        [row.id]: nextMode,
+                                                                                    }));
+                                                                                }}
+                                                                                className="w-full px-2 py-1.5 rounded border border-white/15 bg-black/30 text-xs"
+                                                                            >
+                                                                                {modeOptions.map((opt) => (
+                                                                                    <option key={`${row.id}-mode-${opt}`} value={opt}>{opt}</option>
+                                                                                ))}
+                                                                            </select>
+                                                                        ) : (
+                                                                            <div className="text-muted-foreground">-</div>
+                                                                        )}
+                                                                    </div>
                                                                     <div className="md:col-span-2 flex md:justify-end">
                                                                         <div className="w-full md:w-auto flex gap-2 justify-end">
                                                                             <button
                                                                                 onClick={(e) => {
                                                                                     e.stopPropagation();
-                                                                                    handleSelectSystemSetting(row, categoryBlock.category, group.provider_alias || '');
+                                                                                    handleSelectSystemSetting(
+                                                                                        row,
+                                                                                        categoryBlock.category,
+                                                                                        group.provider_alias || '',
+                                                                                        modeOptions.length > 0 ? (selectedMode || modeOptions[0]) : '',
+                                                                                    );
                                                                                 }}
                                                                                 disabled={!group.shared_key_configured || selectingSystemId === row.id || !!row.deprecated}
                                                                                 className="text-xs px-3 py-1.5 rounded border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50 disabled:cursor-not-allowed"

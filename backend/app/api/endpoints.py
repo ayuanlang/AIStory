@@ -3556,6 +3556,8 @@ def _ensure_project_generation_defaults(global_info: Any) -> Dict[str, Any]:
     defaults = dict(defaults_raw) if isinstance(defaults_raw, dict) else {}
     for key in _PROJECT_LEVEL_GENERATION_DEFAULT_KEYS:
         defaults.setdefault(key, None)
+    if defaults.get("sound") is None:
+        defaults["sound"] = True
 
     # Keep compatibility with existing visual-standard readers.
     tech_params = gi.get("tech_params") if isinstance(gi.get("tech_params"), dict) else {}
@@ -12986,6 +12988,8 @@ class GenerationRequest(BaseModel):
     model: Optional[str] = None
     image_size: Optional[str] = None
     ref_image_url: Optional[Union[str, List[str]]] = None
+    image_urls: Optional[List[str]] = None
+    imageUrls: Optional[List[str]] = None
     project_id: Optional[int] = None
     episode_id: Optional[int] = None
     shot_id: Optional[int] = None
@@ -13000,6 +13004,20 @@ class GenerationRequest(BaseModel):
     callback_url: Optional[str] = None
     callbackUrl: Optional[str] = None
     callBackUrl: Optional[str] = None
+    files_url: Optional[List[str]] = None
+    filesUrl: Optional[List[str]] = None
+    file_url: Optional[str] = None
+    fileUrl: Optional[str] = None
+    mask_url: Optional[str] = None
+    maskUrl: Optional[str] = None
+    is_enhance: Optional[bool] = None
+    isEnhance: Optional[bool] = None
+    upload_cn: Optional[bool] = None
+    uploadCn: Optional[bool] = None
+    enable_fallback: Optional[bool] = None
+    enableFallback: Optional[bool] = None
+    fallback_model: Optional[str] = None
+    fallbackModel: Optional[str] = None
     seed: Optional[int] = None
     cfg: Optional[float] = None
     mode: Optional[str] = None
@@ -14674,6 +14692,43 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
             if image_mode:
                 image_provider_options["mode"] = image_mode
 
+        if isinstance(req.files_url, list):
+            image_provider_options["filesUrl"] = [str(item).strip() for item in req.files_url if str(item).strip()]
+        elif isinstance(req.filesUrl, list):
+            image_provider_options["filesUrl"] = [str(item).strip() for item in req.filesUrl if str(item).strip()]
+
+        if isinstance(req.image_urls, list):
+            image_provider_options["image_urls"] = [str(item).strip() for item in req.image_urls if str(item).strip()]
+        elif isinstance(req.imageUrls, list):
+            image_provider_options["image_urls"] = [str(item).strip() for item in req.imageUrls if str(item).strip()]
+
+        file_url_candidate = str(req.file_url or req.fileUrl or "").strip()
+        if file_url_candidate:
+            image_provider_options["fileUrl"] = file_url_candidate
+
+        mask_url_candidate = str(req.mask_url or req.maskUrl or "").strip()
+        if mask_url_candidate:
+            image_provider_options["maskUrl"] = mask_url_candidate
+
+        if req.is_enhance is not None:
+            image_provider_options["isEnhance"] = bool(req.is_enhance)
+        elif req.isEnhance is not None:
+            image_provider_options["isEnhance"] = bool(req.isEnhance)
+
+        if req.upload_cn is not None:
+            image_provider_options["uploadCn"] = bool(req.upload_cn)
+        elif req.uploadCn is not None:
+            image_provider_options["uploadCn"] = bool(req.uploadCn)
+
+        if req.enable_fallback is not None:
+            image_provider_options["enableFallback"] = bool(req.enable_fallback)
+        elif req.enableFallback is not None:
+            image_provider_options["enableFallback"] = bool(req.enableFallback)
+
+        fallback_model_candidate = str(req.fallback_model or req.fallbackModel or "").strip()
+        if fallback_model_candidate:
+            image_provider_options["fallbackModel"] = fallback_model_candidate
+
         # Assuming generate_image returns {"url": "...", ...}
         result = await media_service.generate_image(
             prompt=req.prompt, 
@@ -16129,6 +16184,43 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
         episode_ratio = _pick_ratio_from_info(episode_info)
         project_ratio = _pick_ratio_from_info(project_global_info)
 
+        resolved_sound: Optional[bool] = None
+        sound_source = "request"
+        if req.sound is not None:
+            resolved_sound = bool(req.sound)
+        else:
+            project_defaults = (
+                project_global_info.get("project_generation_defaults")
+                if isinstance(project_global_info.get("project_generation_defaults"), dict)
+                else {}
+            )
+            sound_candidates = [
+                project_defaults.get("sound"),
+                project_global_info.get("video_sound"),
+                project_global_info.get("sound"),
+            ]
+            visual_standard = {}
+            tech_params = project_global_info.get("tech_params")
+            if isinstance(tech_params, dict):
+                visual_standard = (
+                    tech_params.get("visual_standard")
+                    if isinstance(tech_params.get("visual_standard"), dict)
+                    else {}
+                )
+            sound_candidates.extend([
+                visual_standard.get("sound"),
+                visual_standard.get("has_audio"),
+            ])
+            for candidate in sound_candidates:
+                if candidate is None:
+                    continue
+                resolved_sound = bool(_to_bool(candidate))
+                sound_source = "project_global_info"
+                break
+            if resolved_sound is None:
+                resolved_sound = True
+                sound_source = "fallback_default"
+
         if req_ratio:
             aspect_ratio = req_ratio
             aspect_ratio_source = "request"
@@ -16143,9 +16235,11 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
         explicit_seed = _normalize_seed_value(getattr(req, "seed", None))
 
         logger.info(
-            "[GenerateVideo] Resolved aspect ratio=%s source=%s project_id=%s shot_id=%s",
+            "[GenerateVideo] Resolved aspect ratio=%s source=%s sound=%s sound_source=%s project_id=%s shot_id=%s",
             aspect_ratio,
             aspect_ratio_source,
+            resolved_sound,
+            sound_source,
             resolved_project_id,
             req.shot_id,
         )
@@ -16158,6 +16252,8 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
                 "duration": req.duration,
                 "aspect_ratio": aspect_ratio,
                 "aspect_ratio_source": aspect_ratio_source,
+                "sound": resolved_sound,
+                "sound_source": sound_source,
                 "resolved_project_id": resolved_project_id,
                 "project_seed": explicit_seed or project_seed,
                 "keyframes_count": len(req.keyframes or []),
@@ -16201,6 +16297,8 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
             pass
 
         video_provider_options = _build_video_provider_options(req)
+        if "sound" not in video_provider_options and resolved_sound is not None:
+            video_provider_options["sound"] = bool(resolved_sound)
         if explicit_seed:
             video_provider_options["seed"] = int(explicit_seed)
             video_provider_options["seeds"] = int(explicit_seed)
@@ -16312,8 +16410,8 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
                 }
 
                 final_has_audio = final_meta.get("has_audio") if isinstance(final_meta, dict) else None
-                if final_has_audio is None and req.sound is not None:
-                    final_has_audio = bool(req.sound)
+                if final_has_audio is None and resolved_sound is not None:
+                    final_has_audio = bool(resolved_sound)
                 if final_has_audio is not None:
                     settle_details["has_audio"] = bool(final_has_audio)
 

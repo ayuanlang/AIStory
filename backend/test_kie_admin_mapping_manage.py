@@ -37,13 +37,13 @@ def main() -> int:
 
         create_payload = KIEDataStandardMappingCreate(
             provider="kie",
-            model_key_inferred="__smoke_test_model__",
+            model_key_inferred="bytedance/v1-lite-text-to-video",
             model_title="Smoke Test Model",
             model_url="https://example.com/smoke",
-            source_field="paths.post.input.mode",
-            source_enum_value=marker,
-            standard_dimension="MODE",
-            standard_value="STANDARD",
+            source_field="paths.post.input.aspect_ratio",
+            source_enum_value="1:1",
+            standard_dimension="ASPECT_RATIO",
+            standard_value=f"SMOKE_{marker}",
             confidence="LOW",
             note="smoke test row",
             is_active=True,
@@ -52,8 +52,19 @@ def main() -> int:
         created = settings_api.create_kie_standard_mapping_manage(create_payload, db=db, current_user=admin)
         created_id = int(created.id)
 
-        assert created.source_enum_value == marker, "created row should preserve source_enum_value"
+        assert created.source_enum_value == "1:1", "created row should preserve source_enum_value"
         assert created.is_billing_related is False, "created row billing flag should start false"
+
+        try:
+            settings_api.update_kie_standard_mapping_manage(
+                created_id,
+                KIEDataStandardMappingUpdate(source_enum_value=f"invalid_{marker}"),
+                db=db,
+                current_user=admin,
+            )
+            raise AssertionError("invalid source_enum_value should be rejected")
+        except HTTPException as exc:
+            assert exc.status_code == 400, f"expected 400 for invalid source_enum_value, got {exc.status_code}"
 
         update_payload = KIEDataStandardMappingUpdate(
             note="smoke test row updated",

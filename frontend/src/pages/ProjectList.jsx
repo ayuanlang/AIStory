@@ -253,6 +253,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [newBasePositioning, setNewBasePositioning] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.base_positioning));
     const [newAspectRatio, setNewAspectRatio] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.aspect_ratio, PROJECT_CREATE_PREFERRED_ASPECT_RATIO));
     const [newImageSize, setNewImageSize] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.image_size, PROJECT_CREATE_PREFERRED_IMAGE_SIZE));
+    const [newVideoSoundEnabled, setNewVideoSoundEnabled] = useState(true);
     const [activeTab, setActiveTab] = useState(initialTab);
     const [selectedProjectId, setSelectedProjectId] = useState(null);
     const [restoredEditorState, setRestoredEditorState] = useState(null);
@@ -451,6 +452,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
         setNewBasePositioning(pickPreferredOrFirst(projectCreateOptions.base_positioning));
         setNewAspectRatio(pickPreferredOrFirst(projectCreateOptions.aspect_ratio, PROJECT_CREATE_PREFERRED_ASPECT_RATIO));
         setNewImageSize(pickPreferredOrFirst(projectCreateOptions.image_size, PROJECT_CREATE_PREFERRED_IMAGE_SIZE));
+        setNewVideoSoundEnabled(true);
     };
 
     const handleCreate = async () => {
@@ -470,10 +472,15 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                     visual_standard: {
                         aspect_ratio: String(newAspectRatio || '').trim(),
                         image_size: String(newImageSize || '').trim(),
+                        sound: Boolean(newVideoSoundEnabled),
                     },
+                },
+                project_generation_defaults: {
+                    sound: Boolean(newVideoSoundEnabled),
                 },
                 aspect_ratio: String(newAspectRatio || '').trim(),
                 image_size: String(newImageSize || '').trim(),
+                video_sound: Boolean(newVideoSoundEnabled),
             },
         });
         resetCreateProjectForm();
@@ -944,6 +951,16 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                                 </select>
                                             </div>
                                         </div>
+
+                                        <label className="flex items-center gap-2 text-sm mt-1 mb-1 cursor-pointer select-none">
+                                            <input
+                                                type="checkbox"
+                                                className="h-4 w-4"
+                                                checked={newVideoSoundEnabled}
+                                                onChange={(e) => setNewVideoSoundEnabled(Boolean(e.target.checked))}
+                                            />
+                                            <span>{t('视频生成默认开启声音', 'Enable sound by default for video generation')}</span>
+                                        </label>
 
                                         <label className="block text-sm font-medium mt-4 mb-2">{t('项目描述（可选）', 'Project Description (Optional)')}</label>
                                         <textarea

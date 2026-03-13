@@ -1710,8 +1710,13 @@ export const getSystemSettingsCatalog = async () => {
     });
 }
 
-export const selectSystemSetting = async (setting_id, api_strategy = 'smart_default') => {
-    const response = await api.post('/settings/system/select', { setting_id, api_strategy });
+export const selectSystemSetting = async (setting_id, api_strategy = 'smart_default', mode = null) => {
+    const payload = { setting_id, api_strategy };
+    const modeText = String(mode == null ? '' : mode).trim();
+    if (modeText) {
+        payload.mode = modeText;
+    }
+    const response = await api.post('/settings/system/select', payload);
     return response.data;
 }
 

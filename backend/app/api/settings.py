@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import cast, String, func, inspect, or_, and_, text
 import logging
+import csv
 import json
 import asyncio
 import os
@@ -13,6 +14,7 @@ from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 import math
 from types import SimpleNamespace
+from pathlib import Path
 from typing import List, Dict, Tuple, Any, Optional
 from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 
@@ -65,6 +67,8 @@ from app.schemas.settings import (
     AgentToolPolicyOut,
     BillingRuleResetConfigOut,
     BillingRuleResetConfigUpdate,
+    SoraMentionConfigOut,
+    SoraMentionConfigUpdate,
     SystemAIAssistantRequest,
     SystemAIAssistantResponse,
     SystemAIAssistantSuggestion,
@@ -123,6 +127,7 @@ _AGENT_POLICY_CATEGORY = "System_Payment"
 _AGENT_POLICY_PROVIDER = "agent_policy"
 _AGENT_POLICY_MODEL = "tool_acl"
 _BILLING_RESET_CONFIG_KEY = "billing_rule_reset_config"
+_SORA_MENTION_CONFIG_KEY = "sora_mention_config"
 _BILLING_RESET_MAX_INCREASE_DEFAULT = 50
 _BILLING_RESET_MIN_MULTIPLIER_DEFAULT = 1.1
 _BILLING_RESET_MAX_MULTIPLIER_DEFAULT = 2.0
@@ -335,6 +340,32 @@ def _default_billing_rule_reset_config() -> Dict[str, Any]:
     }
 
 
+def _default_sora_mention_config() -> Dict[str, Any]:
+    return {
+        "auto_use_sora_mention": False,
+        "auto_upload_character": False,
+    }
+
+
+def _normalize_sora_mention_config(value: Any) -> Dict[str, Any]:
+    base = _default_sora_mention_config()
+    payload = _safe_json_dict(value)
+
+    auto_use = payload.get("auto_use_sora_mention")
+    if auto_use is not None:
+        base["auto_use_sora_mention"] = _to_bool(auto_use)
+
+    auto_upload = payload.get("auto_upload_character")
+    if auto_upload is not None:
+        base["auto_upload_character"] = _to_bool(auto_upload)
+
+    # Upload depends on mention mode.
+    if not base["auto_use_sora_mention"]:
+        base["auto_upload_character"] = False
+
+    return base
+
+
 def _normalize_billing_rule_reset_config(value: Any) -> Dict[str, Any]:
     base = _default_billing_rule_reset_config()
     payload = _safe_json_dict(value)
@@ -384,6 +415,15 @@ def _get_billing_rule_reset_config(db: Session) -> Dict[str, Any]:
     cfg = _safe_json_dict(row.config)
     normalized = _normalize_billing_rule_reset_config(cfg.get(_BILLING_RESET_CONFIG_KEY, {}))
     cfg[_BILLING_RESET_CONFIG_KEY] = normalized
+    row.config = cfg
+    return normalized
+
+
+def _get_sora_mention_config(db: Session) -> Dict[str, Any]:
+    row = _get_or_create_agent_policy_row(db)
+    cfg = _safe_json_dict(row.config)
+    normalized = _normalize_sora_mention_config(cfg.get(_SORA_MENTION_CONFIG_KEY, {}))
+    cfg[_SORA_MENTION_CONFIG_KEY] = normalized
     row.config = cfg
     return normalized
 
@@ -1779,6 +1819,108 @@ def _ensure_kie_standard_tables_for_admin(db: Session) -> None:
         CREATE INDEX IF NOT EXISTS ix_kie_std_mappings_lookup
         ON kie_system_data_standard_mappings(provider, model_key_inferred, standard_dimension, source_field, is_active)
     """))
+
+
+_KIE_ENUM_FACT_CSV = Path(__file__).resolve().parents[3] / "_kie_input_param_enum_values_for_db.csv"
+_KIE_ENUM_FACT_CACHE: Dict[str, Any] = {
+    "mtime": None,
+    "by_model_field": set(),
+    "by_field": set(),
+}
+
+
+def _normalize_kie_enum_token(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _load_kie_enum_fact_index() -> Dict[str, Any]:
+    try:
+        stat = _KIE_ENUM_FACT_CSV.stat()
+        mtime = float(stat.st_mtime)
+    except Exception:
+        raise HTTPException(
+            status_code=503,
+            detail="KIE enum catalog is unavailable; cannot validate source_enum_value",
+        )
+
+    cached_mtime = _KIE_ENUM_FACT_CACHE.get("mtime")
+    if cached_mtime is not None and abs(float(cached_mtime) - mtime) < 1e-9:
+        return _KIE_ENUM_FACT_CACHE
+
+    by_model_field: set = set()
+    by_field: set = set()
+    try:
+        with _KIE_ENUM_FACT_CSV.open("r", encoding="utf-8-sig", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                model_key = _normalize_kie_enum_token(row.get("model_key_inferred"))
+                field_path = _normalize_kie_enum_token(row.get("field_path"))
+                enum_value = _normalize_kie_enum_token(row.get("enum_value"))
+                if not field_path or not enum_value:
+                    continue
+                by_field.add((field_path, enum_value))
+                if model_key:
+                    by_model_field.add((model_key, field_path, enum_value))
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(
+            status_code=503,
+            detail="Failed to load KIE enum catalog; cannot validate source_enum_value",
+        )
+
+    _KIE_ENUM_FACT_CACHE["mtime"] = mtime
+    _KIE_ENUM_FACT_CACHE["by_model_field"] = by_model_field
+    _KIE_ENUM_FACT_CACHE["by_field"] = by_field
+    return _KIE_ENUM_FACT_CACHE
+
+
+def _validate_kie_mapping_source_enum_allowed(
+    *,
+    provider: Any,
+    model_key_inferred: Any,
+    source_field: Any,
+    source_enum_value: Any,
+) -> None:
+    provider_norm = _normalize_kie_enum_token(provider)
+    if provider_norm != "kie":
+        return
+
+    field_norm = _normalize_kie_enum_token(source_field)
+    value_norm = _normalize_kie_enum_token(source_enum_value)
+    model_norm = _normalize_kie_enum_token(model_key_inferred)
+
+    if not field_norm or not value_norm:
+        raise HTTPException(status_code=400, detail="source_field and source_enum_value are required")
+
+    # Strictly enforce API-side enum values. Non-API synthetic fields (e.g. matrix booleans)
+    # are handled by separate pipelines and are excluded from this guard.
+    if not field_norm.startswith("paths."):
+        return
+
+    idx = _load_kie_enum_fact_index()
+    by_model_field = idx.get("by_model_field") if isinstance(idx.get("by_model_field"), set) else set()
+    by_field = idx.get("by_field") if isinstance(idx.get("by_field"), set) else set()
+
+    if model_norm:
+        if (model_norm, field_norm, value_norm) in by_model_field:
+            return
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "source_enum_value is not allowed by API enum catalog for this model/field: "
+                f"model={model_norm}, field={field_norm}, value={value_norm}"
+            ),
+        )
+
+    if (field_norm, value_norm) not in by_field:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "source_enum_value is not allowed by API enum catalog for this field: "
+                f"field={field_norm}, value={value_norm}"
+            ),
+        )
 
 
 def _row_to_kie_standard_value_out(row: Dict[str, Any]) -> KIEDataStandardValueOut:
@@ -3991,6 +4133,12 @@ def create_kie_standard_mapping_manage(
     _ensure_kie_standard_tables_for_admin(db)
 
     values = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
+    _validate_kie_mapping_source_enum_allowed(
+        provider=values.get("provider") or "kie",
+        model_key_inferred=values.get("model_key_inferred"),
+        source_field=values.get("source_field"),
+        source_enum_value=values.get("source_enum_value"),
+    )
     now_iso = now_bj_iso()
     db.execute(text("""
         INSERT INTO kie_system_data_standard_mappings (
@@ -4058,7 +4206,13 @@ def update_kie_standard_mapping_manage(
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
     _ensure_kie_standard_tables_for_admin(db)
-    existing = db.execute(text("SELECT id FROM kie_system_data_standard_mappings WHERE id = :id"), {"id": int(mapping_id)}).first()
+    existing_row = db.execute(text("""
+        SELECT id, provider, model_key_inferred, source_field, source_enum_value
+        FROM kie_system_data_standard_mappings
+        WHERE id = :id
+        LIMIT 1
+    """), {"id": int(mapping_id)}).mappings().first()
+    existing = dict(existing_row) if existing_row else None
     if not existing:
         raise HTTPException(status_code=404, detail="KIE mapping not found")
 
@@ -4094,6 +4248,17 @@ def update_kie_standard_mapping_manage(
             value = 1 if _to_bool(value) else 0
         assignments.append(f"{key} = :{key}")
         params[key] = value
+
+    effective_provider = params.get("provider", existing.get("provider"))
+    effective_model_key = params.get("model_key_inferred", existing.get("model_key_inferred"))
+    effective_source_field = params.get("source_field", existing.get("source_field"))
+    effective_source_enum_value = params.get("source_enum_value", existing.get("source_enum_value"))
+    _validate_kie_mapping_source_enum_allowed(
+        provider=effective_provider,
+        model_key_inferred=effective_model_key,
+        source_field=effective_source_field,
+        source_enum_value=effective_source_enum_value,
+    )
 
     if assignments:
         assignments.append("updated_at = :updated_at")
@@ -4242,6 +4407,19 @@ def get_billing_rule_reset_config(
     return BillingRuleResetConfigOut(**cfg)
 
 
+@router.get("/settings/system/manage/sora-mention-config", response_model=SoraMentionConfigOut)
+def get_sora_mention_config(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage Sora mention config")
+
+    cfg = _get_sora_mention_config(db)
+    db.commit()
+    return SoraMentionConfigOut(**cfg)
+
+
 @router.put("/settings/system/manage/billing-rules/reset-config", response_model=BillingRuleResetConfigOut)
 def update_billing_rule_reset_config(
     payload: BillingRuleResetConfigUpdate,
@@ -4263,6 +4441,29 @@ def update_billing_rule_reset_config(
 
     normalized = _normalize_billing_rule_reset_config(_safe_json_dict(row.config).get(_BILLING_RESET_CONFIG_KEY, {}))
     return BillingRuleResetConfigOut(**normalized)
+
+
+@router.put("/settings/system/manage/sora-mention-config", response_model=SoraMentionConfigOut)
+def update_sora_mention_config(
+    payload: SoraMentionConfigUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage Sora mention config")
+
+    row = _get_or_create_agent_policy_row(db)
+    cfg = _safe_json_dict(row.config)
+    current_cfg = _normalize_sora_mention_config(cfg.get(_SORA_MENTION_CONFIG_KEY, {}))
+    patch = payload.model_dump(exclude_unset=True) if hasattr(payload, "model_dump") else payload.dict(exclude_unset=True)
+    merged_cfg = {**current_cfg, **_safe_json_dict(patch)}
+    cfg[_SORA_MENTION_CONFIG_KEY] = _normalize_sora_mention_config(merged_cfg)
+    row.config = cfg
+    db.commit()
+    db.refresh(row)
+
+    normalized = _normalize_sora_mention_config(_safe_json_dict(row.config).get(_SORA_MENTION_CONFIG_KEY, {}))
+    return SoraMentionConfigOut(**normalized)
 
 
 @router.get("/settings/system/manage/{system_api_id}/billing-rules", response_model=List[SystemAPIBillingRuleOut])
@@ -6989,6 +7190,7 @@ def export_system_config_sync_bundle_for_manage(
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
     provider_bundle = export_system_provider_bundle_for_manage(db=db, current_user=current_user)
+    _ensure_kie_standard_tables_for_admin(db)
 
     system_rows = db.query(SystemAPISetting).filter(
         ~SystemAPISetting.category.like("System_%"),
@@ -7106,6 +7308,59 @@ def export_system_config_sync_bundle_for_manage(
                 "updated_at": None,
             })
 
+    kie_standard_values_rows = db.execute(text("""
+        SELECT id, standard_dimension, standard_value, value_type, definition, alias_values,
+               is_active, created_at, updated_at
+        FROM kie_system_data_standard_values
+        ORDER BY standard_dimension ASC, standard_value ASC, id ASC
+    """)).mappings().all()
+    kie_standard_values_payload = [
+        {
+            "standard_dimension": str(row.get("standard_dimension") or "").strip(),
+            "standard_value": str(row.get("standard_value") or "").strip(),
+            "value_type": str(row.get("value_type") or "text").strip() or "text",
+            "definition": row.get("definition"),
+            "alias_values": row.get("alias_values"),
+            "is_active": bool(_to_bool(row.get("is_active"))),
+            "created_at": row.get("created_at"),
+            "updated_at": row.get("updated_at"),
+        }
+        for row in kie_standard_values_rows
+        if str(row.get("standard_dimension") or "").strip() and str(row.get("standard_value") or "").strip()
+    ]
+
+    kie_standard_mappings_rows = db.execute(text("""
+        SELECT id, provider, model_key_inferred, model_title, model_url,
+               source_field, source_enum_value, standard_dimension, standard_value,
+               confidence, note, is_active, is_billing_related, created_at, updated_at
+        FROM kie_system_data_standard_mappings
+        ORDER BY provider ASC, standard_dimension ASC, model_key_inferred ASC,
+                 source_field ASC, source_enum_value ASC, id ASC
+    """)).mappings().all()
+    kie_standard_mappings_payload = [
+        {
+            "provider": str(row.get("provider") or "kie").strip() or "kie",
+            "model_key_inferred": str(row.get("model_key_inferred") or "").strip() or None,
+            "model_title": row.get("model_title"),
+            "model_url": row.get("model_url"),
+            "source_field": str(row.get("source_field") or "").strip(),
+            "source_enum_value": str(row.get("source_enum_value") or "").strip(),
+            "standard_dimension": str(row.get("standard_dimension") or "").strip().upper(),
+            "standard_value": str(row.get("standard_value") or "").strip(),
+            "confidence": row.get("confidence"),
+            "note": row.get("note"),
+            "is_active": bool(_to_bool(row.get("is_active"))),
+            "is_billing_related": bool(_to_bool(row.get("is_billing_related"))),
+            "created_at": row.get("created_at"),
+            "updated_at": row.get("updated_at"),
+        }
+        for row in kie_standard_mappings_rows
+        if str(row.get("source_field") or "").strip()
+        and str(row.get("source_enum_value") or "").strip()
+        and str(row.get("standard_dimension") or "").strip()
+        and str(row.get("standard_value") or "").strip()
+    ]
+
     data = {
         "providers": provider_bundle.get("providers", []),
         "billing_rules": billing_rules_payload,
@@ -7113,6 +7368,8 @@ def export_system_config_sync_bundle_for_manage(
         "smtp_configs": smtp_payload,
         "wechat_pay_configs": wechat_payload,
         "task_default_apis": task_default_payload,
+        "kie_standard_values": kie_standard_values_payload,
+        "kie_standard_mappings": kie_standard_mappings_payload,
     }
 
     return {
@@ -7126,6 +7383,8 @@ def export_system_config_sync_bundle_for_manage(
             "smtp_configs": len(data["smtp_configs"]),
             "wechat_pay_configs": len(data["wechat_pay_configs"]),
             "task_default_apis": len(data["task_default_apis"]),
+            "kie_standard_values": len(data["kie_standard_values"]),
+            "kie_standard_mappings": len(data["kie_standard_mappings"]),
         },
         "data": data,
     }
@@ -7147,6 +7406,8 @@ def import_system_config_sync_bundle_for_manage(
     smtp_configs = data.get("smtp_configs") if isinstance(data.get("smtp_configs"), list) else []
     wechat_pay_configs = data.get("wechat_pay_configs") if isinstance(data.get("wechat_pay_configs"), list) else []
     task_default_apis = data.get("task_default_apis") if isinstance(data.get("task_default_apis"), list) else []
+    kie_standard_values = data.get("kie_standard_values") if isinstance(data.get("kie_standard_values"), list) else []
+    kie_standard_mappings = data.get("kie_standard_mappings") if isinstance(data.get("kie_standard_mappings"), list) else []
 
     replace_all = bool(payload.replace_all)
     if replace_all and not bool(getattr(payload, "confirm_clear_existing", False)):
@@ -7158,6 +7419,7 @@ def import_system_config_sync_bundle_for_manage(
     try:
         tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
         with tx_ctx:
+            _ensure_kie_standard_tables_for_admin(db)
             provider_items = []
             for raw in providers:
                 if not isinstance(raw, dict):
@@ -7196,6 +7458,12 @@ def import_system_config_sync_bundle_for_manage(
             billing_skipped = 0
             default_created = 0
             default_skipped = 0
+            kie_standard_values_created = 0
+            kie_standard_values_updated = 0
+            kie_standard_values_skipped = 0
+            kie_standard_mappings_created = 0
+            kie_standard_mappings_updated = 0
+            kie_standard_mappings_skipped = 0
             now_iso = now_bj_iso()
             for raw_rule in billing_rules:
                 if not isinstance(raw_rule, dict):
@@ -7223,6 +7491,177 @@ def import_system_config_sync_bundle_for_manage(
                 new_rule.updated_at = str(raw_rule.get("updated_at") or now_iso)
                 db.add(new_rule)
                 billing_created += 1
+
+            if replace_all:
+                db.execute(text("DELETE FROM kie_system_data_standard_mappings"))
+                db.execute(text("DELETE FROM kie_system_data_standard_values"))
+
+            for raw_value in kie_standard_values:
+                if not isinstance(raw_value, dict):
+                    kie_standard_values_skipped += 1
+                    continue
+                standard_dimension = str(raw_value.get("standard_dimension") or "").strip().upper()
+                standard_value = str(raw_value.get("standard_value") or "").strip()
+                if not standard_dimension or not standard_value:
+                    kie_standard_values_skipped += 1
+                    continue
+                value_type = str(raw_value.get("value_type") or "text").strip() or "text"
+                definition = raw_value.get("definition")
+                alias_values = raw_value.get("alias_values")
+                is_active = 1 if _to_bool(raw_value.get("is_active", True)) else 0
+                created_at = str(raw_value.get("created_at") or now_iso)
+                updated_at = str(raw_value.get("updated_at") or now_iso)
+
+                exists = db.execute(text("""
+                    SELECT id
+                    FROM kie_system_data_standard_values
+                    WHERE standard_dimension = :standard_dimension
+                      AND standard_value = :standard_value
+                    LIMIT 1
+                """), {
+                    "standard_dimension": standard_dimension,
+                    "standard_value": standard_value,
+                }).mappings().first()
+
+                if exists:
+                    db.execute(text("""
+                        UPDATE kie_system_data_standard_values
+                        SET value_type = :value_type,
+                            definition = :definition,
+                            alias_values = :alias_values,
+                            is_active = :is_active,
+                            updated_at = :updated_at
+                        WHERE id = :id
+                    """), {
+                        "id": int(exists.get("id") or 0),
+                        "value_type": value_type,
+                        "definition": definition,
+                        "alias_values": alias_values,
+                        "is_active": is_active,
+                        "updated_at": updated_at,
+                    })
+                    kie_standard_values_updated += 1
+                else:
+                    db.execute(text("""
+                        INSERT INTO kie_system_data_standard_values (
+                            standard_dimension, standard_value, value_type,
+                            definition, alias_values, is_active, created_at, updated_at
+                        ) VALUES (
+                            :standard_dimension, :standard_value, :value_type,
+                            :definition, :alias_values, :is_active, :created_at, :updated_at
+                        )
+                    """), {
+                        "standard_dimension": standard_dimension,
+                        "standard_value": standard_value,
+                        "value_type": value_type,
+                        "definition": definition,
+                        "alias_values": alias_values,
+                        "is_active": is_active,
+                        "created_at": created_at,
+                        "updated_at": updated_at,
+                    })
+                    kie_standard_values_created += 1
+
+            for raw_mapping in kie_standard_mappings:
+                if not isinstance(raw_mapping, dict):
+                    kie_standard_mappings_skipped += 1
+                    continue
+
+                provider_name = str(raw_mapping.get("provider") or "kie").strip() or "kie"
+                model_key_inferred = str(raw_mapping.get("model_key_inferred") or "").strip() or None
+                source_field = str(raw_mapping.get("source_field") or "").strip()
+                source_enum_value = str(raw_mapping.get("source_enum_value") or "").strip()
+                standard_dimension = str(raw_mapping.get("standard_dimension") or "").strip().upper()
+                standard_value = str(raw_mapping.get("standard_value") or "").strip()
+                if not source_field or not source_enum_value or not standard_dimension or not standard_value:
+                    kie_standard_mappings_skipped += 1
+                    continue
+
+                _validate_kie_mapping_source_enum_allowed(
+                    provider=provider_name,
+                    model_key_inferred=model_key_inferred,
+                    source_field=source_field,
+                    source_enum_value=source_enum_value,
+                )
+
+                model_title = raw_mapping.get("model_title")
+                model_url = raw_mapping.get("model_url")
+                confidence = raw_mapping.get("confidence")
+                note = raw_mapping.get("note")
+                is_active = 1 if _to_bool(raw_mapping.get("is_active", True)) else 0
+                is_billing_related = 1 if _to_bool(raw_mapping.get("is_billing_related", False)) else 0
+                created_at = str(raw_mapping.get("created_at") or now_iso)
+                updated_at = str(raw_mapping.get("updated_at") or now_iso)
+
+                exists = db.execute(text("""
+                    SELECT id
+                    FROM kie_system_data_standard_mappings
+                    WHERE provider = :provider
+                      AND coalesce(model_key_inferred, '') = coalesce(:model_key_inferred, '')
+                      AND source_field = :source_field
+                      AND source_enum_value = :source_enum_value
+                      AND standard_dimension = :standard_dimension
+                      AND standard_value = :standard_value
+                    LIMIT 1
+                """), {
+                    "provider": provider_name,
+                    "model_key_inferred": model_key_inferred,
+                    "source_field": source_field,
+                    "source_enum_value": source_enum_value,
+                    "standard_dimension": standard_dimension,
+                    "standard_value": standard_value,
+                }).mappings().first()
+
+                if exists:
+                    db.execute(text("""
+                        UPDATE kie_system_data_standard_mappings
+                        SET model_title = :model_title,
+                            model_url = :model_url,
+                            confidence = :confidence,
+                            note = :note,
+                            is_active = :is_active,
+                            is_billing_related = :is_billing_related,
+                            updated_at = :updated_at
+                        WHERE id = :id
+                    """), {
+                        "id": int(exists.get("id") or 0),
+                        "model_title": model_title,
+                        "model_url": model_url,
+                        "confidence": confidence,
+                        "note": note,
+                        "is_active": is_active,
+                        "is_billing_related": is_billing_related,
+                        "updated_at": updated_at,
+                    })
+                    kie_standard_mappings_updated += 1
+                else:
+                    db.execute(text("""
+                        INSERT INTO kie_system_data_standard_mappings (
+                            provider, model_key_inferred, model_title, model_url,
+                            source_field, source_enum_value, standard_dimension, standard_value,
+                            confidence, note, is_active, is_billing_related, created_at, updated_at
+                        ) VALUES (
+                            :provider, :model_key_inferred, :model_title, :model_url,
+                            :source_field, :source_enum_value, :standard_dimension, :standard_value,
+                            :confidence, :note, :is_active, :is_billing_related, :created_at, :updated_at
+                        )
+                    """), {
+                        "provider": provider_name,
+                        "model_key_inferred": model_key_inferred,
+                        "model_title": model_title,
+                        "model_url": model_url,
+                        "source_field": source_field,
+                        "source_enum_value": source_enum_value,
+                        "standard_dimension": standard_dimension,
+                        "standard_value": standard_value,
+                        "confidence": confidence,
+                        "note": note,
+                        "is_active": is_active,
+                        "is_billing_related": is_billing_related,
+                        "created_at": created_at,
+                        "updated_at": updated_at,
+                    })
+                    kie_standard_mappings_created += 1
 
             provider_pool_created = 0
             provider_pool_updated = 0
@@ -7385,6 +7824,16 @@ def import_system_config_sync_bundle_for_manage(
             "task_default_apis": {
                 "created_or_updated": default_created,
                 "skipped": default_skipped,
+            },
+            "kie_standard_values": {
+                "created": kie_standard_values_created,
+                "updated": kie_standard_values_updated,
+                "skipped": kie_standard_values_skipped,
+            },
+            "kie_standard_mappings": {
+                "created": kie_standard_mappings_created,
+                "updated": kie_standard_mappings_updated,
+                "skipped": kie_standard_mappings_skipped,
             },
         }
     except HTTPException:

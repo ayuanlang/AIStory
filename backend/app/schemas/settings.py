@@ -651,6 +651,16 @@ class BillingRuleResetConfigUpdate(BaseModel):
     max_total_increase_credits: int = 50
 
 
+class SoraMentionConfigOut(BaseModel):
+    auto_use_sora_mention: bool = False
+    auto_upload_character: bool = False
+
+
+class SoraMentionConfigUpdate(BaseModel):
+    auto_use_sora_mention: Optional[bool] = None
+    auto_upload_character: Optional[bool] = None
+
+
 class SystemAIAssistantModelInput(BaseModel):
     """AI助手模型输入。
 

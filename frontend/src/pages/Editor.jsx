@@ -673,6 +673,27 @@ const normalizeCanonTagCategories = (raw) => {
 
 const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], uiLang = 'en', mode = 'overview' }) => {
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
+    const resolveVideoSoundFromInfo = (payload) => {
+        const src = (payload && typeof payload === 'object') ? payload : {};
+        const visual = (src.tech_params && src.tech_params.visual_standard && typeof src.tech_params.visual_standard === 'object')
+            ? src.tech_params.visual_standard
+            : {};
+        const defaults = (src.project_generation_defaults && typeof src.project_generation_defaults === 'object')
+            ? src.project_generation_defaults
+            : {};
+        const candidate = (
+            src.video_sound ?? src.sound ?? defaults.sound ?? visual.sound
+        );
+        return candidate === false ? false : true;
+    };
+    const resolveProjectSeedFromInfo = (payload) => {
+        const src = (payload && typeof payload === 'object') ? payload : {};
+        const generation = (src.generation && typeof src.generation === 'object') ? src.generation : {};
+        const candidate = src.generation_seed ?? src.seed ?? generation.seed ?? null;
+        const parsed = Number(candidate);
+        if (!Number.isFinite(parsed) || parsed <= 0) return "";
+        return String(Math.trunc(parsed));
+    };
     const [project, setProject] = useState(null);
     const { addLog } = useLog();
     const [info, setInfo] = useState({
@@ -694,7 +715,9 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
         tone: "",
         lighting: "",
         language: "英文 / English",
+        video_sound: true,
         borrowed_films: [],
+        generation_seed: "",
         character_relationships: "",
         notes: "",
         story_dna_global_md: "",
@@ -1135,6 +1158,8 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                      merged.Global_Style = normalizeProjectEpisodeGlobalStyle(merged.Global_Style);
                      merged.tone = normalizeProjectEpisodeTone(merged.tone);
                      merged.lighting = normalizeProjectEpisodeLighting(merged.lighting);
+                     merged.video_sound = resolveVideoSoundFromInfo(merged);
+                     merged.generation_seed = resolveProjectSeedFromInfo(merged);
                      if (merged.tech_params?.visual_standard) {
                          merged.tech_params.visual_standard.quality = normalizeProjectEpisodeQuality(merged.tech_params.visual_standard.quality);
                      }
@@ -1423,8 +1448,26 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
 
     const handleSave = async () => {
         try {
+            const resolvedVideoSound = info.video_sound === false ? false : true;
+            const seedParsed = Number(info.generation_seed);
+            const resolvedSeed = Number.isFinite(seedParsed) && seedParsed > 0
+                ? Math.trunc(seedParsed)
+                : null;
+
             const global_info = {
                 ...info,
+                video_sound: resolvedVideoSound,
+                project_generation_defaults: {
+                    ...(info.project_generation_defaults || {}),
+                    sound: resolvedVideoSound,
+                },
+                tech_params: {
+                    ...(info.tech_params || {}),
+                    visual_standard: {
+                        ...(info.tech_params?.visual_standard || {}),
+                        sound: resolvedVideoSound,
+                    },
+                },
                 story_generator_global_input: {
                     ...globalStoryInput,
                     episodes_count: Number(globalStoryInput.episodes_count || 0) || 0,
@@ -1443,6 +1486,9 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                     extra_notes: canonExtra || '',
                 },
             };
+            if (resolvedSeed !== null) {
+                global_info.generation_seed = resolvedSeed;
+            }
             await updateProject(id, { global_info });
             alert("Project info saved!");
             if (onProjectUpdate) onProjectUpdate();
@@ -2161,6 +2207,18 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                         />
                     </div>
 
+                    <div className="flex flex-col gap-1">
+                        <label className="text-xs text-muted-foreground uppercase font-bold">{t('视频声音', 'Video Sound')}</label>
+                        <select
+                            className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none"
+                            value={info.video_sound === false ? 'off' : 'on'}
+                            onChange={(e) => updateField('video_sound', e.target.value !== 'off')}
+                        >
+                            <option value="on">{t('有', 'Enabled')}</option>
+                            <option value="off">{t('无', 'Disabled')}</option>
+                        </select>
+                    </div>
+
                     <div>
                         <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('补充说明', 'Additional Notes')}</label>
                         <textarea 
@@ -2212,6 +2270,13 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                                      list={PROJECT_EP_QUALITY_OPTIONS} 
                         />
                     </div>
+
+                    <InputGroup idPrefix={prefix}
+                        label={t('项目 Seed', 'Project Seed')}
+                        value={info.generation_seed}
+                        onChange={v => updateField('generation_seed', String(v || '').replace(/[^0-9]/g, ''))}
+                        placeholder={t('例如：12345678', 'e.g. 12345678')}
+                    />
 
                     <InputGroup idPrefix={prefix}
                         label={t('全局风格', 'Global Style')}
