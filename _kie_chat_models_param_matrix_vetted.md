@@ -1,0 +1,17 @@
+﻿# KIE Chat Models Param Matrix (Vetted Pass)
+Generated at: 2026-03-12T23:13:36
+Total docs parsed: 11
+
+| Category | Model Page | URL | model | resolution | image_size/size | aspect_ratio | duration | mode | quality | output_format | sound | multi_shots | image refs |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| chat | Claude Opus 4.5 | https://docs.kie.ai/market/claude/claude-opus-4-5.md |  |  |  |  |  |  |  |  |  |  |  |
+| chat | Claude Sonnet 4.5 | https://docs.kie.ai/market/claude/claude-sonnet-4-5.md |  |  |  |  |  |  |  |  |  |  |  |
+| chat | Gemini  2.5 Pro | https://docs.kie.ai/market/gemini/gemini-2-5-pro.md |  |  |  |  |  |  |  |  |  |  |  |
+| chat | Gemini 2.5 Flash | https://docs.kie.ai/market/gemini/gemini-2-5-flash.md |  |  |  |  |  |  |  |  |  |  |  |
+| chat | Gemini 3 Pro | https://docs.kie.ai/market/gemini/gemini-3-pro.md |  |  |  |  |  |  |  |  |  |  |  |
+| chat | GPT Image-1.5 - Image to Image | https://docs.kie.ai/market/gpt-image/1-5-image-to-image.md |  |  |  | 3:2 |  |  |  |  |  |  |  |
+| chat | GPT Image-1.5 - Text to Image | https://docs.kie.ai/market/gpt-image/1-5-text-to-image.md |  |  |  | 1:1 |  |  |  |  |  |  |  |
+| chat | GPT-5-2 | https://docs.kie.ai/market/chat/gpt-5-2.md | gpt-5-2 |  |  |  |  |  |  |  |  |  |  |
+| chat | Qwen - Image Edit | https://docs.kie.ai/market/qwen/image-edit.md |  |  |  |  |  |  |  |  |  |  | yes |
+| chat | Qwen - Image to Image | https://docs.kie.ai/market/qwen/image-to-image.md |  |  |  |  |  |  |  |  |  |  | yes |
+| chat | Qwen - Text to Image | https://docs.kie.ai/market/qwen/text-to-image.md |  |  |  |  |  |  |  |  |  |  |  |

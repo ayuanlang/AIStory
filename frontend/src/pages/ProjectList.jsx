@@ -1,6 +1,6 @@
 
 import React, { useEffect, useState } from 'react';
-import { api, fetchProjects, createProject, getSettings, updateSetting, getSettingDefaults, deleteSetting, deleteProject, recordSystemLogAction, fetchProjectShares, createProjectShare, deleteProjectShare } from '../services/api';
+import { api, fetchProjects, createProject, getSettings, updateSetting, getSettingDefaults, deleteSetting, deleteProject, recordSystemLogAction, fetchProjectShares, createProjectShare, deleteProjectShare, getKieStandardValueOptions } from '../services/api';
 import { BASE_URL } from '../config';
 import Editor from './Editor';
 import SettingsPage from './Settings';
@@ -67,8 +67,56 @@ const getAvatarUrl = (url) => {
 
 const USER_PROFILE_UPDATED_EVENT = 'aistory.user.profile.updated';
 const PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY = 'aistory.projects.return.snapshot';
-const PROJECT_CREATE_ASPECT_RATIO_OPTIONS = ['16:9', '2.35:1', '4:3', '9:16', '1:1'];
-const PROJECT_CREATE_IMAGE_SIZE_OPTIONS = ['1K', '2K', '4K'];
+const PROJECT_CREATE_FALLBACK_ASPECT_RATIO_OPTIONS = ['16:9', '2.35:1', '4:3', '9:16', '1:1'];
+const PROJECT_CREATE_FALLBACK_IMAGE_SIZE_OPTIONS = ['0.5K', '1K', '2K', '4K'];
+const PROJECT_CREATE_PREFERRED_ASPECT_RATIO = '9:16';
+const PROJECT_CREATE_PREFERRED_IMAGE_SIZE = '1K';
+const PROJECT_CREATE_DEFAULT_OPTIONS = {
+    type: [...PROJECT_EP_TYPE_OPTIONS],
+    language: [...PROJECT_EP_LANGUAGE_OPTIONS],
+    base_positioning: [...PROJECT_EP_BASE_POSITIONING_OPTIONS],
+    aspect_ratio: [...PROJECT_CREATE_FALLBACK_ASPECT_RATIO_OPTIONS],
+    image_size: [...PROJECT_CREATE_FALLBACK_IMAGE_SIZE_OPTIONS],
+};
+
+const uniqueNonEmptyStrings = (items) => {
+    if (!Array.isArray(items)) return [];
+    const out = [];
+    const seen = new Set();
+    items.forEach((item) => {
+        const value = String(item || '').trim();
+        if (!value || seen.has(value)) return;
+        seen.add(value);
+        out.push(value);
+    });
+    return out;
+};
+
+const pickPreferredOrFirst = (options, preferred = '') => {
+    const normalized = uniqueNonEmptyStrings(options);
+    if (preferred && normalized.includes(preferred)) return preferred;
+    return normalized[0] || '';
+};
+
+const normalizeProjectCreateOptions = (payload) => {
+    const safe = payload && typeof payload === 'object' ? payload : {};
+    const type = uniqueNonEmptyStrings(safe.type);
+    const language = uniqueNonEmptyStrings(safe.language);
+    const basePositioning = uniqueNonEmptyStrings(safe.base_positioning);
+    const aspectRatio = uniqueNonEmptyStrings(safe.aspect_ratio);
+    const imageSize = uniqueNonEmptyStrings([
+        ...(Array.isArray(safe.image_size) ? safe.image_size : []),
+        ...PROJECT_CREATE_DEFAULT_OPTIONS.image_size,
+    ]);
+
+    return {
+        type: type.length ? type : [...PROJECT_CREATE_DEFAULT_OPTIONS.type],
+        language: language.length ? language : [...PROJECT_CREATE_DEFAULT_OPTIONS.language],
+        base_positioning: basePositioning.length ? basePositioning : [...PROJECT_CREATE_DEFAULT_OPTIONS.base_positioning],
+        aspect_ratio: aspectRatio.length ? aspectRatio : [...PROJECT_CREATE_DEFAULT_OPTIONS.aspect_ratio],
+        image_size: imageSize.length ? imageSize : [...PROJECT_CREATE_DEFAULT_OPTIONS.image_size],
+    };
+};
 
 const sortProjectsNewestFirst = (items = []) => {
     const safeList = Array.isArray(items) ? [...items] : [];
@@ -199,11 +247,12 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [isCreating, setIsCreating] = useState(false);
     const [newTitle, setNewTitle] = useState('');
     const [newDescription, setNewDescription] = useState('');
-    const [newType, setNewType] = useState(PROJECT_EP_TYPE_OPTIONS[0] || '');
-    const [newLanguage, setNewLanguage] = useState(PROJECT_EP_LANGUAGE_OPTIONS[0] || '');
-    const [newBasePositioning, setNewBasePositioning] = useState(PROJECT_EP_BASE_POSITIONING_OPTIONS[0] || '');
-    const [newAspectRatio, setNewAspectRatio] = useState('9:16');
-    const [newImageSize, setNewImageSize] = useState('1K');
+    const [projectCreateOptions, setProjectCreateOptions] = useState(PROJECT_CREATE_DEFAULT_OPTIONS);
+    const [newType, setNewType] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.type));
+    const [newLanguage, setNewLanguage] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.language));
+    const [newBasePositioning, setNewBasePositioning] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.base_positioning));
+    const [newAspectRatio, setNewAspectRatio] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.aspect_ratio, PROJECT_CREATE_PREFERRED_ASPECT_RATIO));
+    const [newImageSize, setNewImageSize] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.image_size, PROJECT_CREATE_PREFERRED_IMAGE_SIZE));
     const [activeTab, setActiveTab] = useState(initialTab);
     const [selectedProjectId, setSelectedProjectId] = useState(null);
     const [restoredEditorState, setRestoredEditorState] = useState(null);
@@ -335,6 +384,33 @@ const ProjectList = ({ initialTab = 'projects' }) => {
         }
     }, [activeTab]);
 
+    useEffect(() => {
+        const loadProjectCreateOptions = async () => {
+            try {
+                const data = await getKieStandardValueOptions();
+                const normalized = normalizeProjectCreateOptions(data);
+                setProjectCreateOptions(normalized);
+                setNewType((prev) => (normalized.type.includes(prev) ? prev : pickPreferredOrFirst(normalized.type)));
+                setNewLanguage((prev) => (normalized.language.includes(prev) ? prev : pickPreferredOrFirst(normalized.language)));
+                setNewBasePositioning((prev) => (normalized.base_positioning.includes(prev) ? prev : pickPreferredOrFirst(normalized.base_positioning)));
+                setNewAspectRatio((prev) => (
+                    normalized.aspect_ratio.includes(prev)
+                        ? prev
+                        : pickPreferredOrFirst(normalized.aspect_ratio, PROJECT_CREATE_PREFERRED_ASPECT_RATIO)
+                ));
+                setNewImageSize((prev) => (
+                    normalized.image_size.includes(prev)
+                        ? prev
+                        : pickPreferredOrFirst(normalized.image_size, PROJECT_CREATE_PREFERRED_IMAGE_SIZE)
+                ));
+            } catch (error) {
+                console.error('Failed to load project-create dictionary options', error);
+            }
+        };
+
+        loadProjectCreateOptions();
+    }, []);
+
     const loadProjects = async () => {
         try {
             const data = await fetchProjects();
@@ -370,11 +446,11 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const resetCreateProjectForm = () => {
         setNewTitle('');
         setNewDescription('');
-        setNewType(PROJECT_EP_TYPE_OPTIONS[0] || '');
-        setNewLanguage(PROJECT_EP_LANGUAGE_OPTIONS[0] || '');
-        setNewBasePositioning(PROJECT_EP_BASE_POSITIONING_OPTIONS[0] || '');
-        setNewAspectRatio('9:16');
-        setNewImageSize('1K');
+        setNewType(pickPreferredOrFirst(projectCreateOptions.type));
+        setNewLanguage(pickPreferredOrFirst(projectCreateOptions.language));
+        setNewBasePositioning(pickPreferredOrFirst(projectCreateOptions.base_positioning));
+        setNewAspectRatio(pickPreferredOrFirst(projectCreateOptions.aspect_ratio, PROJECT_CREATE_PREFERRED_ASPECT_RATIO));
+        setNewImageSize(pickPreferredOrFirst(projectCreateOptions.image_size, PROJECT_CREATE_PREFERRED_IMAGE_SIZE));
     };
 
     const handleCreate = async () => {
@@ -840,31 +916,31 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                             <div>
                                                 <label className="block text-xs font-medium mb-1 text-muted-foreground">{t('类型', 'Type')}</label>
                                                 <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newType} onChange={(e) => setNewType(e.target.value)}>
-                                                    {PROJECT_EP_TYPE_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                                                    {projectCreateOptions.type.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
                                                 </select>
                                             </div>
                                             <div>
                                                 <label className="block text-xs font-medium mb-1 text-muted-foreground">{t('语言', 'Language')}</label>
                                                 <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newLanguage} onChange={(e) => setNewLanguage(e.target.value)}>
-                                                    {PROJECT_EP_LANGUAGE_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                                                    {projectCreateOptions.language.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
                                                 </select>
                                             </div>
                                             <div>
                                                 <label className="block text-xs font-medium mb-1 text-muted-foreground">{t('基础定位', 'Base Positioning')}</label>
                                                 <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newBasePositioning} onChange={(e) => setNewBasePositioning(e.target.value)}>
-                                                    {PROJECT_EP_BASE_POSITIONING_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                                                    {projectCreateOptions.base_positioning.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
                                                 </select>
                                             </div>
                                             <div>
                                                 <label className="block text-xs font-medium mb-1 text-muted-foreground">{t('画幅比例', 'Aspect Ratio')}</label>
                                                 <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newAspectRatio} onChange={(e) => setNewAspectRatio(e.target.value)}>
-                                                    {PROJECT_CREATE_ASPECT_RATIO_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                                                    {projectCreateOptions.aspect_ratio.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
                                                 </select>
                                             </div>
                                             <div>
                                                 <label className="block text-xs font-medium mb-1 text-muted-foreground">{t('图像尺寸', 'Image Size')}</label>
                                                 <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newImageSize} onChange={(e) => setNewImageSize(e.target.value)}>
-                                                    {PROJECT_CREATE_IMAGE_SIZE_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                                                    {projectCreateOptions.image_size.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
                                                 </select>
                                             </div>
                                         </div>

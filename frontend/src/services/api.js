@@ -48,6 +48,47 @@ api.interceptors.response.use(
     }
 );
 
+// Merge duplicate concurrent requests (single-flight) for hot Settings endpoints.
+const inFlightRequestMap = new Map();
+
+const buildSingleFlightKey = (prefix, params = null) => {
+    if (params === null || params === undefined) return prefix;
+    if (typeof params === 'string') return `${prefix}|${params}`;
+    try {
+        if (Array.isArray(params)) {
+            return `${prefix}|${JSON.stringify(params)}`;
+        }
+        if (typeof params === 'object') {
+            const sorted = Object.keys(params)
+                .sort((a, b) => a.localeCompare(b))
+                .reduce((acc, key) => {
+                    acc[key] = params[key];
+                    return acc;
+                }, {});
+            return `${prefix}|${JSON.stringify(sorted)}`;
+        }
+    } catch (_) {
+        // Ignore serialization failures and fall back to prefix-only key.
+    }
+    return prefix;
+};
+
+const runSingleFlight = (key, producer) => {
+    const existing = inFlightRequestMap.get(key);
+    if (existing) return existing;
+
+    const task = (async () => {
+        try {
+            return await producer();
+        } finally {
+            inFlightRequestMap.delete(key);
+        }
+    })();
+
+    inFlightRequestMap.set(key, task);
+    return task;
+};
+
 // ── Async LLM task polling utilities ────────────────────────────────────
 // Backend LLM endpoints accept ?async=1 and return { task_id, async: true }.
 // pollTask() polls GET /tasks/{task_id} until completed or failed.
@@ -368,6 +409,9 @@ const buildImageSubmitSignature = (payload) => {
         negative_prompt: String(payload?.negative_prompt || '').trim(),
         provider: String(payload?.provider || '').trim(),
         model: String(payload?.model || '').trim(),
+        seed: payload?.seed ?? null,
+        cfg: payload?.cfg ?? null,
+        mode: payload?.mode ?? null,
         ref_image_url: normalizeRefImageValue(payload?.ref_image_url),
         project_id: payload?.project_id ?? null,
         shot_id: payload?.shot_id ?? null,
@@ -889,6 +933,19 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const AUTO_DOWNLOAD_PREF_KEY_PREFIX = 'aistory.autoDownloadLocal';
 const PROMPT_SUBMIT_LANG_PREF_KEY_PREFIX = 'aistory.promptSubmitLang';
+const USER_PREFERENCES_CACHE_KEY_PREFIX = 'aistory.userPreferences';
+
+const DEFAULT_USER_PREFERENCES = {
+    prompt_submit_language: 'en',
+    auto_download_local: false,
+    generation: {},
+    advanced_model: {
+        temperature: 0.7,
+        seed: null,
+        cfg: null,
+        reasoning_effort: 'high',
+    },
+};
 
 const decodeJwtPayload = (token) => {
     try {
@@ -913,6 +970,63 @@ const resolveCurrentUserStorageScope = () => {
 
 const autoDownloadPreferenceStorageKey = () => `${AUTO_DOWNLOAD_PREF_KEY_PREFIX}:${resolveCurrentUserStorageScope()}`;
 const promptSubmitLanguageStorageKey = () => `${PROMPT_SUBMIT_LANG_PREF_KEY_PREFIX}:${resolveCurrentUserStorageScope()}`;
+const userPreferencesStorageKey = () => `${USER_PREFERENCES_CACHE_KEY_PREFIX}:${resolveCurrentUserStorageScope()}`;
+
+const normalizeReasoningEffort = (value) => {
+    const raw = String(value || '').trim().toLowerCase();
+    return ['low', 'medium', 'high'].includes(raw) ? raw : 'high';
+};
+
+export const normalizeUserPreferences = (value) => {
+    const raw = value && typeof value === 'object' ? value : {};
+    const generation = raw.generation && typeof raw.generation === 'object' ? raw.generation : {};
+    const advanced = raw.advanced_model && typeof raw.advanced_model === 'object' ? raw.advanced_model : {};
+    const temperatureNum = Number(advanced.temperature);
+    const cfgNum = Number(advanced.cfg);
+    const seedNum = Number(advanced.seed);
+
+    return {
+        prompt_submit_language: normalizePromptSubmitLanguagePreference(raw.prompt_submit_language),
+        auto_download_local: !!raw.auto_download_local,
+        generation,
+        advanced_model: {
+            temperature: Number.isFinite(temperatureNum) ? Math.max(0, Math.min(2, temperatureNum)) : 0.7,
+            seed: Number.isFinite(seedNum) && seedNum > 0 ? Math.trunc(seedNum) : null,
+            cfg: Number.isFinite(cfgNum) && cfgNum > 0 ? cfgNum : null,
+            reasoning_effort: normalizeReasoningEffort(advanced.reasoning_effort),
+        },
+    };
+};
+
+const getCachedUserPreferences = () => {
+    try {
+        const raw = localStorage.getItem(userPreferencesStorageKey());
+        if (!raw) return null;
+        return normalizeUserPreferences(JSON.parse(raw));
+    } catch {
+        return null;
+    }
+};
+
+const setCachedUserPreferences = (next) => {
+    try {
+        const normalized = normalizeUserPreferences(next);
+        localStorage.setItem(userPreferencesStorageKey(), JSON.stringify(normalized));
+        return normalized;
+    } catch {
+        return normalizeUserPreferences(next);
+    }
+};
+
+export const getUserPreferences = async () => {
+    const response = await api.get('/settings/preferences');
+    return setCachedUserPreferences(response?.data || {});
+};
+
+export const updateUserPreferences = async (payload = {}) => {
+    const response = await api.put('/settings/preferences', payload || {});
+    return setCachedUserPreferences(response?.data || {});
+};
 
 export const normalizePromptSubmitLanguagePreference = (value) => {
     const raw = String(value || '').trim().toLowerCase();
@@ -922,6 +1036,10 @@ export const normalizePromptSubmitLanguagePreference = (value) => {
 };
 
 export const getAutoDownloadLocalPreference = () => {
+    const cached = getCachedUserPreferences();
+    if (cached && typeof cached.auto_download_local === 'boolean') {
+        return cached.auto_download_local;
+    }
     try {
         const raw = localStorage.getItem(autoDownloadPreferenceStorageKey());
         if (raw === '1') return true;
@@ -935,12 +1053,21 @@ export const getAutoDownloadLocalPreference = () => {
 export const setAutoDownloadLocalPreference = (enabled) => {
     try {
         localStorage.setItem(autoDownloadPreferenceStorageKey(), enabled ? '1' : '0');
+        const current = getCachedUserPreferences() || DEFAULT_USER_PREFERENCES;
+        setCachedUserPreferences({
+            ...current,
+            auto_download_local: !!enabled,
+        });
     } catch {
         // ignore storage failures
     }
 };
 
 export const getPromptSubmitLanguagePreference = () => {
+    const cached = getCachedUserPreferences();
+    if (cached && cached.prompt_submit_language) {
+        return normalizePromptSubmitLanguagePreference(cached.prompt_submit_language);
+    }
     try {
         const raw = localStorage.getItem(promptSubmitLanguageStorageKey());
         if (!raw) return 'en';
@@ -954,6 +1081,11 @@ export const setPromptSubmitLanguagePreference = (value) => {
     try {
         const normalized = normalizePromptSubmitLanguagePreference(value);
         localStorage.setItem(promptSubmitLanguageStorageKey(), normalized);
+        const current = getCachedUserPreferences() || DEFAULT_USER_PREFERENCES;
+        setCachedUserPreferences({
+            ...current,
+            prompt_submit_language: normalized,
+        });
     } catch {
         // ignore storage failures
     }
@@ -1247,6 +1379,25 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
         on_job_created,
         ...requestOptions
     } = options || {};
+
+    const effectiveRequestOptions = { ...(requestOptions || {}) };
+    const userPrefs = getCachedUserPreferences() || DEFAULT_USER_PREFERENCES;
+    const advanced = userPrefs?.advanced_model && typeof userPrefs.advanced_model === 'object'
+        ? userPrefs.advanced_model
+        : {};
+    if (!Object.prototype.hasOwnProperty.call(effectiveRequestOptions, 'seed')) {
+        const seedNum = Number(advanced.seed);
+        if (Number.isFinite(seedNum) && seedNum > 0) {
+            effectiveRequestOptions.seed = Math.trunc(seedNum);
+        }
+    }
+    if (!Object.prototype.hasOwnProperty.call(effectiveRequestOptions, 'cfg')) {
+        const cfgNum = Number(advanced.cfg);
+        if (Number.isFinite(cfgNum) && cfgNum > 0) {
+            effectiveRequestOptions.cfg = cfgNum;
+        }
+    }
+
     const effectiveNegativePrompt = String(negative_prompt ?? options?.negative_prompt ?? '').trim();
     const callbackPollingEnabled = Object.prototype.hasOwnProperty.call(options || {}, 'callback_polling')
         ? options?.callback_polling !== false
@@ -1257,7 +1408,7 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
         prompt,
         provider,
         ref_image_url,
-        ...requestOptions,
+        ...effectiveRequestOptions,
         ...(effectiveNegativePrompt ? { negative_prompt: effectiveNegativePrompt } : {}),
         ...(callbackUrl ? { callback_url: callbackUrl } : {}),
     };
@@ -1528,8 +1679,10 @@ export const resetPassword = async (token, new_password) => {
 }
 
 export const getSettings = async () => {
-    const response = await api.get('/settings');
-    return response.data;
+    return runSingleFlight('GET:/settings', async () => {
+        const response = await api.get('/settings');
+        return response.data;
+    });
 }
 
 export const getSettingDefaults = async () => {
@@ -1538,19 +1691,23 @@ export const getSettingDefaults = async () => {
 }
 
 export const getSystemSettings = async () => {
-    const response = await api.get('/settings/system', {
-        params: { _ts: Date.now() },
-        headers: {
-            'Cache-Control': 'no-cache',
-            Pragma: 'no-cache',
-        },
+    return runSingleFlight('GET:/settings/system', async () => {
+        const response = await api.get('/settings/system', {
+            params: { _ts: Date.now() },
+            headers: {
+                'Cache-Control': 'no-cache',
+                Pragma: 'no-cache',
+            },
+        });
+        return response.data;
     });
-    return response.data;
 }
 
 export const getSystemSettingsCatalog = async () => {
-    const response = await api.get('/settings/system/catalog');
-    return response.data;
+    return runSingleFlight('GET:/settings/system/catalog', async () => {
+        const response = await api.get('/settings/system/catalog');
+        return response.data;
+    });
 }
 
 export const selectSystemSetting = async (setting_id, api_strategy = 'smart_default') => {
@@ -1559,14 +1716,16 @@ export const selectSystemSetting = async (setting_id, api_strategy = 'smart_defa
 }
 
 export const getSystemSettingsManage = async () => {
-    const response = await api.get('/settings/system/manage', {
-        params: { _ts: Date.now() },
-        headers: {
-            'Cache-Control': 'no-cache',
-            Pragma: 'no-cache',
-        },
+    return runSingleFlight('GET:/settings/system/manage', async () => {
+        const response = await api.get('/settings/system/manage', {
+            params: { _ts: Date.now() },
+            headers: {
+                'Cache-Control': 'no-cache',
+                Pragma: 'no-cache',
+            },
+        });
+        return response.data;
     });
-    return response.data;
 }
 
 export const getSystemApisMissingBillingRulesManage = async () => {
@@ -1722,17 +1881,22 @@ export const listSystemApiBillingRulesBatchManage = async (systemApiIds = []) =>
     const ids = (Array.isArray(systemApiIds) ? systemApiIds : [])
         .map((id) => Number(id || 0))
         .filter((id) => Number.isFinite(id) && id > 0);
-    const response = await api.get('/settings/system/manage/billing-rules', {
-        params: {
-            ...(ids.length ? { system_api_ids: ids.join(',') } : {}),
-            _ts: Date.now(),
-        },
-        headers: {
-            'Cache-Control': 'no-cache',
-            Pragma: 'no-cache',
-        },
+    const key = buildSingleFlightKey('GET:/settings/system/manage/billing-rules', {
+        system_api_ids: ids.join(',') || '',
     });
-    return response.data;
+    return runSingleFlight(key, async () => {
+        const response = await api.get('/settings/system/manage/billing-rules', {
+            params: {
+                ...(ids.length ? { system_api_ids: ids.join(',') } : {}),
+                _ts: Date.now(),
+            },
+            headers: {
+                'Cache-Control': 'no-cache',
+                Pragma: 'no-cache',
+            },
+        });
+        return response.data;
+    });
 }
 
 export const createSystemApiBillingRuleManage = async (systemApiId, payload) => {
@@ -1791,6 +1955,70 @@ export const deleteProviderKeyPool = async (poolId) => {
     return response.data;
 }
 
+export const listKieStandardValuesManage = async (params = {}) => {
+    const response = await api.get('/settings/system/manage/kie-standard-values', {
+        params: {
+            ...params,
+            _ts: Date.now(),
+        },
+        headers: {
+            'Cache-Control': 'no-cache',
+            Pragma: 'no-cache',
+        },
+    });
+    return response.data;
+}
+
+export const getKieStandardValueOptions = async (params = {}) => {
+    const response = await api.get('/settings/system/kie-standard-values/options', {
+        params: {
+            ...params,
+            _ts: Date.now(),
+        },
+        headers: {
+            'Cache-Control': 'no-cache',
+            Pragma: 'no-cache',
+        },
+    });
+    return response.data;
+}
+
+export const listKieStandardMappingsManage = async (params = {}) => {
+    const response = await api.get('/settings/system/manage/kie-standard-mappings', {
+        params: {
+            ...params,
+            _ts: Date.now(),
+        },
+        headers: {
+            'Cache-Control': 'no-cache',
+            Pragma: 'no-cache',
+        },
+    });
+    return response.data;
+}
+
+export const createKieStandardMappingManage = async (payload) => {
+    const response = await api.post('/settings/system/manage/kie-standard-mappings', payload || {});
+    return response.data;
+}
+
+export const updateKieStandardMappingManage = async (mappingId, payload) => {
+    const response = await api.post(`/settings/system/manage/kie-standard-mappings/${mappingId}`, payload || {});
+    return response.data;
+}
+
+export const deleteKieStandardMappingManage = async (mappingId) => {
+    const response = await api.delete(`/settings/system/manage/kie-standard-mappings/${mappingId}`);
+    return response.data;
+}
+
+export const inferKieStandardMappingBillingRelatedManage = async (provider = 'kie') => {
+    const response = await api.post('/settings/system/manage/kie-standard-mappings/infer-billing-related', null, {
+        params: { provider },
+    });
+    return response.data;
+}
+
 export const exportSystemSettingsManage = async () => {
     const response = await api.get('/settings/system/manage/export');
     return response.data;
@@ -1838,6 +2066,16 @@ export const getAdminLlmLogFiles = async () => {
 
 export const getAdminLlmLogView = async (params = {}) => {
     const response = await api.get('/admin/llm-logs/view', { params });
+    return response.data;
+}
+
+export const getAdminRuntimeLogFiles = async () => {
+    const response = await api.get('/admin/runtime-logs/files');
+    return response.data;
+}
+
+export const getAdminRuntimeLogView = async (params = {}) => {
+    const response = await api.get('/admin/runtime-logs/view', { params });
     return response.data;
 }
 
@@ -2041,8 +2279,10 @@ export const fetchPromptSkillDetail = async (skillId) => {
 };
 
 export const fetchMe = async () => {
-    const response = await api.get('/users/me');
-    return response.data;
+    return runSingleFlight('GET:/users/me', async () => {
+        const response = await api.get('/users/me');
+        return response.data;
+    });
 };
 
 export const updateMyProfile = async (payload) => {
@@ -2135,6 +2375,7 @@ export const applyKiePricingRulesManage = async (payload = {}) => (await api.pos
 export const getTransactions = async (limit=100, userId=null) => {
     let url = `/billing/transactions?limit=${limit}`;
     if (userId) url += `&user_id=${userId}`;
-    return (await api.get(url)).data;
+    const key = buildSingleFlightKey('GET:/billing/transactions', { limit, userId: userId || '' });
+    return runSingleFlight(key, async () => (await api.get(url)).data);
 };
 export const updateUserCredits = async (userId, credits, mode='set') => (await api.post(`/billing/users/${userId}/credits`, { amount: credits, mode })).data;

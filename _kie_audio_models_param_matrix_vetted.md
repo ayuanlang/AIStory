@@ -1,0 +1,12 @@
+﻿# KIE Audio Models Param Matrix (Vetted Pass)
+Generated at: 2026-03-12T23:13:27
+Total docs parsed: 6
+
+| Category | Model Page | URL | model | resolution | image_size/size | aspect_ratio | duration | mode | quality | output_format | sound | multi_shots | image refs |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| audio | elevenlabs/audio-isolation | https://docs.kie.ai/market/elevenlabs/audio-isolation.md |  |  |  |  |  |  |  |  |  |  |  |
+| audio | elevenlabs/speech-to-text | https://docs.kie.ai/market/elevenlabs/speech-to-text.md |  |  |  |  |  |  |  |  |  |  |  |
+| audio | elevenlabs/text-to-speech-multilingual-v2 | https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md |  |  |  |  |  |  |  |  |  |  |  |
+| audio | elevenlabs/text-to-speech-turbo-2-5 | https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md | turbo |  |  |  |  |  |  |  |  |  |  |
+| audio | Infinitalk - From Audio | https://docs.kie.ai/market/infinitalk/from-audio.md |  | 480p |  |  |  |  |  |  |  |  | yes |
+| audio | Wan - 2.2 A14B Speech to Video Turbo | https://docs.kie.ai/market/wan/2-2-a14b-speech-to-video-turbo.md | turbo | 480p |  |  |  |  |  |  |  |  | yes |

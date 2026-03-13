@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useStore } from '@/lib/store';
 import { Save, Info, Upload, Download, Coins, History, Palette, CheckCircle, ArrowLeft, User, KeyRound } from 'lucide-react';
 import { API_URL } from '@/config';
-import { updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, selectSystemSetting, updateMyProfile, updateMyPassword, uploadMyAvatar, recordSystemLogAction, getAutoDownloadLocalPreference, setAutoDownloadLocalPreference, getPromptSubmitLanguagePreference, setPromptSubmitLanguagePreference, normalizePromptSubmitLanguagePreference } from '../services/api';
+import { updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, selectSystemSetting, updateMyProfile, updateMyPassword, uploadMyAvatar, recordSystemLogAction, getAutoDownloadLocalPreference, setAutoDownloadLocalPreference, getPromptSubmitLanguagePreference, setPromptSubmitLanguagePreference, normalizePromptSubmitLanguagePreference, updateUserPreferences } from '../services/api';
 import RechargeModal from '../components/RechargeModal'; // Import RechargeModal
 import { getUiLang, setUiLang as setGlobalUiLang, tUI, UI_LANG_EVENT } from '../lib/uiLang';
 import { formatProviderLabel } from '../lib/providerLabel';
@@ -199,6 +199,10 @@ const Settings = () => {
     const [promptLanguage, setPromptLanguage] = useState("mixed");
     const [autoDownloadLocal, setAutoDownloadLocal] = useState(false);
     const [promptSubmitLanguage, setPromptSubmitLanguage] = useState(() => getPromptSubmitLanguagePreference());
+    const [advancedTemperature, setAdvancedTemperature] = useState('0.7');
+    const [advancedSeed, setAdvancedSeed] = useState('');
+    const [advancedCfg, setAdvancedCfg] = useState('');
+    const [advancedReasoningEffort, setAdvancedReasoningEffort] = useState('high');
 
     // State for Tool Configs (Active inputs)
     const [imgToolKey, setImgToolKey] = useState("");
@@ -367,12 +371,48 @@ const Settings = () => {
             ...(generationConfig || {}),
             autoDownloadLocal: next,
         });
+        void updateUserPreferences({ auto_download_local: next });
     };
 
     const handlePromptSubmitLanguageChange = (value) => {
         const next = normalizePromptSubmitLanguagePreference(value);
         setPromptSubmitLanguage(next);
         setPromptSubmitLanguagePreference(next);
+        void updateUserPreferences({ prompt_submit_language: next });
+    };
+
+    const buildAdvancedModelPayload = () => {
+        const tempNum = Number(advancedTemperature);
+        const seedNum = Number(advancedSeed);
+        const cfgNum = Number(advancedCfg);
+        const effort = ['low', 'medium', 'high'].includes(String(advancedReasoningEffort || '').toLowerCase())
+            ? String(advancedReasoningEffort).toLowerCase()
+            : 'high';
+
+        return {
+            temperature: Number.isFinite(tempNum) ? Math.max(0, Math.min(2, tempNum)) : 0.7,
+            seed: Number.isFinite(seedNum) && seedNum > 0 ? Math.trunc(seedNum) : null,
+            cfg: Number.isFinite(cfgNum) && cfgNum > 0 ? cfgNum : null,
+            reasoning_effort: effort,
+        };
+    };
+
+    const handleSaveAdvancedModelPreferences = async () => {
+        const advancedModelPayload = buildAdvancedModelPayload();
+        setGenerationConfig({
+            ...(generationConfig || {}),
+            advanced_model: advancedModelPayload,
+        });
+
+        try {
+            await updateUserPreferences({
+                advanced_model: advancedModelPayload,
+            });
+            showNotification(t('高级模型参数已保存', 'Advanced model preferences saved'), 'success');
+        } catch (e) {
+            console.warn('Failed to persist advanced model preferences', e);
+            showNotification(t('高级模型参数保存失败', 'Failed to save advanced model preferences'), 'error');
+        }
     };
 
     const trackMenuAction = (menuKey, menuLabel, actionFn) => {
@@ -617,13 +657,50 @@ const Settings = () => {
                 .sort((a, b) => a.localeCompare(b)),
         ];
 
-        return orderedKeys.map((category) => ({
-            category,
-            label: categoryLabelMap[category] || category,
-            groups: (grouped[category] || [])
-                .filter((item) => !!item?.shared_key_configured)
-                .sort((a, b) => String(a.provider || '').localeCompare(String(b.provider || ''))),
-        })).filter((block) => (block.groups || []).length > 0);
+        return orderedKeys.map((category) => {
+            const sourceGroups = (grouped[category] || []).filter((item) => !!item?.shared_key_configured);
+            const mergedByProvider = sourceGroups.reduce((bucket, item) => {
+                const providerKey = `${String(item?.provider || '').trim().toLowerCase()}::${String(item?.provider_alias || '').trim().toLowerCase()}`;
+                const currentModels = Array.isArray(item?.models) ? item.models : [];
+
+                if (!bucket[providerKey]) {
+                    bucket[providerKey] = {
+                        ...item,
+                        category,
+                        models: [...currentModels],
+                        shared_key_configured: !!item?.shared_key_configured,
+                    };
+                    return bucket;
+                }
+
+                const existing = bucket[providerKey];
+                existing.shared_key_configured = !!existing.shared_key_configured || !!item?.shared_key_configured;
+                if (!existing.provider_alias && item?.provider_alias) {
+                    existing.provider_alias = item.provider_alias;
+                }
+
+                const mergedModels = [...(Array.isArray(existing.models) ? existing.models : []), ...currentModels];
+                const dedupedModels = [];
+                const seenModelKeys = new Set();
+                for (const row of mergedModels) {
+                    const modelKey = `${String(row?.id ?? '')}::${String(row?.model ?? '').trim().toLowerCase()}`;
+                    if (seenModelKeys.has(modelKey)) continue;
+                    seenModelKeys.add(modelKey);
+                    dedupedModels.push(row);
+                }
+                existing.models = dedupedModels;
+                return bucket;
+            }, {});
+
+            const mergedGroups = Object.values(mergedByProvider)
+                .sort((a, b) => String(a.provider || '').localeCompare(String(b.provider || '')));
+
+            return {
+                category,
+                label: categoryLabelMap[category] || category,
+                groups: mergedGroups,
+            };
+        }).filter((block) => (block.groups || []).length > 0);
     }, [systemSettings]);
 
 
@@ -860,6 +937,22 @@ const Settings = () => {
             setCharSupplements(withFallback(generationConfig.characterSupplements, DEFAULT_CHARACTER_SUPPLEMENTS));
             setSceneSupplements(withFallback(generationConfig.sceneSupplements, DEFAULT_SCENE_SUPPLEMENTS));
             setPromptLanguage(generationConfig.prompt_language || "mixed");
+            const advanced = (generationConfig.advanced_model && typeof generationConfig.advanced_model === 'object')
+                ? generationConfig.advanced_model
+                : {};
+            const tempNum = Number(advanced.temperature);
+            const seedNum = Number(advanced.seed);
+            const cfgNum = Number(advanced.cfg);
+            setAdvancedTemperature(
+                Number.isFinite(tempNum) ? String(Math.max(0, Math.min(2, tempNum))) : '0.7'
+            );
+            setAdvancedSeed(Number.isFinite(seedNum) && seedNum > 0 ? String(Math.trunc(seedNum)) : '');
+            setAdvancedCfg(Number.isFinite(cfgNum) && cfgNum > 0 ? String(cfgNum) : '');
+            setAdvancedReasoningEffort(
+                ['low', 'medium', 'high'].includes(String(advanced.reasoning_effort || '').toLowerCase())
+                    ? String(advanced.reasoning_effort).toLowerCase()
+                    : 'high'
+            );
             const userPref = getAutoDownloadLocalPreference();
             setAutoDownloadLocal(
                 userPref !== null
@@ -886,6 +979,10 @@ const Settings = () => {
         } else {
                setCharSupplements(DEFAULT_CHARACTER_SUPPLEMENTS);
                setSceneSupplements(DEFAULT_SCENE_SUPPLEMENTS);
+                         setAdvancedTemperature('0.7');
+                         setAdvancedSeed('');
+                         setAdvancedCfg('');
+                         setAdvancedReasoningEffort('high');
              setAutoDownloadLocal(getAutoDownloadLocalPreference() ?? false);
              // Even if no generationConfig, we might have defaults set in state (e.g. Midjourney/Runway)
              // and we should load their configs if savedToolConfigs updates
@@ -1198,7 +1295,8 @@ const Settings = () => {
     };
 
     const handleSaveGeneration = async () => {
-        setGenerationConfig({
+        const advancedModelPayload = buildAdvancedModelPayload();
+        const generationPayload = {
             characterSupplements: charSupplements,
             sceneSupplements: sceneSupplements,
             prompt_language: promptLanguage,
@@ -1206,7 +1304,22 @@ const Settings = () => {
             videoModel,
             visionModel,
             autoDownloadLocal,
+        };
+        setGenerationConfig({
+            ...generationPayload,
+            advanced_model: advancedModelPayload,
         });
+
+        try {
+            await updateUserPreferences({
+                prompt_submit_language: promptSubmitLanguage,
+                auto_download_local: !!autoDownloadLocal,
+                generation: generationPayload,
+                advanced_model: advancedModelPayload,
+            });
+        } catch (e) {
+            console.warn('Failed to persist user preferences to backend', e);
+        }
 
         // Save tool credentials locally
         const imgConfig = { 
@@ -1607,6 +1720,71 @@ const Settings = () => {
                             {t('该选项会立即保存到当前用户本地设置，并用于 Subject 与 Shot 的生成提交。', 'This option is saved immediately to current user local settings and applies to Subject and Shot generation submissions.')}
                         </p>
                     </div>
+                    <div className="space-y-3 bg-white/5 p-3 rounded-lg border border-white/10">
+                        <div className="flex items-center justify-between gap-3">
+                            <label className="text-sm leading-6 text-white/90">{t('高级模型参数', 'Advanced Model Parameters')}</label>
+                            <button
+                                type="button"
+                                onClick={handleSaveAdvancedModelPreferences}
+                                className="px-3 py-1.5 rounded-md text-xs bg-primary text-black hover:opacity-90"
+                            >
+                                {t('保存参数', 'Save Parameters')}
+                            </button>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <label className="text-xs text-muted-foreground space-y-1">
+                                <span>{t('Temperature (0-2)', 'Temperature (0-2)')}</span>
+                                <input
+                                    type="number"
+                                    min="0"
+                                    max="2"
+                                    step="0.1"
+                                    value={advancedTemperature}
+                                    onChange={(e) => setAdvancedTemperature(e.target.value)}
+                                    className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-sm text-white"
+                                />
+                            </label>
+                            <label className="text-xs text-muted-foreground space-y-1">
+                                <span>{t('Seed (可选)', 'Seed (Optional)')}</span>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    step="1"
+                                    value={advancedSeed}
+                                    onChange={(e) => setAdvancedSeed(e.target.value)}
+                                    placeholder={t('留空则随机', 'Leave blank for random')}
+                                    className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-sm text-white"
+                                />
+                            </label>
+                            <label className="text-xs text-muted-foreground space-y-1">
+                                <span>{t('CFG (可选)', 'CFG (Optional)')}</span>
+                                <input
+                                    type="number"
+                                    min="0.1"
+                                    step="0.1"
+                                    value={advancedCfg}
+                                    onChange={(e) => setAdvancedCfg(e.target.value)}
+                                    placeholder={t('留空则使用模型默认', 'Leave blank for provider default')}
+                                    className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-sm text-white"
+                                />
+                            </label>
+                            <label className="text-xs text-muted-foreground space-y-1">
+                                <span>{t('Reasoning Effort', 'Reasoning Effort')}</span>
+                                <select
+                                    value={advancedReasoningEffort}
+                                    onChange={(e) => setAdvancedReasoningEffort(e.target.value)}
+                                    className="w-full p-2 rounded-md bg-white/10 border border-white/10 text-sm text-white"
+                                >
+                                    <option value="low">low</option>
+                                    <option value="medium">medium</option>
+                                    <option value="high">high</option>
+                                </select>
+                            </label>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground">
+                            {t('用于 LLM 分析与生图默认参数。若请求中显式传参，将优先使用请求参数。', 'Used as defaults for LLM analysis and image generation. Explicit request parameters take priority.')}
+                        </p>
+                    </div>
                 </div>
             </section>
             )}
@@ -1886,8 +2064,8 @@ const Settings = () => {
                                             </div>
 
                                             <div className="space-y-3">
-                                                {categoryBlock.groups.map((group) => (
-                                                    <div key={`${group.category}-${group.provider}`} className="border border-white/10 rounded-lg p-4 bg-white/5 space-y-3">
+                                                {categoryBlock.groups.map((group, groupIndex) => (
+                                                    <div key={`${group.category}-${group.provider}-${group.provider_alias || ''}-${groupIndex}`} className="border border-white/10 rounded-lg p-4 bg-white/5 space-y-3">
                                                         <div className="flex flex-wrap items-center gap-2">
                                                             <span className="text-sm font-semibold">{group.provider_alias || group.provider}</span>
                                                             {group.provider_alias && (
@@ -1903,12 +2081,12 @@ const Settings = () => {
                                                         </div>
 
                                                         <div className="space-y-2">
-                                                            {(group.models || []).map((row) => (
+                                                            {(group.models || []).map((row, rowIndex) => (
                                                                 (() => {
                                                                     const pricing = buildPriceDisplay(row);
                                                                     return (
                                                                 <div
-                                                                    key={row.id}
+                                                                    key={`system-row-${group.category}-${group.provider}-${String(row?.id ?? '')}-${String(row?.model || '')}-${rowIndex}`}
                                                                     className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center p-2 rounded border border-white/10 bg-black/20"
                                                                 >
                                                                     <div className="md:col-span-9 text-xs">

@@ -1,0 +1,740 @@
+provider,model_title,model_url,model_key_inferred,source_field,source_enum_value,standard_dimension,standard_value,confidence,note
+kie,Generate 4o Image,https://docs.kie.ai/4o-image-api/generate-4-o-image.md,4o-image-api/generate-4-o-image,paths.post.input.size,1:1,ASPECT_RATIO,1:1,HIGH,native
+kie,Generate 4o Image,https://docs.kie.ai/4o-image-api/generate-4-o-image.md,4o-image-api/generate-4-o-image,paths.post.input.size,2:3,ASPECT_RATIO,2:3,HIGH,native
+kie,Generate 4o Image,https://docs.kie.ai/4o-image-api/generate-4-o-image.md,4o-image-api/generate-4-o-image,paths.post.input.size,3:2,ASPECT_RATIO,3:2,HIGH,native
+kie,Bytedance Seedance 1.5 Pro,https://docs.kie.ai/market/bytedance/seedance-1-5-pro.md,bytedance/seedance-1-5-pro,paths.post.input.aspect_ratio,16:9,ASPECT_RATIO,16:9,HIGH,native
+kie,Bytedance Seedance 1.5 Pro,https://docs.kie.ai/market/bytedance/seedance-1-5-pro.md,bytedance/seedance-1-5-pro,paths.post.input.aspect_ratio,1:1,ASPECT_RATIO,1:1,HIGH,native
+kie,Bytedance Seedance 1.5 Pro,https://docs.kie.ai/market/bytedance/seedance-1-5-pro.md,bytedance/seedance-1-5-pro,paths.post.input.aspect_ratio,21:9,ASPECT_RATIO,21:9,HIGH,native
+kie,Bytedance Seedance 1.5 Pro,https://docs.kie.ai/market/bytedance/seedance-1-5-pro.md,bytedance/seedance-1-5-pro,paths.post.input.aspect_ratio,3:4,ASPECT_RATIO,3:4,HIGH,native
+kie,Bytedance Seedance 1.5 Pro,https://docs.kie.ai/market/bytedance/seedance-1-5-pro.md,bytedance/seedance-1-5-pro,paths.post.input.aspect_ratio,4:3,ASPECT_RATIO,4:3,HIGH,native
+kie,Bytedance Seedance 1.5 Pro,https://docs.kie.ai/market/bytedance/seedance-1-5-pro.md,bytedance/seedance-1-5-pro,paths.post.input.aspect_ratio,9:16,ASPECT_RATIO,9:16,HIGH,native
+kie,Bytedance - V1 Lite Text to Video,https://docs.kie.ai/market/bytedance/v1-lite-text-to-video.md,bytedance/v1-lite-text-to-video,paths.post.input.aspect_ratio,16:9,ASPECT_RATIO,16:9,HIGH,native
+kie,Bytedance - V1 Lite Text to Video,https://docs.kie.ai/market/bytedance/v1-lite-text-to-video.md,bytedance/v1-lite-text-to-video,paths.post.input.aspect_ratio,1:1,ASPECT_RATIO,1:1,HIGH,native
+kie,Bytedance - V1 Lite Text to Video,https://docs.kie.ai/market/bytedance/v1-lite-text-to-video.md,bytedance/v1-lite-text-to-video,paths.post.input.aspect_ratio,3:4,ASPECT_RATIO,3:4,HIGH,native
+kie,Bytedance - V1 Lite Text to Video,https://docs.kie.ai/market/bytedance/v1-lite-text-to-video.md,bytedance/v1-lite-text-to-video,paths.post.input.aspect_ratio,4:3,ASPECT_RATIO,4:3,HIGH,native
+kie,Bytedance - V1 Lite Text to Video,https://docs.kie.ai/market/bytedance/v1-lite-text-to-video.md,bytedance/v1-lite-text-to-video,paths.post.input.aspect_ratio,9:16,ASPECT_RATIO,9:16,HIGH,native
+kie,Bytedance - V1 Lite Text to Video,https://docs.kie.ai/market/bytedance/v1-lite-text-to-video.md,bytedance/v1-lite-text-to-video,paths.post.input.aspect_ratio,9:21,ASPECT_RATIO,9:21,HIGH,native
+kie,Bytedance - V1 Pro Text to Video,https://docs.kie.ai/market/bytedance/v1-pro-text-to-video.md,bytedance/v1-pro-text-to-video,paths.post.input.aspect_ratio,16:9,ASPECT_RATIO,16:9,HIGH,native
+kie,Bytedance - V1 Pro Text to Video,https://docs.kie.ai/market/bytedance/v1-pro-text-to-video.md,bytedance/v1-pro-text-to-video,paths.post.input.aspect_ratio,1:1,ASPECT_RATIO,1:1,HIGH,native
+kie,Bytedance - V1 Pro Text to Video,https://docs.kie.ai/market/bytedance/v1-pro-text-to-video.md,bytedance/v1-pro-text-to-video,paths.post.input.aspect_ratio,21:9,ASPECT_RATIO,21:9,HIGH,native
+kie,Bytedance - V1 Pro Text to Video,https://docs.kie.ai/market/bytedance/v1-pro-text-to-video.md,bytedance/v1-pro-text-to-video,paths.post.input.aspect_ratio,3:4,ASPECT_RATIO,3:4,HIGH,native
+kie,Bytedance - V1 Pro Text to Video,https://docs.kie.ai/market/bytedance/v1-pro-text-to-video.md,bytedance/v1-pro-text-to-video,paths.post.input.aspect_ratio,4:3,ASPECT_RATIO,4:3,HIGH,native
+kie,Bytedance - V1 Pro Text to Video,https://docs.kie.ai/market/bytedance/v1-pro-text-to-video.md,bytedance/v1-pro-text-to-video,paths.post.input.aspect_ratio,9:16,ASPECT_RATIO,9:16,HIGH,native
+kie,Generate or Edit Image,https://docs.kie.ai/flux-kontext-api/generate-or-edit-image.md,flux-kontext-api/generate-or-edit-image,paths.post.input.aspect_ratio,16:9,ASPECT_RATIO,16:9,HIGH,native
+kie,Generate or Edit Image,https://docs.kie.ai/flux-kontext-api/generate-or-edit-image.md,flux-kontext-api/generate-or-edit-image,paths.post.input.aspect_ratio,1:1,ASPECT_RATIO,1:1,HIGH,native
+kie,Generate or Edit Image,https://docs.kie.ai/flux-kontext-api/generate-or-edit-image.md,flux-kontext-api/generate-or-edit-image,paths.post.input.aspect_ratio,21:9,ASPECT_RATIO,21:9,HIGH,native
+kie,Generate or Edit Image,https://docs.kie.ai/flux-kontext-api/generate-or-edit-image.md,flux-kontext-api/generate-or-edit-image,paths.post.input.aspect_ratio,3:4,ASPECT_RATIO,3:4,HIGH,native
+kie,Generate or Edit Image,https://docs.kie.ai/flux-kontext-api/generate-or-edit-image.md,flux-kontext-api/generate-or-edit-image,paths.post.input.aspect_ratio,4:3,ASPECT_RATIO,4:3,HIGH,native
+kie,Generate or Edit Image,https://docs.kie.ai/flux-kontext-api/generate-or-edit-image.md,flux-kontext-api/generate-or-edit-image,paths.post.input.aspect_ratio,9:16,ASPECT_RATIO,9:16,HIGH,native
+kie,Flux-2 - Image to Image,https://docs.kie.ai/market/flux2/flex-image-to-image.md,flux2/flex-image-to-image,paths.post.input.aspect_ratio,16:9,ASPECT_RATIO,16:9,HIGH,native
+kie,Flux-2 - Image to Image,https://docs.kie.ai/market/flux2/flex-image-to-image.md,flux2/flex-image-to-image,paths.post.input.aspect_ratio,1:1,ASPECT_RATIO,1:1,HIGH,native
+kie,Flux-2 - Image to Image,https://docs.kie.ai/market/flux2/flex-image-to-image.md,flux2/flex-image-to-image,paths.post.input.aspect_ratio,2:3,ASPECT_RATIO,2:3,HIGH,native
+kie,Flux-2 - Image to Image,https://docs.kie.ai/market/flux2/flex-image-to-image.md,flux2/flex-image-to-image,paths.post.input.aspect_ratio,3:2,ASPECT_RATIO,3:2,HIGH,native
+kie,Flux-2 - Image to Image,https://docs.kie.ai/market/flux2/flex-image-to-image.md,flux2/flex-image-to-image,paths.post.input.aspect_ratio,3:4,ASPECT_RATIO,3:4,HIGH,native
+kie,Flux-2 - Image to Image,https://docs.kie.ai/market/flux2/flex-image-to-image.md,flux2/flex-image-to-image,paths.post.input.aspect_ratio,4:3,ASPECT_RATIO,4:3,HIGH,native
+kie,Flux-2 - Image to Image,https://docs.kie.ai/market/flux2/flex-image-to-image.md,flux2/flex-image-to-image,paths.post.input.aspect_ratio,9:16,ASPECT_RATIO,9:16,HIGH,native
+kie,Flux-2 - Image to Image,https://docs.kie.ai/market/flux2/flex-image-to-image.md,flux2/flex-image-to-image,paths.post.input.aspect_ratio,auto,ASPECT_RATIO,AUTO,HIGH,native
+kie,Flux-2 - Text to Image,https://docs.kie.ai/market/flux2/flex-text-to-image.md,flux2/flex-text-to-image,paths.post.input.aspect_ratio,16:9,ASPECT_RATIO,16:9,HIGH,native
+kie,Flux-2 - Text to Image,https://docs.kie.ai/market/flux2/flex-text-to-image.md,flux2/flex-text-to-image,paths.post.input.aspect_ratio,1:1,ASPECT_RATIO,1:1,HIGH,native
+kie,Flux-2 - Text to Image,https://docs.kie.ai/market/flux2/flex-text-to-image.md,flux2/flex-text-to-image,paths.post.input.aspect_ratio,2:3,ASPECT_RATIO,2:3,HIGH,native
+kie,Flux-2 - Text to Image,https://docs.kie.ai/market/flux2/flex-text-to-image.md,flux2/flex-text-to-image,paths.post.input.aspect_ratio,3:2,ASPECT_RATIO,3:2,HIGH,native
+kie,Flux-2 - Text to Image,https://docs.kie.ai/market/flux2/flex-text-to-image.md,flux2/flex-text-to-image,paths.post.input.aspect_ratio,3:4,ASPECT_RATIO,3:4,HIGH,native
+kie,Flux-2 - Text to Image,https://docs.kie.ai/market/flux2/flex-text-to-image.md,flux2/flex-text-to-image,paths.post.input.aspect_ratio,4:3,ASPECT_RATIO,4:3,HIGH,native
+kie,Flux-2 - Text to Image,https://docs.kie.ai/market/flux2/flex-text-to-image.md,flux2/flex-text-to-image,paths.post.input.aspect_ratio,9:16,ASPECT_RATIO,9:16,HIGH,native
+kie,Flux-2 - Pro Image to Image,https://docs.kie.ai/market/flux2/pro-image-to-image.md,flux2/pro-image-to-image,paths.post.input.aspect_ratio,16:9,ASPECT_RATIO,16:9,HIGH,native
+kie,Flux-2 - Pro Image to Image,https://docs.kie.ai/market/flux2/pro-image-to-image.md,flux2/pro-image-to-image,paths.post.input.aspect_ratio,1:1,ASPECT_RATIO,1:1,HIGH,native
+kie,Flux-2 - Pro Image to Image,https://docs.kie.ai/market/flux2/pro-image-to-image.md,flux2/pro-image-to-image,paths.post.input.aspect_ratio,2:3,ASPECT_RATIO,2:3,HIGH,native
+kie,Flux-2 - Pro Image to Image,https://docs.kie.ai/market/flux2/pro-image-to-image.md,flux2/pro-image-to-image,paths.post.input.aspect_ratio,3:2,ASPECT_RATIO,3:2,HIGH,native
+kie,Flux-2 - Pro Image to Image,https://docs.kie.ai/market/flux2/pro-image-to-image.md,flux2/pro-image-to-image,paths.post.input.aspect_ratio,3:4,ASPECT_RATIO,3:4,HIGH,native
+kie,Flux-2 - Pro Image to Image,https://docs.kie.ai/market/flux2/pro-image-to-image.md,flux2/pro-image-to-image,paths.post.input.aspect_ratio,4:3,ASPECT_RATIO,4:3,HIGH,native
+kie,Flux-2 - Pro Image to Image,https://docs.kie.ai/market/flux2/pro-image-to-image.md,flux2/pro-image-to-image,paths.post.input.aspect_ratio,9:16,ASPECT_RATIO,9:16,HIGH,native
+kie,Flux-2 - Pro Image to Image,https://docs.kie.ai/market/flux2/pro-image-to-image.md,flux2/pro-image-to-image,paths.post.input.aspect_ratio,auto,ASPECT_RATIO,AUTO,HIGH,native
+kie,Flux-2 - Pro Text to Image,https://docs.kie.ai/market/flux2/pro-text-to-image.md,flux2/pro-text-to-image,paths.post.input.aspect_ratio,16:9,ASPECT_RATIO,16:9,HIGH,native
+kie,Flux-2 - Pro Text to Image,https://docs.kie.ai/market/flux2/pro-text-to-image.md,flux2/pro-text-to-image,paths.post.input.aspect_ratio,1:1,ASPECT_RATIO,1:1,HIGH,native
+kie,Flux-2 - Pro Text to Image,https://docs.kie.ai/market/flux2/pro-text-to-image.md,flux2/pro-text-to-image,paths.post.input.aspect_ratio,2:3,ASPECT_RATIO,2:3,HIGH,native
+kie,Flux-2 - Pro Text to Image,https://docs.kie.ai/market/flux2/pro-text-to-image.md,flux2/pro-text-to-image,paths.post.input.aspect_ratio,3:2,ASPECT_RATIO,3:2,HIGH,native
+kie,Flux-2 - Pro Text to Image,https://docs.kie.ai/market/flux2/pro-text-to-image.md,flux2/pro-text-to-image,paths.post.input.aspect_ratio,3:4,ASPECT_RATIO,3:4,HIGH,native
+kie,Flux-2 - Pro Text to Image,https://docs.kie.ai/market/flux2/pro-text-to-image.md,flux2/pro-text-to-image,paths.post.input.aspect_ratio,4:3,ASPECT_RATIO,4:3,HIGH,native
+kie,Flux-2 - Pro Text to Image,https://docs.kie.ai/market/flux2/pro-text-to-image.md,flux2/pro-text-to-image,paths.post.input.aspect_ratio,9:16,ASPECT_RATIO,9:16,HIGH,native
+kie,Google - imagen4,https://docs.kie.ai/market/google/imagen4.md,google/imagen4,paths.post.input.aspect_ratio,16:9,ASPECT_RATIO,16:9,HIGH,native
+kie,Google - imagen4,https://docs.kie.ai/market/google/imagen4.md,google/imagen4,paths.post.input.aspect_ratio,1:1,ASPECT_RATIO,1:1,HIGH,native
+kie,Google - imagen4,https://docs.kie.ai/market/google/imagen4.md,google/imagen4,paths.post.input.aspect_ratio,3:4,ASPECT_RATIO,3:4,HIGH,native
+kie,Google - imagen4,https://docs.kie.ai/market/google/imagen4.md,google/imagen4,paths.post.input.aspect_ratio,4:3,ASPECT_RATIO,4:3,HIGH,native
+kie,Google - imagen4,https://docs.kie.ai/market/google/imagen4.md,google/imagen4,paths.post.input.aspect_ratio,9:16,ASPECT_RATIO,9:16,HIGH,native
+kie,Google - imagen4-fast,https://docs.kie.ai/market/google/imagen4-fast.md,google/imagen4-fast,paths.post.input.aspect_ratio,16:9,ASPECT_RATIO,16:9,HIGH,native
+kie,Google - imagen4-fast,https://docs.kie.ai/market/google/imagen4-fast.md,google/imagen4-fast,paths.post.input.aspect_ratio,1:1,ASPECT_RATIO,1:1,HIGH,native
+kie,Google - imagen4-fast,https://docs.kie.ai/market/google/imagen4-fast.md,google/imagen4-fast,paths.post.input.aspect_ratio,3:4,ASPECT_RATIO,3:4,HIGH,native
+kie,Google - imagen4-fast,https://docs.kie.ai/market/google/imagen4-fast.md,google/imagen4-fast,paths.post.input.aspect_ratio,4:3,ASPECT_RATIO,4:3,HIGH,native
+kie,Google - imagen4-fast,https://docs.kie.ai/market/google/imagen4-fast.md,google/imagen4-fast,paths.post.input.aspect_ratio,9:16,ASPECT_RATIO,9:16,HIGH,native
+kie,Google - imagen4-ultra,https://docs.kie.ai/market/google/imagen4-ultra.md,google/imagen4-ultra,paths.post.input.aspect_ratio,16:9,ASPECT_RATIO,16:9,HIGH,native
+kie,Google - imagen4-ultra,https://docs.kie.ai/market/google/imagen4-ultra.md,google/imagen4-ultra,paths.post.input.aspect_ratio,1:1,ASPECT_RATIO,1:1,HIGH,native
+kie,Google - imagen4-ultra,https://docs.kie.ai/market/google/imagen4-ultra.md,google/imagen4-ultra,paths.post.input.aspect_ratio,3:4,ASPECT_RATIO,3:4,HIGH,native
+kie,Google - imagen4-ultra,https://docs.kie.ai/market/google/imagen4-ultra.md,google/imagen4-ultra,paths.post.input.aspect_ratio,4:3,ASPECT_RATIO,4:3,HIGH,native
+kie,Google - imagen4-ultra,https://docs.kie.ai/market/google/imagen4-ultra.md,google/imagen4-ultra,paths.post.input.aspect_ratio,9:16,ASPECT_RATIO,9:16,HIGH,native
+kie,GPT Image-1.5 - Image to Image,https://docs.kie.ai/market/gpt-image/1-5-image-to-image.md,gpt-image/1-5-image-to-image,paths.post.input.aspect_ratio,1:1,ASPECT_RATIO,1:1,HIGH,native
+kie,GPT Image-1.5 - Image to Image,https://docs.kie.ai/market/gpt-image/1-5-image-to-image.md,gpt-image/1-5-image-to-image,paths.post.input.aspect_ratio,2:3,ASPECT_RATIO,2:3,HIGH,native
+kie,GPT Image-1.5 - Image to Image,https://docs.kie.ai/market/gpt-image/1-5-image-to-image.md,gpt-image/1-5-image-to-image,paths.post.input.aspect_ratio,3:2,ASPECT_RATIO,3:2,HIGH,native
+kie,GPT Image-1.5 - Text to Image,https://docs.kie.ai/market/gpt-image/1-5-text-to-image.md,gpt-image/1-5-text-to-image,paths.post.input.aspect_ratio,1:1,ASPECT_RATIO,1:1,HIGH,native
+kie,GPT Image-1.5 - Text to Image,https://docs.kie.ai/market/gpt-image/1-5-text-to-image.md,gpt-image/1-5-text-to-image,paths.post.input.aspect_ratio,2:3,ASPECT_RATIO,2:3,HIGH,native
+kie,GPT Image-1.5 - Text to Image,https://docs.kie.ai/market/gpt-image/1-5-text-to-image.md,gpt-image/1-5-text-to-image,paths.post.input.aspect_ratio,3:2,ASPECT_RATIO,3:2,HIGH,native
+kie,Grok Imagine - Text to Image,https://docs.kie.ai/market/grok-imagine/text-to-image.md,grok-imagine/text-to-image,paths.post.input.aspect_ratio,16:9,ASPECT_RATIO,16:9,HIGH,native
+kie,Grok Imagine - Text to Image,https://docs.kie.ai/market/grok-imagine/text-to-image.md,grok-imagine/text-to-image,paths.post.input.aspect_ratio,1:1,ASPECT_RATIO,1:1,HIGH,native
+kie,Grok Imagine - Text to Image,https://docs.kie.ai/market/grok-imagine/text-to-image.md,grok-imagine/text-to-image,paths.post.input.aspect_ratio,2:3,ASPECT_RATIO,2:3,HIGH,native
+kie,Grok Imagine - Text to Image,https://docs.kie.ai/market/grok-imagine/text-to-image.md,grok-imagine/text-to-image,paths.post.input.aspect_ratio,3:2,ASPECT_RATIO,3:2,HIGH,native
+kie,Grok Imagine - Text to Image,https://docs.kie.ai/market/grok-imagine/text-to-image.md,grok-imagine/text-to-image,paths.post.input.aspect_ratio,9:16,ASPECT_RATIO,9:16,HIGH,native
+kie,Grok Imagine Text to Video,https://docs.kie.ai/market/grok-imagine/text-to-video.md,grok-imagine/text-to-video,paths.post.input.aspect_ratio,16:9,ASPECT_RATIO,16:9,HIGH,native
+kie,Grok Imagine Text to Video,https://docs.kie.ai/market/grok-imagine/text-to-video.md,grok-imagine/text-to-video,paths.post.input.aspect_ratio,1:1,ASPECT_RATIO,1:1,HIGH,native
+kie,Grok Imagine Text to Video,https://docs.kie.ai/market/grok-imagine/text-to-video.md,grok-imagine/text-to-video,paths.post.input.aspect_ratio,2:3,ASPECT_RATIO,2:3,HIGH,native
+kie,Grok Imagine Text to Video,https://docs.kie.ai/market/grok-imagine/text-to-video.md,grok-imagine/text-to-video,paths.post.input.aspect_ratio,3:2,ASPECT_RATIO,3:2,HIGH,native
+kie,Grok Imagine Text to Video,https://docs.kie.ai/market/grok-imagine/text-to-video.md,grok-imagine/text-to-video,paths.post.input.aspect_ratio,9:16,ASPECT_RATIO,9:16,HIGH,native
+kie,Kling 3.0,https://docs.kie.ai/market/kling/kling-3-0.md,kling/kling-3-0,paths.post.input.aspect_ratio,16:9,ASPECT_RATIO,16:9,HIGH,native
+kie,Kling 3.0,https://docs.kie.ai/market/kling/kling-3-0.md,kling/kling-3-0,paths.post.input.aspect_ratio,1:1,ASPECT_RATIO,1:1,HIGH,native
+kie,Kling 3.0,https://docs.kie.ai/market/kling/kling-3-0.md,kling/kling-3-0,paths.post.input.aspect_ratio,9:16,ASPECT_RATIO,9:16,HIGH,native
+kie,Kling 2.6 Text to Video,https://docs.kie.ai/market/kling/text-to-video.md,kling/text-to-video,paths.post.input.aspect_ratio,16:9,ASPECT_RATIO,16:9,HIGH,native
+kie,Kling 2.6 Text to Video,https://docs.kie.ai/market/kling/text-to-video.md,kling/text-to-video,paths.post.input.aspect_ratio,1:1,ASPECT_RATIO,1:1,HIGH,native
+kie,Kling 2.6 Text to Video,https://docs.kie.ai/market/kling/text-to-video.md,kling/text-to-video,paths.post.input.aspect_ratio,9:16,ASPECT_RATIO,9:16,HIGH,native
+kie,Kling V2.1 Master Text to Video,https://docs.kie.ai/market/kling/v2-1-master-text-to-video.md,kling/v2-1-master-text-to-video,paths.post.input.aspect_ratio,16:9,ASPECT_RATIO,16:9,HIGH,native
+kie,Kling V2.1 Master Text to Video,https://docs.kie.ai/market/kling/v2-1-master-text-to-video.md,kling/v2-1-master-text-to-video,paths.post.input.aspect_ratio,1:1,ASPECT_RATIO,1:1,HIGH,native
+kie,Kling V2.1 Master Text to Video,https://docs.kie.ai/market/kling/v2-1-master-text-to-video.md,kling/v2-1-master-text-to-video,paths.post.input.aspect_ratio,9:16,ASPECT_RATIO,9:16,HIGH,native
+kie,Kling - V2.5 Turbo Text to Video Pro,https://docs.kie.ai/market/kling/v25-turbo-text-to-video-pro.md,kling/v25-turbo-text-to-video-pro,paths.post.input.aspect_ratio,16:9,ASPECT_RATIO,16:9,HIGH,native
+kie,Kling - V2.5 Turbo Text to Video Pro,https://docs.kie.ai/market/kling/v25-turbo-text-to-video-pro.md,kling/v25-turbo-text-to-video-pro,paths.post.input.aspect_ratio,1:1,ASPECT_RATIO,1:1,HIGH,native
+kie,Kling - V2.5 Turbo Text to Video Pro,https://docs.kie.ai/market/kling/v25-turbo-text-to-video-pro.md,kling/v25-turbo-text-to-video-pro,paths.post.input.aspect_ratio,9:16,ASPECT_RATIO,9:16,HIGH,native
+kie,Generate AI Video,https://docs.kie.ai/runway-api/generate-ai-video.md,runway-api/generate-ai-video,paths.post.input.aspect_ratio,16:9,ASPECT_RATIO,16:9,HIGH,native
+kie,Generate AI Video,https://docs.kie.ai/runway-api/generate-ai-video.md,runway-api/generate-ai-video,paths.post.input.aspect_ratio,1:1,ASPECT_RATIO,1:1,HIGH,native
+kie,Generate AI Video,https://docs.kie.ai/runway-api/generate-ai-video.md,runway-api/generate-ai-video,paths.post.input.aspect_ratio,3:4,ASPECT_RATIO,3:4,HIGH,native
+kie,Generate AI Video,https://docs.kie.ai/runway-api/generate-ai-video.md,runway-api/generate-ai-video,paths.post.input.aspect_ratio,4:3,ASPECT_RATIO,4:3,HIGH,native
+kie,Generate AI Video,https://docs.kie.ai/runway-api/generate-ai-video.md,runway-api/generate-ai-video,paths.post.input.aspect_ratio,9:16,ASPECT_RATIO,9:16,HIGH,native
+kie,Generate Aleph Video,https://docs.kie.ai/runway-api/generate-aleph-video.md,runway-api/generate-aleph-video,paths.post.input.aspect_ratio,16:9,ASPECT_RATIO,16:9,HIGH,native
+kie,Generate Aleph Video,https://docs.kie.ai/runway-api/generate-aleph-video.md,runway-api/generate-aleph-video,paths.post.input.aspect_ratio,1:1,ASPECT_RATIO,1:1,HIGH,native
+kie,Generate Aleph Video,https://docs.kie.ai/runway-api/generate-aleph-video.md,runway-api/generate-aleph-video,paths.post.input.aspect_ratio,21:9,ASPECT_RATIO,21:9,HIGH,native
+kie,Generate Aleph Video,https://docs.kie.ai/runway-api/generate-aleph-video.md,runway-api/generate-aleph-video,paths.post.input.aspect_ratio,3:4,ASPECT_RATIO,3:4,HIGH,native
+kie,Generate Aleph Video,https://docs.kie.ai/runway-api/generate-aleph-video.md,runway-api/generate-aleph-video,paths.post.input.aspect_ratio,4:3,ASPECT_RATIO,4:3,HIGH,native
+kie,Generate Aleph Video,https://docs.kie.ai/runway-api/generate-aleph-video.md,runway-api/generate-aleph-video,paths.post.input.aspect_ratio,9:16,ASPECT_RATIO,9:16,HIGH,native
+kie,Seedream4.5 - Edit,https://docs.kie.ai/market/seedream/4-5-edit.md,seedream/4-5-edit,paths.post.input.aspect_ratio,16:9,ASPECT_RATIO,16:9,HIGH,native
+kie,Seedream4.5 - Edit,https://docs.kie.ai/market/seedream/4-5-edit.md,seedream/4-5-edit,paths.post.input.aspect_ratio,1:1,ASPECT_RATIO,1:1,HIGH,native
+kie,Seedream4.5 - Edit,https://docs.kie.ai/market/seedream/4-5-edit.md,seedream/4-5-edit,paths.post.input.aspect_ratio,21:9,ASPECT_RATIO,21:9,HIGH,native
+kie,Seedream4.5 - Edit,https://docs.kie.ai/market/seedream/4-5-edit.md,seedream/4-5-edit,paths.post.input.aspect_ratio,2:3,ASPECT_RATIO,2:3,HIGH,native
+kie,Seedream4.5 - Edit,https://docs.kie.ai/market/seedream/4-5-edit.md,seedream/4-5-edit,paths.post.input.aspect_ratio,3:2,ASPECT_RATIO,3:2,HIGH,native
+kie,Seedream4.5 - Edit,https://docs.kie.ai/market/seedream/4-5-edit.md,seedream/4-5-edit,paths.post.input.aspect_ratio,3:4,ASPECT_RATIO,3:4,HIGH,native
+kie,Seedream4.5 - Edit,https://docs.kie.ai/market/seedream/4-5-edit.md,seedream/4-5-edit,paths.post.input.aspect_ratio,4:3,ASPECT_RATIO,4:3,HIGH,native
+kie,Seedream4.5 - Edit,https://docs.kie.ai/market/seedream/4-5-edit.md,seedream/4-5-edit,paths.post.input.aspect_ratio,9:16,ASPECT_RATIO,9:16,HIGH,native
+kie,Seedream4.5 - Text to Image,https://docs.kie.ai/market/seedream/4-5-text-to-image.md,seedream/4-5-text-to-image,paths.post.input.aspect_ratio,16:9,ASPECT_RATIO,16:9,HIGH,native
+kie,Seedream4.5 - Text to Image,https://docs.kie.ai/market/seedream/4-5-text-to-image.md,seedream/4-5-text-to-image,paths.post.input.aspect_ratio,1:1,ASPECT_RATIO,1:1,HIGH,native
+kie,Seedream4.5 - Text to Image,https://docs.kie.ai/market/seedream/4-5-text-to-image.md,seedream/4-5-text-to-image,paths.post.input.aspect_ratio,21:9,ASPECT_RATIO,21:9,HIGH,native
+kie,Seedream4.5 - Text to Image,https://docs.kie.ai/market/seedream/4-5-text-to-image.md,seedream/4-5-text-to-image,paths.post.input.aspect_ratio,2:3,ASPECT_RATIO,2:3,HIGH,native
+kie,Seedream4.5 - Text to Image,https://docs.kie.ai/market/seedream/4-5-text-to-image.md,seedream/4-5-text-to-image,paths.post.input.aspect_ratio,3:2,ASPECT_RATIO,3:2,HIGH,native
+kie,Seedream4.5 - Text to Image,https://docs.kie.ai/market/seedream/4-5-text-to-image.md,seedream/4-5-text-to-image,paths.post.input.aspect_ratio,3:4,ASPECT_RATIO,3:4,HIGH,native
+kie,Seedream4.5 - Text to Image,https://docs.kie.ai/market/seedream/4-5-text-to-image.md,seedream/4-5-text-to-image,paths.post.input.aspect_ratio,4:3,ASPECT_RATIO,4:3,HIGH,native
+kie,Seedream4.5 - Text to Image,https://docs.kie.ai/market/seedream/4-5-text-to-image.md,seedream/4-5-text-to-image,paths.post.input.aspect_ratio,9:16,ASPECT_RATIO,9:16,HIGH,native
+kie,Sora2 - Pro Storyboard,https://docs.kie.ai/market/sora-2-pro-storyboard.md,sora-2-pro-storyboard,paths.post.input.aspect_ratio,landscape,ASPECT_RATIO,16:9,MEDIUM,alias(landscape->16:9)
+kie,Sora2 - Pro Storyboard,https://docs.kie.ai/market/sora-2-pro-storyboard.md,sora-2-pro-storyboard,paths.post.input.aspect_ratio,portrait,ASPECT_RATIO,9:16,MEDIUM,alias(portrait->9:16)
+kie,Sora2 - Image to Video,https://docs.kie.ai/market/sora2/sora-2-image-to-video.md,sora2/sora-2-image-to-video,paths.post.input.aspect_ratio,landscape,ASPECT_RATIO,16:9,MEDIUM,alias(landscape->16:9)
+kie,Sora2 - Image to Video,https://docs.kie.ai/market/sora2/sora-2-image-to-video.md,sora2/sora-2-image-to-video,paths.post.input.aspect_ratio,portrait,ASPECT_RATIO,9:16,MEDIUM,alias(portrait->9:16)
+kie,Sora2 - Pro Image to Video,https://docs.kie.ai/market/sora2/sora-2-pro-image-to-video.md,sora2/sora-2-pro-image-to-video,paths.post.input.aspect_ratio,landscape,ASPECT_RATIO,16:9,MEDIUM,alias(landscape->16:9)
+kie,Sora2 - Pro Image to Video,https://docs.kie.ai/market/sora2/sora-2-pro-image-to-video.md,sora2/sora-2-pro-image-to-video,paths.post.input.aspect_ratio,portrait,ASPECT_RATIO,9:16,MEDIUM,alias(portrait->9:16)
+kie,Sora2 - Pro Text to Video,https://docs.kie.ai/market/sora2/sora-2-pro-text-to-video.md,sora2/sora-2-pro-text-to-video,paths.post.input.aspect_ratio,landscape,ASPECT_RATIO,16:9,MEDIUM,alias(landscape->16:9)
+kie,Sora2 - Pro Text to Video,https://docs.kie.ai/market/sora2/sora-2-pro-text-to-video.md,sora2/sora-2-pro-text-to-video,paths.post.input.aspect_ratio,portrait,ASPECT_RATIO,9:16,MEDIUM,alias(portrait->9:16)
+kie,Sora2 - Text to Video,https://docs.kie.ai/market/sora2/sora-2-text-to-video.md,sora2/sora-2-text-to-video,paths.post.input.aspect_ratio,landscape,ASPECT_RATIO,16:9,MEDIUM,alias(landscape->16:9)
+kie,Sora2 - Text to Video,https://docs.kie.ai/market/sora2/sora-2-text-to-video.md,sora2/sora-2-text-to-video,paths.post.input.aspect_ratio,portrait,ASPECT_RATIO,9:16,MEDIUM,alias(portrait->9:16)
+kie,Wan - Text to Video,https://docs.kie.ai/market/wan/2-2-a14b-text-to-video-turbo.md,wan/2-2-a14b-text-to-video-turbo,paths.post.input.aspect_ratio,16:9,ASPECT_RATIO,16:9,HIGH,native
+kie,Wan - Text to Video,https://docs.kie.ai/market/wan/2-2-a14b-text-to-video-turbo.md,wan/2-2-a14b-text-to-video-turbo,paths.post.input.aspect_ratio,9:16,ASPECT_RATIO,9:16,HIGH,native
+kie,Z-Image,https://docs.kie.ai/market/z-image/z-image.md,z-image/z-image,paths.post.input.aspect_ratio,16:9,ASPECT_RATIO,16:9,HIGH,native
+kie,Z-Image,https://docs.kie.ai/market/z-image/z-image.md,z-image/z-image,paths.post.input.aspect_ratio,1:1,ASPECT_RATIO,1:1,HIGH,native
+kie,Z-Image,https://docs.kie.ai/market/z-image/z-image.md,z-image/z-image,paths.post.input.aspect_ratio,3:4,ASPECT_RATIO,3:4,HIGH,native
+kie,Z-Image,https://docs.kie.ai/market/z-image/z-image.md,z-image/z-image,paths.post.input.aspect_ratio,4:3,ASPECT_RATIO,4:3,HIGH,native
+kie,Z-Image,https://docs.kie.ai/market/z-image/z-image.md,z-image/z-image,paths.post.input.aspect_ratio,9:16,ASPECT_RATIO,9:16,HIGH,native
+kie,Kling 2.6 motion-control,https://docs.kie.ai/market/kling/motion-control.md,kling/motion-control,paths.post.input.character_orientation,image,CHARACTER_ORIENTATION,IMAGE,HIGH,native
+kie,Kling 2.6 motion-control,https://docs.kie.ai/market/kling/motion-control.md,kling/motion-control,paths.post.input.character_orientation,video,CHARACTER_ORIENTATION,VIDEO,HIGH,native
+kie,Bytedance Seedance 1.5 Pro,https://docs.kie.ai/market/bytedance/seedance-1-5-pro.md,bytedance/seedance-1-5-pro,paths.post.input.duration,12,DURATION_SECONDS,12,HIGH,native
+kie,Bytedance Seedance 1.5 Pro,https://docs.kie.ai/market/bytedance/seedance-1-5-pro.md,bytedance/seedance-1-5-pro,paths.post.input.duration,4,DURATION_SECONDS,4,HIGH,native
+kie,Bytedance Seedance 1.5 Pro,https://docs.kie.ai/market/bytedance/seedance-1-5-pro.md,bytedance/seedance-1-5-pro,paths.post.input.duration,8,DURATION_SECONDS,8,HIGH,native
+kie,Bytedance - V1 Lite Image to Video,https://docs.kie.ai/market/bytedance/v1-lite-image-to-video.md,bytedance/v1-lite-image-to-video,paths.post.input.duration,10,DURATION_SECONDS,10,HIGH,native
+kie,Bytedance - V1 Lite Image to Video,https://docs.kie.ai/market/bytedance/v1-lite-image-to-video.md,bytedance/v1-lite-image-to-video,paths.post.input.duration,5,DURATION_SECONDS,5,HIGH,native
+kie,Bytedance - V1 Lite Text to Video,https://docs.kie.ai/market/bytedance/v1-lite-text-to-video.md,bytedance/v1-lite-text-to-video,paths.post.input.duration,10,DURATION_SECONDS,10,HIGH,native
+kie,Bytedance - V1 Lite Text to Video,https://docs.kie.ai/market/bytedance/v1-lite-text-to-video.md,bytedance/v1-lite-text-to-video,paths.post.input.duration,5,DURATION_SECONDS,5,HIGH,native
+kie,Bytedance V1 Pro Fast Image to Video,https://docs.kie.ai/market/bytedance/v1-pro-fast-image-to-video.md,bytedance/v1-pro-fast-image-to-video,paths.post.input.duration,10,DURATION_SECONDS,10,HIGH,native
+kie,Bytedance V1 Pro Fast Image to Video,https://docs.kie.ai/market/bytedance/v1-pro-fast-image-to-video.md,bytedance/v1-pro-fast-image-to-video,paths.post.input.duration,5,DURATION_SECONDS,5,HIGH,native
+kie,Bytedance V1 Pro Image to Video,https://docs.kie.ai/market/bytedance/v1-pro-image-to-video.md,bytedance/v1-pro-image-to-video,paths.post.input.duration,10,DURATION_SECONDS,10,HIGH,native
+kie,Bytedance V1 Pro Image to Video,https://docs.kie.ai/market/bytedance/v1-pro-image-to-video.md,bytedance/v1-pro-image-to-video,paths.post.input.duration,5,DURATION_SECONDS,5,HIGH,native
+kie,Bytedance - V1 Pro Text to Video,https://docs.kie.ai/market/bytedance/v1-pro-text-to-video.md,bytedance/v1-pro-text-to-video,paths.post.input.duration,10,DURATION_SECONDS,10,HIGH,native
+kie,Bytedance - V1 Pro Text to Video,https://docs.kie.ai/market/bytedance/v1-pro-text-to-video.md,bytedance/v1-pro-text-to-video,paths.post.input.duration,5,DURATION_SECONDS,5,HIGH,native
+kie,Grok Imagine Image to Video,https://docs.kie.ai/market/grok-imagine/image-to-video.md,grok-imagine/image-to-video,paths.post.input.duration,10,DURATION_SECONDS,10,HIGH,native
+kie,Grok Imagine Image to Video,https://docs.kie.ai/market/grok-imagine/image-to-video.md,grok-imagine/image-to-video,paths.post.input.duration,15,DURATION_SECONDS,15,HIGH,native
+kie,Grok Imagine Image to Video,https://docs.kie.ai/market/grok-imagine/image-to-video.md,grok-imagine/image-to-video,paths.post.input.duration,6,DURATION_SECONDS,6,HIGH,native
+kie,Grok Imagine Text to Video,https://docs.kie.ai/market/grok-imagine/text-to-video.md,grok-imagine/text-to-video,paths.post.input.duration,10,DURATION_SECONDS,10,HIGH,native
+kie,Grok Imagine Text to Video,https://docs.kie.ai/market/grok-imagine/text-to-video.md,grok-imagine/text-to-video,paths.post.input.duration,15,DURATION_SECONDS,15,HIGH,native
+kie,Grok Imagine Text to Video,https://docs.kie.ai/market/grok-imagine/text-to-video.md,grok-imagine/text-to-video,paths.post.input.duration,6,DURATION_SECONDS,6,HIGH,native
+kie,Hailuo Standard Image to Video,https://docs.kie.ai/market/hailuo/02-image-to-video-standard.md,hailuo/02-image-to-video-standard,paths.post.input.duration,10,DURATION_SECONDS,10,HIGH,native
+kie,Hailuo Standard Image to Video,https://docs.kie.ai/market/hailuo/02-image-to-video-standard.md,hailuo/02-image-to-video-standard,paths.post.input.duration,6,DURATION_SECONDS,6,HIGH,native
+kie,Hailuo Standard Text to Video,https://docs.kie.ai/market/hailuo/02-text-to-video-standard.md,hailuo/02-text-to-video-standard,paths.post.input.duration,10,DURATION_SECONDS,10,HIGH,native
+kie,Hailuo Standard Text to Video,https://docs.kie.ai/market/hailuo/02-text-to-video-standard.md,hailuo/02-text-to-video-standard,paths.post.input.duration,6,DURATION_SECONDS,6,HIGH,native
+kie,Hailuo 2.3 Pro Image to Video,https://docs.kie.ai/market/hailuo/2-3-image-to-video-pro.md,hailuo/2-3-image-to-video-pro,paths.post.input.duration,10,DURATION_SECONDS,10,HIGH,native
+kie,Hailuo 2.3 Pro Image to Video,https://docs.kie.ai/market/hailuo/2-3-image-to-video-pro.md,hailuo/2-3-image-to-video-pro,paths.post.input.duration,6,DURATION_SECONDS,6,HIGH,native
+kie,Hailuo 2.3 Standard Image to Video,https://docs.kie.ai/market/hailuo/2-3-image-to-video-standard.md,hailuo/2-3-image-to-video-standard,paths.post.input.duration,10,DURATION_SECONDS,10,HIGH,native
+kie,Hailuo 2.3 Standard Image to Video,https://docs.kie.ai/market/hailuo/2-3-image-to-video-standard.md,hailuo/2-3-image-to-video-standard,paths.post.input.duration,6,DURATION_SECONDS,6,HIGH,native
+kie,Kling 2.6 Image to Video,https://docs.kie.ai/market/kling/image-to-video.md,kling/image-to-video,paths.post.input.duration,10,DURATION_SECONDS,10,HIGH,native
+kie,Kling 2.6 Image to Video,https://docs.kie.ai/market/kling/image-to-video.md,kling/image-to-video,paths.post.input.duration,5,DURATION_SECONDS,5,HIGH,native
+kie,Kling 3.0,https://docs.kie.ai/market/kling/kling-3-0.md,kling/kling-3-0,paths.post.input.duration,10,DURATION_SECONDS,10,HIGH,native
+kie,Kling 3.0,https://docs.kie.ai/market/kling/kling-3-0.md,kling/kling-3-0,paths.post.input.duration,11,DURATION_SECONDS,11,HIGH,native
+kie,Kling 3.0,https://docs.kie.ai/market/kling/kling-3-0.md,kling/kling-3-0,paths.post.input.duration,12,DURATION_SECONDS,12,HIGH,native
+kie,Kling 3.0,https://docs.kie.ai/market/kling/kling-3-0.md,kling/kling-3-0,paths.post.input.duration,13,DURATION_SECONDS,13,HIGH,native
+kie,Kling 3.0,https://docs.kie.ai/market/kling/kling-3-0.md,kling/kling-3-0,paths.post.input.duration,14,DURATION_SECONDS,14,HIGH,native
+kie,Kling 3.0,https://docs.kie.ai/market/kling/kling-3-0.md,kling/kling-3-0,paths.post.input.duration,15,DURATION_SECONDS,15,HIGH,native
+kie,Kling 3.0,https://docs.kie.ai/market/kling/kling-3-0.md,kling/kling-3-0,paths.post.input.duration,3,DURATION_SECONDS,3,HIGH,native
+kie,Kling 3.0,https://docs.kie.ai/market/kling/kling-3-0.md,kling/kling-3-0,paths.post.input.duration,4,DURATION_SECONDS,4,HIGH,native
+kie,Kling 3.0,https://docs.kie.ai/market/kling/kling-3-0.md,kling/kling-3-0,paths.post.input.duration,5,DURATION_SECONDS,5,HIGH,native
+kie,Kling 3.0,https://docs.kie.ai/market/kling/kling-3-0.md,kling/kling-3-0,paths.post.input.duration,6,DURATION_SECONDS,6,HIGH,native
+kie,Kling 3.0,https://docs.kie.ai/market/kling/kling-3-0.md,kling/kling-3-0,paths.post.input.duration,7,DURATION_SECONDS,7,HIGH,native
+kie,Kling 3.0,https://docs.kie.ai/market/kling/kling-3-0.md,kling/kling-3-0,paths.post.input.duration,8,DURATION_SECONDS,8,HIGH,native
+kie,Kling 3.0,https://docs.kie.ai/market/kling/kling-3-0.md,kling/kling-3-0,paths.post.input.duration,9,DURATION_SECONDS,9,HIGH,native
+kie,Kling 2.6 Text to Video,https://docs.kie.ai/market/kling/text-to-video.md,kling/text-to-video,paths.post.input.duration,10,DURATION_SECONDS,10,HIGH,native
+kie,Kling 2.6 Text to Video,https://docs.kie.ai/market/kling/text-to-video.md,kling/text-to-video,paths.post.input.duration,5,DURATION_SECONDS,5,HIGH,native
+kie,Kling V2.1 Master Image to Video,https://docs.kie.ai/market/kling/v2-1-master-image-to-video.md,kling/v2-1-master-image-to-video,paths.post.input.duration,10,DURATION_SECONDS,10,HIGH,native
+kie,Kling V2.1 Master Image to Video,https://docs.kie.ai/market/kling/v2-1-master-image-to-video.md,kling/v2-1-master-image-to-video,paths.post.input.duration,5,DURATION_SECONDS,5,HIGH,native
+kie,Kling V2.1 Master Text to Video,https://docs.kie.ai/market/kling/v2-1-master-text-to-video.md,kling/v2-1-master-text-to-video,paths.post.input.duration,10,DURATION_SECONDS,10,HIGH,native
+kie,Kling V2.1 Master Text to Video,https://docs.kie.ai/market/kling/v2-1-master-text-to-video.md,kling/v2-1-master-text-to-video,paths.post.input.duration,5,DURATION_SECONDS,5,HIGH,native
+kie,Kling V2.1 Pro,https://docs.kie.ai/market/kling/v2-1-pro.md,kling/v2-1-pro,paths.post.input.duration,10,DURATION_SECONDS,10,HIGH,native
+kie,Kling V2.1 Pro,https://docs.kie.ai/market/kling/v2-1-pro.md,kling/v2-1-pro,paths.post.input.duration,5,DURATION_SECONDS,5,HIGH,native
+kie,Kling V2.1 Standard,https://docs.kie.ai/market/kling/v2-1-standard.md,kling/v2-1-standard,paths.post.input.duration,10,DURATION_SECONDS,10,HIGH,native
+kie,Kling V2.1 Standard,https://docs.kie.ai/market/kling/v2-1-standard.md,kling/v2-1-standard,paths.post.input.duration,5,DURATION_SECONDS,5,HIGH,native
+kie,Kling - V2.5 Turbo Image to Video Pro,https://docs.kie.ai/market/kling/v25-turbo-image-to-video-pro.md,kling/v25-turbo-image-to-video-pro,paths.post.input.duration,10,DURATION_SECONDS,10,HIGH,native
+kie,Kling - V2.5 Turbo Image to Video Pro,https://docs.kie.ai/market/kling/v25-turbo-image-to-video-pro.md,kling/v25-turbo-image-to-video-pro,paths.post.input.duration,5,DURATION_SECONDS,5,HIGH,native
+kie,Kling - V2.5 Turbo Text to Video Pro,https://docs.kie.ai/market/kling/v25-turbo-text-to-video-pro.md,kling/v25-turbo-text-to-video-pro,paths.post.input.duration,10,DURATION_SECONDS,10,HIGH,native
+kie,Kling - V2.5 Turbo Text to Video Pro,https://docs.kie.ai/market/kling/v25-turbo-text-to-video-pro.md,kling/v25-turbo-text-to-video-pro,paths.post.input.duration,5,DURATION_SECONDS,5,HIGH,native
+kie,Sora2 - Pro Storyboard,https://docs.kie.ai/market/sora-2-pro-storyboard.md,sora-2-pro-storyboard,paths.post.input.n_frames,10,DURATION_SECONDS,10,HIGH,native
+kie,Sora2 - Pro Storyboard,https://docs.kie.ai/market/sora-2-pro-storyboard.md,sora-2-pro-storyboard,paths.post.input.n_frames,15,DURATION_SECONDS,15,HIGH,native
+kie,Sora2 - Pro Storyboard,https://docs.kie.ai/market/sora-2-pro-storyboard.md,sora-2-pro-storyboard,paths.post.input.n_frames,25,DURATION_SECONDS,25,HIGH,native
+kie,Sora2 - Image to Video,https://docs.kie.ai/market/sora2/sora-2-image-to-video.md,sora2/sora-2-image-to-video,paths.post.input.n_frames,10,DURATION_SECONDS,10,HIGH,native
+kie,Sora2 - Image to Video,https://docs.kie.ai/market/sora2/sora-2-image-to-video.md,sora2/sora-2-image-to-video,paths.post.input.n_frames,15,DURATION_SECONDS,15,HIGH,native
+kie,Sora2 - Pro Image to Video,https://docs.kie.ai/market/sora2/sora-2-pro-image-to-video.md,sora2/sora-2-pro-image-to-video,paths.post.input.n_frames,10,DURATION_SECONDS,10,HIGH,native
+kie,Sora2 - Pro Image to Video,https://docs.kie.ai/market/sora2/sora-2-pro-image-to-video.md,sora2/sora-2-pro-image-to-video,paths.post.input.n_frames,15,DURATION_SECONDS,15,HIGH,native
+kie,Sora2 - Pro Text to Video,https://docs.kie.ai/market/sora2/sora-2-pro-text-to-video.md,sora2/sora-2-pro-text-to-video,paths.post.input.n_frames,10,DURATION_SECONDS,10,HIGH,native
+kie,Sora2 - Pro Text to Video,https://docs.kie.ai/market/sora2/sora-2-pro-text-to-video.md,sora2/sora-2-pro-text-to-video,paths.post.input.n_frames,15,DURATION_SECONDS,15,HIGH,native
+kie,Sora2 - Text to Video,https://docs.kie.ai/market/sora2/sora-2-text-to-video.md,sora2/sora-2-text-to-video,paths.post.input.n_frames,10,DURATION_SECONDS,10,HIGH,native
+kie,Sora2 - Text to Video,https://docs.kie.ai/market/sora2/sora-2-text-to-video.md,sora2/sora-2-text-to-video,paths.post.input.n_frames,15,DURATION_SECONDS,15,HIGH,native
+kie,Wan - 2.6-flash-image-to-video,https://docs.kie.ai/market/wan/2-6-flash-image-to-video.md,wan/2-6-flash-image-to-video,paths.post.input.duration,10,DURATION_SECONDS,10,HIGH,native
+kie,Wan - 2.6-flash-image-to-video,https://docs.kie.ai/market/wan/2-6-flash-image-to-video.md,wan/2-6-flash-image-to-video,paths.post.input.duration,15,DURATION_SECONDS,15,HIGH,native
+kie,Wan - 2.6-flash-image-to-video,https://docs.kie.ai/market/wan/2-6-flash-image-to-video.md,wan/2-6-flash-image-to-video,paths.post.input.duration,5,DURATION_SECONDS,5,HIGH,native
+kie,Wan - 2-6-flash-video-to-video,https://docs.kie.ai/market/wan/2-6-flash-video-to-video.md,wan/2-6-flash-video-to-video,paths.post.input.duration,10,DURATION_SECONDS,10,HIGH,native
+kie,Wan - 2-6-flash-video-to-video,https://docs.kie.ai/market/wan/2-6-flash-video-to-video.md,wan/2-6-flash-video-to-video,paths.post.input.duration,5,DURATION_SECONDS,5,HIGH,native
+kie,Wan 2.6 - Image to Video,https://docs.kie.ai/market/wan/2-6-image-to-video.md,wan/2-6-image-to-video,paths.post.input.duration,10,DURATION_SECONDS,10,HIGH,native
+kie,Wan 2.6 - Image to Video,https://docs.kie.ai/market/wan/2-6-image-to-video.md,wan/2-6-image-to-video,paths.post.input.duration,15,DURATION_SECONDS,15,HIGH,native
+kie,Wan 2.6 - Image to Video,https://docs.kie.ai/market/wan/2-6-image-to-video.md,wan/2-6-image-to-video,paths.post.input.duration,5,DURATION_SECONDS,5,HIGH,native
+kie,Wan 2.6 - Text to Video,https://docs.kie.ai/market/wan/2-6-text-to-video.md,wan/2-6-text-to-video,paths.post.input.duration,10,DURATION_SECONDS,10,HIGH,native
+kie,Wan 2.6 - Text to Video,https://docs.kie.ai/market/wan/2-6-text-to-video.md,wan/2-6-text-to-video,paths.post.input.duration,15,DURATION_SECONDS,15,HIGH,native
+kie,Wan 2.6 - Text to Video,https://docs.kie.ai/market/wan/2-6-text-to-video.md,wan/2-6-text-to-video,paths.post.input.duration,5,DURATION_SECONDS,5,HIGH,native
+kie,Wan 2.6 - Video to Video,https://docs.kie.ai/market/wan/2-6-video-to-video.md,wan/2-6-video-to-video,paths.post.input.duration,10,DURATION_SECONDS,10,HIGH,native
+kie,Wan 2.6 - Video to Video,https://docs.kie.ai/market/wan/2-6-video-to-video.md,wan/2-6-video-to-video,paths.post.input.duration,5,DURATION_SECONDS,5,HIGH,native
+kie,Ideogram - Character,https://docs.kie.ai/market/ideogram/character.md,ideogram/character,paths.post.input.image_size,square,IMAGE_SIZE_CLASS,SQUARE,HIGH,native
+kie,Ideogram - Character Remix,https://docs.kie.ai/market/ideogram/character-remix.md,ideogram/character-remix,paths.post.input.image_size,square,IMAGE_SIZE_CLASS,SQUARE,HIGH,native
+kie,Ideogram - V3 Reframe,https://docs.kie.ai/market/ideogram/v3-reframe.md,ideogram/v3-reframe,paths.post.input.image_size,square,IMAGE_SIZE_CLASS,SQUARE,HIGH,native
+kie,Qwen - Image Edit,https://docs.kie.ai/market/qwen/image-edit.md,qwen/image-edit,paths.post.input.image_size,square,IMAGE_SIZE_CLASS,SQUARE,HIGH,native
+kie,Qwen - Text to Image,https://docs.kie.ai/market/qwen/text-to-image.md,qwen/text-to-image,paths.post.input.image_size,square,IMAGE_SIZE_CLASS,SQUARE,HIGH,native
+kie,Seedream3.0 - Text to Image,https://docs.kie.ai/market/seedream/seedream.md,seedream/seedream,paths.post.input.image_size,square,IMAGE_SIZE_CLASS,SQUARE,HIGH,native
+kie,Seedream4.0 - Edit,https://docs.kie.ai/market/seedream/seedream-v4-edit.md,seedream/seedream-v4-edit,paths.post.input.image_size,square,IMAGE_SIZE_CLASS,SQUARE,HIGH,native
+kie,Seedream4.0 - Text to Image,https://docs.kie.ai/market/seedream/seedream-v4-text-to-image.md,seedream/seedream-v4-text-to-image,paths.post.input.image_size,square,IMAGE_SIZE_CLASS,SQUARE,HIGH,native
+kie,Grok Imagine Image to Video,https://docs.kie.ai/market/grok-imagine/image-to-video.md,grok-imagine/image-to-video,paths.post.input.mode,fun,MODE,FUN,HIGH,native
+kie,Grok Imagine Image to Video,https://docs.kie.ai/market/grok-imagine/image-to-video.md,grok-imagine/image-to-video,paths.post.input.mode,normal,MODE,NORMAL,HIGH,native
+kie,Grok Imagine Image to Video,https://docs.kie.ai/market/grok-imagine/image-to-video.md,grok-imagine/image-to-video,paths.post.input.mode,spicy,MODE,SPICY,HIGH,native
+kie,Grok Imagine Text to Video,https://docs.kie.ai/market/grok-imagine/text-to-video.md,grok-imagine/text-to-video,paths.post.input.mode,fun,MODE,FUN,HIGH,native
+kie,Grok Imagine Text to Video,https://docs.kie.ai/market/grok-imagine/text-to-video.md,grok-imagine/text-to-video,paths.post.input.mode,normal,MODE,NORMAL,HIGH,native
+kie,Grok Imagine Text to Video,https://docs.kie.ai/market/grok-imagine/text-to-video.md,grok-imagine/text-to-video,paths.post.input.mode,spicy,MODE,SPICY,HIGH,native
+kie,Kling 3.0,https://docs.kie.ai/market/kling/kling-3-0.md,kling/kling-3-0,paths.post.input.mode,pro,MODE,PRO,HIGH,native
+kie,Kling 3.0,https://docs.kie.ai/market/kling/kling-3-0.md,kling/kling-3-0,paths.post.input.mode,std,MODE,STANDARD,HIGH,native
+kie,Bytedance Seedance 1.5 Pro,https://docs.kie.ai/market/bytedance/seedance-1-5-pro.md,bytedance/seedance-1-5-pro,paths.post.model,bytedance/seedance-1.5-pro,MODEL_ID,bytedance/seedance-1.5-pro,HIGH,native
+kie,Bytedance - V1 Lite Image to Video,https://docs.kie.ai/market/bytedance/v1-lite-image-to-video.md,bytedance/v1-lite-image-to-video,paths.post.model,bytedance/v1-lite-image-to-video,MODEL_ID,bytedance/v1-lite-image-to-video,HIGH,native
+kie,Bytedance - V1 Lite Text to Video,https://docs.kie.ai/market/bytedance/v1-lite-text-to-video.md,bytedance/v1-lite-text-to-video,paths.post.model,bytedance/v1-lite-text-to-video,MODEL_ID,bytedance/v1-lite-text-to-video,HIGH,native
+kie,Bytedance V1 Pro Fast Image to Video,https://docs.kie.ai/market/bytedance/v1-pro-fast-image-to-video.md,bytedance/v1-pro-fast-image-to-video,paths.post.model,bytedance/v1-pro-fast-image-to-video,MODEL_ID,bytedance/v1-pro-fast-image-to-video,HIGH,native
+kie,Bytedance V1 Pro Image to Video,https://docs.kie.ai/market/bytedance/v1-pro-image-to-video.md,bytedance/v1-pro-image-to-video,paths.post.model,bytedance/v1-pro-image-to-video,MODEL_ID,bytedance/v1-pro-image-to-video,HIGH,native
+kie,Bytedance - V1 Pro Text to Video,https://docs.kie.ai/market/bytedance/v1-pro-text-to-video.md,bytedance/v1-pro-text-to-video,paths.post.model,bytedance/v1-pro-text-to-video,MODEL_ID,bytedance/v1-pro-text-to-video,HIGH,native
+kie,elevenlabs/audio-isolation,https://docs.kie.ai/market/elevenlabs/audio-isolation.md,elevenlabs/audio-isolation,paths.post.model,elevenlabs/audio-isolation,MODEL_ID,elevenlabs/audio-isolation,HIGH,native
+kie,elevenlabs/speech-to-text,https://docs.kie.ai/market/elevenlabs/speech-to-text.md,elevenlabs/speech-to-text,paths.post.model,elevenlabs/speech-to-text,MODEL_ID,elevenlabs/speech-to-text,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.model,elevenlabs/text-to-speech-multilingual-v2,MODEL_ID,elevenlabs/text-to-speech-multilingual-v2,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.model,elevenlabs/text-to-speech-turbo-2-5,MODEL_ID,elevenlabs/text-to-speech-turbo-2-5,HIGH,native
+kie,Generate or Edit Image,https://docs.kie.ai/flux-kontext-api/generate-or-edit-image.md,flux-kontext-api/generate-or-edit-image,paths.post.model,flux-kontext-max,MODEL_ID,flux-kontext-max,HIGH,native
+kie,Generate or Edit Image,https://docs.kie.ai/flux-kontext-api/generate-or-edit-image.md,flux-kontext-api/generate-or-edit-image,paths.post.model,flux-kontext-pro,MODEL_ID,flux-kontext-pro,HIGH,native
+kie,Flux-2 - Image to Image,https://docs.kie.ai/market/flux2/flex-image-to-image.md,flux2/flex-image-to-image,paths.post.model,flux-2/flex-image-to-image,MODEL_ID,flux-2/flex-image-to-image,HIGH,native
+kie,Flux-2 - Text to Image,https://docs.kie.ai/market/flux2/flex-text-to-image.md,flux2/flex-text-to-image,paths.post.model,flux-2/flex-text-to-image,MODEL_ID,flux-2/flex-text-to-image,HIGH,native
+kie,Flux-2 - Pro Image to Image,https://docs.kie.ai/market/flux2/pro-image-to-image.md,flux2/pro-image-to-image,paths.post.model,flux-2/pro-image-to-image,MODEL_ID,flux-2/pro-image-to-image,HIGH,native
+kie,Flux-2 - Pro Text to Image,https://docs.kie.ai/market/flux2/pro-text-to-image.md,flux2/pro-text-to-image,paths.post.model,flux-2/pro-text-to-image,MODEL_ID,flux-2/pro-text-to-image,HIGH,native
+kie,Google - imagen4,https://docs.kie.ai/market/google/imagen4.md,google/imagen4,paths.post.model,google/imagen4,MODEL_ID,google/imagen4,HIGH,native
+kie,Google - imagen4-fast,https://docs.kie.ai/market/google/imagen4-fast.md,google/imagen4-fast,paths.post.model,google/imagen4-fast,MODEL_ID,google/imagen4-fast,HIGH,native
+kie,Google - imagen4-ultra,https://docs.kie.ai/market/google/imagen4-ultra.md,google/imagen4-ultra,paths.post.model,google/imagen4-ultra,MODEL_ID,google/imagen4-ultra,HIGH,native
+kie,GPT Image-1.5 - Image to Image,https://docs.kie.ai/market/gpt-image/1-5-image-to-image.md,gpt-image/1-5-image-to-image,paths.post.model,gpt-image/1.5-image-to-image,MODEL_ID,gpt-image/1.5-image-to-image,HIGH,native
+kie,GPT Image-1.5 - Text to Image,https://docs.kie.ai/market/gpt-image/1-5-text-to-image.md,gpt-image/1-5-text-to-image,paths.post.model,gpt-image/1.5-text-to-image,MODEL_ID,gpt-image/1.5-text-to-image,HIGH,native
+kie,Grok Imagine - image to image,https://docs.kie.ai/market/grok-imagine/image-to-image.md,grok-imagine/image-to-image,paths.post.model,grok-imagine/image-to-image,MODEL_ID,grok-imagine/image-to-image,HIGH,native
+kie,Grok Imagine Image to Video,https://docs.kie.ai/market/grok-imagine/image-to-video.md,grok-imagine/image-to-video,paths.post.model,grok-imagine/image-to-video,MODEL_ID,grok-imagine/image-to-video,HIGH,native
+kie,Grok Imagine - Text to Image,https://docs.kie.ai/market/grok-imagine/text-to-image.md,grok-imagine/text-to-image,paths.post.model,grok-imagine/text-to-image,MODEL_ID,grok-imagine/text-to-image,HIGH,native
+kie,Grok Imagine Text to Video,https://docs.kie.ai/market/grok-imagine/text-to-video.md,grok-imagine/text-to-video,paths.post.model,grok-imagine/text-to-video,MODEL_ID,grok-imagine/text-to-video,HIGH,native
+kie,Grok Imagine - Video Upscale,https://docs.kie.ai/market/grok-imagine/upscale.md,grok-imagine/upscale,paths.post.model,grok-imagine/upscale,MODEL_ID,grok-imagine/upscale,HIGH,native
+kie,Hailuo Pro Image to Video,https://docs.kie.ai/market/hailuo/02-image-to-video-pro.md,hailuo/02-image-to-video-pro,paths.post.model,hailuo/02-image-to-video-pro,MODEL_ID,hailuo/02-image-to-video-pro,HIGH,native
+kie,Hailuo Standard Image to Video,https://docs.kie.ai/market/hailuo/02-image-to-video-standard.md,hailuo/02-image-to-video-standard,paths.post.model,hailuo/02-image-to-video-standard,MODEL_ID,hailuo/02-image-to-video-standard,HIGH,native
+kie,Hailuo Pro Text to Video,https://docs.kie.ai/market/hailuo/02-text-to-video-pro.md,hailuo/02-text-to-video-pro,paths.post.model,hailuo/02-text-to-video-pro,MODEL_ID,hailuo/02-text-to-video-pro,HIGH,native
+kie,Hailuo Standard Text to Video,https://docs.kie.ai/market/hailuo/02-text-to-video-standard.md,hailuo/02-text-to-video-standard,paths.post.model,hailuo/02-text-to-video-standard,MODEL_ID,hailuo/02-text-to-video-standard,HIGH,native
+kie,Hailuo 2.3 Pro Image to Video,https://docs.kie.ai/market/hailuo/2-3-image-to-video-pro.md,hailuo/2-3-image-to-video-pro,paths.post.model,hailuo/2-3-image-to-video-pro,MODEL_ID,hailuo/2-3-image-to-video-pro,HIGH,native
+kie,Hailuo 2.3 Standard Image to Video,https://docs.kie.ai/market/hailuo/2-3-image-to-video-standard.md,hailuo/2-3-image-to-video-standard,paths.post.model,hailuo/2-3-image-to-video-standard,MODEL_ID,hailuo/2-3-image-to-video-standard,HIGH,native
+kie,Ideogram - Character,https://docs.kie.ai/market/ideogram/character.md,ideogram/character,paths.post.model,ideogram/character,MODEL_ID,ideogram/character,HIGH,native
+kie,Ideogram - Character Edit,https://docs.kie.ai/market/ideogram/character-edit.md,ideogram/character-edit,paths.post.model,ideogram/character-edit,MODEL_ID,ideogram/character-edit,HIGH,native
+kie,Ideogram - Character Remix,https://docs.kie.ai/market/ideogram/character-remix.md,ideogram/character-remix,paths.post.model,ideogram/character-remix,MODEL_ID,ideogram/character-remix,HIGH,native
+kie,Ideogram - V3 Reframe,https://docs.kie.ai/market/ideogram/v3-reframe.md,ideogram/v3-reframe,paths.post.model,ideogram/v3-reframe,MODEL_ID,ideogram/v3-reframe,HIGH,native
+kie,Infinitalk - From Audio,https://docs.kie.ai/market/infinitalk/from-audio.md,infinitalk/from-audio,paths.post.model,infinitalk/from-audio,MODEL_ID,infinitalk/from-audio,HIGH,native
+kie,Kling AI Avatar Pro,https://docs.kie.ai/market/kling/ai-avatar-pro.md,kling/ai-avatar-pro,paths.post.model,kling/ai-avatar-pro,MODEL_ID,kling/ai-avatar-pro,HIGH,native
+kie,Kling AI Avatar Standard,https://docs.kie.ai/market/kling/ai-avatar-standard.md,kling/ai-avatar-standard,paths.post.model,kling/ai-avatar-standard,MODEL_ID,kling/ai-avatar-standard,HIGH,native
+kie,Kling 2.6 Image to Video,https://docs.kie.ai/market/kling/image-to-video.md,kling/image-to-video,paths.post.model,kling-2.6/image-to-video,MODEL_ID,kling-2.6/image-to-video,HIGH,native
+kie,Kling 3.0,https://docs.kie.ai/market/kling/kling-3-0.md,kling/kling-3-0,paths.post.model,kling-3.0/video,MODEL_ID,kling-3.0/video,HIGH,native
+kie,Kling 2.6 motion-control,https://docs.kie.ai/market/kling/motion-control.md,kling/motion-control,paths.post.model,kling-2.6/motion-control,MODEL_ID,kling-2.6/motion-control,HIGH,native
+kie,Kling 2.6 Text to Video,https://docs.kie.ai/market/kling/text-to-video.md,kling/text-to-video,paths.post.model,kling-2.6/text-to-video,MODEL_ID,kling-2.6/text-to-video,HIGH,native
+kie,Kling V2.1 Master Image to Video,https://docs.kie.ai/market/kling/v2-1-master-image-to-video.md,kling/v2-1-master-image-to-video,paths.post.model,kling/v2-1-master-image-to-video,MODEL_ID,kling/v2-1-master-image-to-video,HIGH,native
+kie,Kling V2.1 Master Text to Video,https://docs.kie.ai/market/kling/v2-1-master-text-to-video.md,kling/v2-1-master-text-to-video,paths.post.model,kling/v2-1-master-text-to-video,MODEL_ID,kling/v2-1-master-text-to-video,HIGH,native
+kie,Kling V2.1 Pro,https://docs.kie.ai/market/kling/v2-1-pro.md,kling/v2-1-pro,paths.post.model,kling/v2-1-pro,MODEL_ID,kling/v2-1-pro,HIGH,native
+kie,Kling V2.1 Standard,https://docs.kie.ai/market/kling/v2-1-standard.md,kling/v2-1-standard,paths.post.model,kling/v2-1-standard,MODEL_ID,kling/v2-1-standard,HIGH,native
+kie,Kling - V2.5 Turbo Image to Video Pro,https://docs.kie.ai/market/kling/v25-turbo-image-to-video-pro.md,kling/v25-turbo-image-to-video-pro,paths.post.model,kling/v2-1-master-image-to-video,MODEL_ID,kling/v2-1-master-image-to-video,HIGH,native
+kie,Kling - V2.5 Turbo Text to Video Pro,https://docs.kie.ai/market/kling/v25-turbo-text-to-video-pro.md,kling/v25-turbo-text-to-video-pro,paths.post.model,kling/v2-5-turbo-text-to-video-pro,MODEL_ID,kling/v2-5-turbo-text-to-video-pro,HIGH,native
+kie,Qwen - Image Edit,https://docs.kie.ai/market/qwen/image-edit.md,qwen/image-edit,paths.post.model,qwen/image-edit,MODEL_ID,qwen/image-edit,HIGH,native
+kie,Qwen - Image to Image,https://docs.kie.ai/market/qwen/image-to-image.md,qwen/image-to-image,paths.post.model,qwen/image-to-image,MODEL_ID,qwen/image-to-image,HIGH,native
+kie,Qwen - Text to Image,https://docs.kie.ai/market/qwen/text-to-image.md,qwen/text-to-image,paths.post.model,qwen/text-to-image,MODEL_ID,qwen/text-to-image,HIGH,native
+kie,Recraft - Crisp Upscale,https://docs.kie.ai/market/recraft/crisp-upscale.md,recraft/crisp-upscale,paths.post.model,recraft/crisp-upscale,MODEL_ID,recraft/crisp-upscale,HIGH,native
+kie,Recraft - Remove Background,https://docs.kie.ai/market/recraft/remove-background.md,recraft/remove-background,paths.post.model,recraft/remove-background,MODEL_ID,recraft/remove-background,HIGH,native
+kie,Seedream4.5 - Edit,https://docs.kie.ai/market/seedream/4-5-edit.md,seedream/4-5-edit,paths.post.model,seedream/4.5-edit,MODEL_ID,seedream/4.5-edit,HIGH,native
+kie,Seedream4.5 - Text to Image,https://docs.kie.ai/market/seedream/4-5-text-to-image.md,seedream/4-5-text-to-image,paths.post.model,seedream/4.5-text-to-image,MODEL_ID,seedream/4.5-text-to-image,HIGH,native
+kie,Seedream3.0 - Text to Image,https://docs.kie.ai/market/seedream/seedream.md,seedream/seedream,paths.post.model,bytedance/seedream,MODEL_ID,bytedance/seedream,HIGH,native
+kie,Seedream4.0 - Edit,https://docs.kie.ai/market/seedream/seedream-v4-edit.md,seedream/seedream-v4-edit,paths.post.model,bytedance/seedream-v4-edit,MODEL_ID,bytedance/seedream-v4-edit,HIGH,native
+kie,Seedream4.0 - Text to Image,https://docs.kie.ai/market/seedream/seedream-v4-text-to-image.md,seedream/seedream-v4-text-to-image,paths.post.model,bytedance/seedream-v4-text-to-image,MODEL_ID,bytedance/seedream-v4-text-to-image,HIGH,native
+kie,Sora2 - Pro Storyboard,https://docs.kie.ai/market/sora-2-pro-storyboard.md,sora-2-pro-storyboard,paths.post.model,sora-2-pro-storyboard,MODEL_ID,sora-2-pro-storyboard,HIGH,native
+kie,Sora2 - Characters,https://docs.kie.ai/market/sora2/sora-2-characters.md,sora2/sora-2-characters,paths.post.model,sora-2-characters,MODEL_ID,sora-2-characters,HIGH,native
+kie,Sora2 - Characters Pro,https://docs.kie.ai/market/sora2/sora-2-characters-pro.md,sora2/sora-2-characters-pro,paths.post.model,sora-2-characters-pro,MODEL_ID,sora-2-characters-pro,HIGH,native
+kie,Sora2 - Image to Video,https://docs.kie.ai/market/sora2/sora-2-image-to-video.md,sora2/sora-2-image-to-video,paths.post.model,sora-2-image-to-video,MODEL_ID,sora-2-image-to-video,HIGH,native
+kie,Sora2 - Pro Image to Video,https://docs.kie.ai/market/sora2/sora-2-pro-image-to-video.md,sora2/sora-2-pro-image-to-video,paths.post.model,sora-2-pro-image-to-video,MODEL_ID,sora-2-pro-image-to-video,HIGH,native
+kie,Sora2 - Pro Text to Video,https://docs.kie.ai/market/sora2/sora-2-pro-text-to-video.md,sora2/sora-2-pro-text-to-video,paths.post.model,sora-2-pro-text-to-video,MODEL_ID,sora-2-pro-text-to-video,HIGH,native
+kie,Sora2 - Text to Video,https://docs.kie.ai/market/sora2/sora-2-text-to-video.md,sora2/sora-2-text-to-video,paths.post.model,sora-2-text-to-video,MODEL_ID,sora-2-text-to-video,HIGH,native
+kie,Sora2 - Watermark Remover,https://docs.kie.ai/market/sora2/sora-watermark-remover.md,sora2/sora-watermark-remover,paths.post.model,sora-watermark-remover,MODEL_ID,sora-watermark-remover,HIGH,native
+kie,Topaz - Image Upscale,https://docs.kie.ai/market/topaz/image-upscale.md,topaz/image-upscale,paths.post.model,topaz/image-upscale,MODEL_ID,topaz/image-upscale,HIGH,native
+kie,Topaz - Video Upscale,https://docs.kie.ai/market/topaz/video-upscale.md,topaz/video-upscale,paths.post.model,topaz/video-upscale,MODEL_ID,topaz/video-upscale,HIGH,native
+kie,Wan - Image to Video,https://docs.kie.ai/market/wan/2-2-a14b-image-to-video-turbo.md,wan/2-2-a14b-image-to-video-turbo,paths.post.model,wan/2-2-a14b-image-to-video-turbo,MODEL_ID,wan/2-2-a14b-image-to-video-turbo,HIGH,native
+kie,Wan - 2.2 A14B Speech to Video Turbo,https://docs.kie.ai/market/wan/2-2-a14b-speech-to-video-turbo.md,wan/2-2-a14b-speech-to-video-turbo,paths.post.model,wan/2-2-a14b-speech-to-video-turbo,MODEL_ID,wan/2-2-a14b-speech-to-video-turbo,HIGH,native
+kie,Wan - Text to Video,https://docs.kie.ai/market/wan/2-2-a14b-text-to-video-turbo.md,wan/2-2-a14b-text-to-video-turbo,paths.post.model,wan/2-2-a14b-text-to-video-turbo,MODEL_ID,wan/2-2-a14b-text-to-video-turbo,HIGH,native
+kie,Wan - Animate Move,https://docs.kie.ai/market/wan/2-2-animate-move.md,wan/2-2-animate-move,paths.post.model,wan/2-2-animate-move,MODEL_ID,wan/2-2-animate-move,HIGH,native
+kie,Wan - Animate Replace,https://docs.kie.ai/market/wan/2-2-animate-replace.md,wan/2-2-animate-replace,paths.post.model,wan/2-2-animate-replace,MODEL_ID,wan/2-2-animate-replace,HIGH,native
+kie,Wan - 2.6-flash-image-to-video,https://docs.kie.ai/market/wan/2-6-flash-image-to-video.md,wan/2-6-flash-image-to-video,paths.post.model,wan/2-6-flash-image-to-video,MODEL_ID,wan/2-6-flash-image-to-video,HIGH,native
+kie,Wan - 2-6-flash-video-to-video,https://docs.kie.ai/market/wan/2-6-flash-video-to-video.md,wan/2-6-flash-video-to-video,paths.post.model,wan/2-6-flash-video-to-video,MODEL_ID,wan/2-6-flash-video-to-video,HIGH,native
+kie,Wan 2.6 - Image to Video,https://docs.kie.ai/market/wan/2-6-image-to-video.md,wan/2-6-image-to-video,paths.post.model,wan/2-6-image-to-video,MODEL_ID,wan/2-6-image-to-video,HIGH,native
+kie,Wan 2.6 - Text to Video,https://docs.kie.ai/market/wan/2-6-text-to-video.md,wan/2-6-text-to-video,paths.post.model,wan/2-6-text-to-video,MODEL_ID,wan/2-6-text-to-video,HIGH,native
+kie,Wan 2.6 - Video to Video,https://docs.kie.ai/market/wan/2-6-video-to-video.md,wan/2-6-video-to-video,paths.post.model,wan/2-6-video-to-video,MODEL_ID,wan/2-6-video-to-video,HIGH,native
+kie,Z-Image,https://docs.kie.ai/market/z-image/z-image.md,z-image/z-image,paths.post.model,z-image,MODEL_ID,z-image,HIGH,native
+kie,Wan - 2-6-flash-video-to-video,https://docs.kie.ai/market/wan/2-6-flash-video-to-video.md,,multi_shots,false,MULTI_SHOTS_SUPPORTED,FALSE,HIGH,matrix_bool
+kie,Wan - 2.6-flash-image-to-video,https://docs.kie.ai/market/wan/2-6-flash-image-to-video.md,,multi_shots,false,MULTI_SHOTS_SUPPORTED,FALSE,HIGH,matrix_bool
+kie,Google - imagen4-fast,https://docs.kie.ai/market/google/imagen4-fast.md,google/imagen4-fast,paths.post.input.num_images,1,NUM_IMAGES,1,HIGH,native
+kie,Google - imagen4-fast,https://docs.kie.ai/market/google/imagen4-fast.md,google/imagen4-fast,paths.post.input.num_images,2,NUM_IMAGES,2,HIGH,native
+kie,Google - imagen4-fast,https://docs.kie.ai/market/google/imagen4-fast.md,google/imagen4-fast,paths.post.input.num_images,3,NUM_IMAGES,3,HIGH,native
+kie,Google - imagen4-fast,https://docs.kie.ai/market/google/imagen4-fast.md,google/imagen4-fast,paths.post.input.num_images,4,NUM_IMAGES,4,HIGH,native
+kie,Ideogram - Character,https://docs.kie.ai/market/ideogram/character.md,ideogram/character,paths.post.input.num_images,1,NUM_IMAGES,1,HIGH,native
+kie,Ideogram - Character,https://docs.kie.ai/market/ideogram/character.md,ideogram/character,paths.post.input.num_images,2,NUM_IMAGES,2,HIGH,native
+kie,Ideogram - Character,https://docs.kie.ai/market/ideogram/character.md,ideogram/character,paths.post.input.num_images,3,NUM_IMAGES,3,HIGH,native
+kie,Ideogram - Character,https://docs.kie.ai/market/ideogram/character.md,ideogram/character,paths.post.input.num_images,4,NUM_IMAGES,4,HIGH,native
+kie,Ideogram - Character Edit,https://docs.kie.ai/market/ideogram/character-edit.md,ideogram/character-edit,paths.post.input.num_images,1,NUM_IMAGES,1,HIGH,native
+kie,Ideogram - Character Edit,https://docs.kie.ai/market/ideogram/character-edit.md,ideogram/character-edit,paths.post.input.num_images,2,NUM_IMAGES,2,HIGH,native
+kie,Ideogram - Character Edit,https://docs.kie.ai/market/ideogram/character-edit.md,ideogram/character-edit,paths.post.input.num_images,3,NUM_IMAGES,3,HIGH,native
+kie,Ideogram - Character Edit,https://docs.kie.ai/market/ideogram/character-edit.md,ideogram/character-edit,paths.post.input.num_images,4,NUM_IMAGES,4,HIGH,native
+kie,Ideogram - Character Remix,https://docs.kie.ai/market/ideogram/character-remix.md,ideogram/character-remix,paths.post.input.num_images,1,NUM_IMAGES,1,HIGH,native
+kie,Ideogram - Character Remix,https://docs.kie.ai/market/ideogram/character-remix.md,ideogram/character-remix,paths.post.input.num_images,2,NUM_IMAGES,2,HIGH,native
+kie,Ideogram - Character Remix,https://docs.kie.ai/market/ideogram/character-remix.md,ideogram/character-remix,paths.post.input.num_images,3,NUM_IMAGES,3,HIGH,native
+kie,Ideogram - Character Remix,https://docs.kie.ai/market/ideogram/character-remix.md,ideogram/character-remix,paths.post.input.num_images,4,NUM_IMAGES,4,HIGH,native
+kie,Ideogram - V3 Reframe,https://docs.kie.ai/market/ideogram/v3-reframe.md,ideogram/v3-reframe,paths.post.input.num_images,1,NUM_IMAGES,1,HIGH,native
+kie,Ideogram - V3 Reframe,https://docs.kie.ai/market/ideogram/v3-reframe.md,ideogram/v3-reframe,paths.post.input.num_images,2,NUM_IMAGES,2,HIGH,native
+kie,Ideogram - V3 Reframe,https://docs.kie.ai/market/ideogram/v3-reframe.md,ideogram/v3-reframe,paths.post.input.num_images,3,NUM_IMAGES,3,HIGH,native
+kie,Ideogram - V3 Reframe,https://docs.kie.ai/market/ideogram/v3-reframe.md,ideogram/v3-reframe,paths.post.input.num_images,4,NUM_IMAGES,4,HIGH,native
+kie,Qwen - Image Edit,https://docs.kie.ai/market/qwen/image-edit.md,qwen/image-edit,paths.post.input.num_images,1,NUM_IMAGES,1,HIGH,native
+kie,Qwen - Image Edit,https://docs.kie.ai/market/qwen/image-edit.md,qwen/image-edit,paths.post.input.num_images,2,NUM_IMAGES,2,HIGH,native
+kie,Qwen - Image Edit,https://docs.kie.ai/market/qwen/image-edit.md,qwen/image-edit,paths.post.input.num_images,3,NUM_IMAGES,3,HIGH,native
+kie,Qwen - Image Edit,https://docs.kie.ai/market/qwen/image-edit.md,qwen/image-edit,paths.post.input.num_images,4,NUM_IMAGES,4,HIGH,native
+kie,Generate or Edit Image,https://docs.kie.ai/flux-kontext-api/generate-or-edit-image.md,flux-kontext-api/generate-or-edit-image,paths.post.input.output_format,jpeg,OUTPUT_FORMAT,JPEG,HIGH,native
+kie,Generate or Edit Image,https://docs.kie.ai/flux-kontext-api/generate-or-edit-image.md,flux-kontext-api/generate-or-edit-image,paths.post.input.output_format,png,OUTPUT_FORMAT,PNG,HIGH,native
+kie,Qwen - Image Edit,https://docs.kie.ai/market/qwen/image-edit.md,qwen/image-edit,paths.post.input.output_format,jpeg,OUTPUT_FORMAT,JPEG,HIGH,native
+kie,Qwen - Image Edit,https://docs.kie.ai/market/qwen/image-edit.md,qwen/image-edit,paths.post.input.output_format,png,OUTPUT_FORMAT,PNG,HIGH,native
+kie,Qwen - Image to Image,https://docs.kie.ai/market/qwen/image-to-image.md,qwen/image-to-image,paths.post.input.output_format,jpeg,OUTPUT_FORMAT,JPEG,HIGH,native
+kie,Qwen - Image to Image,https://docs.kie.ai/market/qwen/image-to-image.md,qwen/image-to-image,paths.post.input.output_format,png,OUTPUT_FORMAT,PNG,HIGH,native
+kie,Qwen - Text to Image,https://docs.kie.ai/market/qwen/text-to-image.md,qwen/text-to-image,paths.post.input.output_format,jpeg,OUTPUT_FORMAT,JPEG,HIGH,native
+kie,Qwen - Text to Image,https://docs.kie.ai/market/qwen/text-to-image.md,qwen/text-to-image,paths.post.input.output_format,png,OUTPUT_FORMAT,PNG,HIGH,native
+kie,GPT Image-1.5 - Image to Image,https://docs.kie.ai/market/gpt-image/1-5-image-to-image.md,gpt-image/1-5-image-to-image,paths.post.input.quality,high,QUALITY_LEVEL,HIGH,HIGH,native
+kie,GPT Image-1.5 - Image to Image,https://docs.kie.ai/market/gpt-image/1-5-image-to-image.md,gpt-image/1-5-image-to-image,paths.post.input.quality,medium,QUALITY_LEVEL,MEDIUM,HIGH,native
+kie,GPT Image-1.5 - Text to Image,https://docs.kie.ai/market/gpt-image/1-5-text-to-image.md,gpt-image/1-5-text-to-image,paths.post.input.quality,high,QUALITY_LEVEL,HIGH,HIGH,native
+kie,GPT Image-1.5 - Text to Image,https://docs.kie.ai/market/gpt-image/1-5-text-to-image.md,gpt-image/1-5-text-to-image,paths.post.input.quality,medium,QUALITY_LEVEL,MEDIUM,HIGH,native
+kie,Seedream4.5 - Edit,https://docs.kie.ai/market/seedream/4-5-edit.md,seedream/4-5-edit,paths.post.input.quality,basic,QUALITY_LEVEL,BASIC,HIGH,native
+kie,Seedream4.5 - Edit,https://docs.kie.ai/market/seedream/4-5-edit.md,seedream/4-5-edit,paths.post.input.quality,high,QUALITY_LEVEL,HIGH,HIGH,native
+kie,Seedream4.5 - Text to Image,https://docs.kie.ai/market/seedream/4-5-text-to-image.md,seedream/4-5-text-to-image,paths.post.input.quality,basic,QUALITY_LEVEL,BASIC,HIGH,native
+kie,Seedream4.5 - Text to Image,https://docs.kie.ai/market/seedream/4-5-text-to-image.md,seedream/4-5-text-to-image,paths.post.input.quality,high,QUALITY_LEVEL,HIGH,HIGH,native
+kie,GPT-5-2,https://docs.kie.ai/market/chat/gpt-5-2.md,chat/gpt-5-2,paths.post.reasoning_effort,high,REASONING_EFFORT,HIGH,HIGH,native
+kie,GPT-5-2,https://docs.kie.ai/market/chat/gpt-5-2.md,chat/gpt-5-2,paths.post.reasoning_effort,low,REASONING_EFFORT,LOW,HIGH,native
+kie,Claude Opus 4.5,https://docs.kie.ai/market/claude/claude-opus-4-5.md,claude/claude-opus-4-5,paths.post.reasoning_effort,high,REASONING_EFFORT,HIGH,HIGH,native
+kie,Claude Opus 4.5,https://docs.kie.ai/market/claude/claude-opus-4-5.md,claude/claude-opus-4-5,paths.post.reasoning_effort,low,REASONING_EFFORT,LOW,HIGH,native
+kie,Claude Sonnet 4.5,https://docs.kie.ai/market/claude/claude-sonnet-4-5.md,claude/claude-sonnet-4-5,paths.post.reasoning_effort,high,REASONING_EFFORT,HIGH,HIGH,native
+kie,Claude Sonnet 4.5,https://docs.kie.ai/market/claude/claude-sonnet-4-5.md,claude/claude-sonnet-4-5,paths.post.reasoning_effort,low,REASONING_EFFORT,LOW,HIGH,native
+kie,Gemini  2.5 Pro,https://docs.kie.ai/market/gemini/gemini-2-5-pro.md,gemini/gemini-2-5-pro,paths.post.reasoning_effort,high,REASONING_EFFORT,HIGH,HIGH,native
+kie,Gemini  2.5 Pro,https://docs.kie.ai/market/gemini/gemini-2-5-pro.md,gemini/gemini-2-5-pro,paths.post.reasoning_effort,low,REASONING_EFFORT,LOW,HIGH,native
+kie,Gemini 3 Pro,https://docs.kie.ai/market/gemini/gemini-3-pro.md,gemini/gemini-3-pro,paths.post.reasoning_effort,high,REASONING_EFFORT,HIGH,HIGH,native
+kie,Gemini 3 Pro,https://docs.kie.ai/market/gemini/gemini-3-pro.md,gemini/gemini-3-pro,paths.post.reasoning_effort,low,REASONING_EFFORT,LOW,HIGH,native
+kie,Bytedance Seedance 1.5 Pro,https://docs.kie.ai/market/bytedance/seedance-1-5-pro.md,bytedance/seedance-1-5-pro,paths.post.input.resolution,1080p,RESOLUTION_TIER,P1080,HIGH,native
+kie,Bytedance Seedance 1.5 Pro,https://docs.kie.ai/market/bytedance/seedance-1-5-pro.md,bytedance/seedance-1-5-pro,paths.post.input.resolution,480p,RESOLUTION_TIER,P480,HIGH,native
+kie,Bytedance Seedance 1.5 Pro,https://docs.kie.ai/market/bytedance/seedance-1-5-pro.md,bytedance/seedance-1-5-pro,paths.post.input.resolution,720p,RESOLUTION_TIER,P720,HIGH,native
+kie,Bytedance - V1 Lite Image to Video,https://docs.kie.ai/market/bytedance/v1-lite-image-to-video.md,bytedance/v1-lite-image-to-video,paths.post.input.resolution,1080p,RESOLUTION_TIER,P1080,HIGH,native
+kie,Bytedance - V1 Lite Image to Video,https://docs.kie.ai/market/bytedance/v1-lite-image-to-video.md,bytedance/v1-lite-image-to-video,paths.post.input.resolution,480p,RESOLUTION_TIER,P480,HIGH,native
+kie,Bytedance - V1 Lite Image to Video,https://docs.kie.ai/market/bytedance/v1-lite-image-to-video.md,bytedance/v1-lite-image-to-video,paths.post.input.resolution,720p,RESOLUTION_TIER,P720,HIGH,native
+kie,Bytedance - V1 Lite Text to Video,https://docs.kie.ai/market/bytedance/v1-lite-text-to-video.md,bytedance/v1-lite-text-to-video,paths.post.input.resolution,1080p,RESOLUTION_TIER,P1080,HIGH,native
+kie,Bytedance - V1 Lite Text to Video,https://docs.kie.ai/market/bytedance/v1-lite-text-to-video.md,bytedance/v1-lite-text-to-video,paths.post.input.resolution,480p,RESOLUTION_TIER,P480,HIGH,native
+kie,Bytedance - V1 Lite Text to Video,https://docs.kie.ai/market/bytedance/v1-lite-text-to-video.md,bytedance/v1-lite-text-to-video,paths.post.input.resolution,720p,RESOLUTION_TIER,P720,HIGH,native
+kie,Bytedance V1 Pro Fast Image to Video,https://docs.kie.ai/market/bytedance/v1-pro-fast-image-to-video.md,bytedance/v1-pro-fast-image-to-video,paths.post.input.resolution,1080p,RESOLUTION_TIER,P1080,HIGH,native
+kie,Bytedance V1 Pro Fast Image to Video,https://docs.kie.ai/market/bytedance/v1-pro-fast-image-to-video.md,bytedance/v1-pro-fast-image-to-video,paths.post.input.resolution,720p,RESOLUTION_TIER,P720,HIGH,native
+kie,Bytedance V1 Pro Image to Video,https://docs.kie.ai/market/bytedance/v1-pro-image-to-video.md,bytedance/v1-pro-image-to-video,paths.post.input.resolution,1080p,RESOLUTION_TIER,P1080,HIGH,native
+kie,Bytedance V1 Pro Image to Video,https://docs.kie.ai/market/bytedance/v1-pro-image-to-video.md,bytedance/v1-pro-image-to-video,paths.post.input.resolution,480p,RESOLUTION_TIER,P480,HIGH,native
+kie,Bytedance V1 Pro Image to Video,https://docs.kie.ai/market/bytedance/v1-pro-image-to-video.md,bytedance/v1-pro-image-to-video,paths.post.input.resolution,720p,RESOLUTION_TIER,P720,HIGH,native
+kie,Bytedance - V1 Pro Text to Video,https://docs.kie.ai/market/bytedance/v1-pro-text-to-video.md,bytedance/v1-pro-text-to-video,paths.post.input.resolution,1080p,RESOLUTION_TIER,P1080,HIGH,native
+kie,Bytedance - V1 Pro Text to Video,https://docs.kie.ai/market/bytedance/v1-pro-text-to-video.md,bytedance/v1-pro-text-to-video,paths.post.input.resolution,480p,RESOLUTION_TIER,P480,HIGH,native
+kie,Bytedance - V1 Pro Text to Video,https://docs.kie.ai/market/bytedance/v1-pro-text-to-video.md,bytedance/v1-pro-text-to-video,paths.post.input.resolution,720p,RESOLUTION_TIER,P720,HIGH,native
+kie,Flux-2 - Image to Image,https://docs.kie.ai/market/flux2/flex-image-to-image.md,flux2/flex-image-to-image,paths.post.input.resolution,1k,RESOLUTION_TIER,K1,HIGH,native
+kie,Flux-2 - Image to Image,https://docs.kie.ai/market/flux2/flex-image-to-image.md,flux2/flex-image-to-image,paths.post.input.resolution,2k,RESOLUTION_TIER,K2,HIGH,native
+kie,Flux-2 - Text to Image,https://docs.kie.ai/market/flux2/flex-text-to-image.md,flux2/flex-text-to-image,paths.post.input.resolution,1k,RESOLUTION_TIER,K1,HIGH,native
+kie,Flux-2 - Text to Image,https://docs.kie.ai/market/flux2/flex-text-to-image.md,flux2/flex-text-to-image,paths.post.input.resolution,2k,RESOLUTION_TIER,K2,HIGH,native
+kie,Flux-2 - Pro Image to Image,https://docs.kie.ai/market/flux2/pro-image-to-image.md,flux2/pro-image-to-image,paths.post.input.resolution,1k,RESOLUTION_TIER,K1,HIGH,native
+kie,Flux-2 - Pro Image to Image,https://docs.kie.ai/market/flux2/pro-image-to-image.md,flux2/pro-image-to-image,paths.post.input.resolution,2k,RESOLUTION_TIER,K2,HIGH,native
+kie,Flux-2 - Pro Text to Image,https://docs.kie.ai/market/flux2/pro-text-to-image.md,flux2/pro-text-to-image,paths.post.input.resolution,1k,RESOLUTION_TIER,K1,HIGH,native
+kie,Flux-2 - Pro Text to Image,https://docs.kie.ai/market/flux2/pro-text-to-image.md,flux2/pro-text-to-image,paths.post.input.resolution,2k,RESOLUTION_TIER,K2,HIGH,native
+kie,Grok Imagine Image to Video,https://docs.kie.ai/market/grok-imagine/image-to-video.md,grok-imagine/image-to-video,paths.post.input.resolution,480p,RESOLUTION_TIER,P480,HIGH,native
+kie,Grok Imagine Image to Video,https://docs.kie.ai/market/grok-imagine/image-to-video.md,grok-imagine/image-to-video,paths.post.input.resolution,720p,RESOLUTION_TIER,P720,HIGH,native
+kie,Grok Imagine Text to Video,https://docs.kie.ai/market/grok-imagine/text-to-video.md,grok-imagine/text-to-video,paths.post.input.resolution,480p,RESOLUTION_TIER,P480,HIGH,native
+kie,Grok Imagine Text to Video,https://docs.kie.ai/market/grok-imagine/text-to-video.md,grok-imagine/text-to-video,paths.post.input.resolution,720p,RESOLUTION_TIER,P720,HIGH,native
+kie,Hailuo Standard Image to Video,https://docs.kie.ai/market/hailuo/02-image-to-video-standard.md,hailuo/02-image-to-video-standard,paths.post.input.resolution,512p,RESOLUTION_TIER,P512,HIGH,native
+kie,Hailuo Standard Image to Video,https://docs.kie.ai/market/hailuo/02-image-to-video-standard.md,hailuo/02-image-to-video-standard,paths.post.input.resolution,768p,RESOLUTION_TIER,P768,HIGH,native
+kie,Hailuo 2.3 Pro Image to Video,https://docs.kie.ai/market/hailuo/2-3-image-to-video-pro.md,hailuo/2-3-image-to-video-pro,paths.post.input.resolution,1080p,RESOLUTION_TIER,P1080,HIGH,native
+kie,Hailuo 2.3 Pro Image to Video,https://docs.kie.ai/market/hailuo/2-3-image-to-video-pro.md,hailuo/2-3-image-to-video-pro,paths.post.input.resolution,768p,RESOLUTION_TIER,P768,HIGH,native
+kie,Hailuo 2.3 Standard Image to Video,https://docs.kie.ai/market/hailuo/2-3-image-to-video-standard.md,hailuo/2-3-image-to-video-standard,paths.post.input.resolution,1080p,RESOLUTION_TIER,P1080,HIGH,native
+kie,Hailuo 2.3 Standard Image to Video,https://docs.kie.ai/market/hailuo/2-3-image-to-video-standard.md,hailuo/2-3-image-to-video-standard,paths.post.input.resolution,768p,RESOLUTION_TIER,P768,HIGH,native
+kie,Infinitalk - From Audio,https://docs.kie.ai/market/infinitalk/from-audio.md,infinitalk/from-audio,paths.post.input.resolution,480p,RESOLUTION_TIER,P480,HIGH,native
+kie,Infinitalk - From Audio,https://docs.kie.ai/market/infinitalk/from-audio.md,infinitalk/from-audio,paths.post.input.resolution,720p,RESOLUTION_TIER,P720,HIGH,native
+kie,Seedream4.0 - Edit,https://docs.kie.ai/market/seedream/seedream-v4-edit.md,seedream/seedream-v4-edit,paths.post.input.image_resolution,1k,RESOLUTION_TIER,K1,HIGH,native
+kie,Seedream4.0 - Edit,https://docs.kie.ai/market/seedream/seedream-v4-edit.md,seedream/seedream-v4-edit,paths.post.input.image_resolution,2k,RESOLUTION_TIER,K2,HIGH,native
+kie,Seedream4.0 - Edit,https://docs.kie.ai/market/seedream/seedream-v4-edit.md,seedream/seedream-v4-edit,paths.post.input.image_resolution,4k,RESOLUTION_TIER,K4,HIGH,native
+kie,Seedream4.0 - Text to Image,https://docs.kie.ai/market/seedream/seedream-v4-text-to-image.md,seedream/seedream-v4-text-to-image,paths.post.input.image_resolution,1k,RESOLUTION_TIER,K1,HIGH,native
+kie,Seedream4.0 - Text to Image,https://docs.kie.ai/market/seedream/seedream-v4-text-to-image.md,seedream/seedream-v4-text-to-image,paths.post.input.image_resolution,2k,RESOLUTION_TIER,K2,HIGH,native
+kie,Seedream4.0 - Text to Image,https://docs.kie.ai/market/seedream/seedream-v4-text-to-image.md,seedream/seedream-v4-text-to-image,paths.post.input.image_resolution,4k,RESOLUTION_TIER,K4,HIGH,native
+kie,Wan - Image to Video,https://docs.kie.ai/market/wan/2-2-a14b-image-to-video-turbo.md,wan/2-2-a14b-image-to-video-turbo,paths.post.input.resolution,480p,RESOLUTION_TIER,P480,HIGH,native
+kie,Wan - Image to Video,https://docs.kie.ai/market/wan/2-2-a14b-image-to-video-turbo.md,wan/2-2-a14b-image-to-video-turbo,paths.post.input.resolution,720p,RESOLUTION_TIER,P720,HIGH,native
+kie,Wan - 2.2 A14B Speech to Video Turbo,https://docs.kie.ai/market/wan/2-2-a14b-speech-to-video-turbo.md,wan/2-2-a14b-speech-to-video-turbo,paths.post.input.resolution,480p,RESOLUTION_TIER,P480,HIGH,native
+kie,Wan - 2.2 A14B Speech to Video Turbo,https://docs.kie.ai/market/wan/2-2-a14b-speech-to-video-turbo.md,wan/2-2-a14b-speech-to-video-turbo,paths.post.input.resolution,580p,RESOLUTION_TIER,P580,HIGH,native
+kie,Wan - 2.2 A14B Speech to Video Turbo,https://docs.kie.ai/market/wan/2-2-a14b-speech-to-video-turbo.md,wan/2-2-a14b-speech-to-video-turbo,paths.post.input.resolution,720p,RESOLUTION_TIER,P720,HIGH,native
+kie,Wan - Text to Video,https://docs.kie.ai/market/wan/2-2-a14b-text-to-video-turbo.md,wan/2-2-a14b-text-to-video-turbo,paths.post.input.resolution,480p,RESOLUTION_TIER,P480,HIGH,native
+kie,Wan - Text to Video,https://docs.kie.ai/market/wan/2-2-a14b-text-to-video-turbo.md,wan/2-2-a14b-text-to-video-turbo,paths.post.input.resolution,720p,RESOLUTION_TIER,P720,HIGH,native
+kie,Wan - Animate Move,https://docs.kie.ai/market/wan/2-2-animate-move.md,wan/2-2-animate-move,paths.post.input.resolution,480p,RESOLUTION_TIER,P480,HIGH,native
+kie,Wan - Animate Move,https://docs.kie.ai/market/wan/2-2-animate-move.md,wan/2-2-animate-move,paths.post.input.resolution,580p,RESOLUTION_TIER,P580,HIGH,native
+kie,Wan - Animate Move,https://docs.kie.ai/market/wan/2-2-animate-move.md,wan/2-2-animate-move,paths.post.input.resolution,720p,RESOLUTION_TIER,P720,HIGH,native
+kie,Wan - Animate Replace,https://docs.kie.ai/market/wan/2-2-animate-replace.md,wan/2-2-animate-replace,paths.post.input.resolution,480p,RESOLUTION_TIER,P480,HIGH,native
+kie,Wan - Animate Replace,https://docs.kie.ai/market/wan/2-2-animate-replace.md,wan/2-2-animate-replace,paths.post.input.resolution,580p,RESOLUTION_TIER,P580,HIGH,native
+kie,Wan - Animate Replace,https://docs.kie.ai/market/wan/2-2-animate-replace.md,wan/2-2-animate-replace,paths.post.input.resolution,720p,RESOLUTION_TIER,P720,HIGH,native
+kie,Wan - 2.6-flash-image-to-video,https://docs.kie.ai/market/wan/2-6-flash-image-to-video.md,wan/2-6-flash-image-to-video,paths.post.input.resolution,1080p,RESOLUTION_TIER,P1080,HIGH,native
+kie,Wan - 2.6-flash-image-to-video,https://docs.kie.ai/market/wan/2-6-flash-image-to-video.md,wan/2-6-flash-image-to-video,paths.post.input.resolution,720p,RESOLUTION_TIER,P720,HIGH,native
+kie,Wan - 2-6-flash-video-to-video,https://docs.kie.ai/market/wan/2-6-flash-video-to-video.md,wan/2-6-flash-video-to-video,paths.post.input.resolution,1080p,RESOLUTION_TIER,P1080,HIGH,native
+kie,Wan - 2-6-flash-video-to-video,https://docs.kie.ai/market/wan/2-6-flash-video-to-video.md,wan/2-6-flash-video-to-video,paths.post.input.resolution,720p,RESOLUTION_TIER,P720,HIGH,native
+kie,Wan 2.6 - Image to Video,https://docs.kie.ai/market/wan/2-6-image-to-video.md,wan/2-6-image-to-video,paths.post.input.resolution,1080p,RESOLUTION_TIER,P1080,HIGH,native
+kie,Wan 2.6 - Image to Video,https://docs.kie.ai/market/wan/2-6-image-to-video.md,wan/2-6-image-to-video,paths.post.input.resolution,720p,RESOLUTION_TIER,P720,HIGH,native
+kie,Wan 2.6 - Text to Video,https://docs.kie.ai/market/wan/2-6-text-to-video.md,wan/2-6-text-to-video,paths.post.input.resolution,1080p,RESOLUTION_TIER,P1080,HIGH,native
+kie,Wan 2.6 - Text to Video,https://docs.kie.ai/market/wan/2-6-text-to-video.md,wan/2-6-text-to-video,paths.post.input.resolution,720p,RESOLUTION_TIER,P720,HIGH,native
+kie,Wan 2.6 - Video to Video,https://docs.kie.ai/market/wan/2-6-video-to-video.md,wan/2-6-video-to-video,paths.post.input.resolution,1080p,RESOLUTION_TIER,P1080,HIGH,native
+kie,Wan 2.6 - Video to Video,https://docs.kie.ai/market/wan/2-6-video-to-video.md,wan/2-6-video-to-video,paths.post.input.resolution,720p,RESOLUTION_TIER,P720,HIGH,native
+kie,Generate or Edit Image,https://docs.kie.ai/flux-kontext-api/generate-or-edit-image.md,flux-kontext-api/generate-or-edit-image,paths.post.input.safety_tolerance,0,SAFETY_TOLERANCE,0,HIGH,native
+kie,Generate or Edit Image,https://docs.kie.ai/flux-kontext-api/generate-or-edit-image.md,flux-kontext-api/generate-or-edit-image,paths.post.input.safety_tolerance,1,SAFETY_TOLERANCE,1,HIGH,native
+kie,Generate or Edit Image,https://docs.kie.ai/flux-kontext-api/generate-or-edit-image.md,flux-kontext-api/generate-or-edit-image,paths.post.input.safety_tolerance,2,SAFETY_TOLERANCE,2,HIGH,native
+kie,Generate or Edit Image,https://docs.kie.ai/flux-kontext-api/generate-or-edit-image.md,flux-kontext-api/generate-or-edit-image,paths.post.input.safety_tolerance,3,SAFETY_TOLERANCE,3,HIGH,native
+kie,Generate or Edit Image,https://docs.kie.ai/flux-kontext-api/generate-or-edit-image.md,flux-kontext-api/generate-or-edit-image,paths.post.input.safety_tolerance,4,SAFETY_TOLERANCE,4,HIGH,native
+kie,Generate or Edit Image,https://docs.kie.ai/flux-kontext-api/generate-or-edit-image.md,flux-kontext-api/generate-or-edit-image,paths.post.input.safety_tolerance,5,SAFETY_TOLERANCE,5,HIGH,native
+kie,Generate or Edit Image,https://docs.kie.ai/flux-kontext-api/generate-or-edit-image.md,flux-kontext-api/generate-or-edit-image,paths.post.input.safety_tolerance,6,SAFETY_TOLERANCE,6,HIGH,native
+kie,Kling 2.6 Image to Video,https://docs.kie.ai/market/kling/image-to-video.md,,sound,false,SOUND_SUPPORTED,FALSE,HIGH,matrix_bool
+kie,Kling 2.6 Text to Video,https://docs.kie.ai/market/kling/text-to-video.md,,sound,false,SOUND_SUPPORTED,FALSE,HIGH,matrix_bool
+kie,Kling 3.0,https://docs.kie.ai/market/kling/kling-3-0.md,kling-3.0,sound,true,SOUND_SUPPORTED,TRUE,HIGH,matrix_bool
+kie,Ideogram - Character,https://docs.kie.ai/market/ideogram/character.md,ideogram/character,paths.post.input.style,AUTO,STYLE,AUTO,HIGH,native
+kie,Ideogram - Character,https://docs.kie.ai/market/ideogram/character.md,ideogram/character,paths.post.input.style,FICTION,STYLE,FICTION,HIGH,native
+kie,Ideogram - Character,https://docs.kie.ai/market/ideogram/character.md,ideogram/character,paths.post.input.style,REALISTIC,STYLE,REALISTIC,HIGH,native
+kie,Ideogram - Character Edit,https://docs.kie.ai/market/ideogram/character-edit.md,ideogram/character-edit,paths.post.input.style,AUTO,STYLE,AUTO,HIGH,native
+kie,Ideogram - Character Edit,https://docs.kie.ai/market/ideogram/character-edit.md,ideogram/character-edit,paths.post.input.style,FICTION,STYLE,FICTION,HIGH,native
+kie,Ideogram - Character Edit,https://docs.kie.ai/market/ideogram/character-edit.md,ideogram/character-edit,paths.post.input.style,REALISTIC,STYLE,REALISTIC,HIGH,native
+kie,Ideogram - Character Remix,https://docs.kie.ai/market/ideogram/character-remix.md,ideogram/character-remix,paths.post.input.style,AUTO,STYLE,AUTO,HIGH,native
+kie,Ideogram - Character Remix,https://docs.kie.ai/market/ideogram/character-remix.md,ideogram/character-remix,paths.post.input.style,FICTION,STYLE,FICTION,HIGH,native
+kie,Ideogram - Character Remix,https://docs.kie.ai/market/ideogram/character-remix.md,ideogram/character-remix,paths.post.input.style,REALISTIC,STYLE,REALISTIC,HIGH,native
+kie,Ideogram - V3 Reframe,https://docs.kie.ai/market/ideogram/v3-reframe.md,ideogram/v3-reframe,paths.post.input.style,AUTO,STYLE,AUTO,HIGH,native
+kie,Ideogram - V3 Reframe,https://docs.kie.ai/market/ideogram/v3-reframe.md,ideogram/v3-reframe,paths.post.input.style,DESIGN,STYLE,DESIGN,HIGH,native
+kie,Ideogram - V3 Reframe,https://docs.kie.ai/market/ideogram/v3-reframe.md,ideogram/v3-reframe,paths.post.input.style,GENERAL,STYLE,GENERAL,HIGH,native
+kie,Ideogram - V3 Reframe,https://docs.kie.ai/market/ideogram/v3-reframe.md,ideogram/v3-reframe,paths.post.input.style,REALISTIC,STYLE,REALISTIC,HIGH,native
+kie,Topaz - Image Upscale,https://docs.kie.ai/market/topaz/image-upscale.md,topaz/image-upscale,paths.post.input.upscale_factor,1,UPSCALE_FACTOR,1,HIGH,native
+kie,Topaz - Image Upscale,https://docs.kie.ai/market/topaz/image-upscale.md,topaz/image-upscale,paths.post.input.upscale_factor,2,UPSCALE_FACTOR,2,HIGH,native
+kie,Topaz - Image Upscale,https://docs.kie.ai/market/topaz/image-upscale.md,topaz/image-upscale,paths.post.input.upscale_factor,4,UPSCALE_FACTOR,4,HIGH,native
+kie,Topaz - Image Upscale,https://docs.kie.ai/market/topaz/image-upscale.md,topaz/image-upscale,paths.post.input.upscale_factor,8,UPSCALE_FACTOR,8,HIGH,native
+kie,Topaz - Video Upscale,https://docs.kie.ai/market/topaz/video-upscale.md,topaz/video-upscale,paths.post.input.upscale_factor,1,UPSCALE_FACTOR,1,HIGH,native
+kie,Topaz - Video Upscale,https://docs.kie.ai/market/topaz/video-upscale.md,topaz/video-upscale,paths.post.input.upscale_factor,2,UPSCALE_FACTOR,2,HIGH,native
+kie,Topaz - Video Upscale,https://docs.kie.ai/market/topaz/video-upscale.md,topaz/video-upscale,paths.post.input.upscale_factor,4,UPSCALE_FACTOR,4,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,0SpgpJ4D3MpHCiWdyTg3,VOICE_ID,0SpgpJ4D3MpHCiWdyTg3,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,1KFdM0QCwQn4rmn5nn9C,VOICE_ID,1KFdM0QCwQn4rmn5nn9C,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,1SM7GgM6IMuvQlz2BwM3,VOICE_ID,1SM7GgM6IMuvQlz2BwM3,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,1U02n4nD6AdIZ9CjF053,VOICE_ID,1U02n4nD6AdIZ9CjF053,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,1cxc5c3E9K6F1wlqOJGV,VOICE_ID,1cxc5c3E9K6F1wlqOJGV,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,1hlpeD1ydbI2ow0Tt3EW,VOICE_ID,1hlpeD1ydbI2ow0Tt3EW,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,1wGbFxmAM3Fgw63G1zZJ,VOICE_ID,1wGbFxmAM3Fgw63G1zZJ,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,2zRM7PkgwBPiau2jvVXc,VOICE_ID,2zRM7PkgwBPiau2jvVXc,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,4YYIPFl9wE5c4L2eu2Gb,VOICE_ID,4YYIPFl9wE5c4L2eu2Gb,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,56AoDkrOh6qfVPDXZ7Pt,VOICE_ID,56AoDkrOh6qfVPDXZ7Pt,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,5l5f8iK3YPeGga21rQIX,VOICE_ID,5l5f8iK3YPeGga21rQIX,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,6F5Zhi321D3Oq7v1oNT4,VOICE_ID,6F5Zhi321D3Oq7v1oNT4,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,6aDn1KB0hjpdcocrUkmq,VOICE_ID,6aDn1KB0hjpdcocrUkmq,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,8JVbfL6oEdmuxKn5DK2C,VOICE_ID,8JVbfL6oEdmuxKn5DK2C,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,9PVP7ENhDskL0KYHAKtD,VOICE_ID,9PVP7ENhDskL0KYHAKtD,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,9yzdeviXkFddZ4Oz8Mok,VOICE_ID,9yzdeviXkFddZ4Oz8Mok,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,AeRdCCKzvd23BpJoofzx,VOICE_ID,AeRdCCKzvd23BpJoofzx,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,Alice,VOICE_ID,Alice,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,Aria,VOICE_ID,Aria,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,Atp5cNFg1Wj5gyKD7HWV,VOICE_ID,Atp5cNFg1Wj5gyKD7HWV,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,B8gJV1IhpuegLxdpXFOE,VOICE_ID,B8gJV1IhpuegLxdpXFOE,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,BIvP0GN1cAtSRTxNHnWS,VOICE_ID,BIvP0GN1cAtSRTxNHnWS,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,BZgkqPqms7Kj9ulSkVzn,VOICE_ID,BZgkqPqms7Kj9ulSkVzn,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,Bill,VOICE_ID,Bill,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,Bj9UqZbhQsanLzgalpEG,VOICE_ID,Bj9UqZbhQsanLzgalpEG,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,BpjGufoPiobT79j2vtj4,VOICE_ID,BpjGufoPiobT79j2vtj4,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,Brian,VOICE_ID,Brian,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,Callum,VOICE_ID,Callum,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,CeNX9CMwmxDxUF5Q2Inm,VOICE_ID,CeNX9CMwmxDxUF5Q2Inm,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,Charlie,VOICE_ID,Charlie,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,Charlotte,VOICE_ID,Charlotte,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,Chris,VOICE_ID,Chris,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,D2jw4N9m4xePLTQ3IHjU,VOICE_ID,D2jw4N9m4xePLTQ3IHjU,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,DGTOOUoGpoP6UZ9uSWfA,VOICE_ID,DGTOOUoGpoP6UZ9uSWfA,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,DGzg6RaUqxGRTHSBjfgF,VOICE_ID,DGzg6RaUqxGRTHSBjfgF,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,DTKMou8ccj1ZaWGBiotd,VOICE_ID,DTKMou8ccj1ZaWGBiotd,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,DYkrAHD8iwork3YSUBbs,VOICE_ID,DYkrAHD8iwork3YSUBbs,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,Daniel,VOICE_ID,Daniel,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,EiNlNiXeDU1pqqOPrYMO,VOICE_ID,EiNlNiXeDU1pqqOPrYMO,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,EkK5I93UQWFDigLMpZcX,VOICE_ID,EkK5I93UQWFDigLMpZcX,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,Eric,VOICE_ID,Eric,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,FF7KdobWPaiR0vkcALHF,VOICE_ID,FF7KdobWPaiR0vkcALHF,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,FGY2WhTYpPnrIDTdsKH5,VOICE_ID,FGY2WhTYpPnrIDTdsKH5,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,FUfBrNit0NNZAwb58KWH,VOICE_ID,FUfBrNit0NNZAwb58KWH,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,George,VOICE_ID,George,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,HgyIHe81F3nXywNwkraY,VOICE_ID,HgyIHe81F3nXywNwkraY,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,IjnA9kwZJHJ20Fp7Vmy6,VOICE_ID,IjnA9kwZJHJ20Fp7Vmy6,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,Jessica,VOICE_ID,Jessica,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,KTPVrSVAEUSJRClDzBw7,VOICE_ID,KTPVrSVAEUSJRClDzBw7,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,KoQQbl9zjAdLgKZjm8Ol,VOICE_ID,KoQQbl9zjAdLgKZjm8Ol,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,L0Dsvb3SLTyegXwtm47J,VOICE_ID,L0Dsvb3SLTyegXwtm47J,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,LG95yZDEHg6fCZdQjLqj,VOICE_ID,LG95yZDEHg6fCZdQjLqj,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,Laura,VOICE_ID,Laura,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,Liam,VOICE_ID,Liam,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,Lily,VOICE_ID,Lily,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,LruHrtVF6PSyGItzMNHS,VOICE_ID,LruHrtVF6PSyGItzMNHS,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,MJ0RnG71ty4LH3dvNfSd,VOICE_ID,MJ0RnG71ty4LH3dvNfSd,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,Matilda,VOICE_ID,Matilda,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,MnUw1cSnpiLoLhpd3Hqp,VOICE_ID,MnUw1cSnpiLoLhpd3Hqp,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,N2lVS1w4EtoT3dr4eOWO,VOICE_ID,N2lVS1w4EtoT3dr4eOWO,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,NNl6r8mD7vthiJatiJt1,VOICE_ID,NNl6r8mD7vthiJatiJt1,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,NOpBlnGInO9m6vDvFkFC,VOICE_ID,NOpBlnGInO9m6vDvFkFC,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,OYWwCdDHouzDwiZJWOOu,VOICE_ID,OYWwCdDHouzDwiZJWOOu,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,P1bg08DkjqiVEzOn76yG,VOICE_ID,P1bg08DkjqiVEzOn76yG,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,PPzYpIqttlTYA83688JI,VOICE_ID,PPzYpIqttlTYA83688JI,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,Qggl4b0xRMiqOwhPtVWT,VOICE_ID,Qggl4b0xRMiqOwhPtVWT,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,RILOU7YmBhvwJGDGjNmP,VOICE_ID,RILOU7YmBhvwJGDGjNmP,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,Rachel,VOICE_ID,Rachel,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,River,VOICE_ID,River,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,Roger,VOICE_ID,Roger,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,SOYHLrjzK2X1ezoPC6cr,VOICE_ID,SOYHLrjzK2X1ezoPC6cr,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,Sarah,VOICE_ID,Sarah,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,Sm1seazb4gs7RSlUVw7c,VOICE_ID,Sm1seazb4gs7RSlUVw7c,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,Sq93GQT4X1lKDXsQcixO,VOICE_ID,Sq93GQT4X1lKDXsQcixO,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,TC0Zp7WVFzhA8zpTlRqV,VOICE_ID,TC0Zp7WVFzhA8zpTlRqV,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,TX3LPaxmHKxFdv7VOQHJ,VOICE_ID,TX3LPaxmHKxFdv7VOQHJ,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,TmNe0cCqkZBMwPWOd3RD,VOICE_ID,TmNe0cCqkZBMwPWOd3RD,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,Tsns2HvNFKfGiNjllgqo,VOICE_ID,Tsns2HvNFKfGiNjllgqo,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,U1Vk2oyatMdYs096Ety7,VOICE_ID,U1Vk2oyatMdYs096Ety7,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,UFO0Yv86wqRxAt1DmXUu,VOICE_ID,UFO0Yv86wqRxAt1DmXUu,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,UgBBYS2sOqTuMpoF3BR0,VOICE_ID,UgBBYS2sOqTuMpoF3BR0,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,Will,VOICE_ID,Will,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,XB0fDUnXU5powFXDhCwa,VOICE_ID,XB0fDUnXU5powFXDhCwa,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,YOq2y2Up4RgXP2HyXjE5,VOICE_ID,YOq2y2Up4RgXP2HyXjE5,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,YXpFCvM1S3JbWEJhoskW,VOICE_ID,YXpFCvM1S3JbWEJhoskW,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,Z3R5wn05IrDiVCyEkUrK,VOICE_ID,Z3R5wn05IrDiVCyEkUrK,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,ZF6FPAbjXT4488VcRRnw,VOICE_ID,ZF6FPAbjXT4488VcRRnw,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,aD6riP1btT197c6dACmy,VOICE_ID,aD6riP1btT197c6dACmy,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,aMSt68OGf4xUZAnLpTU8,VOICE_ID,aMSt68OGf4xUZAnLpTU8,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,bwCXcoVxWNYMlC6Esa8u,VOICE_ID,bwCXcoVxWNYMlC6Esa8u,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,c6SfcYrb2t09NHXiT80T,VOICE_ID,c6SfcYrb2t09NHXiT80T,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,cTNP6ZM2mLTKj2BFhxEh,VOICE_ID,cTNP6ZM2mLTKj2BFhxEh,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,cgSgspJ2msm6clMCkdW9,VOICE_ID,cgSgspJ2msm6clMCkdW9,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,dHd5gvgSOzSfduK4CvEg,VOICE_ID,dHd5gvgSOzSfduK4CvEg,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,eR40ATw9ArzDf9h3v7t7,VOICE_ID,eR40ATw9ArzDf9h3v7t7,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,eVItLK1UvXctxuaRV2Oq,VOICE_ID,eVItLK1UvXctxuaRV2Oq,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,esy0r39YPLQjOczyOib8,VOICE_ID,esy0r39YPLQjOczyOib8,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,exsUS4vynmxd379XN4yO,VOICE_ID,exsUS4vynmxd379XN4yO,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,flHkNRp1BlvT73UL6gyz,VOICE_ID,flHkNRp1BlvT73UL6gyz,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,g6xIsTj2HwM6VR4iXFCw,VOICE_ID,g6xIsTj2HwM6VR4iXFCw,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,gU0LNdkMOQCOrPrwtbee,VOICE_ID,gU0LNdkMOQCOrPrwtbee,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,gs0tAILXbY5DNrJrsM6F,VOICE_ID,gs0tAILXbY5DNrJrsM6F,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,hpp4J3VqNfWAUOO0d1Us,VOICE_ID,hpp4J3VqNfWAUOO0d1Us,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,hqfrgApggtO1785R4Fsn,VOICE_ID,hqfrgApggtO1785R4Fsn,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,iCrDUkL56s3C8sCRl7wb,VOICE_ID,iCrDUkL56s3C8sCRl7wb,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,iP95p4xoKVk53GoZ742B,VOICE_ID,iP95p4xoKVk53GoZ742B,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,kPzsL2i3teMYv0FxEYQ6,VOICE_ID,kPzsL2i3teMYv0FxEYQ6,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,kUUTqKQ05NMGulF08DDf,VOICE_ID,kUUTqKQ05NMGulF08DDf,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,lcMyyd2HUfFzxdCaC4Ta,VOICE_ID,lcMyyd2HUfFzxdCaC4Ta,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,ljo9gAlSqKOvF6D8sOsX,VOICE_ID,ljo9gAlSqKOvF6D8sOsX,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,mtrellq69YZsNwzUSyXh,VOICE_ID,mtrellq69YZsNwzUSyXh,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,nPczCjzI2devNBz1zQrb,VOICE_ID,nPczCjzI2devNBz1zQrb,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,nzeAacJi50IvxcyDnMXa,VOICE_ID,nzeAacJi50IvxcyDnMXa,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,oR4uRy4fHDUGGISL0Rev,VOICE_ID,oR4uRy4fHDUGGISL0Rev,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,ouL9IsyrSnUkCmfnD02u,VOICE_ID,ouL9IsyrSnUkCmfnD02u,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,pNInz6obpgDQGcFmaJgB,VOICE_ID,pNInz6obpgDQGcFmaJgB,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,pPdl9cQBQq4p6mRkZy2Z,VOICE_ID,pPdl9cQBQq4p6mRkZy2Z,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,piI8Kku0DcvcL6TTSeQt,VOICE_ID,piI8Kku0DcvcL6TTSeQt,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,qDuRKMlYmrm8trt5QyBn,VOICE_ID,qDuRKMlYmrm8trt5QyBn,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,qNkzaJoHLLdpvgh5tISm,VOICE_ID,qNkzaJoHLLdpvgh5tISm,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,qXpMhyvQqiRxWQs4qSSB,VOICE_ID,qXpMhyvQqiRxWQs4qSSB,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,ruirxsoakN0GWmGNIo04,VOICE_ID,ruirxsoakN0GWmGNIo04,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,sH0WdfE5fsKuM2otdQZr,VOICE_ID,sH0WdfE5fsKuM2otdQZr,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,scOwDtmlUjD3prqpp97I,VOICE_ID,scOwDtmlUjD3prqpp97I,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,st7NwhTPEzqo2riw7qWC,VOICE_ID,st7NwhTPEzqo2riw7qWC,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,tnSpp4vdxKPjI9w0GnoV,VOICE_ID,tnSpp4vdxKPjI9w0GnoV,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,uYXf8XasLslADfZ2MB4u,VOICE_ID,uYXf8XasLslADfZ2MB4u,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,vBKc2FfBKJfcZNyEt1n6,VOICE_ID,vBKc2FfBKJfcZNyEt1n6,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,vfaqCOvlrKi4Zp7C2IAm,VOICE_ID,vfaqCOvlrKi4Zp7C2IAm,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,wJqPPQ618aTW29mptyoc,VOICE_ID,wJqPPQ618aTW29mptyoc,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,wo6udizrrtpIxWGp2qJk,VOICE_ID,wo6udizrrtpIxWGp2qJk,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,x70vRnQBMBu4FAYhjJbO,VOICE_ID,x70vRnQBMBu4FAYhjJbO,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,yjJ45q8TVCrtMhEKurxY,VOICE_ID,yjJ45q8TVCrtMhEKurxY,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,zA6D7RyKdc2EClouEMkP,VOICE_ID,zA6D7RyKdc2EClouEMkP,HIGH,native
+kie,elevenlabs/text-to-speech-multilingual-v2,https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md,elevenlabs/text-to-speech-multilingual-v2,paths.post.input.voice,zYcjlYFOd3taleS0gkk3,VOICE_ID,zYcjlYFOd3taleS0gkk3,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,0SpgpJ4D3MpHCiWdyTg3,VOICE_ID,0SpgpJ4D3MpHCiWdyTg3,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,1KFdM0QCwQn4rmn5nn9C,VOICE_ID,1KFdM0QCwQn4rmn5nn9C,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,1SM7GgM6IMuvQlz2BwM3,VOICE_ID,1SM7GgM6IMuvQlz2BwM3,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,1U02n4nD6AdIZ9CjF053,VOICE_ID,1U02n4nD6AdIZ9CjF053,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,1cxc5c3E9K6F1wlqOJGV,VOICE_ID,1cxc5c3E9K6F1wlqOJGV,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,1hlpeD1ydbI2ow0Tt3EW,VOICE_ID,1hlpeD1ydbI2ow0Tt3EW,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,1wGbFxmAM3Fgw63G1zZJ,VOICE_ID,1wGbFxmAM3Fgw63G1zZJ,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,2zRM7PkgwBPiau2jvVXc,VOICE_ID,2zRM7PkgwBPiau2jvVXc,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,4YYIPFl9wE5c4L2eu2Gb,VOICE_ID,4YYIPFl9wE5c4L2eu2Gb,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,56AoDkrOh6qfVPDXZ7Pt,VOICE_ID,56AoDkrOh6qfVPDXZ7Pt,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,5l5f8iK3YPeGga21rQIX,VOICE_ID,5l5f8iK3YPeGga21rQIX,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,6F5Zhi321D3Oq7v1oNT4,VOICE_ID,6F5Zhi321D3Oq7v1oNT4,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,6aDn1KB0hjpdcocrUkmq,VOICE_ID,6aDn1KB0hjpdcocrUkmq,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,8JVbfL6oEdmuxKn5DK2C,VOICE_ID,8JVbfL6oEdmuxKn5DK2C,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,9PVP7ENhDskL0KYHAKtD,VOICE_ID,9PVP7ENhDskL0KYHAKtD,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,9yzdeviXkFddZ4Oz8Mok,VOICE_ID,9yzdeviXkFddZ4Oz8Mok,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,AeRdCCKzvd23BpJoofzx,VOICE_ID,AeRdCCKzvd23BpJoofzx,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,Alice,VOICE_ID,Alice,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,Aria,VOICE_ID,Aria,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,Atp5cNFg1Wj5gyKD7HWV,VOICE_ID,Atp5cNFg1Wj5gyKD7HWV,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,B8gJV1IhpuegLxdpXFOE,VOICE_ID,B8gJV1IhpuegLxdpXFOE,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,BIvP0GN1cAtSRTxNHnWS,VOICE_ID,BIvP0GN1cAtSRTxNHnWS,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,BZgkqPqms7Kj9ulSkVzn,VOICE_ID,BZgkqPqms7Kj9ulSkVzn,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,Bill,VOICE_ID,Bill,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,Bj9UqZbhQsanLzgalpEG,VOICE_ID,Bj9UqZbhQsanLzgalpEG,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,BpjGufoPiobT79j2vtj4,VOICE_ID,BpjGufoPiobT79j2vtj4,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,Brian,VOICE_ID,Brian,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,Callum,VOICE_ID,Callum,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,CeNX9CMwmxDxUF5Q2Inm,VOICE_ID,CeNX9CMwmxDxUF5Q2Inm,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,Charlie,VOICE_ID,Charlie,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,Charlotte,VOICE_ID,Charlotte,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,Chris,VOICE_ID,Chris,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,D2jw4N9m4xePLTQ3IHjU,VOICE_ID,D2jw4N9m4xePLTQ3IHjU,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,DGTOOUoGpoP6UZ9uSWfA,VOICE_ID,DGTOOUoGpoP6UZ9uSWfA,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,DGzg6RaUqxGRTHSBjfgF,VOICE_ID,DGzg6RaUqxGRTHSBjfgF,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,DTKMou8ccj1ZaWGBiotd,VOICE_ID,DTKMou8ccj1ZaWGBiotd,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,DYkrAHD8iwork3YSUBbs,VOICE_ID,DYkrAHD8iwork3YSUBbs,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,Daniel,VOICE_ID,Daniel,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,EiNlNiXeDU1pqqOPrYMO,VOICE_ID,EiNlNiXeDU1pqqOPrYMO,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,EkK5I93UQWFDigLMpZcX,VOICE_ID,EkK5I93UQWFDigLMpZcX,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,Eric,VOICE_ID,Eric,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,FF7KdobWPaiR0vkcALHF,VOICE_ID,FF7KdobWPaiR0vkcALHF,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,FGY2WhTYpPnrIDTdsKH5,VOICE_ID,FGY2WhTYpPnrIDTdsKH5,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,FUfBrNit0NNZAwb58KWH,VOICE_ID,FUfBrNit0NNZAwb58KWH,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,George,VOICE_ID,George,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,HgyIHe81F3nXywNwkraY,VOICE_ID,HgyIHe81F3nXywNwkraY,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,IjnA9kwZJHJ20Fp7Vmy6,VOICE_ID,IjnA9kwZJHJ20Fp7Vmy6,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,Jessica,VOICE_ID,Jessica,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,KTPVrSVAEUSJRClDzBw7,VOICE_ID,KTPVrSVAEUSJRClDzBw7,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,KoQQbl9zjAdLgKZjm8Ol,VOICE_ID,KoQQbl9zjAdLgKZjm8Ol,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,L0Dsvb3SLTyegXwtm47J,VOICE_ID,L0Dsvb3SLTyegXwtm47J,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,LG95yZDEHg6fCZdQjLqj,VOICE_ID,LG95yZDEHg6fCZdQjLqj,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,Laura,VOICE_ID,Laura,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,Liam,VOICE_ID,Liam,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,Lily,VOICE_ID,Lily,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,LruHrtVF6PSyGItzMNHS,VOICE_ID,LruHrtVF6PSyGItzMNHS,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,MJ0RnG71ty4LH3dvNfSd,VOICE_ID,MJ0RnG71ty4LH3dvNfSd,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,Matilda,VOICE_ID,Matilda,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,MnUw1cSnpiLoLhpd3Hqp,VOICE_ID,MnUw1cSnpiLoLhpd3Hqp,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,N2lVS1w4EtoT3dr4eOWO,VOICE_ID,N2lVS1w4EtoT3dr4eOWO,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,NNl6r8mD7vthiJatiJt1,VOICE_ID,NNl6r8mD7vthiJatiJt1,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,NOpBlnGInO9m6vDvFkFC,VOICE_ID,NOpBlnGInO9m6vDvFkFC,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,OYWwCdDHouzDwiZJWOOu,VOICE_ID,OYWwCdDHouzDwiZJWOOu,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,P1bg08DkjqiVEzOn76yG,VOICE_ID,P1bg08DkjqiVEzOn76yG,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,PPzYpIqttlTYA83688JI,VOICE_ID,PPzYpIqttlTYA83688JI,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,Qggl4b0xRMiqOwhPtVWT,VOICE_ID,Qggl4b0xRMiqOwhPtVWT,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,RILOU7YmBhvwJGDGjNmP,VOICE_ID,RILOU7YmBhvwJGDGjNmP,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,Rachel,VOICE_ID,Rachel,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,River,VOICE_ID,River,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,Roger,VOICE_ID,Roger,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,SOYHLrjzK2X1ezoPC6cr,VOICE_ID,SOYHLrjzK2X1ezoPC6cr,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,Sarah,VOICE_ID,Sarah,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,Sq93GQT4X1lKDXsQcixO,VOICE_ID,Sq93GQT4X1lKDXsQcixO,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,TC0Zp7WVFzhA8zpTlRqV,VOICE_ID,TC0Zp7WVFzhA8zpTlRqV,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,TX3LPaxmHKxFdv7VOQHJ,VOICE_ID,TX3LPaxmHKxFdv7VOQHJ,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,TmNe0cCqkZBMwPWOd3RD,VOICE_ID,TmNe0cCqkZBMwPWOd3RD,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,Tsns2HvNFKfGiNjllgqo,VOICE_ID,Tsns2HvNFKfGiNjllgqo,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,U1Vk2oyatMdYs096Ety7,VOICE_ID,U1Vk2oyatMdYs096Ety7,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,UFO0Yv86wqRxAt1DmXUu,VOICE_ID,UFO0Yv86wqRxAt1DmXUu,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,UgBBYS2sOqTuMpoF3BR0,VOICE_ID,UgBBYS2sOqTuMpoF3BR0,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,Will,VOICE_ID,Will,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,XB0fDUnXU5powFXDhCwa,VOICE_ID,XB0fDUnXU5powFXDhCwa,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,YOq2y2Up4RgXP2HyXjE5,VOICE_ID,YOq2y2Up4RgXP2HyXjE5,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,YXpFCvM1S3JbWEJhoskW,VOICE_ID,YXpFCvM1S3JbWEJhoskW,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,Z3R5wn05IrDiVCyEkUrK,VOICE_ID,Z3R5wn05IrDiVCyEkUrK,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,ZF6FPAbjXT4488VcRRnw,VOICE_ID,ZF6FPAbjXT4488VcRRnw,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,aD6riP1btT197c6dACmy,VOICE_ID,aD6riP1btT197c6dACmy,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,aMSt68OGf4xUZAnLpTU8,VOICE_ID,aMSt68OGf4xUZAnLpTU8,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,bwCXcoVxWNYMlC6Esa8u,VOICE_ID,bwCXcoVxWNYMlC6Esa8u,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,c6SfcYrb2t09NHXiT80T,VOICE_ID,c6SfcYrb2t09NHXiT80T,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,cTNP6ZM2mLTKj2BFhxEh,VOICE_ID,cTNP6ZM2mLTKj2BFhxEh,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,cgSgspJ2msm6clMCkdW9,VOICE_ID,cgSgspJ2msm6clMCkdW9,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,dHd5gvgSOzSfduK4CvEg,VOICE_ID,dHd5gvgSOzSfduK4CvEg,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,eR40ATw9ArzDf9h3v7t7,VOICE_ID,eR40ATw9ArzDf9h3v7t7,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,eVItLK1UvXctxuaRV2Oq,VOICE_ID,eVItLK1UvXctxuaRV2Oq,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,esy0r39YPLQjOczyOib8,VOICE_ID,esy0r39YPLQjOczyOib8,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,exsUS4vynmxd379XN4yO,VOICE_ID,exsUS4vynmxd379XN4yO,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,flHkNRp1BlvT73UL6gyz,VOICE_ID,flHkNRp1BlvT73UL6gyz,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,g6xIsTj2HwM6VR4iXFCw,VOICE_ID,g6xIsTj2HwM6VR4iXFCw,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,gU0LNdkMOQCOrPrwtbee,VOICE_ID,gU0LNdkMOQCOrPrwtbee,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,gs0tAILXbY5DNrJrsM6F,VOICE_ID,gs0tAILXbY5DNrJrsM6F,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,hpp4J3VqNfWAUOO0d1Us,VOICE_ID,hpp4J3VqNfWAUOO0d1Us,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,hqfrgApggtO1785R4Fsn,VOICE_ID,hqfrgApggtO1785R4Fsn,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,iCrDUkL56s3C8sCRl7wb,VOICE_ID,iCrDUkL56s3C8sCRl7wb,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,iP95p4xoKVk53GoZ742B,VOICE_ID,iP95p4xoKVk53GoZ742B,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,kPzsL2i3teMYv0FxEYQ6,VOICE_ID,kPzsL2i3teMYv0FxEYQ6,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,kUUTqKQ05NMGulF08DDf,VOICE_ID,kUUTqKQ05NMGulF08DDf,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,lcMyyd2HUfFzxdCaC4Ta,VOICE_ID,lcMyyd2HUfFzxdCaC4Ta,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,ljo9gAlSqKOvF6D8sOsX,VOICE_ID,ljo9gAlSqKOvF6D8sOsX,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,mtrellq69YZsNwzUSyXh,VOICE_ID,mtrellq69YZsNwzUSyXh,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,nPczCjzI2devNBz1zQrb,VOICE_ID,nPczCjzI2devNBz1zQrb,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,nzeAacJi50IvxcyDnMXa,VOICE_ID,nzeAacJi50IvxcyDnMXa,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,oR4uRy4fHDUGGISL0Rev,VOICE_ID,oR4uRy4fHDUGGISL0Rev,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,ouL9IsyrSnUkCmfnD02u,VOICE_ID,ouL9IsyrSnUkCmfnD02u,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,pNInz6obpgDQGcFmaJgB,VOICE_ID,pNInz6obpgDQGcFmaJgB,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,pPdl9cQBQq4p6mRkZy2Z,VOICE_ID,pPdl9cQBQq4p6mRkZy2Z,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,piI8Kku0DcvcL6TTSeQt,VOICE_ID,piI8Kku0DcvcL6TTSeQt,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,qDuRKMlYmrm8trt5QyBn,VOICE_ID,qDuRKMlYmrm8trt5QyBn,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,qNkzaJoHLLdpvgh5tISm,VOICE_ID,qNkzaJoHLLdpvgh5tISm,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,qXpMhyvQqiRxWQs4qSSB,VOICE_ID,qXpMhyvQqiRxWQs4qSSB,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,ruirxsoakN0GWmGNIo04,VOICE_ID,ruirxsoakN0GWmGNIo04,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,sH0WdfE5fsKuM2otdQZr,VOICE_ID,sH0WdfE5fsKuM2otdQZr,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,scOwDtmlUjD3prqpp97I,VOICE_ID,scOwDtmlUjD3prqpp97I,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,st7NwhTPEzqo2riw7qWC,VOICE_ID,st7NwhTPEzqo2riw7qWC,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,tnSpp4vdxKPjI9w0GnoV,VOICE_ID,tnSpp4vdxKPjI9w0GnoV,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,uYXf8XasLslADfZ2MB4u,VOICE_ID,uYXf8XasLslADfZ2MB4u,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,vBKc2FfBKJfcZNyEt1n6,VOICE_ID,vBKc2FfBKJfcZNyEt1n6,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,vfaqCOvlrKi4Zp7C2IAm,VOICE_ID,vfaqCOvlrKi4Zp7C2IAm,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,wJqPPQ618aTW29mptyoc,VOICE_ID,wJqPPQ618aTW29mptyoc,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,wo6udizrrtpIxWGp2qJk,VOICE_ID,wo6udizrrtpIxWGp2qJk,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,x70vRnQBMBu4FAYhjJbO,VOICE_ID,x70vRnQBMBu4FAYhjJbO,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,yjJ45q8TVCrtMhEKurxY,VOICE_ID,yjJ45q8TVCrtMhEKurxY,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,zA6D7RyKdc2EClouEMkP,VOICE_ID,zA6D7RyKdc2EClouEMkP,HIGH,native
+kie,elevenlabs/text-to-speech-turbo-2-5,https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md,elevenlabs/text-to-speech-turbo-2-5,paths.post.input.voice,zYcjlYFOd3taleS0gkk3,VOICE_ID,zYcjlYFOd3taleS0gkk3,HIGH,native

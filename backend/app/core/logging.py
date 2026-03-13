@@ -3,6 +3,8 @@ import logging
 import time
 import re
 import json
+from pathlib import Path
+from logging.handlers import RotatingFileHandler
 from typing import Optional
 from fastapi import Request
 from starlette.types import ASGIApp, Scope, Receive, Send
@@ -43,6 +45,43 @@ logger.setLevel(logging.INFO)
 handler = logging.StreamHandler()
 handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
 logger.addHandler(handler)
+
+
+def _ensure_runtime_info_file_logging() -> None:
+    try:
+        base_dir = Path(str(settings.BASE_DIR or ".")).resolve()
+        log_dir = base_dir / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = (log_dir / "app_info.log").resolve()
+
+        root_logger = logging.getLogger()
+        if int(root_logger.level or 0) > logging.INFO:
+            root_logger.setLevel(logging.INFO)
+        existing = [
+            h for h in root_logger.handlers
+            if isinstance(h, RotatingFileHandler)
+            and str(getattr(h, "baseFilename", "")).replace("\\", "/").endswith("/app_info.log")
+        ]
+        if existing:
+            return
+
+        file_handler = RotatingFileHandler(
+            filename=str(log_file),
+            maxBytes=10 * 1024 * 1024,
+            backupCount=5,
+            encoding="utf-8",
+        )
+        file_handler.setLevel(logging.INFO)
+        file_handler.setFormatter(
+            logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+        )
+        root_logger.addHandler(file_handler)
+    except Exception:
+        # Never break request handling if log file setup fails.
+        pass
+
+
+_ensure_runtime_info_file_logging()
 
 # Map Regex Patterns to Functional Names (Comprehensive)
 FUNCTION_MAP = [
@@ -112,6 +151,7 @@ def _is_polling_log_suppressed(method: str, path: str) -> bool:
     key = f"{method} {path}"
     suppressed_patterns = [
         r"^GET /api/v1/tasks/[^/]+$",
+        r"^GET /api/v1/projects/\d+/episodes$",
         r"^GET /api/v1/episodes/\d+/shots$",
         r"^GET /api/v1/projects/\d+/script_generator/episodes/scripts/status$",
         r"^GET /api/v1/episodes/\d+/scenes/ai_shots/batch/status$",

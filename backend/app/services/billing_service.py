@@ -13,6 +13,7 @@ import re
 import json
 from typing import Any, Dict, List, Optional
 from app.services.system_default_api_service import list_task_default_system_settings
+from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
@@ -43,9 +44,17 @@ class BillingService:
         "width", "height", "pixels", "image_count", "duration_seconds", "fps", "success_output_count",
         "billing_quantity",
     }
+    _AUDIT_USAGE_DROP_ZERO_KEYS = {
+        "input_tokens", "output_tokens", "total_tokens", "cache_hit_tokens", "cache_miss_tokens",
+        "success_output_count", "billing_quantity", "duration_seconds", "fps",
+    }
+    _AUDIT_BREAKDOWN_DROP_ZERO_KEYS = {
+        "feature_cost", "api_cost", "fallback_api_cost", "total_cost",
+    }
     MINIMUM_CHARGE_BY_TASK = {
         "llm_chat": 1,
     }
+    KIE_STANDARD_PROVIDER = "kie"
 
     @staticmethod
     def _task_type_for_category(category: str) -> str:
@@ -54,6 +63,10 @@ class BillingService:
             return "image_gen"
         if normalized == "video":
             return "video_gen"
+        if normalized == "voice":
+            return "voice_gen"
+        if normalized == "music":
+            return "music_gen"
         if normalized == "vision":
             return "analysis"
         if normalized == "llm":
@@ -513,6 +526,10 @@ class BillingService:
             return "Image"
         if normalized == "video_gen":
             return "Video"
+        if normalized == "voice_gen":
+            return "Voice"
+        if normalized == "music_gen":
+            return "Music"
         if normalized == "analysis_character":
             return "Vision"
         if normalized == "analysis":
@@ -991,6 +1008,233 @@ class BillingService:
         return str(value or "").strip().lower()
 
     @staticmethod
+    def _normalize_bool_value(value: Any) -> Optional[bool]:
+        if isinstance(value, bool):
+            return value
+        raw = str(value or "").strip().lower()
+        if not raw:
+            return None
+        if raw in {"1", "true", "yes", "y", "on", "supported"}:
+            return True
+        if raw in {"0", "false", "no", "n", "off", "unsupported"}:
+            return False
+        return None
+
+    @staticmethod
+    def _normalize_kie_standard_value(dimension: str, raw_value: Any) -> Optional[str]:
+        dim = str(dimension or "").strip().upper()
+        value = "" if raw_value is None else str(raw_value).strip()
+        if not dim or not value:
+            return None
+
+        lower = value.lower()
+        if dim == "ASPECT_RATIO":
+            if lower == "portrait":
+                return "9:16"
+            if lower == "landscape":
+                return "16:9"
+            if lower == "auto":
+                return "AUTO"
+            return value
+
+        if dim == "RESOLUTION_TIER":
+            mapping = {
+                "1k": "K1",
+                "2k": "K2",
+                "4k": "K4",
+                "480p": "P480",
+                "512p": "P512",
+                "580p": "P580",
+                "720p": "P720",
+                "768p": "P768",
+                "1080p": "P1080",
+            }
+            return mapping.get(lower.replace(" ", ""), value.upper())
+
+        if dim == "DURATION_SECONDS":
+            try:
+                num = float(value)
+                if abs(num - int(num)) < 1e-9:
+                    return str(int(num))
+                return str(num)
+            except Exception:
+                return value
+
+        if dim == "MODE":
+            mode_map = {
+                "std": "STANDARD",
+                "standard": "STANDARD",
+                "pro": "PRO",
+                "fast": "FAST",
+                "turbo": "TURBO",
+                "master": "MASTER",
+                "fun": "FUN",
+                "normal": "NORMAL",
+                "spicy": "SPICY",
+            }
+            return mode_map.get(lower, value.upper())
+
+        if dim == "QUALITY_LEVEL":
+            quality_map = {
+                "basic": "BASIC",
+                "medium": "MEDIUM",
+                "high": "HIGH",
+                "std": "STANDARD",
+                "standard": "STANDARD",
+            }
+            return quality_map.get(lower, value.upper())
+
+        if dim in {"OUTPUT_FORMAT", "STYLE", "REASONING_EFFORT", "CHARACTER_ORIENTATION", "IMAGE_SIZE_CLASS"}:
+            return value.upper()
+
+        if dim in {"SOUND_SUPPORTED", "MULTI_SHOTS_SUPPORTED"}:
+            b = BillingService._normalize_bool_value(value)
+            if b is None:
+                return None
+            return "TRUE" if b else "FALSE"
+
+        return value
+
+    @staticmethod
+    def _get_kie_standard_forward_mapping(
+        db: Session,
+        model_key: str,
+        standard_dimension: str,
+        source_field: str,
+        source_enum_value: Any,
+    ) -> Optional[Dict[str, Any]]:
+        model = str(model_key or "").strip()
+        dim = str(standard_dimension or "").strip().upper()
+        field = str(source_field or "").strip()
+        value = "" if source_enum_value is None else str(source_enum_value).strip()
+        if not dim or not field or not value:
+            return None
+
+        row = db.execute(
+            text(
+                """
+                SELECT standard_value, standard_dimension, source_field, source_enum_value, confidence
+                FROM kie_system_data_standard_mappings
+                WHERE provider = 'kie'
+                  AND is_active = 1
+                  AND standard_dimension = :dim
+                  AND lower(coalesce(source_field, '')) = lower(:field)
+                  AND lower(trim(coalesce(source_enum_value, ''))) = lower(trim(:val))
+                  AND (
+                    lower(coalesce(model_key_inferred, '')) = lower(:model)
+                    OR coalesce(model_key_inferred, '') = ''
+                  )
+                ORDER BY CASE
+                    WHEN lower(coalesce(model_key_inferred, '')) = lower(:model) THEN 0
+                    ELSE 1
+                  END,
+                  CASE upper(coalesce(confidence, ''))
+                    WHEN 'HIGH' THEN 0
+                    WHEN 'MEDIUM' THEN 1
+                    WHEN 'LOW' THEN 2
+                    ELSE 3
+                  END,
+                  id ASC
+                LIMIT 1
+                """
+            ),
+            {
+                "model": model,
+                "dim": dim,
+                "field": field,
+                "val": value,
+            },
+        ).mappings().first()
+        return dict(row) if row else None
+
+    @staticmethod
+    def _resolve_kie_standard_usage(
+        db: Session,
+        model_key: str,
+        usage: Dict[str, Any],
+        details: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        payload = dict(details or {})
+        out_values: Dict[str, str] = {}
+        out_trace: Dict[str, Any] = {}
+
+        preferred: Dict[str, List[str]] = {
+            "ASPECT_RATIO": ["paths.post.input.aspect_ratio", "paths.post.input.size"],
+            "RESOLUTION_TIER": ["paths.post.input.resolution", "paths.post.input.image_resolution"],
+            "DURATION_SECONDS": ["paths.post.input.duration", "paths.post.input.n_frames"],
+            "MODE": ["paths.post.input.mode"],
+            "QUALITY_LEVEL": ["paths.post.input.quality"],
+            "OUTPUT_FORMAT": ["paths.post.input.output_format"],
+            "IMAGE_SIZE_CLASS": ["paths.post.input.image_size"],
+            "SOUND_SUPPORTED": ["sound"],
+            "MULTI_SHOTS_SUPPORTED": ["multi_shots"],
+        }
+
+        raw_candidates: Dict[str, List[Any]] = {
+            "ASPECT_RATIO": [payload.get("aspect_ratio"), payload.get("size")],
+            "RESOLUTION_TIER": [payload.get("resolution"), payload.get("image_resolution")],
+            "DURATION_SECONDS": [payload.get("duration_seconds"), payload.get("duration"), usage.get("duration_seconds")],
+            "MODE": [payload.get("mode")],
+            "QUALITY_LEVEL": [payload.get("quality")],
+            "OUTPUT_FORMAT": [payload.get("output_format"), payload.get("outputFormat"), usage.get("output_format")],
+            "IMAGE_SIZE_CLASS": [payload.get("image_size")],
+            "SOUND_SUPPORTED": [payload.get("sound"), payload.get("has_audio"), usage.get("has_audio")],
+            "MULTI_SHOTS_SUPPORTED": [payload.get("multi_shots")],
+        }
+
+        for dim, candidates in raw_candidates.items():
+            picked = None
+            source_field = None
+            source_value = None
+
+            for raw in candidates:
+                raw_text = "" if raw is None else str(raw).strip()
+                if not raw_text:
+                    continue
+                for field in preferred.get(dim, []):
+                    mapped = BillingService._get_kie_standard_forward_mapping(
+                        db=db,
+                        model_key=model_key,
+                        standard_dimension=dim,
+                        source_field=field,
+                        source_enum_value=raw_text,
+                    )
+                    if not mapped:
+                        continue
+                    mapped_val = str(mapped.get("standard_value") or "").strip()
+                    if not mapped_val:
+                        continue
+                    picked = mapped_val
+                    source_field = str(mapped.get("source_field") or field)
+                    source_value = str(mapped.get("source_enum_value") or raw_text)
+                    break
+                if picked:
+                    break
+
+            if not picked:
+                for raw in candidates:
+                    norm_val = BillingService._normalize_kie_standard_value(dim, raw)
+                    if norm_val:
+                        picked = norm_val
+                        source_value = str(raw)
+                        break
+
+            if not picked:
+                continue
+
+            out_values[dim] = picked
+            out_trace[dim] = {
+                "standard_value": picked,
+                "source_field": source_field,
+                "source_value": source_value,
+            }
+
+        return {
+            "standard_values": out_values,
+            "standard_trace": out_trace,
+        }
+
+    @staticmethod
     def _resolve_system_api_row(db: Session, task_type: str, provider: str = None, model: str = None) -> Optional[SystemAPISetting]:
         provider_text = str(provider or "").strip()
         model_text = str(model or "").strip()
@@ -1096,6 +1340,67 @@ class BillingService:
         if key in BillingService._USAGE_POSITIVE_KEYS:
             return BillingService._safe_non_negative_float(value, 0.0) > 0
         return True
+
+    @staticmethod
+    def _compact_audit_payload(value: Any, *, drop_zero_keys: Optional[set] = None) -> Any:
+        zero_keys = set(drop_zero_keys or set())
+
+        def _walk(node: Any, key_name: Optional[str] = None) -> Any:
+            if node is None:
+                return None
+
+            if isinstance(node, bool):
+                return node
+
+            if isinstance(node, (int, float)):
+                if isinstance(node, float) and not math.isfinite(node):
+                    return None
+                if key_name in zero_keys and float(node) == 0.0:
+                    return None
+                return node
+
+            if isinstance(node, str):
+                text = node.strip()
+                return text if text else None
+
+            if isinstance(node, dict):
+                out: Dict[str, Any] = {}
+                for k, v in node.items():
+                    key_text = str(k)
+                    compacted = _walk(v, key_text)
+                    if compacted is None:
+                        continue
+                    if isinstance(compacted, (dict, list)) and len(compacted) == 0:
+                        continue
+                    out[key_text] = compacted
+                return out
+
+            if isinstance(node, (list, tuple, set)):
+                out_list = []
+                for item in node:
+                    compacted = _walk(item, key_name)
+                    if compacted is None:
+                        continue
+                    if isinstance(compacted, (dict, list)) and len(compacted) == 0:
+                        continue
+                    out_list.append(compacted)
+                return out_list
+
+            return node
+
+        compacted_root = _walk(value)
+        if compacted_root is None:
+            return {}
+        return compacted_root
+
+    @staticmethod
+    def _compact_usage_metadata_for_audit(usage: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        payload = dict(usage or {})
+        compacted = BillingService._compact_audit_payload(
+            payload,
+            drop_zero_keys=BillingService._AUDIT_USAGE_DROP_ZERO_KEYS,
+        )
+        return compacted if isinstance(compacted, dict) else {}
 
     @staticmethod
     def _rule_specificity_score(rule: SystemAPIBillingRule) -> int:
@@ -1220,6 +1525,30 @@ class BillingService:
                     continue
                 if not BillingService._usage_key_present(usage, key_text):
                     return False
+
+        usage_standard_values = usage.get("standard_values") if isinstance(usage.get("standard_values"), dict) else {}
+        expected_standard_values: Dict[str, Any] = {}
+        explicit_standard = extra.get("standard_values")
+        if isinstance(explicit_standard, dict):
+            for key, value in explicit_standard.items():
+                dim = str(key or "").strip().upper()
+                if dim:
+                    expected_standard_values[dim] = value
+        for key, value in (extra or {}).items():
+            key_text = str(key or "").strip()
+            if not key_text.lower().startswith("standard."):
+                continue
+            dim = key_text.split(".", 1)[1].strip().upper()
+            if dim:
+                expected_standard_values[dim] = value
+
+        for dim, expected in expected_standard_values.items():
+            expected_norm = BillingService._normalize_kie_standard_value(dim, expected)
+            actual_norm = BillingService._normalize_kie_standard_value(dim, usage_standard_values.get(dim))
+            if not expected_norm:
+                continue
+            if not actual_norm or expected_norm != actual_norm:
+                return False
 
         return True
 
@@ -1361,7 +1690,7 @@ class BillingService:
         if pricing_config is None:
             pricing_config = BillingService._billing_from_rule(rule)
 
-        return {
+        payload = {
             "id": int(getattr(rule, "id", 0) or 0),
             "name": str(getattr(rule, "name", "") or ""),
             "priority": int(getattr(rule, "priority", 0) or 0),
@@ -1386,6 +1715,8 @@ class BillingService:
             "computed_cost": int((pricing_payload or {}).get("cost", 0) or 0),
             "specificity_score": int(specificity or 0),
         }
+        compacted = BillingService._compact_audit_payload(payload)
+        return compacted if isinstance(compacted, dict) else None
 
     @staticmethod
     def estimate_cost_breakdown(
@@ -1444,6 +1775,21 @@ class BillingService:
             provider_text = str(getattr(system_row, "provider", "") or provider_text).strip()
             model_text = str(getattr(system_row, "model", "") or model_text).strip()
 
+        if (
+            system_row
+            and str(getattr(system_row, "provider", "") or "").strip().lower() == BillingService.KIE_STANDARD_PROVIDER
+        ):
+            std_usage = BillingService._resolve_kie_standard_usage(
+                db=db,
+                model_key=model_text,
+                usage=usage,
+                details=payload_details,
+            )
+            if isinstance(std_usage.get("standard_values"), dict) and std_usage.get("standard_values"):
+                usage["standard_values"] = dict(std_usage.get("standard_values") or {})
+            if isinstance(std_usage.get("standard_trace"), dict) and std_usage.get("standard_trace"):
+                usage["standard_trace"] = dict(std_usage.get("standard_trace") or {})
+
         # Billing order: system API billing rules -> system API base rule -> generic default pricing.
         if system_row:
             base_rule = BillingService._get_base_billing_rule(db, int(system_row.id))
@@ -1485,7 +1831,7 @@ class BillingService:
                     pricing=item.get("pricing"),
                     specificity=item.get("specificity"),
                 )
-                for item in matched_rows[:20]
+                for item in matched_rows[:5]
             ]
             matched_rule_details = [item for item in matched_rule_details if item]
             best = matched_info.get("best")
@@ -1560,7 +1906,7 @@ class BillingService:
             },
         }
 
-        return {
+        payload = {
             "task_type": task_type,
             "provider": provider_text,
             "model": model_text,
@@ -1584,7 +1930,7 @@ class BillingService:
             "rule_selection_status": rule_selection_status,
             "rule_selection_reason": rule_selection_reason,
             "audit_summary": audit_summary,
-            "usage_metadata": usage,
+            "usage_metadata": BillingService._compact_usage_metadata_for_audit(usage),
             "minimum_charge": {
                 "enabled": min_charge > 0,
                 "required": int(min_charge),
@@ -1604,6 +1950,55 @@ class BillingService:
                 "model": str(getattr(system_row, "model", "") or "") if system_row else "",
             },
         }
+        compacted = BillingService._compact_audit_payload(payload)
+        return compacted if isinstance(compacted, dict) else {}
+
+    @staticmethod
+    def _build_billing_breakdown_for_audit(breakdown: Dict[str, Any], *, phase: str) -> Dict[str, Any]:
+        minimum_charge = breakdown.get("minimum_charge") if isinstance(breakdown.get("minimum_charge"), dict) else {}
+        minimum_required = int(minimum_charge.get("required") or 0)
+        minimum_delta = int(minimum_charge.get("delta") or 0)
+        minimum_applied = bool(minimum_charge.get("applied"))
+        minimum_enabled = bool(minimum_charge.get("enabled"))
+        minimum_payload: Optional[Dict[str, Any]] = None
+        if minimum_applied or minimum_enabled or minimum_required > 0 or minimum_delta > 0:
+            minimum_payload = {
+                "enabled": minimum_enabled,
+                "required": minimum_required,
+                "applied": minimum_applied,
+                "delta": max(0, minimum_delta),
+            }
+
+        payload = {
+            "feature_cost": int(breakdown.get("feature_cost") or 0),
+            "api_cost": int(breakdown.get("api_cost") or 0),
+            "fallback_api_cost": int(breakdown.get("fallback_api_cost") or 0),
+            "total_cost": int(breakdown.get("total_cost") or 0),
+            "resolved_provider": breakdown.get("resolved_provider"),
+            "resolved_model": breakdown.get("resolved_model"),
+            "api_pricing_source": breakdown.get("api_pricing_source"),
+            "api_pricing_source_detail": breakdown.get("api_pricing_source_detail") or {},
+            "system_api_id": breakdown.get("system_api_id"),
+            "matched_rule_id": breakdown.get("matched_rule_id"),
+            "matched_rule_name": breakdown.get("matched_rule_name"),
+            "matched_rule_ids": breakdown.get("matched_rule_ids") or [],
+            "matched_rule_details": breakdown.get("matched_rule_details") or [],
+            "selected_rule_detail": breakdown.get("selected_rule_detail"),
+            "rule_match_count": int(breakdown.get("rule_match_count") or 0),
+            "rule_selection_status": breakdown.get("rule_selection_status"),
+            "rule_selection_reason": breakdown.get("rule_selection_reason"),
+            "minimum_charge": minimum_payload,
+            "used_reserved_fallback": bool(breakdown.get("used_reserved_fallback")),
+            "settlement_fallback_reason": breakdown.get("settlement_fallback_reason"),
+            "system_api_ref": breakdown.get("system_api_ref") or {},
+            "phase": str(phase or "").strip() or None,
+            "audit_summary": breakdown.get("audit_summary") or {},
+        }
+        compacted = BillingService._compact_audit_payload(
+            payload,
+            drop_zero_keys=BillingService._AUDIT_BREAKDOWN_DROP_ZERO_KEYS,
+        )
+        return compacted if isinstance(compacted, dict) else {}
 
     @staticmethod
     def _build_billing_trace(breakdown: Dict[str, Any], *, task_type: str, provider: Optional[str], model: Optional[str], phase: str) -> Dict[str, Any]:
@@ -1619,7 +2014,7 @@ class BillingService:
             or model
             or ""
         ).strip() or None
-        return {
+        payload = {
             "task_type": str(task_type or "").strip(),
             "provider": resolved_provider,
             "model": resolved_model,
@@ -1634,12 +2029,10 @@ class BillingService:
             "rule_match_count": int(breakdown.get("rule_match_count") or 0),
             "rule_selection_status": breakdown.get("rule_selection_status"),
             "rule_selection_reason": breakdown.get("rule_selection_reason"),
-            "selected_rule_detail": breakdown.get("selected_rule_detail"),
-            "matched_rule_details": breakdown.get("matched_rule_details") or [],
-            "usage_metadata": breakdown.get("usage_metadata") or {},
-            "minimum_charge": breakdown.get("minimum_charge") or {},
             "audit_summary": breakdown.get("audit_summary") or {},
         }
+        compacted = BillingService._compact_audit_payload(payload)
+        return compacted if isinstance(compacted, dict) else {}
 
     @staticmethod
     def _log_transaction_action(
@@ -1867,29 +2260,8 @@ class BillingService:
         reserve_details.update({
             "resolved_provider": reserve_breakdown.get("resolved_provider"),
             "resolved_model": reserve_breakdown.get("resolved_model"),
-            "billing_breakdown": {
-                "feature_cost": int(reserve_breakdown.get("feature_cost") or 0),
-                "api_cost": int(reserve_breakdown.get("api_cost") or 0),
-                "total_cost": int(reserve_breakdown.get("total_cost") or 0),
-                "resolved_provider": reserve_breakdown.get("resolved_provider"),
-                "resolved_model": reserve_breakdown.get("resolved_model"),
-                "api_pricing_source": reserve_breakdown.get("api_pricing_source"),
-                "api_pricing_source_detail": reserve_breakdown.get("api_pricing_source_detail") or {},
-                "system_api_id": reserve_breakdown.get("system_api_id"),
-                "matched_rule_id": reserve_breakdown.get("matched_rule_id"),
-                "matched_rule_name": reserve_breakdown.get("matched_rule_name"),
-                "matched_rule_ids": reserve_breakdown.get("matched_rule_ids") or [],
-                "matched_rule_details": reserve_breakdown.get("matched_rule_details") or [],
-                "selected_rule_detail": reserve_breakdown.get("selected_rule_detail"),
-                "rule_match_count": int(reserve_breakdown.get("rule_match_count") or 0),
-                "rule_selection_status": reserve_breakdown.get("rule_selection_status"),
-                "rule_selection_reason": reserve_breakdown.get("rule_selection_reason"),
-                "minimum_charge": reserve_breakdown.get("minimum_charge") or {},
-                "phase": "reserve",
-                "system_api_ref": reserve_breakdown.get("system_api_ref") or {},
-                "audit_summary": reserve_breakdown.get("audit_summary") or {},
-            },
-            "usage_metadata": reserve_breakdown.get("usage_metadata") or {},
+            "billing_breakdown": BillingService._build_billing_breakdown_for_audit(reserve_breakdown, phase="reserve"),
+            "usage_metadata": BillingService._compact_usage_metadata_for_audit(reserve_breakdown.get("usage_metadata") or {}),
             "billing_trace": BillingService._build_billing_trace(
                 reserve_breakdown,
                 task_type=task_type,
@@ -2183,31 +2555,8 @@ class BillingService:
             "actual_input_tokens": int(details.get("input_tokens", 0) or 0),
             "actual_output_tokens": int(details.get("output_tokens", 0) or 0),
             "actual_total_tokens": int(details.get("total_tokens", 0) or 0),
-            "billing_breakdown": {
-                "feature_cost": int(breakdown.get("feature_cost") or 0),
-                "api_cost": int(breakdown.get("api_cost") or 0),
-                "fallback_api_cost": int(breakdown.get("fallback_api_cost") or 0),
-                "resolved_provider": breakdown.get("resolved_provider"),
-                "resolved_model": breakdown.get("resolved_model"),
-                "api_pricing_source": breakdown.get("api_pricing_source"),
-                "api_pricing_source_detail": breakdown.get("api_pricing_source_detail") or {},
-                "system_api_id": breakdown.get("system_api_id"),
-                "matched_rule_id": breakdown.get("matched_rule_id"),
-                "matched_rule_name": breakdown.get("matched_rule_name"),
-                "matched_rule_ids": breakdown.get("matched_rule_ids") or [],
-                "matched_rule_details": breakdown.get("matched_rule_details") or [],
-                "selected_rule_detail": breakdown.get("selected_rule_detail"),
-                "rule_match_count": int(breakdown.get("rule_match_count") or 0),
-                "rule_selection_status": breakdown.get("rule_selection_status"),
-                "rule_selection_reason": breakdown.get("rule_selection_reason"),
-                "minimum_charge": breakdown.get("minimum_charge") or {},
-                "used_reserved_fallback": bool(breakdown.get("used_reserved_fallback")),
-                "settlement_fallback_reason": breakdown.get("settlement_fallback_reason"),
-                "system_api_ref": breakdown.get("system_api_ref") or {},
-                "phase": "settle",
-                "audit_summary": breakdown.get("audit_summary") or {},
-            },
-            "usage_metadata": breakdown.get("usage_metadata") or {},
+            "billing_breakdown": BillingService._build_billing_breakdown_for_audit(breakdown, phase="settle"),
+            "usage_metadata": BillingService._compact_usage_metadata_for_audit(breakdown.get("usage_metadata") or {}),
             "billing_trace": BillingService._build_billing_trace(
                 breakdown,
                 task_type=reservation_tx.task_type,
@@ -2370,30 +2719,13 @@ class BillingService:
         
         # Log Transaction
         tx_details = dict(details or {})
-        tx_details["billing_breakdown"] = {
-            "feature_cost": int(breakdown.get("feature_cost") or 0),
-            "api_cost": int(breakdown.get("api_cost") or 0),
-            "fallback_api_cost": int(breakdown.get("fallback_api_cost") or 0),
-            "total_cost": int(breakdown.get("total_cost") or 0),
-            "resolved_provider": breakdown.get("resolved_provider"),
-            "resolved_model": breakdown.get("resolved_model"),
-            "api_pricing_source": breakdown.get("api_pricing_source"),
-            "api_pricing_source_detail": breakdown.get("api_pricing_source_detail") or {},
-            "system_api_id": breakdown.get("system_api_id"),
-            "matched_rule_id": breakdown.get("matched_rule_id"),
-            "matched_rule_name": breakdown.get("matched_rule_name"),
-            "matched_rule_ids": breakdown.get("matched_rule_ids") or [],
-            "matched_rule_details": breakdown.get("matched_rule_details") or [],
-            "selected_rule_detail": breakdown.get("selected_rule_detail"),
-            "rule_match_count": int(breakdown.get("rule_match_count") or 0),
-            "rule_selection_status": breakdown.get("rule_selection_status"),
-            "rule_selection_reason": breakdown.get("rule_selection_reason"),
-            "minimum_charge": breakdown.get("minimum_charge") or {},
-            "phase": "direct_deduct",
-            "system_api_ref": breakdown.get("system_api_ref") or {},
-            "audit_summary": breakdown.get("audit_summary") or {},
-        }
-        tx_details["usage_metadata"] = breakdown.get("usage_metadata") or {}
+        tx_details["billing_breakdown"] = BillingService._build_billing_breakdown_for_audit(
+            breakdown,
+            phase="direct_deduct",
+        )
+        tx_details["usage_metadata"] = BillingService._compact_usage_metadata_for_audit(
+            breakdown.get("usage_metadata") or {}
+        )
         tx_details["billing_trace"] = BillingService._build_billing_trace(
             breakdown,
             task_type=task_type,

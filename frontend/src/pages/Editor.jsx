@@ -100,7 +100,7 @@ function buildEntityNegativePrompt(sourceText = '', primaryEntity = null, entity
 function normalizeImageSizeOption(value) {
     const raw = String(value || '').trim().toUpperCase().replace(/\s+/g, '');
     if (!raw) return '';
-    if (raw === '1K' || raw === '2K' || raw === '4K') return raw;
+    if (raw === '0.5K' || raw === '1K' || raw === '2K' || raw === '4K') return raw;
     return '';
 }
 
@@ -111,7 +111,8 @@ function inferImageSizeFromResolution(width, height) {
     const maxSide = Math.max(w, h);
     if (maxSide >= 3200) return '4K';
     if (maxSide >= 1900) return '2K';
-    return '1K';
+    if (maxSide >= 900) return '1K';
+    return '0.5K';
 }
 
 function getEpisodePreferredImageSize(episodeInfoLike) {
@@ -135,18 +136,23 @@ function getResolutionByAspectAndImageSize(aspectRatio, imageSize) {
     const size = normalizeImageSizeOption(imageSize) || '1K';
     const key = `${ratio}|${size}`;
     const presets = {
+        '16:9|0.5K': { width: '960', height: '540' },
         '16:9|1K': { width: '1920', height: '1080' },
         '16:9|2K': { width: '2560', height: '1440' },
         '16:9|4K': { width: '3840', height: '2160' },
+        '9:16|0.5K': { width: '540', height: '960' },
         '9:16|1K': { width: '1080', height: '1920' },
         '9:16|2K': { width: '1440', height: '2560' },
         '9:16|4K': { width: '2160', height: '3840' },
+        '4:3|0.5K': { width: '960', height: '720' },
         '4:3|1K': { width: '1440', height: '1080' },
         '4:3|2K': { width: '2048', height: '1536' },
         '4:3|4K': { width: '2880', height: '2160' },
+        '2.35:1|0.5K': { width: '960', height: '409' },
         '2.35:1|1K': { width: '1920', height: '817' },
         '2.35:1|2K': { width: '2560', height: '1089' },
         '2.35:1|4K': { width: '3840', height: '1634' },
+        '1:1|0.5K': { width: '720', height: '720' },
         '1:1|1K': { width: '1080', height: '1080' },
         '1:1|2K': { width: '2048', height: '2048' },
         '1:1|4K': { width: '4096', height: '4096' },
@@ -333,11 +339,11 @@ function buildVoicePromptWithEntityContext(videoPrompt, entityList = [], project
         return {
             dialogueOnly,
             voicePrompt: [
+                '[Dialogue Candidate]',
                 dialogueOnly,
-                '[Project Language Requirement]',
+                '[Project Language]',
                 `project_language: ${languageHint}`,
-                `language_code: ${languageCode}`,
-                `You MUST configure TTS parameters with language_code='${languageCode}' and keep narration strictly in that language.`,
+                `language_code_hint: ${languageCode}`,
             ].join('\n'),
             matchedEntities: [],
             languageCode,
@@ -357,14 +363,13 @@ function buildVoicePromptWithEntityContext(videoPrompt, entityList = [], project
     const languageHint = String(projectLanguage || '').trim() || languageCode;
 
     const voicePrompt = [
+        '[Dialogue Candidate]',
         dialogueOnly,
-        '[Project Language Requirement]',
+        '[Project Language]',
         `project_language: ${languageHint}`,
-        `language_code: ${languageCode}`,
-        `You MUST configure TTS parameters with language_code='${languageCode}' and keep narration strictly in that language.`,
+        `language_code_hint: ${languageCode}`,
         '[Character Voice Context]',
         ...contextLines,
-        'Infer speaker voice parameters from the context above, especially age and gender cues.',
     ].join('\n');
 
     return {
@@ -478,8 +483,6 @@ import {
     PROVIDER_LABELS,
     MODEL_OPTIONS,
     getSettingSourceByCategory,
-    sourceBadgeClass,
-    sourceBadgeText,
     formatProviderModelEndpointError,
 } from './editor/editorConfig';
 import {
@@ -502,7 +505,6 @@ import {
 // RefineControl moved to components/RefineControl.jsx
 import { processPrompt } from '../lib/promptUtils';
 import { normalizeEntityToken } from '../lib/entityToken';
-import { formatProviderLabel } from '../lib/providerLabel';
 import SettingsPage from './Settings';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
 
@@ -2155,7 +2157,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                             label={t('图像尺寸', 'Image Size')}
                             value={info.tech_params?.visual_standard?.image_size}
                             onChange={v => updateTech('image_size', v)}
-                            list={["1K", "2K", "4K"]}
+                            list={["0.5K", "1K", "2K", "4K"]}
                         />
                     </div>
 
@@ -3625,7 +3627,7 @@ const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'en', mer
                          <InputGroup idPrefix={prefix} label={t('帧率', 'Frame Rate')} value={data.tech_params?.visual_standard?.frame_rate} onChange={v => updateTech('frame_rate', v)} list={["24", "30", "60"]} />
                          <InputGroup idPrefix={prefix} label={t('画幅比例', 'Aspect Ratio')} value={data.tech_params?.visual_standard?.aspect_ratio} onChange={v => updateTech('aspect_ratio', v)} list={["16:9", "2.35:1", "4:3", "9:16", "1:1"]} />
                          <InputGroup idPrefix={prefix} label={t('质量等级', 'Quality')} value={data.tech_params?.visual_standard?.quality} onChange={v => updateTech('quality', v)} list={PROJECT_EP_QUALITY_OPTIONS} />
-                        <InputGroup idPrefix={prefix} label={t('图像尺寸', 'Image Size')} value={data.tech_params?.visual_standard?.image_size} onChange={v => updateTech('image_size', v)} list={["1K", "2K", "4K"]} />
+                        <InputGroup idPrefix={prefix} label={t('图像尺寸', 'Image Size')} value={data.tech_params?.visual_standard?.image_size} onChange={v => updateTech('image_size', v)} list={["0.5K", "1K", "2K", "4K"]} />
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -10198,6 +10200,7 @@ const SceneCard = ({ scene, entities, onClick, onGenerateShots, onDelete, select
 
 const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShots, uiLang = 'zh' }) => {
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
+    const defaultSceneRegenRequirement = t('补充所缺实体', 'Supplement missing entities');
     const [scenes, setScenes] = useState([]);
     const [sceneSortMode, setSceneSortMode] = useState('updated_desc');
     const [sceneSortDirection, setSceneSortDirection] = useState('desc');
@@ -10206,7 +10209,22 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
     const [isSuperuser, setIsSuperuser] = useState(false);
     const [editingScene, setEditingScene] = useState(null);
     const [sceneRegenRequirements, setSceneRegenRequirements] = useState('');
+    const [sceneRegenEntityOnlyMode, setSceneRegenEntityOnlyMode] = useState(true);
     const [sceneRegenerating, setSceneRegenerating] = useState(false);
+    const [sceneRegenPromptModal, setSceneRegenPromptModal] = useState({
+        open: false,
+        loading: false,
+        data: null,
+    });
+    const [sceneRegenProgress, setSceneRegenProgress] = useState({
+        phase: 'idle',
+        percent: 0,
+        message: '',
+        error: '',
+    });
+    const [sceneRegenSubjectsReport, setSceneRegenSubjectsReport] = useState(null);
+    const [sceneRegenReimporting, setSceneRegenReimporting] = useState(false);
+    const [sceneRegenScenePatching, setSceneRegenScenePatching] = useState(false);
     const [shotPromptModal, setShotPromptModal] = useState({ open: false, sceneId: null, data: null, loading: false });
     const [aiShotsFlowStatus, setAiShotsFlowStatus] = useState({ phase: 'idle', message: '', sceneId: null });
     const [batchAiShotsProgress, setBatchAiShotsProgress] = useState({
@@ -10352,13 +10370,16 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
             shot_name: ['Shot Name', 'shot_name'],
             scene_id: ['Scene ID', 'scene_id'],
             start_frame: ['Start Frame', 'start_frame'],
+            start_frame_cn: ['Start Frame (CN)', 'start_frame_cn', '起始帧（中文）'],
             video_content: ['Video Content', 'video_content'],
+            video_content_cn: ['Video Content (CN)', 'video_content_cn', 'video_prompt_cn', '视频内容（中文）'],
             duration: ['Duration (s)', 'duration'],
             end_frame: ['End Frame', 'end_frame'],
+            end_frame_cn: ['End Frame (CN)', 'end_frame_cn', '结束帧（中文）'],
             associated_entities: ['Associated Entities', 'associated_entities'],
             shot_logic_cn: ['Shot Logic (CN)', 'shot_logic_cn'],
             keyframes: ['Keyframes', 'keyframes'],
-            prompt_cn: ['Prompt (CN)', 'prompt_cn'],
+            keyframes_cn: ['Keyframes (CN)', 'keyframes_cn', '关键帧（中文）'],
         };
         const keys = map[field] || [];
         for (const key of keys) {
@@ -10377,13 +10398,16 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                 shot_name: getStagingShotField(shot, 'shot_name'),
                 scene_id: getStagingShotField(shot, 'scene_id'),
                 start_frame: getStagingShotField(shot, 'start_frame'),
+                start_frame_cn: getStagingShotField(shot, 'start_frame_cn'),
                 video_content: getStagingShotField(shot, 'video_content'),
+                video_content_cn: getStagingShotField(shot, 'video_content_cn'),
                 duration: getStagingShotField(shot, 'duration'),
                 end_frame: getStagingShotField(shot, 'end_frame'),
+                end_frame_cn: getStagingShotField(shot, 'end_frame_cn'),
                 associated_entities: getStagingShotField(shot, 'associated_entities'),
                 shot_logic_cn: getStagingShotField(shot, 'shot_logic_cn'),
                 keyframes: getStagingShotField(shot, 'keyframes'),
-                prompt_cn: getStagingShotField(shot, 'prompt_cn'),
+                keyframes_cn: getStagingShotField(shot, 'keyframes_cn'),
             },
         });
     };
@@ -10400,13 +10424,16 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
             'Shot Name': edited.shot_name || '',
             'Scene ID': edited.scene_id || '',
             'Start Frame': edited.start_frame || '',
+            'Start Frame (CN)': edited.start_frame_cn || '',
             'Video Content': edited.video_content || '',
+            'Video Content (CN)': edited.video_content_cn || '',
             'Duration (s)': edited.duration || '',
             'End Frame': edited.end_frame || '',
+            'End Frame (CN)': edited.end_frame_cn || '',
             'Associated Entities': edited.associated_entities || '',
             'Shot Logic (CN)': edited.shot_logic_cn || '',
             'Keyframes': edited.keyframes || '',
-            'Prompt (CN)': edited.prompt_cn || '',
+            'Keyframes (CN)': edited.keyframes_cn || '',
         };
 
         setAiShotsStaging(prev => ({ ...prev, content: currentRows }));
@@ -10421,109 +10448,106 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         });
     }, []);
 
-    // Fetch Entities (Environment) for image matching
-    useEffect(() => {
-        // Shared Parsing Logic
-        const parseScenesFromText = (text) => {
-             if (!text) return [];
-             const lines = text.split('\n').filter(l => l.trim().includes('|'));
-             const headerIdx = lines.findIndex(l => 
-                (l.includes("Scene No") || l.includes("场次序号") || l.includes("Scene ID") || l.includes("场次") || l.includes("Title"))
-             );
-             
-             if (headerIdx === -1) return [];
-             
-             // Parse Headers
-             const headerLine = lines[headerIdx];
-             let headers = headerLine.split('|').map(c => c.trim());
-             if (headers.length > 0 && headers[0] === "") headers.shift();
-             if (headers.length > 0 && headers[headers.length-1] === "") headers.pop();
-             
-             const normalizeHeader = (h) => h.toLowerCase().replace(/[\.\s]/g, '');
-             const headerMap = {};
-             headers.forEach((h, idx) => {
-                 const n = normalizeHeader(h);
-                 if (n.includes("episodeid") || n.includes("集id")) headerMap['episode_id'] = idx;
-                 else if ((n.includes("sceneid") && !n.includes("sceneno")) || n.includes("场景id")) headerMap['scene_id'] = idx;
-                 if(n.includes("sceneno") || n.includes("场次")) headerMap['scene_no'] = idx;
-                 else if(n.includes("scenename") || n.includes("title")) headerMap['scene_name'] = idx;
-                 else if(n.includes("equivalentduration")) headerMap['equivalent_duration'] = idx;
-                 else if(n.includes("coresceneinfo") || n.includes("coregoal")) headerMap['core_scene_info'] = idx;
-                 else if(n.includes("originalscripttext") || n.includes("description")) headerMap['original_script_text'] = idx;
-                 else if(n.includes("environmentname") || n.includes("environment")) headerMap['environment_name'] = idx;
-                 else if(n.includes("environmentrelation")) headerMap['environment_relation'] = idx;
-                 else if(n.includes("entrystate")) headerMap['entry_state'] = idx;
-                 else if(n.includes("exitstate")) headerMap['exit_state'] = idx;
-                 else if(n.includes("linkedcharacters")) headerMap['linked_characters'] = idx;
-                 else if(n.includes("keyprops")) headerMap['key_props'] = idx;
-             });
+    const parseScenesFromText = useCallback((text) => {
+        if (!text) return [];
+        const lines = text.split('\n').filter(l => l.trim().includes('|'));
+        const headerIdx = lines.findIndex(l =>
+            (l.includes("Scene No") || l.includes("场次序号") || l.includes("Scene ID") || l.includes("场次") || l.includes("Title"))
+        );
 
-             const rows = [];
-             let inShotTable = false;
+        if (headerIdx === -1) return [];
 
-             for (let i = headerIdx + 1; i < lines.length; i++) {
-                const line = lines[i];
-                if (line.includes("Shot ID") || line.includes("镜头ID")) {
-                    inShotTable = true;
-                    continue;
-                }
-                if (line.includes("Scene No") || line.includes("场次序号")) {
-                    inShotTable = false;
-                    continue;
-                }
-                if (inShotTable) continue;
-                if (line.includes('---')) continue;
-                
-                let cols = line.split('|').map(c => c.trim());
-                if (cols.length > 0 && cols[0] === "") cols.shift();
-                if (cols.length > 0 && cols[cols.length-1] === "") cols.pop();
-                
-                if (cols.length >= 2) {
-                    const cleanCol = (txt) => txt ? txt.replace(/<br\s*\/?>/gi, '\n').replace(/\\\|/g, '|') : '';
-                    
-                    // Helper to get by mapped index, defaulting to hardcoded fallback if map fails (legacy support)
-                    const getVal = (key, fallbackIdx) => {
-                        const idx = headerMap[key] !== undefined ? headerMap[key] : fallbackIdx;
-                        return cols[idx] ? cleanCol(cols[idx]) : '';
+        const headerLine = lines[headerIdx];
+        let headers = headerLine.split('|').map(c => c.trim());
+        if (headers.length > 0 && headers[0] === "") headers.shift();
+        if (headers.length > 0 && headers[headers.length - 1] === "") headers.pop();
+
+        const normalizeHeader = (h) => h.toLowerCase().replace(/[\.\s]/g, '');
+        const headerMap = {};
+        headers.forEach((h, idx) => {
+            const n = normalizeHeader(h);
+            if (n.includes("episodeid") || n.includes("集id")) headerMap['episode_id'] = idx;
+            else if ((n.includes("sceneid") && !n.includes("sceneno")) || n.includes("场景id")) headerMap['scene_id'] = idx;
+            if (n.includes("sceneno") || n.includes("场次")) headerMap['scene_no'] = idx;
+            else if (n.includes("scenename") || n.includes("title")) headerMap['scene_name'] = idx;
+            else if (n.includes("equivalentduration")) headerMap['equivalent_duration'] = idx;
+            else if (n.includes("coresceneinfo") || n.includes("coregoal")) headerMap['core_scene_info'] = idx;
+            else if (n.includes("originalscripttext") || n.includes("description")) headerMap['original_script_text'] = idx;
+            else if (n.includes("environmentname") || n.includes("environment")) headerMap['environment_name'] = idx;
+            else if (n.includes("environmentrelation")) headerMap['environment_relation'] = idx;
+            else if (n.includes("entrystate")) headerMap['entry_state'] = idx;
+            else if (n.includes("exitstate")) headerMap['exit_state'] = idx;
+            else if (n.includes("linkedcharacters")) headerMap['linked_characters'] = idx;
+            else if (n.includes("keyprops")) headerMap['key_props'] = idx;
+        });
+
+        const rows = [];
+        let inShotTable = false;
+
+        for (let i = headerIdx + 1; i < lines.length; i++) {
+            const line = lines[i];
+            if (line.includes("Shot ID") || line.includes("镜头ID")) {
+                inShotTable = true;
+                continue;
+            }
+            if (line.includes("Scene No") || line.includes("场次序号")) {
+                inShotTable = false;
+                continue;
+            }
+            if (inShotTable) continue;
+            if (line.includes('---')) continue;
+
+            let cols = line.split('|').map(c => c.trim());
+            if (cols.length > 0 && cols[0] === "") cols.shift();
+            if (cols.length > 0 && cols[cols.length - 1] === "") cols.pop();
+
+            if (cols.length >= 2) {
+                const cleanCol = (txt) => txt ? txt.replace(/<br\s*\/?>/gi, '\n').replace(/\\\|/g, '|') : '';
+                const getVal = (key, fallbackIdx) => {
+                    const idx = headerMap[key] !== undefined ? headerMap[key] : fallbackIdx;
+                    return cols[idx] ? cleanCol(cols[idx]) : '';
+                };
+
+                const isNewFormat = cols.length >= 13 || headerMap['episode_id'] !== undefined || headerMap['scene_id'] !== undefined;
+                const fallback = isNewFormat
+                    ? {
+                        scene_no: 2,
+                        scene_name: 3,
+                        equivalent_duration: 4,
+                        core_scene_info: 5,
+                        original_script_text: 6,
+                        environment_name: 7,
+                        linked_characters: 11,
+                        key_props: 12,
+                    }
+                    : {
+                        scene_no: 0,
+                        scene_name: 1,
+                        equivalent_duration: 2,
+                        core_scene_info: 3,
+                        original_script_text: 4,
+                        environment_name: 5,
+                        linked_characters: 6,
+                        key_props: 7,
                     };
 
-                    const isNewFormat = cols.length >= 13 || headerMap['episode_id'] !== undefined || headerMap['scene_id'] !== undefined;
-                    const fallback = isNewFormat
-                        ? {
-                            scene_no: 2,
-                            scene_name: 3,
-                            equivalent_duration: 4,
-                            core_scene_info: 5,
-                            original_script_text: 6,
-                            environment_name: 7,
-                            linked_characters: 11,
-                            key_props: 12,
-                        }
-                        : {
-                            scene_no: 0,
-                            scene_name: 1,
-                            equivalent_duration: 2,
-                            core_scene_info: 3,
-                            original_script_text: 4,
-                            environment_name: 5,
-                            linked_characters: 6,
-                            key_props: 7,
-                        };
+                rows.push({
+                    scene_no: getVal('scene_no', fallback.scene_no),
+                    scene_name: getVal('scene_name', fallback.scene_name),
+                    equivalent_duration: getVal('equivalent_duration', fallback.equivalent_duration),
+                    core_scene_info: getVal('core_scene_info', fallback.core_scene_info),
+                    original_script_text: normalizeOriginalScriptText(getVal('original_script_text', fallback.original_script_text)),
+                    environment_name: getVal('environment_name', fallback.environment_name),
+                    linked_characters: getVal('linked_characters', fallback.linked_characters),
+                    key_props: getVal('key_props', fallback.key_props)
+                });
+            }
+        }
+        return rows;
+    }, []);
 
-                    rows.push({
-                        scene_no: getVal('scene_no', fallback.scene_no),
-                        scene_name: getVal('scene_name', fallback.scene_name),
-                        equivalent_duration: getVal('equivalent_duration', fallback.equivalent_duration),
-                        core_scene_info: getVal('core_scene_info', fallback.core_scene_info),
-                        original_script_text: normalizeOriginalScriptText(getVal('original_script_text', fallback.original_script_text)),
-                        environment_name: getVal('environment_name', fallback.environment_name),
-                        linked_characters: getVal('linked_characters', fallback.linked_characters),
-                        key_props: getVal('key_props', fallback.key_props)
-                    });
-                }
-             }
-             return rows;
-        };
+    // Fetch Entities (Environment) for image matching
+    useEffect(() => {
 
         const loadScenes = async () => {
              if (activeEpisode?.id) {
@@ -10574,7 +10598,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
 
         if (projectId) fetchEntities(projectId).then(setEntities).catch(console.error);
         loadScenes();
-    }, [activeEpisode, projectId]);
+    }, [activeEpisode, projectId, parseScenesFromText]);
 
     const buildSceneContentMarkdown = (sceneRows = []) => {
         if (!activeEpisode) return '';
@@ -10602,6 +10626,247 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         )).join('\n');
         return `${contextInfo}${header}\n${content}`;
     };
+
+    const normalizeSubjectType = (rawType, fallbackType = 'character') => {
+        const value = String(rawType || '').trim().toLowerCase();
+        if (value === 'character' || value === 'char' || value === '角色' || value === '人物') return 'character';
+        if (value === 'prop' || value === 'props' || value === '道具' || value === '物件') return 'prop';
+        if (value === 'environment' || value === 'env' || value === '场景' || value === '环境') return 'environment';
+        return fallbackType;
+    };
+
+    const importSubjectsFromRegeneratedJson = useCallback(async (subjectsJson) => {
+        const payload = (subjectsJson && typeof subjectsJson === 'object') ? subjectsJson : null;
+        if (!projectId || !payload) {
+            return {
+                created: 0,
+                skipped: 0,
+                createdItems: [],
+                skippedItems: [],
+                byType: {
+                    character: { created: 0, skipped: 0 },
+                    environment: { created: 0, skipped: 0 },
+                    prop: { created: 0, skipped: 0 },
+                },
+            };
+        }
+
+        const toKey = (type, name) => `${String(type || '').trim().toLowerCase()}::${String(name || '').trim().toLowerCase()}`;
+        const existingMap = new Map();
+        for (const entity of (entities || [])) {
+            const entityType = normalizeSubjectType(entity?.type, 'character');
+            const zhName = String(entity?.name || '').trim();
+            const enName = String(entity?.name_en || '').trim();
+            if (zhName) existingMap.set(toKey(entityType, zhName), entity);
+            if (enName) existingMap.set(toKey(entityType, enName), entity);
+        }
+
+        let created = 0;
+        let skipped = 0;
+        const createdItems = [];
+        const skippedItems = [];
+        const byType = {
+            character: { created: 0, skipped: 0 },
+            environment: { created: 0, skipped: 0 },
+            prop: { created: 0, skipped: 0 },
+        };
+        const seenInBatch = new Set();
+        let hasMutations = false;
+
+        const resolveName = (obj) => String(
+            obj?.name
+            || obj?.subject_name_exact
+            || obj?.subject_name
+            || obj?.name_zh
+            || obj?.name_en
+            || ''
+        ).trim();
+
+        const resolveNameEn = (obj) => String(
+            obj?.name_en
+            || obj?.english_name
+            || obj?.en_name
+            || ''
+        ).trim();
+
+        const upsertOne = async (rawItem, fallbackType) => {
+            if (!rawItem || typeof rawItem !== 'object') return;
+            const type = normalizeSubjectType(rawItem?.type || fallbackType, fallbackType);
+            const name = resolveName(rawItem);
+            const nameEn = resolveNameEn(rawItem);
+            if (!name) {
+                skipped += 1;
+                byType[type].skipped += 1;
+                skippedItems.push({ type, name: '', reason: 'missing_name' });
+                return;
+            }
+
+            const batchKey = toKey(type, name);
+            if (seenInBatch.has(batchKey)) {
+                skipped += 1;
+                byType[type].skipped += 1;
+                skippedItems.push({ type, name, reason: 'duplicate_in_payload' });
+                return;
+            }
+            seenInBatch.add(batchKey);
+
+            let entityPayload = {
+                name,
+                type,
+                description: `Imported from regenerated scene subjects_json (${String(type)})`,
+                name_en: nameEn,
+            };
+
+            if (type === 'character') {
+                const desc = [
+                    `Name (EN): ${nameEn || rawItem?.name_en || ''}`,
+                    `Role: ${rawItem?.role || ''}`,
+                    `Archetype: ${rawItem?.archetype || ''}`,
+                    `Appearance: ${rawItem?.appearance_cn || ''}`,
+                    `Clothing: ${rawItem?.clothing || ''}`,
+                    `Action: ${rawItem?.action_characteristics || ''}`,
+                    rawItem?.generation_prompt_cn ? `Prompt (CN): ${rawItem.generation_prompt_cn}` : '',
+                    rawItem?.generation_prompt_en ? `Prompt: ${rawItem.generation_prompt_en}` : '',
+                    rawItem?.negative_prompt_en ? `Negative Prompt: ${rawItem.negative_prompt_en}` : '',
+                ].filter(Boolean).join('\n\n');
+
+                entityPayload = {
+                    ...entityPayload,
+                    description: desc || entityPayload.description,
+                    generation_prompt_cn: rawItem?.generation_prompt_cn || '',
+                    generation_prompt_en: rawItem?.generation_prompt_en || '',
+                    anchor_description: rawItem?.anchor_description || '',
+                    gender: rawItem?.gender,
+                    role: rawItem?.role,
+                    archetype: rawItem?.archetype,
+                    appearance_cn: rawItem?.appearance_cn,
+                    clothing: rawItem?.clothing,
+                    action_characteristics: rawItem?.action_characteristics,
+                    visual_dependencies: rawItem?.visual_dependencies || [],
+                    dependency_strategy: rawItem?.dependency_strategy || {},
+                    custom_attributes: {
+                        ...(rawItem?.custom_attributes || {}),
+                        ...(rawItem?.negative_prompt_en ? { negative_prompt_en: rawItem.negative_prompt_en } : {}),
+                    },
+                };
+            } else if (type === 'prop') {
+                const desc = [
+                    `Name (EN): ${nameEn || rawItem?.name_en || ''}`,
+                    `Type: ${rawItem?.type || ''}`,
+                    `Description: ${rawItem?.description_cn || ''}`,
+                    rawItem?.generation_prompt_cn ? `Prompt (CN): ${rawItem.generation_prompt_cn}` : '',
+                    rawItem?.generation_prompt_en ? `Prompt: ${rawItem.generation_prompt_en}` : '',
+                    rawItem?.negative_prompt_en ? `Negative Prompt: ${rawItem.negative_prompt_en}` : '',
+                    rawItem?.dependency_strategy?.logic ? `Dependency: ${rawItem.dependency_strategy.logic}` : '',
+                ].filter(Boolean).join('\n\n');
+
+                entityPayload = {
+                    ...entityPayload,
+                    description: desc || entityPayload.description,
+                    generation_prompt_cn: rawItem?.generation_prompt_cn || '',
+                    generation_prompt_en: rawItem?.generation_prompt_en || '',
+                    anchor_description: rawItem?.anchor_description || '',
+                    visual_dependencies: rawItem?.visual_dependencies || [],
+                    dependency_strategy: rawItem?.dependency_strategy || {},
+                    custom_attributes: {
+                        ...(rawItem?.custom_attributes || {}),
+                        ...(rawItem?.negative_prompt_en ? { negative_prompt_en: rawItem.negative_prompt_en } : {}),
+                    },
+                };
+            } else {
+                const desc = [
+                    `Name (EN): ${nameEn || rawItem?.name_en || ''}`,
+                    `Atmosphere: ${rawItem?.atmosphere || ''}`,
+                    `Visual Params: ${rawItem?.visual_params || ''}`,
+                    `Description: ${rawItem?.description_cn || ''}`,
+                    rawItem?.generation_prompt_cn ? `Prompt (CN): ${rawItem.generation_prompt_cn}` : '',
+                    rawItem?.generation_prompt_en ? `Prompt: ${rawItem.generation_prompt_en}` : '',
+                    rawItem?.negative_prompt_en ? `Negative Prompt: ${rawItem.negative_prompt_en}` : '',
+                ].filter(Boolean).join('\n\n');
+
+                entityPayload = {
+                    ...entityPayload,
+                    description: desc || entityPayload.description,
+                    generation_prompt_cn: rawItem?.generation_prompt_cn || '',
+                    generation_prompt_en: rawItem?.generation_prompt_en || '',
+                    anchor_description: rawItem?.anchor_description || '',
+                    atmosphere: rawItem?.atmosphere,
+                    visual_params: rawItem?.visual_params,
+                    narrative_description: rawItem?.description_cn,
+                    visual_dependencies: rawItem?.visual_dependencies || [],
+                    dependency_strategy: rawItem?.dependency_strategy || {},
+                    custom_attributes: {
+                        ...(rawItem?.custom_attributes || {}),
+                        ...(rawItem?.negative_prompt_en ? { negative_prompt_en: rawItem.negative_prompt_en } : {}),
+                    },
+                };
+            }
+
+            try {
+                const existing = existingMap.get(toKey(type, name)) || (nameEn ? existingMap.get(toKey(type, nameEn)) : null);
+                if (existing?.id) {
+                    await updateEntity(existing.id, entityPayload);
+                    const updated = { ...existing, ...entityPayload };
+                    existingMap.set(toKey(type, name), updated);
+                    if (nameEn) existingMap.set(toKey(type, nameEn), updated);
+                    createdItems.push({ type, name, action: 'updated' });
+                } else {
+                    const createdEntity = await createEntity(projectId, entityPayload);
+                    if (createdEntity) {
+                        existingMap.set(toKey(type, name), createdEntity);
+                        if (nameEn) existingMap.set(toKey(type, nameEn), createdEntity);
+                    }
+                    createdItems.push({ type, name, action: 'created' });
+                }
+                hasMutations = true;
+                created += 1;
+                byType[type].created += 1;
+            } catch (_) {
+                skipped += 1;
+                byType[type].skipped += 1;
+                skippedItems.push({ type, name, reason: 'upsert_failed' });
+            }
+        };
+
+        const sections = [
+            { name: 'characters', fallbackType: 'character' },
+            { name: 'props', fallbackType: 'prop' },
+            { name: 'environments', fallbackType: 'environment' },
+        ];
+
+        for (const section of sections) {
+            const items = Array.isArray(payload?.[section.name]) ? payload[section.name] : [];
+            for (const item of items) {
+                // Reuse the same field-mapping semantics as the standard subjects import path.
+                // eslint-disable-next-line no-await-in-loop
+                await upsertOne(item, section.fallbackType);
+            }
+        }
+
+        if (hasMutations) {
+            try {
+                const refreshed = await fetchEntities(projectId);
+                setEntities(Array.isArray(refreshed) ? refreshed : []);
+            } catch {
+                // Non-blocking refresh failure.
+            }
+        }
+
+        return { created, skipped, createdItems, skippedItems, byType };
+    }, [projectId, entities]);
+
+    const persistSceneRegenSubjectsReport = useCallback(async (report) => {
+        if (!activeEpisode?.id || !report) return false;
+        const currentEpisodeInfo = (activeEpisode?.episode_info && typeof activeEpisode.episode_info === 'object')
+            ? activeEpisode.episode_info
+            : {};
+        const nextEpisodeInfo = {
+            ...currentEpisodeInfo,
+            scene_regen_subjects_result: report,
+        };
+        await updateEpisode(activeEpisode.id, { episode_info: nextEpisodeInfo });
+        return true;
+    }, [activeEpisode?.id, activeEpisode?.episode_info]);
 
     const flushSceneAutoSave = useCallback(async (sceneCandidate) => {
         if (!activeEpisode?.id || !sceneCandidate?.id) return;
@@ -10686,7 +10951,243 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
 
     useEffect(() => {
         setSceneRegenRequirements('');
+        setSceneRegenEntityOnlyMode(true);
     }, [editingScene?.id]);
+
+    useEffect(() => {
+        const persisted = activeEpisode?.episode_info?.scene_regen_subjects_result;
+        if (persisted && typeof persisted === 'object') {
+            setSceneRegenSubjectsReport(persisted);
+        }
+    }, [activeEpisode?.id, activeEpisode?.episode_info?.scene_regen_subjects_result]);
+
+    const handleReimportSceneRegenLlmContent = async () => {
+        if (sceneRegenerating || sceneRegenReimporting || sceneRegenScenePatching) return;
+        const report = sceneRegenSubjectsReport && typeof sceneRegenSubjectsReport === 'object'
+            ? sceneRegenSubjectsReport
+            : null;
+        const subjectsJson = (report?.subjects_json && typeof report.subjects_json === 'object')
+            ? report.subjects_json
+            : null;
+
+        if (!subjectsJson) {
+            setSceneRegenProgress({
+                phase: 'failed',
+                percent: 100,
+                message: t('重导入失败。', 'Re-import failed.'),
+                error: t('没有可重导入的数据：上次重生成结果未包含 subjects_json。请先重新执行一次“重生成场景”。', 'No re-importable payload found: last regenerate result does not include subjects_json. Please run Regenerate Scene once first.'),
+            });
+            onLog?.(
+                t('当前没有可重导入的重生成 LLM 内容（subjects_json 为空）。', 'No re-importable regenerated LLM payload found (subjects_json is empty).'),
+                'warning'
+            );
+            return;
+        }
+
+        setSceneRegenReimporting(true);
+        setSceneRegenProgress({
+            phase: 'reimport_subjects_json',
+            percent: 72,
+            message: t('正在重新导入重生成 LLM 内容...', 'Re-importing regenerated LLM content...'),
+            error: '',
+        });
+
+        try {
+            const importResult = await importSubjectsFromRegeneratedJson(subjectsJson);
+            const nextReport = {
+                ...report,
+                created_count: Number(importResult.created || 0),
+                skipped_count: Number(importResult.skipped || 0),
+                by_type: importResult.byType || report?.by_type || {
+                    character: { created: 0, skipped: 0 },
+                    environment: { created: 0, skipped: 0 },
+                    prop: { created: 0, skipped: 0 },
+                },
+                created_items: Array.isArray(importResult.createdItems) ? importResult.createdItems : [],
+                skipped_items: Array.isArray(importResult.skippedItems) ? importResult.skippedItems : [],
+                reimport_count: Number(report?.reimport_count || 0) + 1,
+                last_reimport_at: new Date().toISOString(),
+                persisted: report?.persisted === true,
+            };
+
+            try {
+                const persisted = await persistSceneRegenSubjectsReport(nextReport);
+                nextReport.persisted = !!persisted;
+            } catch {
+                nextReport.persisted = false;
+            }
+
+            setSceneRegenSubjectsReport(nextReport);
+            setSceneRegenProgress({
+                phase: 'done',
+                percent: 100,
+                message: t('重导入完成。', 'Re-import completed.'),
+                error: '',
+            });
+
+            onLog?.(
+                t(
+                    `已重新导入重生成 LLM 内容：导入/更新 ${importResult.created} 条，跳过 ${importResult.skipped} 条。`,
+                    `Re-imported regenerated LLM content: imported/updated ${importResult.created}, skipped ${importResult.skipped}.`
+                ),
+                'success'
+            );
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || t('重导入失败', 'Re-import failed');
+            setSceneRegenProgress({
+                phase: 'failed',
+                percent: 100,
+                message: t('重导入失败。', 'Re-import failed.'),
+                error: String(detail || ''),
+            });
+            onLog?.(`${t('重导入失败', 'Re-import failed')}: ${detail}`, 'error');
+        } finally {
+            setSceneRegenReimporting(false);
+        }
+    };
+
+    const handlePatchScenesFromRegenRawMarkdown = async () => {
+        if (sceneRegenerating || sceneRegenReimporting || sceneRegenScenePatching) return;
+        if (!activeEpisode?.id) {
+            setSceneRegenProgress({
+                phase: 'failed',
+                percent: 100,
+                message: t('补场景失败。', 'Patch scenes failed.'),
+                error: t('未选择有效分集。', 'No active episode selected.'),
+            });
+            return;
+        }
+
+        const report = sceneRegenSubjectsReport && typeof sceneRegenSubjectsReport === 'object'
+            ? sceneRegenSubjectsReport
+            : null;
+        const rawMarkdown = String(report?.raw_markdown || '').trim();
+        if (!rawMarkdown) {
+            setSceneRegenProgress({
+                phase: 'failed',
+                percent: 100,
+                message: t('补场景失败。', 'Patch scenes failed.'),
+                error: t('没有可补场景的数据：上次重生成结果未包含 raw_markdown。', 'No scene patch payload found: last regenerate result has no raw_markdown.'),
+            });
+            return;
+        }
+
+        setSceneRegenScenePatching(true);
+        setSceneRegenProgress({
+            phase: 'rebuild_scenes_from_raw',
+            percent: 35,
+            message: t('按 raw_markdown 解析场景并补录...', 'Parsing raw_markdown and patching scenes...'),
+            error: '',
+        });
+
+        try {
+            const parsedRows = parseScenesFromText(rawMarkdown);
+            if (!Array.isArray(parsedRows) || parsedRows.length === 0) {
+                throw new Error(t('raw_markdown 未解析到可导入场景行。', 'No importable scene rows parsed from raw_markdown.'));
+            }
+
+            setSceneRegenProgress({
+                phase: 'rebuild_scenes_from_raw',
+                percent: 62,
+                message: t('正在按场次号补录场景...', 'Patching scenes by scene_no...'),
+                error: '',
+            });
+
+            const latest = await fetchScenes(activeEpisode.id);
+            const currentRows = Array.isArray(latest) ? latest : [];
+            const bySceneNo = new Map();
+            for (const row of currentRows) {
+                const key = String(row?.scene_no || '').trim();
+                if (key) bySceneNo.set(key, row);
+            }
+
+            let createdCount = 0;
+            let updatedCount = 0;
+            let failedCount = 0;
+
+            for (const row of parsedRows) {
+                const payload = buildSceneSavePayload(row);
+                const sceneNoKey = String(payload?.scene_no || '').trim();
+                try {
+                    const matched = sceneNoKey ? bySceneNo.get(sceneNoKey) : null;
+                    if (matched?.id) {
+                        // eslint-disable-next-line no-await-in-loop
+                        await updateScene(matched.id, payload);
+                        updatedCount += 1;
+                    } else {
+                        // eslint-disable-next-line no-await-in-loop
+                        await createScene(activeEpisode.id, payload);
+                        createdCount += 1;
+                    }
+                } catch {
+                    failedCount += 1;
+                }
+            }
+
+            const mergedRows = await fetchScenes(activeEpisode.id);
+            const normalizedRows = (mergedRows || []).map((scene) => ({
+                ...scene,
+                original_script_text: normalizeOriginalScriptText(scene?.original_script_text),
+            }));
+            setScenes(normalizedRows);
+            if (normalizedRows.length > 0) {
+                setEditingScene((prev) => {
+                    if (prev?.id) {
+                        const still = normalizedRows.find((s) => Number(s?.id) === Number(prev.id));
+                        if (still) return still;
+                    }
+                    return normalizedRows[0];
+                });
+            }
+            await updateEpisode(activeEpisode.id, { scene_content: buildSceneContentMarkdown(normalizedRows) });
+
+            const nextReport = {
+                ...(report || {}),
+                scene_patch: {
+                    created_count: createdCount,
+                    updated_count: updatedCount,
+                    failed_count: failedCount,
+                    patch_count: Number(report?.scene_patch?.patch_count || 0) + 1,
+                    last_patch_at: new Date().toISOString(),
+                },
+                persisted: report?.persisted === true,
+            };
+
+            try {
+                const persisted = await persistSceneRegenSubjectsReport(nextReport);
+                nextReport.persisted = !!persisted;
+            } catch {
+                nextReport.persisted = false;
+            }
+            setSceneRegenSubjectsReport(nextReport);
+
+            setSceneRegenProgress({
+                phase: 'done',
+                percent: 100,
+                message: t('补场景完成。', 'Patch scenes completed.'),
+                error: '',
+            });
+
+            onLog?.(
+                t(
+                    `补场景完成：新增 ${createdCount} 条，更新 ${updatedCount} 条，失败 ${failedCount} 条。`,
+                    `Patch scenes completed: created ${createdCount}, updated ${updatedCount}, failed ${failedCount}.`
+                ),
+                failedCount > 0 ? 'warning' : 'success'
+            );
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || t('补场景失败', 'Patch scenes failed');
+            setSceneRegenProgress({
+                phase: 'failed',
+                percent: 100,
+                message: t('补场景失败。', 'Patch scenes failed.'),
+                error: String(detail || ''),
+            });
+            onLog?.(`${t('补场景失败', 'Patch scenes failed')}: ${detail}`, 'error');
+        } finally {
+            setSceneRegenScenePatching(false);
+        }
+    };
 
     const handleSave = async () => {
         if (!activeEpisode) return;
@@ -10932,28 +11433,122 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         }
     };
 
-    const handleRegenerateScene = async () => {
+    const buildSceneRegenUserPromptPreview = (sceneRow, requirements) => {
+        const scene = sceneRow || {};
+        const reqText = String(requirements || '').trim() || defaultSceneRegenRequirement;
+
+        const bucket = {
+            character: [],
+            environment: [],
+            prop: [],
+        };
+        const seen = new Set();
+        (Array.isArray(entities) ? entities : []).forEach((entity) => {
+            const type = normalizeSubjectType(entity?.type, 'character');
+            if (!bucket[type]) return;
+            const names = [entity?.name, entity?.name_en]
+                .map((v) => String(v || '').trim())
+                .filter(Boolean);
+            names.forEach((name) => {
+                const key = `${type}:${name.toLowerCase()}`;
+                if (seen.has(key)) return;
+                seen.add(key);
+                bucket[type].push(name);
+            });
+        });
+
+        const formatLine = (typeKey, label) => {
+            const list = bucket[typeKey] || [];
+            if (list.length === 0) return `${label}: (none)`;
+            const shown = list.slice(0, 80);
+            const suffix = list.length > shown.length ? ` ... (+${list.length - shown.length} more)` : '';
+            return `${label} (${list.length}): ${shown.join(', ')}${suffix}`;
+        };
+
+        const existingEntityBlock = [
+            'Existing Entity Inventory By Category (project baseline dependencies; reusable as-is; DO NOT rewrite/rename/redefine):',
+            formatLine('character', 'characters'),
+            formatLine('prop', 'props'),
+            formatLine('environment', 'environments'),
+            'Constraint: Existing entities are immutable references for this regeneration. You may depend on them, but must not overwrite or regenerate them.',
+        ].join('\n');
+
+        return [
+            `Project Title: ${project?.title || ''}`,
+            `Episode Title: ${activeEpisode?.title || ''}`,
+            `Source Scene Database ID: ${scene?.id || ''}`,
+            '',
+            `Scene No: ${scene?.scene_no || ''}`,
+            `Scene Name: ${scene?.scene_name || ''}`,
+            `Equivalent Duration: ${scene?.equivalent_duration || ''}`,
+            `Core Scene Info: ${scene?.core_scene_info || ''}`,
+            `Original Script Text: ${scene?.original_script_text || ''}`,
+            `Environment Name: ${scene?.environment_name || ''}`,
+            `Linked Characters: ${scene?.linked_characters || ''}`,
+            `Key Props: ${scene?.key_props || ''}`,
+            '',
+            existingEntityBlock,
+            '',
+            'User Requirements:',
+            reqText,
+        ].join('\n');
+    };
+
+    const openSceneRegenPromptModal = async (sceneRow, requirements) => {
+        setSceneRegenPromptModal({ open: true, loading: true, data: null });
+        try {
+            const res = await fetchPrompt('scene_analysis.txt');
+            const sysPrompt = String(res?.content || '').trim();
+            const userPreview = buildSceneRegenUserPromptPreview(sceneRow, requirements);
+            setSceneRegenPromptModal({
+                open: true,
+                loading: false,
+                data: {
+                    system_prompt: sysPrompt,
+                    user_prompt_preview: userPreview,
+                },
+            });
+        } catch (e) {
+            setSceneRegenPromptModal({ open: false, loading: false, data: null });
+            onLog?.(`SceneManager: Failed to load regeneration prompt - ${e?.message || e}`, 'error');
+            alert(t('加载重生成提示词失败。', 'Failed to load regeneration prompt.'));
+        }
+    };
+
+    const handleRegenerateScene = async (superuserPromptData = null) => {
         if (!editingScene?.id) {
             alert(t('请先保存当前场景。', 'Please save current scene first.'));
             return;
         }
 
-        const requirements = String(sceneRegenRequirements || '').trim();
-        if (!requirements) {
-            alert(t('请先输入重生成要求。', 'Please provide regeneration requirements first.'));
+        const requirements = String(sceneRegenRequirements || '').trim() || defaultSceneRegenRequirement;
+
+        if (isSuperuser && !superuserPromptData) {
+            await openSceneRegenPromptModal(editingScene, requirements);
             return;
         }
 
         const label = editingScene.scene_no || editingScene.scene_name || `#${editingScene.id}`;
         const confirmed = await confirmUiMessage(
             t(
-                `将重生成场景 ${label}，并删除旧场景及其镜头。是否继续？`,
-                `Regenerate scene ${label}, replace it with new scene rows, and delete old scene with its shots. Continue?`
+                (sceneRegenEntityOnlyMode
+                    ? `将按“仅补实体”模式执行场景重生成：不替换场景与分镜，仅回填环境锚点/关联角色/关键道具并导入实体。目标：${label}。是否继续？`
+                    : `将重生成场景 ${label}，并删除旧场景及其镜头。是否继续？`),
+                (sceneRegenEntityOnlyMode
+                    ? `Run regenerate in Entity-Only mode for ${label}: keep scene/shots unchanged, patch environment anchor/linked characters/key props, and import entities. Continue?`
+                    : `Regenerate scene ${label}, replace it with new scene rows, and delete old scene with its shots. Continue?`)
             )
         );
         if (!confirmed) return;
 
         setSceneRegenerating(true);
+        setSceneRegenSubjectsReport(null);
+        setSceneRegenProgress({
+            phase: 'preflight',
+            percent: 8,
+            message: t('预检场景状态...', 'Preflight checking scene state...'),
+            error: '',
+        });
         try {
             // Preflight: scene ID may become stale after list refresh/replacement; resolve latest DB row first.
             let targetScene = editingScene;
@@ -10987,11 +11582,25 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                 }
             }
 
+            setSceneRegenProgress({
+                phase: 'autosave',
+                percent: 18,
+                message: t('同步当前编辑内容...', 'Syncing current scene edits...'),
+                error: '',
+            });
             await flushSceneAutoSave(targetScene);
 
             const oldSceneId = targetScene.id;
+            setSceneRegenProgress({
+                phase: 'llm',
+                percent: 38,
+                message: t('提交重生成提示词到 LLM...', 'Submitting regeneration prompt to LLM...'),
+                error: '',
+            });
             const result = await regenerateScene(oldSceneId, {
                 user_requirements: requirements,
+                system_prompt: String(superuserPromptData?.system_prompt || '').trim() || undefined,
+                entity_only_mode: !!sceneRegenEntityOnlyMode,
             });
 
             const generated = Array.isArray(result?.scenes) ? result.scenes : [];
@@ -10999,32 +11608,158 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                 throw new Error(t('未返回可用的新场景。', 'No regenerated scenes returned.'));
             }
 
-            const currentRows = Array.isArray(scenes) ? scenes : [];
-            const oldIndex = currentRows.findIndex((s) => s.id === oldSceneId);
-            const nextRows = [...currentRows];
-            if (oldIndex >= 0) {
-                nextRows.splice(oldIndex, 1, ...generated);
-            } else {
-                nextRows.push(...generated);
+            const isEntityOnlyMode = Boolean(result?.entity_only_mode || sceneRegenEntityOnlyMode);
+
+            setSceneRegenProgress({
+                phase: 'replace_scene',
+                percent: 58,
+                message: isEntityOnlyMode
+                    ? t('仅补实体模式：刷新当前场景信息...', 'Entity-only mode: refreshing current scene metadata...')
+                    : t('替换旧场景并刷新列表...', 'Replacing old scene and refreshing list...'),
+                error: '',
+            });
+
+            let mergedRows = Array.isArray(generated) ? generated : [];
+            if (activeEpisode?.id) {
+                try {
+                    const latestScenes = await fetchScenes(activeEpisode.id);
+                    mergedRows = (latestScenes || []).map((scene) => ({
+                        ...scene,
+                        original_script_text: normalizeOriginalScriptText(scene?.original_script_text),
+                    }));
+                } catch {
+                    if (!isEntityOnlyMode) {
+                        const currentRows = Array.isArray(scenes) ? scenes : [];
+                        const oldIndex = currentRows.findIndex((s) => s.id === oldSceneId);
+                        const nextRows = [...currentRows];
+                        if (oldIndex >= 0) {
+                            nextRows.splice(oldIndex, 1, ...generated);
+                        } else {
+                            nextRows.push(...generated);
+                        }
+                        mergedRows = nextRows;
+                    } else {
+                        mergedRows = Array.isArray(scenes) ? scenes : [];
+                    }
+                }
             }
 
-            setScenes(nextRows);
-            setEditingScene(generated[0]);
+            setScenes(mergedRows);
+            if (isEntityOnlyMode) {
+                const focusScene = mergedRows.find((item) => Number(item?.id || 0) === Number(oldSceneId || 0)) || mergedRows[0] || null;
+                setEditingScene(focusScene);
+            } else {
+                const generatedIdSet = new Set(generated.map((item) => Number(item?.id || 0)).filter((v) => v > 0));
+                const focusScene = mergedRows.find((item) => generatedIdSet.has(Number(item?.id || 0))) || mergedRows[0] || null;
+                setEditingScene(focusScene);
+            }
 
             if (activeEpisode?.id) {
-                await updateEpisode(activeEpisode.id, { scene_content: buildSceneContentMarkdown(nextRows) });
+                await updateEpisode(activeEpisode.id, { scene_content: buildSceneContentMarkdown(mergedRows) });
             }
+
+            setSceneRegenProgress({
+                phase: 'import_subjects_json',
+                percent: 78,
+                message: t('按 subjects JSON 增量导入实体...', 'Incrementally importing entities from subjects JSON...'),
+                error: '',
+            });
+            const subjectsJson = (result?.subjects_json && typeof result.subjects_json === 'object')
+                ? result.subjects_json
+                : null;
+            let importResult = {
+                created: 0,
+                skipped: 0,
+                createdItems: [],
+                skippedItems: [],
+                byType: {
+                    character: { created: 0, skipped: 0 },
+                    environment: { created: 0, skipped: 0 },
+                    prop: { created: 0, skipped: 0 },
+                },
+            };
+            if (subjectsJson) {
+                importResult = await importSubjectsFromRegeneratedJson(subjectsJson);
+            } else {
+                onLog?.(
+                    t('重生成返回未包含 subjects_json，本次未执行实体补全导入。', 'Regeneration response did not include subjects_json; skipped subject import for this run.'),
+                    'warning'
+                );
+            }
+
+            const rawSubjectsJsonCount = (result?.subjects_json_count && typeof result.subjects_json_count === 'object')
+                ? result.subjects_json_count
+                : {};
+            const totalSubjectsJsonCount =
+                Number(rawSubjectsJsonCount.characters || 0)
+                + Number(rawSubjectsJsonCount.props || 0)
+                + Number(rawSubjectsJsonCount.environments || 0);
+
+            const sceneRegenSubjectResult = {
+                source: 'scene_regenerate_subjects_json',
+                source_scene_id: Number(oldSceneId || 0),
+                source_scene_label: String(label || ''),
+                generated_scene_count: Number(generated.length || 0),
+                entity_only_mode: Boolean(result?.entity_only_mode || sceneRegenEntityOnlyMode),
+                subjects_json_count: totalSubjectsJsonCount,
+                raw_markdown: String(result?.raw_markdown || ''),
+                subjects_json: subjectsJson || { characters: [], props: [], environments: [] },
+                created_count: Number(importResult.created || 0),
+                skipped_count: Number(importResult.skipped || 0),
+                by_type: importResult.byType || {
+                    character: { created: 0, skipped: 0 },
+                    environment: { created: 0, skipped: 0 },
+                    prop: { created: 0, skipped: 0 },
+                },
+                created_items: Array.isArray(importResult.createdItems) ? importResult.createdItems : [],
+                skipped_items: Array.isArray(importResult.skippedItems) ? importResult.skippedItems : [],
+                reimport_count: 0,
+                saved_at: new Date().toISOString(),
+                persisted: false,
+            };
+
+            try {
+                const persisted = await persistSceneRegenSubjectsReport(sceneRegenSubjectResult);
+                sceneRegenSubjectResult.persisted = !!persisted;
+            } catch (persistErr) {
+                onLog?.(
+                    t(
+                        `重生成实体结果持久化失败：${persistErr?.message || persistErr}`,
+                        `Failed to persist regenerated entity result: ${persistErr?.message || persistErr}`
+                    ),
+                    'warning'
+                );
+            }
+
+            setSceneRegenSubjectsReport(sceneRegenSubjectResult);
+
+            setSceneRegenProgress({
+                phase: 'done',
+                percent: 100,
+                message: t('重生成完成。', 'Regeneration completed.'),
+                error: '',
+            });
 
             onLog?.(
                 t(
-                    `场景重生成完成：替换 1 个旧场景，新增 ${generated.length} 个场景。`,
-                    `Scene regeneration completed: replaced 1 scene with ${generated.length} new scene(s).`
+                    ((Boolean(result?.entity_only_mode || sceneRegenEntityOnlyMode))
+                        ? `场景重生成完成（仅补实体模式）：未替换场景/分镜，已回填环境锚点、关联角色、关键道具；按 subjects_json 导入/更新 ${importResult.created} 条（跳过 ${importResult.skipped} 条）。`
+                        : `场景重生成完成：替换 1 个旧场景，新增 ${generated.length} 个场景；按 subjects_json 增量导入 ${importResult.created} 条（跳过已存在 ${importResult.skipped} 条）。`),
+                    ((Boolean(result?.entity_only_mode || sceneRegenEntityOnlyMode))
+                        ? `Scene regeneration completed (Entity-only mode): scene/shots unchanged; patched environment anchor, linked characters, key props; imported/updated ${importResult.created} entities from subjects_json (skipped ${importResult.skipped}).`
+                        : `Scene regeneration completed: replaced 1 scene with ${generated.length} new scene(s); incrementally imported ${importResult.created} subject entities from subjects_json (skipped existing ${importResult.skipped}).`)
                 ),
                 'success'
             );
         } catch (e) {
             const status = Number(e?.response?.status || 0);
             const detail = e?.response?.data?.detail || e?.message || t('重生成失败', 'Regeneration failed');
+            setSceneRegenProgress({
+                phase: 'failed',
+                percent: 100,
+                message: t('重生成失败。', 'Regeneration failed.'),
+                error: String(detail || ''),
+            });
 
             if (status === 404) {
                 onLog?.(
@@ -11584,8 +12319,129 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                             className="w-full bg-black/40 border border-amber-500/20 rounded p-3 text-white text-sm focus:outline-none focus:ring-1 focus:ring-amber-400/60 resize-y custom-scrollbar leading-relaxed min-h-[96px] mb-4"
                                             value={sceneRegenRequirements}
                                             onChange={e => setSceneRegenRequirements(e.target.value)}
-                                            placeholder={t('输入本次重生成要求，例如：拆分为2个场景、强化机位方向、补足角色反应镜头等。', 'Enter regeneration requirements, e.g. split into 2 scenes, strengthen camera direction, add reaction beats.')}
+                                                          placeholder={t('可留空，默认“补充所缺实体”；也可输入例如：拆分为2个场景、强化机位方向、补足角色反应镜头等。', 'Optional. If empty, defaults to "Supplement missing entities"; you can also specify: split into 2 scenes, strengthen camera direction, add reaction beats.')}
                                         />
+                                        <label className="mb-3 inline-flex items-center gap-2 text-xs text-white/80 select-none">
+                                            <input
+                                                type="checkbox"
+                                                className="h-3.5 w-3.5"
+                                                checked={sceneRegenEntityOnlyMode}
+                                                onChange={(e) => setSceneRegenEntityOnlyMode(Boolean(e.target.checked))}
+                                                disabled={sceneRegenerating}
+                                            />
+                                            <span>
+                                                {t('仅补实体（默认）：不替换场景、不删除分镜；仅更新环境锚点/关联角色/关键道具并导入实体', 'Entity-only (default): keep scene/shots unchanged; only patch environment anchor/linked characters/key props and import entities')}
+                                            </span>
+                                        </label>
+                                        {(sceneRegenerating || sceneRegenReimporting || sceneRegenScenePatching || sceneRegenProgress.phase === 'reimport_subjects_json' || sceneRegenProgress.phase === 'rebuild_scenes_from_raw' || sceneRegenProgress.phase === 'done' || sceneRegenProgress.phase === 'failed') && (
+                                            <div className={`mb-4 rounded border p-3 ${
+                                                sceneRegenProgress.phase === 'failed'
+                                                    ? 'border-red-500/30 bg-red-500/10'
+                                                    : 'border-amber-500/30 bg-amber-500/10'
+                                            }`}>
+                                                <div className="flex items-center justify-between text-[11px] font-semibold mb-2">
+                                                    <span>
+                                                        {sceneRegenProgress.message || t('正在处理...', 'Processing...')}
+                                                    </span>
+                                                    <span>{Math.max(0, Math.min(100, Number(sceneRegenProgress.percent || 0)))}%</span>
+                                                </div>
+                                                <div className="h-1.5 w-full rounded bg-white/10 overflow-hidden">
+                                                    <div
+                                                        className={`h-full transition-all duration-300 ${sceneRegenProgress.phase === 'failed' ? 'bg-red-400/80' : 'bg-amber-300/90'}`}
+                                                        style={{ width: `${Math.max(0, Math.min(100, Number(sceneRegenProgress.percent || 0)))}%` }}
+                                                    />
+                                                </div>
+                                                {sceneRegenProgress.error ? (
+                                                    <div className="mt-2 text-[11px] text-red-200 break-words">
+                                                        {sceneRegenProgress.error}
+                                                    </div>
+                                                ) : null}
+                                            </div>
+                                        )}
+                                        {sceneRegenSubjectsReport && (
+                                            <div className="mb-4 rounded border border-white/10 bg-black/20 p-3">
+                                                <div className="flex items-center justify-between gap-2 mb-2">
+                                                    <div className="text-xs font-bold uppercase tracking-wide text-white/90">
+                                                        {t('重生成新增实体结果', 'Regenerated New Entities Result')}
+                                                    </div>
+                                                    <div className="flex items-center gap-2">
+                                                        <div className={`text-[10px] font-mono px-2 py-0.5 rounded border ${sceneRegenSubjectsReport.entity_only_mode ? 'text-sky-100 border-sky-400/40 bg-sky-500/15' : 'text-violet-100 border-violet-400/40 bg-violet-500/15'}`}>
+                                                            {sceneRegenSubjectsReport.entity_only_mode
+                                                                ? t('执行模式：仅补实体', 'Mode: Entity-Only')
+                                                                : t('执行模式：完整替换', 'Mode: Full Replace')}
+                                                        </div>
+                                                        <button
+                                                            onClick={() => { void handleReimportSceneRegenLlmContent(); }}
+                                                            disabled={sceneRegenerating || sceneRegenReimporting || sceneRegenScenePatching}
+                                                            className="px-2 py-1 rounded border border-sky-500/30 bg-sky-500/15 text-[10px] text-sky-100 hover:bg-sky-500/25 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                                                            title={t('按上次重生成返回内容补实体（subjects_json）', 'Patch entities from last regenerated subjects_json')}
+                                                        >
+                                                            {sceneRegenReimporting ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                                                            {sceneRegenReimporting ? t('补实体中...', 'Patching Entities...') : t('补实体', 'Patch Entities')}
+                                                        </button>
+                                                        <button
+                                                            onClick={() => { void handlePatchScenesFromRegenRawMarkdown(); }}
+                                                            disabled={sceneRegenerating || sceneRegenReimporting || sceneRegenScenePatching}
+                                                            className="px-2 py-1 rounded border border-violet-500/30 bg-violet-500/15 text-[10px] text-violet-100 hover:bg-violet-500/25 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                                                            title={t('按上次重生成返回内容补场景（raw_markdown）', 'Patch scenes from last regenerated raw_markdown')}
+                                                        >
+                                                            {sceneRegenScenePatching ? <Loader2 className="w-3 h-3 animate-spin" /> : <TableIcon className="w-3 h-3" />}
+                                                            {sceneRegenScenePatching ? t('补场景中...', 'Patching Scenes...') : t('补场景', 'Patch Scenes')}
+                                                        </button>
+                                                        <div className={`text-[10px] font-mono ${sceneRegenSubjectsReport.persisted ? 'text-emerald-300' : 'text-amber-200'}`}>
+                                                            {sceneRegenSubjectsReport.persisted
+                                                                ? t('已持久化保存', 'Persisted')
+                                                                : t('未持久化（仅当前会话可见）', 'Not persisted (session only)')}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div className="text-[11px] text-muted-foreground mb-3">
+                                                    {t('新增', 'Created')}: <span className="font-mono text-white/80">{Number(sceneRegenSubjectsReport.created_count || 0)}</span>
+                                                    <span className="mx-2">|</span>
+                                                    {t('跳过', 'Skipped')}: <span className="font-mono text-white/80">{Number(sceneRegenSubjectsReport.skipped_count || 0)}</span>
+                                                    <span className="mx-2">|</span>
+                                                    subjects_json: <span className="font-mono text-white/80">{Number(sceneRegenSubjectsReport.subjects_json_count || 0)}</span>
+                                                    <span className="mx-2">|</span>
+                                                    {t('重导入次数', 'Re-import')}: <span className="font-mono text-white/80">{Number(sceneRegenSubjectsReport.reimport_count || 0)}</span>
+                                                    <span className="mx-2">|</span>
+                                                    {t('补场景', 'Patch Scenes')}: <span className="font-mono text-white/80">{Number(sceneRegenSubjectsReport?.scene_patch?.updated_count || 0)}↑/{Number(sceneRegenSubjectsReport?.scene_patch?.created_count || 0)}+</span>
+                                                </div>
+                                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                                    {[
+                                                        { key: 'character', label: t('角色', 'Characters') },
+                                                        { key: 'environment', label: t('场景', 'Environments') },
+                                                        { key: 'prop', label: t('道具', 'Props') },
+                                                    ].map((group) => {
+                                                        const createdItems = (sceneRegenSubjectsReport.created_items || []).filter((item) => String(item?.type || '') === group.key);
+                                                        const skippedItems = (sceneRegenSubjectsReport.skipped_items || []).filter((item) => String(item?.type || '') === group.key);
+                                                        const counts = (sceneRegenSubjectsReport.by_type && sceneRegenSubjectsReport.by_type[group.key]) || { created: 0, skipped: 0 };
+                                                        return (
+                                                            <div key={group.key} className="rounded-lg border border-white/10 bg-black/30 p-2.5">
+                                                                <div className="flex items-center justify-between mb-1.5 text-[11px] font-bold uppercase tracking-wide text-white/90">
+                                                                    <span>{group.label}</span>
+                                                                    <span className="font-mono text-white/65">+{Number(counts.created || 0)} / -{Number(counts.skipped || 0)}</span>
+                                                                </div>
+                                                                <div className="space-y-1 max-h-32 overflow-auto custom-scrollbar pr-1">
+                                                                    {createdItems.map((item, idx) => (
+                                                                        <div key={`created-${group.key}-${idx}`} className="text-[11px] text-emerald-200 bg-emerald-500/10 border border-emerald-500/20 rounded px-2 py-1 truncate" title={String(item?.name || '')}>
+                                                                            + {String(item?.name || '')}
+                                                                        </div>
+                                                                    ))}
+                                                                    {skippedItems.map((item, idx) => (
+                                                                        <div key={`skipped-${group.key}-${idx}`} className="text-[11px] text-white/70 bg-white/5 border border-white/10 rounded px-2 py-1 truncate" title={String(item?.name || '')}>
+                                                                            = {String(item?.name || '')}
+                                                                        </div>
+                                                                    ))}
+                                                                    {createdItems.length === 0 && skippedItems.length === 0 && (
+                                                                        <div className="text-[11px] text-muted-foreground">{t('暂无', 'Empty')}</div>
+                                                                    )}
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                        )}
                                          <label className="text-xs text-muted-foreground uppercase font-bold tracking-wider mb-2 block text-primary/80">{t('核心场景信息（视觉指导）', 'Core Scene Info (Visual Direction)')}</label>
                                          <textarea 
                                             className="w-full flex-1 bg-black/40 border border-white/10 rounded p-3 text-white text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-none custom-scrollbar font-mono leading-relaxed min-h-[400px]"
@@ -12013,6 +12869,88 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                 </div>
             )}
 
+            {sceneRegenPromptModal.open && (
+                <div className="fixed inset-0 z-[55] bg-black/80 flex items-center justify-center p-4">
+                    <div className="bg-[#1e1e1e] border border-white/10 rounded-lg w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl">
+                        <div className="p-4 border-b border-white/10 flex justify-between items-center">
+                            <h3 className="font-bold flex items-center gap-2"><Sparkles size={16} className="text-amber-300"/> {t('确认重生成提示词', 'Confirm Regeneration Prompt')}</h3>
+                            <button onClick={() => setSceneRegenPromptModal({ open: false, loading: false, data: null })}><X size={18}/></button>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                            {sceneRegenPromptModal.loading && !sceneRegenPromptModal.data ? (
+                                <div className="flex items-center justify-center h-40"><Loader2 className="animate-spin text-amber-300" size={32}/></div>
+                            ) : (
+                                <>
+                                    <div className="bg-amber-500/10 border border-amber-500/20 rounded p-3 text-xs text-amber-100 flex items-start gap-2">
+                                        <Info size={14} className="shrink-0 mt-0.5" />
+                                        {t('超级用户模式：请确认提示词后再提交重生成。', 'Superuser mode: confirm prompt before submitting regeneration.')}
+                                    </div>
+
+                                    <div className="flex flex-col gap-2">
+                                        <label className="text-xs font-bold text-muted-foreground uppercase">{t('用户提示词预览（只读）', 'User Prompt Preview (Read-only)')}</label>
+                                        <textarea
+                                            readOnly
+                                            className="bg-black/30 border border-white/10 rounded-md p-3 text-xs text-white/80 font-mono h-56 focus:outline-none resize-y"
+                                            value={sceneRegenPromptModal.data?.user_prompt_preview || ''}
+                                        />
+                                    </div>
+
+                                    <div className="flex flex-col gap-2">
+                                        <label className="text-xs font-bold text-muted-foreground uppercase">{t('系统提示词（可编辑）', 'System Prompt (Editable)')}</label>
+                                        <textarea
+                                            className="bg-black/30 border border-white/10 rounded-md p-3 text-xs text-muted-foreground font-mono h-48 focus:outline-none focus:border-amber-400/50 resize-y"
+                                            value={sceneRegenPromptModal.data?.system_prompt || ''}
+                                            onChange={e => setSceneRegenPromptModal(prev => ({
+                                                ...prev,
+                                                data: { ...(prev.data || {}), system_prompt: e.target.value },
+                                            }))}
+                                        />
+                                    </div>
+                                </>
+                            )}
+                        </div>
+
+                        <div className="p-4 border-t border-white/10 flex justify-end gap-3 bg-black/20">
+                            <button
+                                onClick={() => {
+                                    const full = String(sceneRegenPromptModal.data?.system_prompt || '');
+                                    navigator.clipboard.writeText(full);
+                                    onLog?.(t('系统提示词已复制到剪贴板', 'System prompt copied to clipboard'), 'success');
+                                }}
+                                className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded text-sm font-medium flex items-center gap-2 mr-auto"
+                            >
+                                <Copy size={16}/> {t('复制系统提示词', 'Copy System Prompt')}
+                            </button>
+                            <button
+                                onClick={() => setSceneRegenPromptModal({ open: false, loading: false, data: null })}
+                                className="px-4 py-2 rounded hover:bg-white/10 text-sm"
+                            >
+                                {t('取消', 'Cancel')}
+                            </button>
+                            <button
+                                onClick={async () => {
+                                    setSceneRegenPromptModal(prev => ({ ...prev, loading: true }));
+                                    try {
+                                        await handleRegenerateScene({
+                                            system_prompt: sceneRegenPromptModal.data?.system_prompt || '',
+                                        });
+                                        setSceneRegenPromptModal({ open: false, loading: false, data: null });
+                                    } catch {
+                                        setSceneRegenPromptModal(prev => ({ ...prev, loading: false }));
+                                    }
+                                }}
+                                disabled={sceneRegenPromptModal.loading}
+                                className="px-6 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm font-medium flex items-center gap-2"
+                            >
+                                {sceneRegenPromptModal.loading ? <Loader2 className="animate-spin" size={16}/> : <Sparkles size={16}/>}
+                                {sceneRegenPromptModal.loading ? t('提交中...', 'Submitting...') : t('确认并重生成', 'Confirm & Regenerate')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {aiShotRowEditor.open && (
                 <div className="fixed inset-0 z-[60] bg-black/85 flex items-center justify-center p-4" onClick={() => setAiShotRowEditor({ open: false, index: -1, data: null })}>
                     <div className="bg-[#1b1b1b] border border-white/10 rounded-xl w-full max-w-3xl max-h-[88vh] overflow-hidden shadow-2xl" onClick={e => e.stopPropagation()}>
@@ -12030,7 +12968,12 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                 <InputGroup label={t('时长（秒）', 'Duration (s)')} value={aiShotRowEditor.data?.duration || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), duration: v } }))} />
                             </div>
                             <InputGroup label={t('镜头逻辑（中文）', 'Shot Logic (CN)')} value={aiShotRowEditor.data?.shot_logic_cn || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), shot_logic_cn: v } }))} />
-                            <InputGroup label={t('中文提示词', 'Prompt (CN)')} value={aiShotRowEditor.data?.prompt_cn || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), prompt_cn: v } }))} />
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <InputGroup label={t('起始帧（中文）', 'Start Frame (CN)')} value={aiShotRowEditor.data?.start_frame_cn || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), start_frame_cn: v } }))} />
+                                <InputGroup label={t('视频内容（中文）', 'Video Content (CN)')} value={aiShotRowEditor.data?.video_content_cn || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), video_content_cn: v } }))} />
+                                <InputGroup label={t('关键帧（中文）', 'Keyframes (CN)')} value={aiShotRowEditor.data?.keyframes_cn || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), keyframes_cn: v } }))} />
+                                <InputGroup label={t('收尾帧（中文）', 'End Frame (CN)')} value={aiShotRowEditor.data?.end_frame_cn || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), end_frame_cn: v } }))} />
+                            </div>
                             <InputGroup label={t('关联实体', 'Associated Entities')} value={aiShotRowEditor.data?.associated_entities || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), associated_entities: v } }))} />
                             <InputGroup label={t('关键帧', 'Keyframes')} value={aiShotRowEditor.data?.keyframes || ''} onChange={v => setAiShotRowEditor(prev => ({ ...prev, data: { ...(prev.data || {}), keyframes: v } }))} />
                             <div>
@@ -12134,15 +13077,13 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     const [promptSubmitLangPref, setPromptSubmitLangPref] = useState(() => getPromptSubmitLanguagePreference());
     const [tempPromptSubmitLang, setTempPromptSubmitLang] = useState('');
     const [showPromptLangMenu, setShowPromptLangMenu] = useState(false);
-    const [provider, setProvider] = useState('');
     const [refImage, setRefImage] = useState(null);
     const [refSelectionMode, setRefSelectionMode] = useState(null); // 'assets'
     const [assets, setAssets] = useState([]);
     const [assetKeyword, setAssetKeyword] = useState('');
     const [assetProjectFilter, setAssetProjectFilter] = useState('all');
     const [assetImageTypeFilter, setAssetImageTypeFilter] = useState('all');
-    const [availableProviders, setAvailableProviders] = useState([]);
-    const [activeSourceImage, setActiveSourceImage] = useState('unset');
+    const [imageSelectAction, setImageSelectAction] = useState('direct_use');
     const [viewingEntity, setViewingEntity] = useState(null);
     const [isBatchGeneratingEntities, setIsBatchGeneratingEntities] = useState(false);
     const [batchEntityProgress, setBatchEntityProgress] = useState(null);
@@ -12327,6 +13268,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
             subjectImageJobPollingRef.current = true;
             try {
                 const completed = [];
+                const statusUpdates = {};
                 for (const [entityId, job] of jobEntries) {
                     const jobId = String(job?.jobId || '').trim();
                     if (!jobId) {
@@ -12343,6 +13285,10 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
 
                     const status = String(statusResp?.status || '').trim().toLowerCase();
                     if (status === 'queued' || status === 'running') {
+                        statusUpdates[String(entityId)] = {
+                            status,
+                            lastPolledAt: Date.now(),
+                        };
                         continue;
                     }
 
@@ -12359,6 +13305,9 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                 setEntities(prev => prev.map(item => String(item?.id) === String(entityId) ? { ...item, image_url: generatedUrl } : item));
                                 setViewingEntity(prev => (String(prev?.id || '') === String(entityId) ? { ...prev, image_url: generatedUrl } : prev));
                                 setSelectedEntity(prev => (String(prev?.id || '') === String(entityId) ? { ...prev, image_url: generatedUrl } : prev));
+                                if (showImageModal && String(selectedEntity?.id || '') === String(entityId)) {
+                                    setShowImageModal(false);
+                                }
                             }
                         }
                         if (onLog) onLog(t(`主体生成完成：${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
@@ -12370,6 +13319,24 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                         if (onLog) onLog(t(`主体生成失败：${job?.entityName || entityId} - ${statusResp?.error || status}`, `Subject generation failed: ${job?.entityName || entityId} - ${statusResp?.error || status}`), 'error');
                         completed.push(entityId);
                     }
+                }
+
+                if (!disposed && Object.keys(statusUpdates).length > 0) {
+                    setSubjectImageJobs(prev => {
+                        const base = { ...(prev || {}) };
+                        let changed = false;
+                        for (const [entityId, patch] of Object.entries(statusUpdates)) {
+                            const existing = base[String(entityId)];
+                            if (!existing) continue;
+                            if (String(existing.status || '') === String(patch.status || '')) continue;
+                            base[String(entityId)] = {
+                                ...existing,
+                                ...patch,
+                            };
+                            changed = true;
+                        }
+                        return changed ? base : prev;
+                    });
                 }
 
                 if (!disposed && completed.length > 0) {
@@ -12395,7 +13362,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
             disposed = true;
             clearInterval(timer);
         };
-    }, [onLog, subjectImageJobs, t]);
+    }, [onLog, selectedEntity?.id, showImageModal, subjectImageJobs, t]);
 
     useEffect(() => {
         const applySnapshot = (snapshot) => {
@@ -12423,26 +13390,6 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         setPickerConfig({ isOpen: true, callback, context });
     };
 
-    // Load active providers
-    useEffect(() => {
-        const loadProviders = async () => {
-            try {
-                const settings = await getSettings();
-                // Filter for Image provider that are active
-                // Ensure unique providers if multiple keys exist for same provider? 
-                // DB structure seems to be one entry per provider config.
-                // But let's verify what 'settings' looks like. 
-                // APISetting schema: provider, api_key, category, is_active...
-                const imageProviders = settings.filter(s => s.category === 'Image' && s.is_active);
-                setAvailableProviders(imageProviders);
-                setActiveSourceImage(getSettingSourceByCategory(settings, 'Image'));
-            } catch (e) {
-                console.error("Failed to load providers", e);
-            }
-        };
-        loadProviders();
-    }, []);
-    
     // Load entities - NOW FETCHES ALL and filters locally
     const loadEntities = useCallback(async () => {
         if (!projectId) return;
@@ -12776,6 +13723,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     const handleOpenImageModal = (entity, defaultTab = 'library') => {
         setSelectedEntity(entity);
         setImageModalTab(defaultTab); // This might cause render before prompt is set?
+        setImageSelectAction('direct_use');
         setTempPromptSubmitLang('');
         setShowPromptLangMenu(false);
         setAssetKeyword('');
@@ -12792,13 +13740,6 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         setShowImageModal(true); // Show AFTER setting everything
 
         setRefImage(null);
-        
-        // Default to active provider if available, otherwise system default
-        if (availableProviders && availableProviders.length > 0) {
-            setProvider(availableProviders[0].provider);
-        } else {
-            setProvider('');
-        }
         setRefSelectionMode(null); 
         loadAssets();
     };
@@ -12941,8 +13882,31 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     ]);
 
     // Image Handlers
-    const  handleSelectAsset = async (asset) => {
-        await updateEntityImage(asset.url);
+    const handleSelectAsset = async (asset) => {
+        const selectedUrl = String(asset?.url || '').trim();
+        if (!selectedUrl) return;
+
+        const updatedEntity = await updateEntityImage(selectedUrl, false);
+        if (!updatedEntity) return;
+
+        if (imageSelectAction === 'sync_prompt') {
+            setShowImageModal(false);
+            await handleAnalyzeEntity(updatedEntity);
+            return;
+        }
+
+        if (imageSelectAction === 'rewrite_and_regenerate') {
+            setShowImageModal(false);
+            await handleReconstructEntityAsset(updatedEntity);
+            return;
+        }
+
+        if (imageSelectAction === 'batch_entry') {
+            setShowImageModal(false);
+            return;
+        }
+
+        setShowImageModal(false);
     };
 
     const handleUpload = async (e) => {
@@ -13027,7 +13991,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                 );
             }
 
-            const submitResult = await submitImageGenerationJob(finalPrompt, provider || null, uniqueRefs.length > 0 ? uniqueRefs : null, {
+            const submitResult = await submitImageGenerationJob(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
                 project_id: projectId,
                 episode_id: currentEpisode?.id,
                 entity_id: targetEntityId,
@@ -13049,6 +14013,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                     ...(prev || {}),
                     [String(targetEntityId)]: {
                         jobId,
+                        status: 'queued',
                         startedAt: Date.now(),
                         entityName: targetEntityName,
                     },
@@ -13078,14 +14043,24 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         }
     };
 
-    const updateEntityImage = async (url) => {
+    const updateEntityImage = async (url, closeModal = true) => {
         if (!selectedEntity) return;
+        const targetUrl = String(url || '').trim();
+        if (!targetUrl) return;
         try {
-            await updateEntity(selectedEntity.id, { image_url: url });
-            setShowImageModal(false);
-            loadEntities();
+            await updateEntity(selectedEntity.id, { image_url: targetUrl });
+            const updatedEntity = { ...selectedEntity, image_url: targetUrl };
+            setSelectedEntity(updatedEntity);
+            setViewingEntity(prev => (String(prev?.id || '') === String(updatedEntity.id) ? { ...prev, image_url: targetUrl } : prev));
+            setEntities(prev => prev.map(ent => String(ent?.id || '') === String(updatedEntity.id) ? { ...ent, image_url: targetUrl } : ent));
+            setAllEntities(prev => prev.map(ent => String(ent?.id || '') === String(updatedEntity.id) ? { ...ent, image_url: targetUrl } : ent));
+            if (closeModal) {
+                setShowImageModal(false);
+            }
+            return updatedEntity;
         } catch (e) {
             console.error(e);
+            return null;
         }
     };
 
@@ -13371,7 +14346,11 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                         {subjectImageJobs[String(entity.id)] && (
                             <div className="absolute top-2 left-2 z-30 px-2 py-1 rounded-md bg-amber-500/20 border border-amber-400/40 text-amber-100 text-[10px] font-bold flex items-center gap-1">
                                 <RefreshCw className="animate-spin" size={10} />
-                                {t('生成中', 'Generating')}
+                                {String(subjectImageJobs[String(entity.id)]?.status || '').toLowerCase() === 'running'
+                                    ? t('运行中', 'Running')
+                                    : String(subjectImageJobs[String(entity.id)]?.status || '').toLowerCase() === 'queued'
+                                        ? t('排队中', 'Queued')
+                                        : t('生成中', 'Generating')}
                             </div>
                         )}
                         <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent z-10 pointer-events-none"></div>
@@ -13913,6 +14892,61 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                             <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
                                 {imageModalTab === 'library' && (
                                     <div>
+                                        {String(selectedEntity?.type || '').toLowerCase() === 'character' && (
+                                            <div className="mb-3 rounded-lg border border-white/10 bg-black/25 p-3">
+                                                <div className="text-xs font-bold text-white/90 mb-2">
+                                                    {t('选图后动作', 'Post-Selection Action')}
+                                                </div>
+                                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                                                    {[
+                                                        {
+                                                            key: 'direct_use',
+                                                            label: t('直接使用图片', 'Use Image Directly'),
+                                                            desc: t('仅替换主体图片，不触发额外处理。', 'Only replace image; no extra processing.')
+                                                        },
+                                                        {
+                                                            key: 'sync_prompt',
+                                                            label: t('按图同步提示词', 'Sync Prompt from Image'),
+                                                            desc: t('应用图片后，立即分析并反写主体信息。非本系统生图原则上先走此步。', 'Apply image, then analyze and write back metadata. For non-system images, this should generally be the first step.')
+                                                        },
+                                                        {
+                                                            key: 'rewrite_and_regenerate',
+                                                            label: t('按图修改提示词并重生成', 'Rewrite Prompt and Regenerate'),
+                                                            desc: t('应用图片后，分析并重写提示词，再生成新图。若原图非六视图/人物不清晰，建议使用此项。', 'Apply image, analyze, rewrite prompt, then regenerate. Recommended when the source image is not six-view or character details are unclear.')
+                                                        },
+                                                        {
+                                                            key: 'batch_entry',
+                                                            label: t('批量分析/批量补图（此处不执行）', 'Batch Analyze / Fill (No Trigger Here)'),
+                                                            desc: t('仅应用当前图片；批量任务请用顶部按钮。', 'Only apply image here; run batch jobs from top toolbar.')
+                                                        },
+                                                    ].map((option) => (
+                                                        <label
+                                                            key={option.key}
+                                                            className={`rounded-md border px-2 py-2 cursor-pointer transition-colors ${imageSelectAction === option.key ? 'border-primary/50 bg-primary/10 text-white' : 'border-white/10 bg-black/20 text-white/75 hover:bg-white/5'}`}
+                                                        >
+                                                            <div className="flex items-center gap-2">
+                                                                <input
+                                                                    type="radio"
+                                                                    name="image-select-action"
+                                                                    checked={imageSelectAction === option.key}
+                                                                    onChange={() => setImageSelectAction(option.key)}
+                                                                    className="accent-primary"
+                                                                />
+                                                                <span className="font-semibold">{option.label}</span>
+                                                            </div>
+                                                            <div className="mt-1 text-[10px] text-white/55">{option.desc}</div>
+                                                        </label>
+                                                    ))}
+                                                </div>
+                                                <div className="mt-2 text-[10px] text-white/50">
+                                                    {t(
+                                                        '说明：点击素材图后会先应用图片，再按上方策略执行。若不是本系统生成的图，原则上应先做“按图同步提示词”；若原图不是六视图或人物细节不清晰，建议继续“按图修改提示词并重生成”。“批量分析/批量补图”在此流程不会触发。',
+                                                        'Note: Clicking an asset first applies the image, then runs the selected strategy. If the image was not generated by this system, you should generally run Sync Prompt from Image first. If the source is not six-view or character details are unclear, it is recommended to continue with Rewrite Prompt and Regenerate. Batch analyze/fill are not triggered in this flow.'
+                                                    )}
+                                                </div>
+                                            </div>
+                                        )}
+
                                         <div className="mb-3 grid grid-cols-1 sm:grid-cols-[1fr_180px_180px_auto] gap-2">
                                             <input
                                                 type="text"
@@ -14048,7 +15082,11 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                         {selectedEntity?.id && subjectImageJobs[String(selectedEntity.id)] && (
                                             <div className="mb-3 rounded border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100 flex items-center gap-2">
                                                 <RefreshCw className="animate-spin" size={12} />
-                                                {t('该主体正在生成中，即使关闭窗口也会继续。', 'This subject is generating in background and will continue even if you close this window.')}
+                                                {String(subjectImageJobs[String(selectedEntity.id)]?.status || '').toLowerCase() === 'running'
+                                                    ? t('该主体正在运行中，即使关闭窗口也会继续。', 'This subject is running in background and will continue even if you close this window.')
+                                                    : String(subjectImageJobs[String(selectedEntity.id)]?.status || '').toLowerCase() === 'queued'
+                                                        ? t('该主体正在排队中，开始后将自动运行。', 'This subject is queued and will run automatically once started.')
+                                                        : t('该主体正在生成中，即使关闭窗口也会继续。', 'This subject is generating in background and will continue even if you close this window.')}
                                             </div>
                                         )}
                                         <textarea
@@ -14105,32 +15143,8 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                             </div>
                                         )}
                                         
-                                        {/* Configuration Row */}
-                                        <div className="flex items-center gap-4 mb-4">
-                                            {/* Provider Select */}
-                                            <div className="flex-1">
-                                                <label className="text-[10px] uppercase font-bold text-muted-foreground mb-1 flex items-center gap-2">
-                                                    Provider
-                                                    <span className={`text-[9px] px-1.5 py-0.5 rounded border font-mono normal-case ${sourceBadgeClass(activeSourceImage)}`}>
-                                                        Source: {sourceBadgeText(activeSourceImage)}
-                                                    </span>
-                                                </label>
-                                                <select 
-                                                    value={provider} 
-                                                    onChange={e => setProvider(e.target.value)}
-                                                    className="w-full bg-black/40 border border-white/10 rounded-md px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
-                                                >
-                                                    <option value="">{t('默认（系统）', 'Default (System)')}</option>
-                                                    {availableProviders.map(p => (
-                                                        <option key={p.provider} value={p.provider}>
-                                                           {formatProviderLabel(p.provider, p.provider_alias) || 'Unknown'}
-                                                        </option>
-                                                    ))}
-                                                </select>
-                                            </div>
-                                            
-                                            {/* Reference Image Select */}
-                                            <div className="flex-[2] relative">
+                                        {/* Reference Image Select */}
+                                        <div className="mb-4 relative">
                                                  <label className="text-[10px] uppercase font-bold text-muted-foreground mb-1 block">{t('参考图（可选）', 'Ref Image (Optional)')}</label>
                                                  
                                                  {!refImage ? (
@@ -14251,7 +15265,6 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                                          </div>
                                                      </div>
                                                  )}
-                                            </div>
                                         </div>
 
                                         <div className="mb-3 text-[11px] text-muted-foreground">
@@ -14319,13 +15332,6 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                             </div>
                                         </div>
                                         
-                                        <div className="mt-6">
-                                            <h4 className="text-xs font-bold uppercase text-muted-foreground mb-3">{t('提示词变量', 'Prompt Variables')}</h4>
-                                            <ul className="text-xs text-white/60 space-y-2 list-disc pl-4">
-                                                <li><code className="bg-white/10 px-1 rounded text-primary">[Global Style]</code>: Injects current episode style.</li>
-                                                <li><code className="bg-white/10 px-1 rounded text-primary">CHAR:[@Name]</code> / <code className="bg-white/10 px-1 rounded text-primary">[@Name]</code>: Injects matched Entity anchor description.</li>
-                                            </ul>
-                                        </div>
                                     </div>
                                 )}
                             </div>
@@ -14351,7 +15357,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     );
 };
 
-const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setEditingShot, uiLang = 'zh', focusRequest = null, restoreEditingShotId = null }) => {
+const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setEditingShot, isSuperuser = false, uiLang = 'zh', focusRequest = null, restoreEditingShotId = null }) => {
     const { generationConfig, saveToolConfig, savedToolConfigs, llmConfig } = useStore();
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
     const [promptSubmitLangPref, setPromptSubmitLangPref] = useState(() => getPromptSubmitLanguagePreference());
@@ -14359,6 +15365,51 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         return resolvePromptSubmitLanguage(uiLang, promptSubmitLangPref);
     }, [promptSubmitLangPref, uiLang]);
     const shotPromptDisplayLang = resolvedPromptSubmitLang === 'cn' ? 'cn' : 'en';
+
+    const getShotCardPromptPreview = useCallback((shot) => {
+        if (!shot || typeof shot !== 'object') return '';
+
+        let tech = {};
+        try {
+            tech = JSON.parse(shot.technical_notes || '{}');
+            if (!tech || typeof tech !== 'object') tech = {};
+        } catch (e) {
+            tech = {};
+        }
+
+        const cnCandidates = [
+            shot.shot_logic_cn,
+            tech.video_prompt_cn,
+            shot.prompt_cn,
+            shot.video_content_cn,
+            shot.prompt,
+            shot.video_content,
+            shot.start_frame,
+            shot.end_frame,
+        ];
+        const enCandidates = [
+            shot.prompt,
+            shot.video_content,
+            shot.start_frame,
+            shot.end_frame,
+            tech.video_prompt_cn,
+            shot.prompt_cn,
+            shot.video_content_cn,
+            shot.shot_logic_cn,
+        ];
+
+        const pickFirstNonEmpty = (items) => {
+            for (const item of items) {
+                const text = String(item || '').trim();
+                if (text) return text;
+            }
+            return '';
+        };
+
+        return shotPromptDisplayLang === 'cn'
+            ? pickFirstNonEmpty(cnCandidates)
+            : pickFirstNonEmpty(enCandidates);
+    }, [shotPromptDisplayLang]);
     const [scenes, setScenes] = useState([]);
     const [shotSortMode, setShotSortMode] = useState('updated_desc');
     const [shotSortDirection, setShotSortDirection] = useState('desc');
@@ -14395,6 +15446,16 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     // AI Prompt Preview Modal State
     const [shotPromptModal, setShotPromptModal] = useState({ open: false, sceneId: null, data: null, loading: false });
     const [shotReviewModal, setShotReviewModal] = useState({ open: false, sceneId: null, data: null, loading: false });
+    const [voicePromptConfirmModal, setVoicePromptConfirmModal] = useState({
+        open: false,
+        shotId: null,
+        prompt: '',
+        systemPrompt: '',
+        loadingSystemPrompt: false,
+        languageCode: '',
+        projectLanguage: '',
+        submitting: false,
+    });
 
     // Media Handling
     const [viewMedia, setViewMedia] = useState(null);
@@ -14404,6 +15465,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const [isStoppingShotBatch, setIsStoppingShotBatch] = useState(false);
     const [isManualRebindingMedia, setIsManualRebindingMedia] = useState(false);
     const [stoppingVideoByShot, setStoppingVideoByShot] = useState({});
+    const [voiceGeneratingByShot, setVoiceGeneratingByShot] = useState({});
     const [translatingPromptField, setTranslatingPromptField] = useState('');
     const [batchProgress, setBatchProgress] = useState({
         current: 0,
@@ -14710,6 +15772,9 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const currentGeneratingState = editingShot?.id
         ? (generatingStateByShot[String(editingShot.id)] || { start: false, end: false, video: false, startAt: 0, endAt: 0, videoAt: 0 })
         : { start: false, end: false, video: false };
+    const currentVoiceGenerating = editingShot?.id
+        ? !!voiceGeneratingByShot[String(editingShot.id)]
+        : false;
     const hasActiveGeneration = useMemo(
         () => Object.values(generatingStateByShot || {}).some(s => !!(s?.start || s?.end || s?.video)),
         [generatingStateByShot]
@@ -15954,6 +17019,64 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         let headerFound = false;
         let headerMap = {}; // Map normalized header string to column index
 
+        const splitCombinedCnPrompt = (raw) => {
+            const textVal = String(raw || '').trim();
+            if (!textVal) {
+                return {
+                    start_frame_cn: '',
+                    video_prompt_cn: '',
+                    keyframes_cn: '',
+                    end_frame_cn: '',
+                };
+            }
+            const lines = textVal
+                .split(/\n|<br\s*\/?>/i)
+                .map((ln) => String(ln || '').trim())
+                .filter(Boolean);
+
+            let start = '';
+            let video = '';
+            let keyframes = '';
+            let end = '';
+
+            lines.forEach((ln) => {
+                const lower = ln.toLowerCase();
+                if (/^(start\s*frame\s*(cn)?\s*:|start\s*:|起始帧\s*[:：])/.test(lower) || /^起始帧\s*[:：]/.test(ln)) {
+                    start = ln.replace(/^(start\s*frame\s*(cn)?\s*:|start\s*:|起始帧\s*[:：])/i, '').trim();
+                    return;
+                }
+                if (/^(video\s*(cn)?\s*:|视频提示词\s*[:：]|视频\s*[:：])/.test(lower) || /^视频(提示词)?\s*[:：]/.test(ln)) {
+                    video = ln.replace(/^(video\s*(cn)?\s*:|视频提示词\s*[:：]|视频\s*[:：])/i, '').trim();
+                    return;
+                }
+                if (/^(key\s*frames?\s*(cn)?\s*:|关键帧\s*[:：])/.test(lower) || /^关键帧\s*[:：]/.test(ln)) {
+                    keyframes = ln.replace(/^(key\s*frames?\s*(cn)?\s*:|关键帧\s*[:：])/i, '').trim();
+                    return;
+                }
+                if (/^(end\s*frame\s*(cn)?\s*:|end\s*:|收尾帧\s*[:：]|结束帧\s*[:：])/.test(lower) || /^(收尾帧|结束帧)\s*[:：]/.test(ln)) {
+                    end = ln.replace(/^(end\s*frame\s*(cn)?\s*:|end\s*:|收尾帧\s*[:：]|结束帧\s*[:：])/i, '').trim();
+                }
+            });
+
+            if (!start && !video && !keyframes && !end) {
+                return {
+                    start_frame_cn: textVal,
+                    video_prompt_cn: textVal,
+                    keyframes_cn: textVal,
+                    end_frame_cn: textVal,
+                };
+            }
+
+            if (!end && start) end = start;
+
+            return {
+                start_frame_cn: start,
+                video_prompt_cn: video,
+                keyframes_cn: keyframes,
+                end_frame_cn: end,
+            };
+        };
+
         for (let line of lines) {
              // Skip context header (Project | Episode)
              if (line.includes('Project:') && line.includes('Episode:')) continue;
@@ -16036,6 +17159,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                          })(),
                          keyframes: useMap ? getVal(['keyframes', 'key frames', '关键帧', 'kf'], 8) : '',
                          prompt_cn: useMap ? getVal(['promptcn', 'prompt(cn)', 'cnprompt', '中文提示词', '中文提示', 'prompt中文'], 9) : '',
+                         start_frame_cn: useMap ? getVal(['startframecn', 'start_frame_cn', '起始帧中文', '起始帧（中文）'], 10) : '',
+                         video_prompt_cn: useMap ? getVal(['videocontentcn', 'video_prompt_cn', '视频内容中文', '视频内容（中文）'], 11) : '',
+                         keyframes_cn: useMap ? getVal(['keyframescn', 'keyframes_cn', '关键帧中文', '关键帧（中文）'], 12) : '',
+                         end_frame_cn: useMap ? getVal(['endframecn', 'end_frame_cn', '收尾帧中文', '收尾帧（中文）', '结束帧中文', '结束帧（中文）'], 13) : '',
 
                          // Clear unused
                          shot_type: '',
@@ -16086,7 +17213,13 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     if (!s.scene_code && currentScene) s.scene_code = currentScene.scene_no;
 
                     const promptCnRaw = String(s.prompt_cn || '').trim();
-                    if (promptCnRaw) {
+                    const startFrameCnRaw = String(s.start_frame_cn || '').trim();
+                    const videoPromptCnRaw = String(s.video_prompt_cn || '').trim();
+                    const keyframesCnRaw = String(s.keyframes_cn || '').trim();
+                    const endFrameCnRaw = String(s.end_frame_cn || '').trim();
+                    const combinedFallback = splitCombinedCnPrompt(promptCnRaw);
+
+                    if (promptCnRaw || startFrameCnRaw || videoPromptCnRaw || keyframesCnRaw || endFrameCnRaw) {
                         let techObj = {};
                         try {
                             techObj = s.technical_notes ? JSON.parse(s.technical_notes) : {};
@@ -16094,7 +17227,22 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                         } catch (e) {
                             techObj = {};
                         }
-                        techObj.shot_prompt_cn = promptCnRaw;
+                        const finalStartCn = startFrameCnRaw || combinedFallback.start_frame_cn;
+                        const finalVideoCn = videoPromptCnRaw || combinedFallback.video_prompt_cn;
+                        const finalKeyframesCn = keyframesCnRaw || combinedFallback.keyframes_cn;
+                        const finalEndCn = endFrameCnRaw || combinedFallback.end_frame_cn;
+
+                        if (finalStartCn) techObj.start_frame_cn = finalStartCn;
+                        if (finalVideoCn) techObj.video_prompt_cn = finalVideoCn;
+                        if (finalKeyframesCn) techObj.keyframes_cn = finalKeyframesCn;
+                        if (finalEndCn) techObj.end_frame_cn = finalEndCn;
+
+                        techObj.shot_prompt_cn = [
+                            `起始帧：${finalStartCn || ''}`,
+                            `视频：${finalVideoCn || ''}`,
+                            `关键帧：${finalKeyframesCn || ''}`,
+                            `收尾帧：${finalEndCn || ''}`,
+                        ].join('<br>');
                         s.technical_notes = JSON.stringify(techObj);
                     }
                     
@@ -16104,7 +17252,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                         }
                     }
 
-                          const { prompt_cn, ...createPayload } = s;
+                          const { prompt_cn, start_frame_cn, video_prompt_cn, keyframes_cn, end_frame_cn, ...createPayload } = s;
                           await createShot(selectedSceneId, createPayload);
                     count++;
                  } catch(e) {
@@ -16480,6 +17628,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const handleGenerateKeyframe = async (kfIndex, promptOverride = null) => {
         const kf = localKeyframes[kfIndex];
         if (!kf) return;
+        const tech = getEditingShotTech();
+        const timeKey = String(kf?.time || '').trim();
+        const cnMap = (tech && typeof tech === 'object' && tech.keyframe_prompt_cn_map && typeof tech.keyframe_prompt_cn_map === 'object')
+            ? tech.keyframe_prompt_cn_map
+            : {};
+        const cnPrompt = timeKey ? String(cnMap[timeKey] || '').trim() : '';
         
         // UI Loading State (Local)
         const updated = [...localKeyframes];
@@ -16491,7 +17645,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         try {
             // Prompt Construction
             const globalCtx = getGlobalContextStr();
-            const promptToUse = promptOverride || kf.prompt;
+            const promptToUse = promptOverride
+                || (resolvedPromptSubmitLang === 'cn' ? (cnPrompt || kf.prompt) : (kf.prompt || cnPrompt));
             const fullPrompt = promptToUse + globalCtx;
             const preferredImageSize = getEpisodePreferredImageSize(activeEpisode?.episode_info);
             
@@ -16716,9 +17871,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         setShotGeneratingState(targetShotId, 'start', true);
         abortGenerationRef.current = false; 
 
-        const rawPrompt = promptOverride || editingShot.start_frame || editingShot.video_content || "A cinematic shot";
-        
         const techNotes = JSON.parse(editingShot.technical_notes || '{}');
+        const cnStartPrompt = String(techNotes.start_frame_cn || '').trim();
+        const rawPrompt = promptOverride
+            || (resolvedPromptSubmitLang === 'cn'
+                ? (cnStartPrompt || editingShot.start_frame || editingShot.video_content || "A cinematic shot")
+                : (editingShot.start_frame || cnStartPrompt || editingShot.video_content || "A cinematic shot"));
         const isManual = techNotes.manual_start_frame === true;
 
         const { text: submitPrompt } = injectEntityFeatures(rawPrompt, isManual);
@@ -16832,9 +17990,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         setShotGeneratingState(targetShotId, 'end', true);
         abortGenerationRef.current = false;
 
-        const rawPrompt = promptOverride || editingShot.end_frame || "End frame";
-        
         const techNotes = JSON.parse(editingShot.technical_notes || '{}');
+        const cnEndPrompt = String(techNotes.end_frame_cn || '').trim();
+        const rawPrompt = promptOverride
+            || (resolvedPromptSubmitLang === 'cn'
+                ? (cnEndPrompt || editingShot.end_frame || "End frame")
+                : (editingShot.end_frame || cnEndPrompt || "End frame"));
         const isManual = techNotes.manual_end_frame === true;
 
         const { text: submitPrompt } = injectEntityFeatures(rawPrompt, isManual);
@@ -17077,6 +18238,175 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         });
     }, []);
 
+    const setShotVoiceGenerating = useCallback((shotId, value) => {
+        const stableShotId = String(shotId || '').trim();
+        if (!stableShotId) return;
+        setVoiceGeneratingByShot((prev) => {
+            if (value) return { ...prev, [stableShotId]: true };
+            const next = { ...prev };
+            delete next[stableShotId];
+            return next;
+        });
+    }, []);
+
+    const buildVoiceGenerationContext = (shot, basePromptOverride = null) => {
+        if (!shot) return null;
+        const tech = (() => {
+            try {
+                const parsed = JSON.parse(shot.technical_notes || '{}');
+                return parsed && typeof parsed === 'object' ? parsed : {};
+            } catch (e) {
+                return {};
+            }
+        })();
+
+        const cnVideoPrompt = String(tech.video_prompt_cn || '').trim();
+        const rawPrompt = basePromptOverride
+            || (resolvedPromptSubmitLang === 'cn'
+                ? (cnVideoPrompt || shot.prompt || shot.video_content || 'Video motion')
+                : (shot.prompt || shot.video_content || cnVideoPrompt || 'Video motion'));
+        const isManual = tech.manual_video_prompt === true;
+        const { text: submitPrompt } = injectEntityFeatures(rawPrompt, isManual);
+        const finalPrompt = isManual ? submitPrompt : (submitPrompt + getGlobalContextStr());
+
+        const projectLanguage = String(
+            activeEpisode?.episode_info?.e_global_info?.language
+            || activeEpisode?.episode_info?.language
+            || project?.global_info?.language
+            || ''
+        ).trim();
+        const voiceBuild = buildVoicePromptWithEntityContext(finalPrompt, entities, projectLanguage, uiLang);
+        const voicePrompt = String(voiceBuild.voicePrompt || '').trim();
+
+        return {
+            shot,
+            voicePrompt,
+            languageCode: voiceBuild.languageCode,
+            projectLanguage: projectLanguage || voiceBuild.languageCode,
+        };
+    };
+
+    const submitVoiceoverOnly = async (context) => {
+        const shot = context?.shot;
+        if (!shot?.id) return;
+
+        const targetShotId = shot.id;
+        const voicePrompt = String(context?.voicePrompt || '').trim();
+        const plannerSystemPrompt = String(context?.plannerSystemPrompt || '').trim();
+        const languageCode = String(context?.languageCode || '').trim() || 'en';
+        const projectLanguage = String(context?.projectLanguage || '').trim() || languageCode;
+
+        if (!voicePrompt) {
+            onLog?.(t('未检测到对白，已取消仅配音生成', 'No dialogue detected, canceled voice-only generation'), 'warning');
+            showNotification(t('未检测到可用于配音的对白', 'No dialogue available for voiceover'), 'warning');
+            return;
+        }
+
+        setShotVoiceGenerating(targetShotId, true);
+        try {
+            onLog?.(`${t('配音语言约束', 'Voice language constraint')}: ${languageCode}`, 'info');
+            onLog?.(t('开始仅生成配音...', 'Generating voiceover only...'), 'info');
+
+            const voiceRes = await generateVoice(voicePrompt, null, null, {
+                project_id: projectId,
+                shot_id: targetShotId,
+                shot_number: shot.shot_id,
+                shot_name: shot.shot_name,
+                asset_type: 'voiceover',
+                use_llm_param_planning: true,
+                planner_system_prompt: plannerSystemPrompt || undefined,
+                language_code: languageCode,
+                project_language: projectLanguage,
+            });
+
+            try {
+                const planMeta = voiceRes?.voiceover_plan_prompts || {};
+                const sysLen = String(planMeta?.system_prompt || '').length;
+                const userLen = String(planMeta?.user_prompt || '').length;
+                const src = String(planMeta?.template_source || 'unknown');
+                const effectiveLen = String(voiceRes?.effective_prompt || '').length;
+                onLog?.(
+                    `${t('配音规划返回', 'Voice planning response')}: source=${src}, sys=${sysLen}, user=${userLen}, effective=${effectiveLen}`,
+                    'info'
+                );
+            } catch (logErr) {
+                console.warn('Voice planning response log failed', logErr);
+            }
+
+            const voiceUrl = String(voiceRes?.url || '').trim();
+            if (!voiceUrl) {
+                onLog?.(t('配音生成完成但未返回音频 URL', 'Voiceover completed but no audio URL returned'), 'warning');
+                showNotification(t('配音生成完成但未返回音频 URL', 'Voiceover completed but no audio URL returned'), 'warning');
+                return;
+            }
+
+            let tech = {};
+            try {
+                const parsed = JSON.parse(shot.technical_notes || '{}');
+                tech = parsed && typeof parsed === 'object' ? parsed : {};
+            } catch (e) {
+                tech = {};
+            }
+            const nextTech = { ...tech, voiceover_url: voiceUrl, voiceover_prompt: voicePrompt };
+            if (voiceRes?.metadata && typeof voiceRes.metadata === 'object') {
+                nextTech.voiceover_metadata = voiceRes.metadata;
+            }
+            const voiceUpdate = { technical_notes: JSON.stringify(nextTech) };
+            setEditingShot((prev) => {
+                if (!prev || prev.id !== targetShotId) return prev;
+                return { ...prev, ...voiceUpdate };
+            });
+
+            refreshShotAssetsMeta();
+            onLog?.(t('仅配音生成完成', 'Voice-only generation completed'), 'success');
+            showNotification(t('仅配音生成完成', 'Voice-only generation completed'), 'success');
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'unknown error';
+            onLog?.(`${t('配音生成失败', 'Voiceover generation failed')}: ${detail}`, 'error');
+            showNotification(`${t('配音生成失败', 'Voiceover generation failed')}: ${detail}`, 'error');
+        } finally {
+            setShotVoiceGenerating(targetShotId, false);
+        }
+    };
+
+    const handleGenerateVoiceoverOnly = async () => {
+        if (!editingShot?.id) return;
+        const context = buildVoiceGenerationContext(editingShot);
+        if (!context) return;
+
+        if (isSuperuser) {
+            setVoicePromptConfirmModal({
+                open: true,
+                shotId: editingShot.id,
+                prompt: String(context.voicePrompt || ''),
+                systemPrompt: '',
+                loadingSystemPrompt: true,
+                languageCode: String(context.languageCode || ''),
+                projectLanguage: String(context.projectLanguage || ''),
+                submitting: false,
+            });
+            try {
+                const res = await fetchPrompt('voice_tts_planner_system.txt');
+                const systemPromptText = String(res?.content || '').trim();
+                setVoicePromptConfirmModal((prev) => ({
+                    ...prev,
+                    systemPrompt: systemPromptText,
+                    loadingSystemPrompt: false,
+                }));
+            } catch (e) {
+                onLog?.(t('读取配音系统提示词失败，已使用空白值', 'Failed to load voice planner system prompt; using blank value'), 'warning');
+                setVoicePromptConfirmModal((prev) => ({
+                    ...prev,
+                    loadingSystemPrompt: false,
+                }));
+            }
+            onLog?.(t('超级用户模式：请确认配音提示词后再提交。', 'Superuser mode: confirm voice prompt before submitting.'), 'info');
+            return;
+        }
+
+        await submitVoiceoverOnly(context);
+    };
+
     const handleGenerateVideo = async (promptOverride = null) => {
         if (!editingShot) return;
         const targetShotId = editingShot.id;
@@ -17087,9 +18417,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
         setShotGeneratingState(targetShotId, 'video', true);
 
-        const rawPrompt = promptOverride || editingShot.prompt || editingShot.video_content || "Video motion";
-        
         const techNotes = JSON.parse(editingShot.technical_notes || '{}');
+        const cnVideoPrompt = String(techNotes.video_prompt_cn || '').trim();
+        const rawPrompt = promptOverride
+            || (resolvedPromptSubmitLang === 'cn'
+                ? (cnVideoPrompt || editingShot.prompt || editingShot.video_content || "Video motion")
+                : (editingShot.prompt || editingShot.video_content || cnVideoPrompt || "Video motion"));
         const isManual = techNotes.manual_video_prompt === true;
 
         const { text: submitPrompt } = injectEntityFeatures(rawPrompt, isManual);
@@ -17762,6 +19095,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                         {sortedShots.map((shot, idx) => {
                             const shotState = generatingStateByShot[String(shot.id)] || { start: false, end: false, video: false };
                             const isGeneratingThisShot = !!(shotState.start || shotState.end || shotState.video);
+                            const shotCardPromptPreview = getShotCardPromptPreview(shot);
                             return (
                             <div 
                                 key={shot.id} 
@@ -17824,10 +19158,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                         )}
                                     </div>
                                     
-                                    {/* Display Shot Logic (CN) Preview */}
-                                    {shot.shot_logic_cn && (
+                                    {/* Display prompt preview with language-aware fallback */}
+                                    {shotCardPromptPreview && (
                                         <div className="mt-2 text-xs text-muted-foreground bg-white/5 p-2 rounded line-clamp-3 overflow-hidden text-ellipsis">
-                                            {shot.shot_logic_cn}
+                                            {shotCardPromptPreview}
                                         </div>
                                     )}
                                 </div>
@@ -18285,6 +19619,14 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 >
                                                     {currentGeneratingState.video ? <Loader2 className="w-3 h-3 animate-spin"/> : <Film className="w-3 h-3"/>} 
                                                     {currentGeneratingState.video ? t('生成中...', 'Generating...') : t('生成', 'Generate')}
+                                                </button>
+                                                <button
+                                                    onClick={handleGenerateVoiceoverOnly}
+                                                    disabled={currentVoiceGenerating}
+                                                    className={`text-[10px] font-bold px-3 py-0.5 rounded flex items-center gap-1 ${currentVoiceGenerating ? 'bg-emerald-500/10 text-emerald-200/50 cursor-wait' : 'bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/30'}`}
+                                                >
+                                                    {currentVoiceGenerating ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
+                                                    {currentVoiceGenerating ? t('配音生成中...', 'Generating voiceover...') : t('仅生成配音', 'Generate Voiceover Only')}
                                                 </button>
                                             </div>
                                         </div>
@@ -18988,6 +20330,13 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                         {currentGeneratingState.video ? t('生成中...', 'Generating...') : t('生成', 'Generate')}
                                                                     </button>
                                                                     <button
+                                                                        onClick={handleGenerateVoiceoverOnly}
+                                                                        disabled={currentVoiceGenerating}
+                                                                        className={`text-xs px-2 py-1 rounded ${currentVoiceGenerating ? 'bg-emerald-500/10 text-emerald-300/50 cursor-wait' : 'bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/30'}`}
+                                                                    >
+                                                                        {currentVoiceGenerating ? t('配音生成中...', 'Generating voiceover...') : t('仅生成配音', 'Generate Voiceover Only')}
+                                                                    </button>
+                                                                    <button
                                                                         onClick={() => handleForceStopShotVideo(editingShot?.id)}
                                                                         disabled={!pendingVideoJobId || isStoppingCurrentVideo}
                                                                         className={`text-xs px-2 py-1 rounded ${(!pendingVideoJobId || isStoppingCurrentVideo) ? 'bg-red-500/10 text-red-300/50 cursor-not-allowed' : 'bg-red-500/20 text-red-200 hover:bg-red-500/30'}`}
@@ -19263,6 +20612,97 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                 className="px-2.5 py-1.5 bg-white/10 hover:bg-white/20 rounded text-[11px] text-white border border-white/10"
                             >
                                 {t('清除镜头筛选', 'Clear Shot Filters')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {voicePromptConfirmModal.open && (
+                <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+                    <div className="bg-[#1e1e1e] border border-white/10 rounded-lg w-full max-w-3xl max-h-[90vh] flex flex-col shadow-2xl">
+                        <div className="p-4 border-b border-white/10 flex justify-between items-center">
+                            <h3 className="font-bold flex items-center gap-2"><Wand2 size={16} className="text-primary" />{t('仅生成配音（超级用户确认）', 'Voice-Only Generation (Superuser Confirmation)')}</h3>
+                            <button
+                                onClick={() => setVoicePromptConfirmModal({ open: false, shotId: null, prompt: '', systemPrompt: '', loadingSystemPrompt: false, languageCode: '', projectLanguage: '', submitting: false })}
+                                disabled={voicePromptConfirmModal.submitting}
+                            >
+                                <X size={18} />
+                            </button>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                            <div className="bg-blue-500/10 border border-blue-500/20 rounded p-3 text-xs text-blue-200 flex items-start gap-2">
+                                <Info size={14} className="shrink-0 mt-0.5" />
+                                {t('超级用户模式：请确认或编辑配音提示词，确认后再提交。', 'Superuser mode: review or edit the voice prompt before submitting.')}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                                {t('语言代码', 'Language Code')}: {voicePromptConfirmModal.languageCode || '-'}
+                            </div>
+                            <div className="flex flex-col gap-2">
+                                <label className="text-xs font-bold text-muted-foreground uppercase">{t('系统提示词（配音规划）', 'System Prompt (Voice Planner)')}</label>
+                                <textarea
+                                    className="w-full min-h-[180px] bg-black/30 border border-white/10 rounded-md p-3 text-xs text-muted-foreground font-mono focus:outline-none focus:border-primary/50 resize-y"
+                                    value={voicePromptConfirmModal.systemPrompt}
+                                    onChange={(e) => setVoicePromptConfirmModal((prev) => ({ ...prev, systemPrompt: e.target.value }))}
+                                    disabled={voicePromptConfirmModal.submitting || voicePromptConfirmModal.loadingSystemPrompt}
+                                />
+                            </div>
+                            {voicePromptConfirmModal.loadingSystemPrompt && (
+                                <div className="text-xs text-blue-300">{t('正在加载系统提示词模板...', 'Loading system prompt template...')}</div>
+                            )}
+                            <textarea
+                                className="w-full min-h-[260px] bg-black/30 border border-white/10 rounded-md p-3 text-sm text-white/90 font-mono focus:outline-none focus:border-primary/50 resize-y"
+                                value={voicePromptConfirmModal.prompt}
+                                onChange={(e) => setVoicePromptConfirmModal((prev) => ({ ...prev, prompt: e.target.value }))}
+                                disabled={voicePromptConfirmModal.submitting}
+                            />
+                        </div>
+
+                        <div className="p-4 border-t border-white/10 flex justify-end gap-3 bg-black/20">
+                            <button
+                                onClick={() => setVoicePromptConfirmModal({ open: false, shotId: null, prompt: '', systemPrompt: '', loadingSystemPrompt: false, languageCode: '', projectLanguage: '', submitting: false })}
+                                disabled={voicePromptConfirmModal.submitting}
+                                className="px-4 py-2 rounded hover:bg-white/10 text-sm"
+                            >
+                                {t('取消', 'Cancel')}
+                            </button>
+                            <button
+                                onClick={async () => {
+                                    const targetShotId = voicePromptConfirmModal.shotId;
+                                    const shot = (editingShot && editingShot.id === targetShotId)
+                                        ? editingShot
+                                        : (shots || []).find((item) => item?.id === targetShotId);
+                                    if (!shot) {
+                                        showNotification(t('未找到镜头，无法提交配音生成', 'Shot not found, cannot submit voice generation'), 'error');
+                                        return;
+                                    }
+
+                                    const promptText = String(voicePromptConfirmModal.prompt || '').trim();
+                                    if (!promptText) {
+                                        showNotification(t('提示词为空，请先填写', 'Prompt is empty, please fill it first'), 'warning');
+                                        return;
+                                    }
+
+                                    setVoicePromptConfirmModal((prev) => ({ ...prev, submitting: true }));
+                                    try {
+                                        await submitVoiceoverOnly({
+                                            shot,
+                                            voicePrompt: promptText,
+                                            plannerSystemPrompt: String(voicePromptConfirmModal.systemPrompt || '').trim(),
+                                            languageCode: voicePromptConfirmModal.languageCode,
+                                            projectLanguage: voicePromptConfirmModal.projectLanguage,
+                                        });
+                                        setVoicePromptConfirmModal({ open: false, shotId: null, prompt: '', systemPrompt: '', loadingSystemPrompt: false, languageCode: '', projectLanguage: '', submitting: false });
+                                    } finally {
+                                        setVoicePromptConfirmModal((prev) => (prev.open ? { ...prev, submitting: false } : prev));
+                                    }
+                                }}
+                                disabled={voicePromptConfirmModal.submitting}
+                                className="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-sm font-medium flex items-center gap-2"
+                            >
+                                {voicePromptConfirmModal.submitting ? <Loader2 className="animate-spin" size={16} /> : <Wand2 size={16} />}
+                                {voicePromptConfirmModal.submitting ? t('提交中...', 'Submitting...') : t('确认并生成配音', 'Confirm and Generate Voiceover')}
                             </button>
                         </div>
                     </div>
@@ -21801,7 +23241,7 @@ const Editor = ({
                             }
                             setActiveTab('shots');
                         }} uiLang={uiLang} />}
-                        {activeTab === 'shots' && <ShotsView activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} editingShot={editingShot} setEditingShot={setEditingShot} uiLang={uiLang} focusRequest={shotsFocusRequest} restoreEditingShotId={initialEditingShotId} />}
+                        {activeTab === 'shots' && <ShotsView activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} editingShot={editingShot} setEditingShot={setEditingShot} isSuperuser={isSuperuser} uiLang={uiLang} focusRequest={shotsFocusRequest} restoreEditingShotId={initialEditingShotId} />}
                         {activeTab === 'montage' && <VideoStudio activeEpisode={activeEpisode} projectId={id} onLog={addLog} />}
                     </div>
                 </div>

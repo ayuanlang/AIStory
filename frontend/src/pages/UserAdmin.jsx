@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, getAdminLlmLogFiles, getAdminLlmLogView, getAdminStorageUsage, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, generateKiePricingRulesManage, applyKiePricingRulesManage, getAdminUsersPage, aiAssistantAnalyzeSupplierFeatures, aiAssistantApplySupplierFeatures } from '../services/api';
+import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, listKieStandardValuesManage, listKieStandardMappingsManage, createKieStandardMappingManage, updateKieStandardMappingManage, deleteKieStandardMappingManage, inferKieStandardMappingBillingRelatedManage, getAdminLlmLogFiles, getAdminLlmLogView, getAdminRuntimeLogFiles, getAdminRuntimeLogView, getAdminStorageUsage, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, generateKiePricingRulesManage, applyKiePricingRulesManage, getAdminUsersPage, aiAssistantAnalyzeSupplierFeatures, aiAssistantApplySupplierFeatures } from '../services/api';
 import Footer from '../components/Footer';
 import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive, Database } from 'lucide-react';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
@@ -192,6 +192,29 @@ const UserAdmin = () => {
     const [isTaskDefaultApiLoading, setIsTaskDefaultApiLoading] = useState(false);
     const [selectedTaskDefaultCategory, setSelectedTaskDefaultCategory] = useState('');
     const [taskDefaultForm, setTaskDefaultForm] = useState({ task_category: 'LLM', system_api_id: '' });
+    const [kieStandardValueRows, setKieStandardValueRows] = useState([]);
+    const [kieStandardMappingRows, setKieStandardMappingRows] = useState([]);
+    const [isKieStandardLoading, setIsKieStandardLoading] = useState(false);
+    const [isKieStandardSaving, setIsKieStandardSaving] = useState(false);
+    const [isKieBillingInferLoading, setIsKieBillingInferLoading] = useState(false);
+    const [selectedKieStandardMappingId, setSelectedKieStandardMappingId] = useState('');
+    const [kieStandardSearchText, setKieStandardSearchText] = useState('');
+    const [kieStandardDimensionFilter, setKieStandardDimensionFilter] = useState('all');
+    const [kieStandardBillingOnly, setKieStandardBillingOnly] = useState(false);
+    const [kieStandardMappingForm, setKieStandardMappingForm] = useState({
+        provider: 'kie',
+        model_key_inferred: '',
+        model_title: '',
+        model_url: '',
+        source_field: '',
+        source_enum_value: '',
+        standard_dimension: '',
+        standard_value: '',
+        confidence: '',
+        note: '',
+        is_active: true,
+        is_billing_related: false,
+    });
     const [systemApiForm, setSystemApiForm] = useState({
         name: '',
         category: 'LLM',
@@ -246,6 +269,12 @@ const UserAdmin = () => {
     const [llmLogContent, setLlmLogContent] = useState('');
     const [isLlmLogsLoading, setIsLlmLogsLoading] = useState(false);
     const [llmLogsError, setLlmLogsError] = useState('');
+    const [runtimeLogFiles, setRuntimeLogFiles] = useState([]);
+    const [selectedRuntimeLogFile, setSelectedRuntimeLogFile] = useState('app_info.log');
+    const [runtimeLogTailLines, setRuntimeLogTailLines] = useState(300);
+    const [runtimeLogContent, setRuntimeLogContent] = useState('');
+    const [isRuntimeLogsLoading, setIsRuntimeLogsLoading] = useState(false);
+    const [runtimeLogsError, setRuntimeLogsError] = useState('');
     const [storageUsage, setStorageUsage] = useState(null);
     const [isStorageUsageLoading, setIsStorageUsageLoading] = useState(false);
     const [storageUsageError, setStorageUsageError] = useState('');
@@ -770,6 +799,12 @@ const UserAdmin = () => {
     useEffect(() => {
         if (activeTab === 'llm_logs') {
             fetchLlmLogs();
+        }
+    }, [activeTab]);
+
+    useEffect(() => {
+        if (activeTab === 'runtime_logs') {
+            fetchRuntimeLogs();
         }
     }, [activeTab]);
 
@@ -2328,9 +2363,68 @@ const UserAdmin = () => {
             fetchProviderKeyPools();
             if (activeTab === 'system_api') {
                 fetchTaskDefaultApis();
+                fetchKieStandardMappingsAndValues();
             }
         }
     }, [activeTab]);
+
+    function createEmptyKieStandardMappingForm() {
+        return {
+            provider: 'kie',
+            model_key_inferred: '',
+            model_title: '',
+            model_url: '',
+            source_field: '',
+            source_enum_value: '',
+            standard_dimension: '',
+            standard_value: '',
+            confidence: '',
+            note: '',
+            is_active: true,
+            is_billing_related: false,
+        };
+    }
+
+    async function fetchKieStandardMappingsAndValues() {
+        setIsKieStandardLoading(true);
+        try {
+            const [values, mappings] = await Promise.all([
+                listKieStandardValuesManage({ active_only: false, limit: 5000 }),
+                listKieStandardMappingsManage({
+                    provider: 'kie',
+                    active_only: false,
+                    billing_related_only: kieStandardBillingOnly,
+                    ...(kieStandardDimensionFilter !== 'all' ? { standard_dimension: kieStandardDimensionFilter } : {}),
+                    ...(String(kieStandardSearchText || '').trim() ? { q: String(kieStandardSearchText || '').trim() } : {}),
+                    limit: 5000,
+                }),
+            ]);
+            setKieStandardValueRows(Array.isArray(values) ? values : []);
+            const normalizedMappings = Array.isArray(mappings) ? mappings : [];
+            setKieStandardMappingRows(normalizedMappings);
+            setSelectedKieStandardMappingId((prev) => {
+                if (prev && normalizedMappings.some((row) => String(row?.id) === String(prev))) {
+                    return prev;
+                }
+                return normalizedMappings.length ? String(normalizedMappings[0]?.id || '') : '';
+            });
+        } catch (e) {
+            console.error('Failed to load KIE standard mappings', e);
+            setKieStandardValueRows([]);
+            setKieStandardMappingRows([]);
+            setSelectedKieStandardMappingId('');
+        } finally {
+            setIsKieStandardLoading(false);
+        }
+    }
+
+    useEffect(() => {
+        if (activeTab !== 'system_api') return;
+        const timer = setTimeout(() => {
+            fetchKieStandardMappingsAndValues();
+        }, 220);
+        return () => clearTimeout(timer);
+    }, [activeTab, kieStandardSearchText, kieStandardDimensionFilter, kieStandardBillingOnly]);
 
     useEffect(() => {
         if (!selectedKeyPoolId) {
@@ -2362,6 +2456,29 @@ const UserAdmin = () => {
             system_api_id: String(row.system_api_id || ''),
         });
     }, [selectedTaskDefaultCategory, taskDefaultApiRows]);
+
+    useEffect(() => {
+        if (!selectedKieStandardMappingId) {
+            setKieStandardMappingForm(createEmptyKieStandardMappingForm());
+            return;
+        }
+        const row = (kieStandardMappingRows || []).find((item) => String(item?.id || '') === String(selectedKieStandardMappingId));
+        if (!row) return;
+        setKieStandardMappingForm({
+            provider: String(row?.provider || 'kie'),
+            model_key_inferred: String(row?.model_key_inferred || ''),
+            model_title: String(row?.model_title || ''),
+            model_url: String(row?.model_url || ''),
+            source_field: String(row?.source_field || ''),
+            source_enum_value: String(row?.source_enum_value || ''),
+            standard_dimension: String(row?.standard_dimension || ''),
+            standard_value: String(row?.standard_value || ''),
+            confidence: String(row?.confidence || ''),
+            note: String(row?.note || ''),
+            is_active: !!row?.is_active,
+            is_billing_related: !!row?.is_billing_related,
+        });
+    }, [selectedKieStandardMappingId, kieStandardMappingRows]);
 
     useEffect(() => {
         const normalizedProvider = String(supplierFeatureProvider || '').trim().toLowerCase();
@@ -2485,6 +2602,110 @@ const UserAdmin = () => {
             alert(t('默认 API 映射已删除', 'Default API mapping deleted'));
         } catch (e) {
             alert(e?.response?.data?.detail || e.message || t('删除默认 API 映射失败', 'Failed to delete default API mapping'));
+        }
+    };
+
+    const handleCreateKieStandardMapping = async () => {
+        const sourceField = String(kieStandardMappingForm.source_field || '').trim();
+        const sourceEnumValue = String(kieStandardMappingForm.source_enum_value || '').trim();
+        const standardDimension = String(kieStandardMappingForm.standard_dimension || '').trim().toUpperCase();
+        const standardValue = String(kieStandardMappingForm.standard_value || '').trim();
+        if (!sourceField || !sourceEnumValue || !standardDimension || !standardValue) {
+            alert(t('请至少填写 source_field/source_enum_value/standard_dimension/standard_value', 'Please fill source_field/source_enum_value/standard_dimension/standard_value'));
+            return;
+        }
+        setIsKieStandardSaving(true);
+        try {
+            const created = await createKieStandardMappingManage({
+                provider: String(kieStandardMappingForm.provider || 'kie').trim() || 'kie',
+                model_key_inferred: String(kieStandardMappingForm.model_key_inferred || '').trim() || null,
+                model_title: String(kieStandardMappingForm.model_title || '').trim() || null,
+                model_url: String(kieStandardMappingForm.model_url || '').trim() || null,
+                source_field: sourceField,
+                source_enum_value: sourceEnumValue,
+                standard_dimension: standardDimension,
+                standard_value: standardValue,
+                confidence: String(kieStandardMappingForm.confidence || '').trim() || null,
+                note: String(kieStandardMappingForm.note || '').trim() || null,
+                is_active: !!kieStandardMappingForm.is_active,
+                is_billing_related: !!kieStandardMappingForm.is_billing_related,
+            });
+            await fetchKieStandardMappingsAndValues();
+            setSelectedKieStandardMappingId(String(created?.id || ''));
+            alert(t('映射已创建', 'Mapping created'));
+        } catch (e) {
+            alert(e?.response?.data?.detail || e?.message || t('创建映射失败', 'Failed to create mapping'));
+        } finally {
+            setIsKieStandardSaving(false);
+        }
+    };
+
+    const handleUpdateKieStandardMapping = async () => {
+        const mappingId = Number(selectedKieStandardMappingId || 0);
+        if (!mappingId) {
+            alert(t('请先选择要更新的映射', 'Please select a mapping to update'));
+            return;
+        }
+        setIsKieStandardSaving(true);
+        try {
+            await updateKieStandardMappingManage(mappingId, {
+                provider: String(kieStandardMappingForm.provider || 'kie').trim() || 'kie',
+                model_key_inferred: String(kieStandardMappingForm.model_key_inferred || '').trim() || null,
+                model_title: String(kieStandardMappingForm.model_title || '').trim() || null,
+                model_url: String(kieStandardMappingForm.model_url || '').trim() || null,
+                source_field: String(kieStandardMappingForm.source_field || '').trim(),
+                source_enum_value: String(kieStandardMappingForm.source_enum_value || '').trim(),
+                standard_dimension: String(kieStandardMappingForm.standard_dimension || '').trim().toUpperCase(),
+                standard_value: String(kieStandardMappingForm.standard_value || '').trim(),
+                confidence: String(kieStandardMappingForm.confidence || '').trim() || null,
+                note: String(kieStandardMappingForm.note || '').trim() || null,
+                is_active: !!kieStandardMappingForm.is_active,
+                is_billing_related: !!kieStandardMappingForm.is_billing_related,
+            });
+            await fetchKieStandardMappingsAndValues();
+            alert(t('映射已更新', 'Mapping updated'));
+        } catch (e) {
+            alert(e?.response?.data?.detail || e?.message || t('更新映射失败', 'Failed to update mapping'));
+        } finally {
+            setIsKieStandardSaving(false);
+        }
+    };
+
+    const handleDeleteKieStandardMapping = async () => {
+        const mappingId = Number(selectedKieStandardMappingId || 0);
+        if (!mappingId) {
+            alert(t('请先选择要删除的映射', 'Please select a mapping to delete'));
+            return;
+        }
+        if (!await confirmUiMessage(t('确认删除该字典映射？', 'Delete this dictionary mapping?'))) {
+            return;
+        }
+        setIsKieStandardSaving(true);
+        try {
+            await deleteKieStandardMappingManage(mappingId);
+            setSelectedKieStandardMappingId('');
+            await fetchKieStandardMappingsAndValues();
+            alert(t('映射已删除', 'Mapping deleted'));
+        } catch (e) {
+            alert(e?.response?.data?.detail || e?.message || t('删除映射失败', 'Failed to delete mapping'));
+        } finally {
+            setIsKieStandardSaving(false);
+        }
+    };
+
+    const handleInferKieBillingRelated = async () => {
+        setIsKieBillingInferLoading(true);
+        try {
+            const result = await inferKieStandardMappingBillingRelatedManage('kie');
+            await fetchKieStandardMappingsAndValues();
+            alert(t(
+                `反推完成，更新 ${Number(result?.updated_count || 0)} 条映射，识别 ${Number(result?.matched_dimension_count || 0)} 个计费维度。`,
+                `Inference completed. Updated ${Number(result?.updated_count || 0)} mappings and matched ${Number(result?.matched_dimension_count || 0)} billing dimensions.`
+            ));
+        } catch (e) {
+            alert(e?.response?.data?.detail || e?.message || t('反推计费关联失败', 'Failed to infer billing-related mappings'));
+        } finally {
+            setIsKieBillingInferLoading(false);
         }
     };
 
@@ -2757,6 +2978,39 @@ const UserAdmin = () => {
             setLlmLogContent('');
         } finally {
             setIsLlmLogsLoading(false);
+        }
+    };
+
+    const fetchRuntimeLogs = async (preferredFile = null) => {
+        setIsRuntimeLogsLoading(true);
+        setRuntimeLogsError('');
+        try {
+            const files = await getAdminRuntimeLogFiles();
+            const normalizedFiles = Array.isArray(files) ? files : [];
+            setRuntimeLogFiles(normalizedFiles);
+
+            if (!normalizedFiles.length) {
+                setRuntimeLogContent('No runtime log files found.');
+                return;
+            }
+
+            let targetFile = preferredFile || selectedRuntimeLogFile || normalizedFiles[0].name;
+            if (!normalizedFiles.some((f) => f.name === targetFile)) {
+                targetFile = normalizedFiles[0].name;
+            }
+            setSelectedRuntimeLogFile(targetFile);
+
+            const view = await getAdminRuntimeLogView({
+                filename: targetFile,
+                tail_lines: Math.max(1, Number(runtimeLogTailLines) || 300),
+            });
+            setRuntimeLogContent(view?.content || '');
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e.message || 'Failed to load runtime logs';
+            setRuntimeLogsError(detail);
+            setRuntimeLogContent('');
+        } finally {
+            setIsRuntimeLogsLoading(false);
         }
     };
 
@@ -3417,6 +3671,7 @@ const UserAdmin = () => {
                         <TabButton id="kie_pricing" label={t('KIE 定价助手', 'KIE Pricing Assistant')} icon={Settings} />
                         <TabButton id="prompt_skills" label={t('Prompt Skills', 'Prompt Skills')} icon={List} />
                         <TabButton id="storage_usage" label={t('磁盘统计', 'Storage Usage')} icon={HardDrive} />
+                        <TabButton id="runtime_logs" label={t('系统日志', 'Runtime Logs')} icon={List} />
                         <TabButton id="llm_logs" label={t('LLM 日志', 'LLM Logs')} icon={List} />
                         <TabButton id="payment" label={t('支付', 'Payment')} icon={CreditCard} />
                         <TabButton id="smtp" label={t('邮件 SMTP', 'Email SMTP')} icon={Mail} />
@@ -4151,7 +4406,7 @@ const UserAdmin = () => {
                                     </p>
 
                                     <div className="overflow-x-auto">
-                                        <table className="w-full text-xs border-collapse">
+                                        <table className="w-full text-xs min-w-[760px]">
                                             <thead>
                                                 <tr className="border-b border-white/10 text-gray-400">
                                                     <th className="text-left p-2">{t('API 类型', 'API Category')}</th>
@@ -4846,6 +5101,227 @@ const UserAdmin = () => {
                                         )}
                                     </div>
 
+                                    <div className="border border-fuchsia-500/30 rounded-lg p-4 bg-fuchsia-500/5 space-y-3">
+                                        <div className="flex items-center justify-between gap-2">
+                                            <h4 className="text-sm font-bold text-fuchsia-200">{t('KIE 数据字典映射 CRUD', 'KIE Dictionary Mapping CRUD')}</h4>
+                                            <div className="flex items-center gap-2">
+                                                <button
+                                                    onClick={handleInferKieBillingRelated}
+                                                    disabled={isKieBillingInferLoading || isKieStandardLoading}
+                                                    className="text-xs bg-indigo-700 hover:bg-indigo-600 text-white px-2 py-1 rounded disabled:opacity-50"
+                                                    title={t('从计费规则反推并更新 is_billing_related 字段', 'Infer billing-related flags from billing rules and update is_billing_related')}
+                                                >
+                                                    {isKieBillingInferLoading ? t('反推中...', 'Inferring...') : t('反推计费关联', 'Infer Billing Related')}
+                                                </button>
+                                                <button
+                                                    onClick={fetchKieStandardMappingsAndValues}
+                                                    disabled={isKieStandardLoading}
+                                                    className="text-xs text-fuchsia-300 hover:text-fuchsia-100 flex items-center gap-1 disabled:opacity-50"
+                                                >
+                                                    <RefreshCw size={12} /> {t('刷新', 'Refresh')}
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                                            <input
+                                                value={kieStandardSearchText}
+                                                onChange={(e) => setKieStandardSearchText(e.target.value)}
+                                                className="bg-black/40 border border-gray-700 rounded p-2 text-xs md:col-span-2"
+                                                placeholder={t('关键词：模型/字段/枚举/标准值', 'Keyword: model/field/enum/standard value')}
+                                            />
+                                            <select
+                                                value={kieStandardDimensionFilter}
+                                                onChange={(e) => setKieStandardDimensionFilter(e.target.value)}
+                                                className="bg-black/40 border border-gray-700 rounded p-2 text-xs"
+                                            >
+                                                <option value="all">{t('全部维度', 'All Dimensions')}</option>
+                                                {Array.from(new Set((kieStandardValueRows || []).map((row) => String(row?.standard_dimension || '').trim()).filter(Boolean))).sort().map((dim) => (
+                                                    <option key={`kie-dim-${dim}`} value={dim}>{dim}</option>
+                                                ))}
+                                            </select>
+                                            <label className="flex items-center gap-2 text-xs text-gray-300 px-2">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={kieStandardBillingOnly}
+                                                    onChange={(e) => setKieStandardBillingOnly(e.target.checked)}
+                                                />
+                                                {t('仅计费相关', 'Billing Related Only')}
+                                            </label>
+                                        </div>
+
+                                        {isKieStandardLoading ? (
+                                            <div className="text-xs text-gray-400">{t('加载中...', 'Loading...')}</div>
+                                        ) : (
+                                            <>
+                                                <div className="overflow-x-auto border border-fuchsia-500/20 rounded max-h-56">
+                                                    <table className="w-full text-xs min-w-[980px]">
+                                                        <thead className="bg-fuchsia-500/10 text-fuchsia-100 sticky top-0">
+                                                            <tr>
+                                                                <th className="text-left py-1.5 px-2">ID</th>
+                                                                <th className="text-left py-1.5 px-2">model_key</th>
+                                                                <th className="text-left py-1.5 px-2">source_field</th>
+                                                                <th className="text-left py-1.5 px-2">source_enum</th>
+                                                                <th className="text-left py-1.5 px-2">dimension</th>
+                                                                <th className="text-left py-1.5 px-2">standard_value</th>
+                                                                <th className="text-left py-1.5 px-2">{t('计费相关', 'Billing Related')}</th>
+                                                                <th className="text-left py-1.5 px-2">{t('启用', 'Active')}</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {(kieStandardMappingRows || []).map((row) => (
+                                                                <tr
+                                                                    key={`kie-mapping-${row.id}`}
+                                                                    className={`border-t border-fuchsia-500/20 cursor-pointer hover:bg-white/5 ${String(selectedKieStandardMappingId) === String(row.id) ? 'bg-fuchsia-500/10' : ''}`}
+                                                                    onClick={() => setSelectedKieStandardMappingId(String(row.id))}
+                                                                >
+                                                                    <td className="py-1.5 px-2">{row.id}</td>
+                                                                    <td className="py-1.5 px-2 font-mono">{row.model_key_inferred || '-'}</td>
+                                                                    <td className="py-1.5 px-2 font-mono">{row.source_field || '-'}</td>
+                                                                    <td className="py-1.5 px-2">{row.source_enum_value || '-'}</td>
+                                                                    <td className="py-1.5 px-2">{row.standard_dimension || '-'}</td>
+                                                                    <td className="py-1.5 px-2">{row.standard_value || '-'}</td>
+                                                                    <td className="py-1.5 px-2">{row.is_billing_related ? t('是', 'Yes') : t('否', 'No')}</td>
+                                                                    <td className="py-1.5 px-2">{row.is_active ? t('是', 'Yes') : t('否', 'No')}</td>
+                                                                </tr>
+                                                            ))}
+                                                            {(kieStandardMappingRows || []).length === 0 && (
+                                                                <tr>
+                                                                    <td colSpan={8} className="py-3 px-2 text-center text-gray-500">{t('暂无映射记录', 'No mapping records')}</td>
+                                                                </tr>
+                                                            )}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+
+                                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                                    <div>
+                                                        <label className="block text-xs uppercase text-gray-400 mb-1">provider</label>
+                                                        <input
+                                                            value={kieStandardMappingForm.provider}
+                                                            onChange={(e) => setKieStandardMappingForm((prev) => ({ ...prev, provider: e.target.value }))}
+                                                            className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-xs uppercase text-gray-400 mb-1">model_key_inferred</label>
+                                                        <input
+                                                            value={kieStandardMappingForm.model_key_inferred}
+                                                            onChange={(e) => setKieStandardMappingForm((prev) => ({ ...prev, model_key_inferred: e.target.value }))}
+                                                            className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-xs uppercase text-gray-400 mb-1">source_field</label>
+                                                        <input
+                                                            value={kieStandardMappingForm.source_field}
+                                                            onChange={(e) => setKieStandardMappingForm((prev) => ({ ...prev, source_field: e.target.value }))}
+                                                            className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm font-mono"
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-xs uppercase text-gray-400 mb-1">source_enum_value</label>
+                                                        <input
+                                                            value={kieStandardMappingForm.source_enum_value}
+                                                            onChange={(e) => setKieStandardMappingForm((prev) => ({ ...prev, source_enum_value: e.target.value }))}
+                                                            className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-xs uppercase text-gray-400 mb-1">standard_dimension</label>
+                                                        <input
+                                                            value={kieStandardMappingForm.standard_dimension}
+                                                            onChange={(e) => setKieStandardMappingForm((prev) => ({ ...prev, standard_dimension: e.target.value.toUpperCase() }))}
+                                                            className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                            list="kie-standard-dimension-list"
+                                                        />
+                                                        <datalist id="kie-standard-dimension-list">
+                                                            {Array.from(new Set((kieStandardValueRows || []).map((row) => String(row?.standard_dimension || '').trim()).filter(Boolean))).sort().map((dim) => (
+                                                                <option key={`kie-dim-option-${dim}`} value={dim} />
+                                                            ))}
+                                                        </datalist>
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-xs uppercase text-gray-400 mb-1">standard_value</label>
+                                                        <input
+                                                            value={kieStandardMappingForm.standard_value}
+                                                            onChange={(e) => setKieStandardMappingForm((prev) => ({ ...prev, standard_value: e.target.value }))}
+                                                            className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-xs uppercase text-gray-400 mb-1">confidence</label>
+                                                        <input
+                                                            value={kieStandardMappingForm.confidence}
+                                                            onChange={(e) => setKieStandardMappingForm((prev) => ({ ...prev, confidence: e.target.value }))}
+                                                            className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                            placeholder="HIGH / MEDIUM / LOW"
+                                                        />
+                                                    </div>
+                                                    <div className="md:col-span-2">
+                                                        <label className="block text-xs uppercase text-gray-400 mb-1">note</label>
+                                                        <input
+                                                            value={kieStandardMappingForm.note}
+                                                            onChange={(e) => setKieStandardMappingForm((prev) => ({ ...prev, note: e.target.value }))}
+                                                            className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                        />
+                                                    </div>
+                                                    <div className="md:col-span-3 grid grid-cols-1 md:grid-cols-2 gap-2">
+                                                        <label className="flex items-center gap-2 text-xs text-gray-300 px-2 py-1">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={!!kieStandardMappingForm.is_active}
+                                                                onChange={(e) => setKieStandardMappingForm((prev) => ({ ...prev, is_active: e.target.checked }))}
+                                                            />
+                                                            {t('启用', 'Active')}
+                                                        </label>
+                                                        <label className="flex items-center gap-2 text-xs text-gray-300 px-2 py-1">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={!!kieStandardMappingForm.is_billing_related}
+                                                                onChange={(e) => setKieStandardMappingForm((prev) => ({ ...prev, is_billing_related: e.target.checked }))}
+                                                            />
+                                                            {t('计费相关', 'Billing Related')}
+                                                        </label>
+                                                    </div>
+                                                </div>
+
+                                                <div className="flex items-center gap-2">
+                                                    <button
+                                                        onClick={handleCreateKieStandardMapping}
+                                                        disabled={isKieStandardSaving}
+                                                        className="px-3 py-1.5 bg-fuchsia-600 hover:bg-fuchsia-500 text-white font-bold rounded text-xs flex items-center gap-1 disabled:opacity-50"
+                                                    >
+                                                        <Plus size={12} /> {t('新建', 'Create')}
+                                                    </button>
+                                                    <button
+                                                        onClick={handleUpdateKieStandardMapping}
+                                                        disabled={isKieStandardSaving || !selectedKieStandardMappingId}
+                                                        className="px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-white font-bold rounded text-xs flex items-center gap-1 disabled:opacity-50"
+                                                    >
+                                                        <Edit2 size={12} /> {t('更新', 'Update')}
+                                                    </button>
+                                                    <button
+                                                        onClick={handleDeleteKieStandardMapping}
+                                                        disabled={isKieStandardSaving || !selectedKieStandardMappingId}
+                                                        className="px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white font-bold rounded text-xs flex items-center gap-1 disabled:opacity-50"
+                                                    >
+                                                        <Trash2 size={12} /> {t('删除', 'Delete')}
+                                                    </button>
+                                                    <button
+                                                        onClick={() => {
+                                                            setSelectedKieStandardMappingId('');
+                                                            setKieStandardMappingForm(createEmptyKieStandardMappingForm());
+                                                        }}
+                                                        className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white font-bold rounded text-xs"
+                                                    >
+                                                        {t('清空表单', 'Clear Form')}
+                                                    </button>
+                                                </div>
+                                            </>
+                                        )}
+                                    </div>
+
                                     <div className="flex flex-col gap-4">
                                     <div className="border border-white/10 rounded-lg p-4 bg-black/20 space-y-3">
                                         <div className="text-[11px] text-gray-300 bg-white/5 border border-white/10 rounded p-2 leading-relaxed">
@@ -5137,7 +5613,7 @@ const UserAdmin = () => {
                                                             <span>{t(`已选 ${selectedBillingRuleIds.length} 条`, `${selectedBillingRuleIds.length} selected`)}</span>
                                                         </div>
                                                     <div className="overflow-x-auto max-h-[260px] border border-white/10 rounded">
-                                                        <table className="w-full text-xs min-w-[760px]">
+                                                        <table className="w-full text-xs min-w-[1700px]">
                                                             <thead className="bg-white/5 text-gray-400 sticky top-0">
                                                                 <tr>
                                                                     <th className="text-left p-2 w-8">
@@ -5151,24 +5627,23 @@ const UserAdmin = () => {
                                                                     <th className="text-left p-2">{t('名称', 'Name')}</th>
                                                                     <th className="text-left p-2">{t('状态', 'Status')}</th>
                                                                     <th className="text-left p-2">{t('优先级', 'Priority')}</th>
-                                                                    <th className="text-left p-2">{t('目标', 'Targets')}</th>
-                                                                    <th className="text-left p-2">{t('条件', 'Dimensions')}</th>
-                                                                    <th className="text-left p-2">{t('计费', 'Pricing')}</th>
+                                                                    <th className="text-left p-2">T</th>
+                                                                    <th className="text-left p-2">I</th>
+                                                                    <th className="text-left p-2">V</th>
+                                                                    <th className="text-left p-2">generation_mode</th>
+                                                                    <th className="text-left p-2">input_format</th>
+                                                                    <th className="text-left p-2">output_format</th>
+                                                                    <th className="text-left p-2">has_audio</th>
+                                                                    <th className="text-left p-2">billing_unit_type</th>
+                                                                    <th className="text-left p-2">billing_cost</th>
+                                                                    <th className="text-left p-2">billing_cost_input</th>
+                                                                    <th className="text-left p-2">billing_cost_output</th>
+                                                                    <th className="text-left p-2">charge_multiplier</th>
                                                                     <th className="text-left p-2">{t('更新时间', 'Updated')}</th>
                                                                 </tr>
                                                             </thead>
                                                             <tbody>
                                                                 {filteredBillingRuleRows.map((row) => {
-                                                                    const targets = [
-                                                                        row?.applies_to_text ? 'T' : null,
-                                                                        row?.applies_to_image ? 'I' : null,
-                                                                        row?.applies_to_video ? 'V' : null,
-                                                                    ].filter(Boolean).join('/');
-                                                                    const dims = [
-                                                                        row?.generation_mode ? `mode:${row.generation_mode}` : null,
-                                                                        row?.input_format ? `in:${row.input_format}` : null,
-                                                                        row?.output_format ? `out:${row.output_format}` : null,
-                                                                    ].filter(Boolean).join(' | ');
                                                                     return (
                                                                         <tr
                                                                             key={row.id}
@@ -5186,16 +5661,25 @@ const UserAdmin = () => {
                                                                             <td className="p-2 max-w-[200px] truncate" title={row.name || '-'}>{row.name || '-'}</td>
                                                                             <td className="p-2">{row.is_active ? t('启用', 'Active') : t('停用', 'Inactive')}</td>
                                                                             <td className="p-2">{row.priority ?? 0}</td>
-                                                                            <td className="p-2">{targets || '-'}</td>
-                                                                            <td className="p-2 max-w-[260px] truncate" title={dims || '-'}>{dims || '-'}</td>
-                                                                            <td className="p-2">{row.billing_unit_type || 'per_call'} / {toNonNegativeInt(row.billing_cost ?? 0)}</td>
+                                                                            <td className="p-2">{row?.applies_to_text ? t('是', 'Yes') : t('否', 'No')}</td>
+                                                                            <td className="p-2">{row?.applies_to_image ? t('是', 'Yes') : t('否', 'No')}</td>
+                                                                            <td className="p-2">{row?.applies_to_video ? t('是', 'Yes') : t('否', 'No')}</td>
+                                                                            <td className="p-2">{row?.generation_mode || '-'}</td>
+                                                                            <td className="p-2">{row?.input_format || '-'}</td>
+                                                                            <td className="p-2">{row?.output_format || '-'}</td>
+                                                                            <td className="p-2">{row?.has_audio === null || row?.has_audio === undefined ? '-' : (row?.has_audio ? t('是', 'Yes') : t('否', 'No'))}</td>
+                                                                            <td className="p-2">{row?.billing_unit_type || 'per_call'}</td>
+                                                                            <td className="p-2">{toNonNegativeInt(row?.billing_cost ?? 0)}</td>
+                                                                            <td className="p-2">{toNonNegativeInt(row?.billing_cost_input ?? 0)}</td>
+                                                                            <td className="p-2">{toNonNegativeInt(row?.billing_cost_output ?? 0)}</td>
+                                                                            <td className="p-2">{toRuleChargeMultiplier(row?.charge_multiplier, 2).toFixed(2)}</td>
                                                                             <td className="p-2 text-gray-500">{row.updated_at || '-'}</td>
                                                                         </tr>
                                                                     );
                                                                 })}
                                                                 {filteredBillingRuleRows.length === 0 && (
                                                                     <tr className="border-t border-white/10">
-                                                                        <td className="p-3 text-gray-400" colSpan={9}>{t('无匹配规则', 'No matching rules')}</td>
+                                                                        <td className="p-3 text-gray-400" colSpan={17}>{t('无匹配规则', 'No matching rules')}</td>
                                                                     </tr>
                                                                 )}
                                                             </tbody>
@@ -5749,7 +6233,7 @@ const UserAdmin = () => {
                                     <div className="text-xs text-gray-400">{t('定价规则加载中...', 'Loading pricing rules...')}</div>
                                 ) : (
                                     <div className="overflow-x-auto max-h-[320px] border border-white/10 rounded">
-                                        <table className="w-full text-xs min-w-[760px]">
+                                        <table className="w-full text-xs min-w-[1480px]">
                                             <thead className="bg-white/5 text-gray-400 sticky top-0">
                                                 <tr>
                                                     <th className="text-left p-2">ID</th>
@@ -5757,17 +6241,22 @@ const UserAdmin = () => {
                                                     <th className="text-left p-2">{t('名称', 'Name')}</th>
                                                     <th className="text-left p-2">{t('状态', 'Status')}</th>
                                                     <th className="text-left p-2">{t('优先级', 'Priority')}</th>
-                                                    <th className="text-left p-2">{t('目标', 'Targets')}</th>
-                                                    <th className="text-left p-2">{t('计费', 'Pricing')}</th>
+                                                    <th className="text-left p-2">T</th>
+                                                    <th className="text-left p-2">I</th>
+                                                    <th className="text-left p-2">V</th>
+                                                    <th className="text-left p-2">generation_mode</th>
+                                                    <th className="text-left p-2">input_format</th>
+                                                    <th className="text-left p-2">output_format</th>
+                                                    <th className="text-left p-2">has_audio</th>
+                                                    <th className="text-left p-2">billing_unit_type</th>
+                                                    <th className="text-left p-2">billing_cost</th>
+                                                    <th className="text-left p-2">billing_cost_input</th>
+                                                    <th className="text-left p-2">billing_cost_output</th>
+                                                    <th className="text-left p-2">charge_multiplier</th>
                                                 </tr>
                                             </thead>
                                             <tbody>
                                                 {filteredBillingRuleRows.map((row) => {
-                                                    const targets = [
-                                                        row?.applies_to_text ? 'T' : null,
-                                                        row?.applies_to_image ? 'I' : null,
-                                                        row?.applies_to_video ? 'V' : null,
-                                                    ].filter(Boolean).join('/');
                                                     const apiRow = systemApiRows.find((api) => Number(api?.id) === Number(row?.system_api_id));
                                                     const apiLabel = apiRow ? `[${apiRow.category}] ${apiRow.provider}/${apiRow.model || '-'}` : `ID:${row?.system_api_id || '-'}`;
                                                     return (
@@ -5786,14 +6275,24 @@ const UserAdmin = () => {
                                                             <td className="p-2">{row.name || '-'}</td>
                                                             <td className="p-2">{row.is_active ? t('启用', 'Active') : t('停用', 'Inactive')}</td>
                                                             <td className="p-2">{row.priority ?? 0}</td>
-                                                            <td className="p-2">{targets || '-'}</td>
-                                                            <td className="p-2">{row.billing_unit_type || 'per_call'} / {toNonNegativeInt(row.billing_cost ?? 0)} x{toRuleChargeMultiplier(row?.charge_multiplier, 2).toFixed(2)}</td>
+                                                            <td className="p-2">{row?.applies_to_text ? t('是', 'Yes') : t('否', 'No')}</td>
+                                                            <td className="p-2">{row?.applies_to_image ? t('是', 'Yes') : t('否', 'No')}</td>
+                                                            <td className="p-2">{row?.applies_to_video ? t('是', 'Yes') : t('否', 'No')}</td>
+                                                            <td className="p-2">{row?.generation_mode || '-'}</td>
+                                                            <td className="p-2">{row?.input_format || '-'}</td>
+                                                            <td className="p-2">{row?.output_format || '-'}</td>
+                                                            <td className="p-2">{row?.has_audio === null || row?.has_audio === undefined ? '-' : (row?.has_audio ? t('是', 'Yes') : t('否', 'No'))}</td>
+                                                            <td className="p-2">{row?.billing_unit_type || 'per_call'}</td>
+                                                            <td className="p-2">{toNonNegativeInt(row?.billing_cost ?? 0)}</td>
+                                                            <td className="p-2">{toNonNegativeInt(row?.billing_cost_input ?? 0)}</td>
+                                                            <td className="p-2">{toNonNegativeInt(row?.billing_cost_output ?? 0)}</td>
+                                                            <td className="p-2">{toRuleChargeMultiplier(row?.charge_multiplier, 2).toFixed(2)}</td>
                                                         </tr>
                                                     );
                                                 })}
                                                 {filteredBillingRuleRows.length === 0 && (
                                                     <tr className="border-t border-white/10">
-                                                        <td className="p-3 text-gray-400" colSpan={7}>{t('无匹配规则', 'No matching rules')}</td>
+                                                        <td className="p-3 text-gray-400" colSpan={17}>{t('无匹配规则', 'No matching rules')}</td>
                                                     </tr>
                                                 )}
                                             </tbody>
@@ -6474,6 +6973,62 @@ const UserAdmin = () => {
                                     </details>
                                 </div>
                             )}
+                        </div>
+                    )}
+
+                    {/* RUNTIME LOGS TAB */}
+                    {activeTab === 'runtime_logs' && (
+                        <div className="space-y-4">
+                            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                                <h3 className="text-lg font-bold">{t('系统运行日志（含 logger.info）', 'Runtime Logs (including logger.info)')}</h3>
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <select
+                                        value={selectedRuntimeLogFile}
+                                        onChange={(e) => {
+                                            const fileName = e.target.value;
+                                            setSelectedRuntimeLogFile(fileName);
+                                            fetchRuntimeLogs(fileName);
+                                        }}
+                                        className="bg-black/40 border border-gray-700 rounded p-2 text-sm min-w-[220px]"
+                                    >
+                                        {runtimeLogFiles.map((f) => (
+                                            <option key={f.name} value={f.name}>
+                                                {f.name} ({formatBytes(f.size_bytes)})
+                                            </option>
+                                        ))}
+                                    </select>
+                                    <input
+                                        type="number"
+                                        min={1}
+                                        max={5000}
+                                        value={runtimeLogTailLines}
+                                        onChange={(e) => setRuntimeLogTailLines(e.target.value)}
+                                        className="w-24 bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                        title={t('尾部行数', 'Tail lines')}
+                                    />
+                                    <button
+                                        onClick={() => fetchRuntimeLogs(selectedRuntimeLogFile)}
+                                        disabled={isRuntimeLogsLoading}
+                                        className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded flex items-center gap-2 disabled:opacity-50"
+                                    >
+                                        <RefreshCw size={16} className={isRuntimeLogsLoading ? 'animate-spin' : ''} /> Refresh
+                                    </button>
+                                </div>
+                            </div>
+
+                            {runtimeLogsError ? (
+                                <div className="text-sm text-red-300 bg-red-500/10 border border-red-500/30 rounded p-3">
+                                    {runtimeLogsError}
+                                </div>
+                            ) : null}
+
+                            <div className="text-xs text-gray-500">
+                                Showing last {Math.max(1, Number(runtimeLogTailLines) || 300)} lines from {selectedRuntimeLogFile}
+                            </div>
+
+                            <pre className="w-full min-h-[420px] max-h-[620px] overflow-auto bg-black/40 border border-gray-700 rounded p-3 text-xs text-gray-100 whitespace-pre-wrap break-all font-mono">
+                                {isRuntimeLogsLoading ? 'Loading runtime logs...' : (runtimeLogContent || 'No content')}
+                            </pre>
                         </div>
                     )}
 

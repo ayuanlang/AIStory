@@ -1,5 +1,5 @@
 import React, { createContext, useState, useEffect } from 'react';
-import { getSettings } from '../services/api';
+import { getSettings, getUserPreferences } from '../services/api';
 
 export const StoreContext = createContext();
 
@@ -78,6 +78,13 @@ export const StoreProvider = ({ children }) => {
 
             const settings = await getSettings();
             if (!settings || !Array.isArray(settings)) return;
+
+            let userPreferences = null;
+            try {
+                userPreferences = await getUserPreferences();
+            } catch {
+                userPreferences = null;
+            }
 
             const newSavedConfigs = { ...savedConfigs };
             const newSavedToolConfigs = { ...savedToolConfigs };
@@ -163,6 +170,23 @@ export const StoreProvider = ({ children }) => {
                     imageModel: activeImageModel || (prev?.imageModel || "Midjourney"),
                     videoModel: activeVideoModel || (prev?.videoModel || "Runway"),
                     visionModel: activeVisionModel || (prev?.visionModel || "Grsai-Vision")
+                }));
+            }
+
+            if (userPreferences && typeof userPreferences === 'object') {
+                const generation = userPreferences.generation && typeof userPreferences.generation === 'object'
+                    ? userPreferences.generation
+                    : {};
+                const advanced = userPreferences.advanced_model && typeof userPreferences.advanced_model === 'object'
+                    ? userPreferences.advanced_model
+                    : {};
+                setGenerationConfigState(prev => ({
+                    ...(prev || {}),
+                    ...generation,
+                    advanced_model: {
+                        ...(prev?.advanced_model || {}),
+                        ...advanced,
+                    },
                 }));
             }
 

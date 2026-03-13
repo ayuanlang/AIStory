@@ -24,7 +24,7 @@ from app.models.all_models import APISetting, SystemAPISetting, ProviderKeyPool
 from app.core.config import settings
 from app.services.billing_service import BillingService
 from app.services.system_default_api_service import get_task_default_system_setting
-from sqlalchemy import cast, String, func
+from sqlalchemy import cast, String, func, text
 
 # Suppress InsecureRequestWarning from urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -258,6 +258,520 @@ class MediaGenerationService:
             return raw
         return None
 
+    def _normalize_bool_value(self, value: Any) -> Optional[bool]:
+        if isinstance(value, bool):
+            return value
+        raw = str(value or "").strip().lower()
+        if not raw:
+            return None
+        if raw in {"1", "true", "yes", "y", "on", "supported"}:
+            return True
+        if raw in {"0", "false", "no", "n", "off", "unsupported"}:
+            return False
+        return None
+
+    def _normalize_kie_standard_value(self, dimension: str, raw_value: Any) -> Optional[str]:
+        dim = str(dimension or "").strip().upper()
+        value = str(raw_value or "").strip()
+        if not dim or not value:
+            return None
+
+        lower = value.lower()
+        if dim == "ASPECT_RATIO":
+            if lower == "portrait":
+                return "9:16"
+            if lower == "landscape":
+                return "16:9"
+            if lower == "auto":
+                return "AUTO"
+            return value
+
+        if dim == "RESOLUTION_TIER":
+            mapping = {
+                "1k": "K1",
+                "2k": "K2",
+                "4k": "K4",
+                "480p": "P480",
+                "512p": "P512",
+                "580p": "P580",
+                "720p": "P720",
+                "768p": "P768",
+                "1080p": "P1080",
+            }
+            return mapping.get(lower.replace(" ", ""), value.upper())
+
+        if dim == "DURATION_SECONDS":
+            try:
+                num = float(value)
+                if abs(num - int(num)) < 1e-9:
+                    return str(int(num))
+                return str(num)
+            except Exception:
+                return value
+
+        if dim == "MODE":
+            mode_map = {
+                "std": "STANDARD",
+                "standard": "STANDARD",
+                "pro": "PRO",
+                "fast": "FAST",
+                "turbo": "TURBO",
+                "master": "MASTER",
+                "fun": "FUN",
+                "normal": "NORMAL",
+                "spicy": "SPICY",
+            }
+            return mode_map.get(lower, value.upper())
+
+        if dim == "QUALITY_LEVEL":
+            quality_map = {
+                "basic": "BASIC",
+                "medium": "MEDIUM",
+                "high": "HIGH",
+                "std": "STANDARD",
+                "standard": "STANDARD",
+            }
+            return quality_map.get(lower, value.upper())
+
+        if dim in {"OUTPUT_FORMAT", "STYLE", "REASONING_EFFORT", "CHARACTER_ORIENTATION", "IMAGE_SIZE_CLASS"}:
+            return value.upper()
+
+        if dim in {"SOUND_SUPPORTED", "MULTI_SHOTS_SUPPORTED"}:
+            b = self._normalize_bool_value(value)
+            if b is None:
+                return None
+            return "TRUE" if b else "FALSE"
+
+        return value
+
+    def _normalize_str_list(self, value: Any) -> List[str]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            items = value
+        elif isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return []
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    items = parsed
+                else:
+                    items = [seg.strip() for seg in raw.replace("\n", ",").split(",")]
+            except Exception:
+                items = [seg.strip() for seg in raw.replace("\n", ",").split(",")]
+        else:
+            items = [value]
+
+        out: List[str] = []
+        seen = set()
+        for item in items:
+            text_item = str(item or "").strip()
+            if not text_item:
+                continue
+            key = text_item.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(text_item)
+        return out
+
+    def _load_system_api_runtime_enum_catalog(self, setting_id: Any) -> Dict[str, Any]:
+        try:
+            sid = int(setting_id or 0)
+        except Exception:
+            sid = 0
+        if sid <= 0:
+            return {}
+
+        with SessionLocal() as session:
+            row = session.query(SystemAPISetting).filter(SystemAPISetting.id == sid).first()
+            if not row:
+                return {}
+
+            cfg = self._safe_json_dict(getattr(row, "config", None))
+            enum_catalog = cfg.get("enum_catalog") if isinstance(cfg.get("enum_catalog"), dict) else {}
+
+            mode_values = self._normalize_str_list(getattr(row, "mode_values", None))
+            if not mode_values:
+                mode_values = self._normalize_str_list(enum_catalog.get("mode") if isinstance(enum_catalog, dict) else None)
+
+            aspect_ratios = self._normalize_str_list(getattr(row, "aspect_ratios", None))
+            if not aspect_ratios:
+                aspect_ratios = self._normalize_str_list(enum_catalog.get("aspect_ratio") if isinstance(enum_catalog, dict) else None)
+
+            image_size_values = self._normalize_str_list(getattr(row, "image_size_values", None))
+            if not image_size_values:
+                image_size_values = self._normalize_str_list(enum_catalog.get("image_size") if isinstance(enum_catalog, dict) else None)
+
+            resolution_values = self._normalize_str_list(getattr(row, "supported_resolutions", None))
+            if not resolution_values:
+                resolution_values = self._normalize_str_list(enum_catalog.get("resolution") if isinstance(enum_catalog, dict) else None)
+
+            duration_values_raw = getattr(row, "durations_seconds", None)
+            duration_values_text = self._normalize_str_list(duration_values_raw)
+            duration_values_num: List[int] = []
+            for item in duration_values_text:
+                try:
+                    duration_values_num.append(int(float(item)))
+                except Exception:
+                    continue
+            duration_values_num = sorted(set([x for x in duration_values_num if x > 0]))
+
+            max_duration = None
+            try:
+                max_duration = int(getattr(row, "max_duration", 0) or 0)
+            except Exception:
+                max_duration = None
+            if max_duration is not None and max_duration <= 0:
+                max_duration = None
+
+            sound_supported = getattr(row, "sound_supported", None)
+            if sound_supported is None:
+                sound_supported = getattr(row, "has_audio", None)
+            if sound_supported is not None:
+                sound_supported = bool(sound_supported)
+
+            multi_shots_supported = getattr(row, "multi_shots_supported", None)
+            if multi_shots_supported is not None:
+                multi_shots_supported = bool(multi_shots_supported)
+
+            return {
+                "mode": mode_values,
+                "aspect_ratio": aspect_ratios,
+                "image_size": image_size_values,
+                "resolution": resolution_values,
+                "durations_seconds": duration_values_num,
+                "max_duration": max_duration,
+                "sound_supported": sound_supported,
+                "multi_shots_supported": multi_shots_supported,
+            }
+
+    def _apply_runtime_enum_constraints(
+        self,
+        runtime_config: Dict[str, Any],
+        category: Optional[str],
+        aspect_ratio: Optional[str],
+        duration: Any,
+        image_size: Optional[str],
+    ) -> Dict[str, Any]:
+        active_config = runtime_config if isinstance(runtime_config, dict) else {}
+        tool_conf = active_config.get("config") if isinstance(active_config.get("config"), dict) else {}
+        active_config["config"] = tool_conf
+
+        resolved_setting_id = None
+        try:
+            resolved_setting_id = int((tool_conf or {}).get("__resolved_setting_id") or 0)
+        except Exception:
+            resolved_setting_id = None
+
+        runtime_enum_catalog = self._load_system_api_runtime_enum_catalog(resolved_setting_id)
+
+        effective_aspect_ratio = self._normalize_aspect_ratio_value(aspect_ratio)
+        effective_image_size = str(image_size or "").strip() or None
+        effective_duration: Optional[int] = None
+        try:
+            effective_duration = int(float(duration))
+        except Exception:
+            effective_duration = None
+
+        def _allowed_map(values: Any, to_lower: bool = False) -> Dict[str, str]:
+            mapped: Dict[str, str] = {}
+            if not isinstance(values, list):
+                return mapped
+            for item in values:
+                text_item = str(item or "").strip()
+                if not text_item:
+                    continue
+                key = text_item.lower() if to_lower else text_item
+                if key not in mapped:
+                    mapped[key] = text_item
+            return mapped
+
+        allowed_modes = _allowed_map(runtime_enum_catalog.get("mode"), to_lower=True)
+        if allowed_modes:
+            current_mode = str(tool_conf.get("mode") or "").strip().lower()
+            if current_mode and current_mode not in allowed_modes:
+                tool_conf["mode"] = list(allowed_modes.values())[0]
+            elif current_mode:
+                tool_conf["mode"] = allowed_modes[current_mode]
+
+        allowed_aspect_ratios = _allowed_map(runtime_enum_catalog.get("aspect_ratio"))
+        if allowed_aspect_ratios and effective_aspect_ratio:
+            if effective_aspect_ratio not in allowed_aspect_ratios:
+                effective_aspect_ratio = list(allowed_aspect_ratios.values())[0]
+            else:
+                effective_aspect_ratio = allowed_aspect_ratios[effective_aspect_ratio]
+
+        allowed_image_sizes = _allowed_map(runtime_enum_catalog.get("image_size"), to_lower=True)
+        if allowed_image_sizes:
+            current_image_size = str(
+                effective_image_size or tool_conf.get("image_size") or tool_conf.get("imageSize") or ""
+            ).strip()
+            if current_image_size:
+                lookup = current_image_size.lower()
+                if lookup not in allowed_image_sizes:
+                    effective_image_size = list(allowed_image_sizes.values())[0]
+                else:
+                    effective_image_size = allowed_image_sizes[lookup]
+                tool_conf["image_size"] = effective_image_size
+                tool_conf["imageSize"] = effective_image_size
+
+        allowed_resolutions = _allowed_map(runtime_enum_catalog.get("resolution"), to_lower=True)
+        if allowed_resolutions:
+            current_resolution = str(tool_conf.get("resolution") or "").strip().lower()
+            if current_resolution and current_resolution not in allowed_resolutions:
+                tool_conf["resolution"] = list(allowed_resolutions.values())[0]
+            elif current_resolution:
+                tool_conf["resolution"] = allowed_resolutions[current_resolution]
+
+        if category in {"Video", "Voice"}:
+            allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
+            if isinstance(allowed_durations, list) and allowed_durations and effective_duration is not None:
+                try:
+                    allowed_duration_nums = sorted(set([int(float(item)) for item in allowed_durations if int(float(item)) > 0]))
+                except Exception:
+                    allowed_duration_nums = []
+                if allowed_duration_nums and effective_duration not in allowed_duration_nums:
+                    effective_duration = allowed_duration_nums[0]
+            max_duration = runtime_enum_catalog.get("max_duration")
+            if effective_duration is not None and max_duration is not None:
+                try:
+                    max_duration_num = int(float(max_duration))
+                    if max_duration_num > 0 and effective_duration > max_duration_num:
+                        effective_duration = max_duration_num
+                except Exception:
+                    pass
+
+        sound_supported = runtime_enum_catalog.get("sound_supported")
+        if sound_supported is False and tool_conf.get("sound") is True:
+            tool_conf["sound"] = False
+
+        multi_shots_supported = runtime_enum_catalog.get("multi_shots_supported")
+        if multi_shots_supported is False and tool_conf.get("multi_shots") is True:
+            tool_conf["multi_shots"] = False
+
+        return {
+            "catalog": runtime_enum_catalog,
+            "aspect_ratio": effective_aspect_ratio,
+            "duration": effective_duration,
+            "image_size": effective_image_size,
+        }
+
+    def _runtime_value_from_kie_standard(self, dimension: str, standard_value: Any) -> Any:
+        dim = str(dimension or "").strip().upper()
+        value = str(standard_value or "").strip()
+        if not value:
+            return None
+
+        if dim == "RESOLUTION_TIER":
+            reverse = {
+                "K1": "1k",
+                "K2": "2k",
+                "K4": "4k",
+                "P480": "480p",
+                "P512": "512p",
+                "P580": "580p",
+                "P720": "720p",
+                "P768": "768p",
+                "P1080": "1080p",
+            }
+            return reverse.get(value.upper(), value)
+
+        if dim == "MODE":
+            if value.upper() == "STANDARD":
+                return "std"
+            return value.lower()
+
+        if dim == "OUTPUT_FORMAT":
+            return value.lower()
+
+        if dim == "QUALITY_LEVEL":
+            return value.lower()
+
+        if dim == "IMAGE_SIZE_CLASS":
+            return value.lower()
+
+        if dim in {"SOUND_SUPPORTED", "MULTI_SHOTS_SUPPORTED"}:
+            return value.upper() == "TRUE"
+
+        return value
+
+    def _get_kie_standard_reverse_mapping(
+        self,
+        model_key: str,
+        standard_dimension: str,
+        standard_value: str,
+        preferred_fields: List[str],
+    ) -> Optional[Dict[str, Any]]:
+        model = str(model_key or "").strip()
+        if not model or not standard_dimension or not standard_value:
+            return None
+
+        preferred = [str(item or "").strip() for item in preferred_fields if str(item or "").strip()]
+        with SessionLocal() as session:
+            for source_field in preferred:
+                row = session.execute(
+                    text(
+                        """
+                        SELECT source_field, source_enum_value, confidence, note
+                        FROM kie_system_data_standard_mappings
+                        WHERE provider = 'kie'
+                          AND is_active = 1
+                          AND standard_dimension = :dim
+                          AND standard_value = :val
+                          AND source_field = :field
+                          AND lower(coalesce(model_key_inferred, '')) = lower(:model)
+                        ORDER BY CASE upper(coalesce(confidence, ''))
+                            WHEN 'HIGH' THEN 0
+                            WHEN 'MEDIUM' THEN 1
+                            WHEN 'LOW' THEN 2
+                            ELSE 3 END,
+                            id ASC
+                        LIMIT 1
+                        """
+                    ),
+                    {
+                        "dim": standard_dimension,
+                        "val": standard_value,
+                        "field": source_field,
+                        "model": model,
+                    },
+                ).mappings().first()
+                if row:
+                    return dict(row)
+
+            for source_field in preferred:
+                row = session.execute(
+                    text(
+                        """
+                        SELECT source_field, source_enum_value, confidence, note
+                        FROM kie_system_data_standard_mappings
+                        WHERE provider = 'kie'
+                          AND is_active = 1
+                          AND standard_dimension = :dim
+                          AND standard_value = :val
+                          AND source_field = :field
+                        ORDER BY CASE upper(coalesce(confidence, ''))
+                            WHEN 'HIGH' THEN 0
+                            WHEN 'MEDIUM' THEN 1
+                            WHEN 'LOW' THEN 2
+                            ELSE 3 END,
+                            id ASC
+                        LIMIT 1
+                        """
+                    ),
+                    {
+                        "dim": standard_dimension,
+                        "val": standard_value,
+                        "field": source_field,
+                    },
+                ).mappings().first()
+                if row:
+                    return dict(row)
+
+        return None
+
+    def _resolve_kie_standardized_runtime_inputs(
+        self,
+        model_key: str,
+        gen_type: str,
+        tool_conf: Dict[str, Any],
+        aspect_ratio: Optional[str],
+        duration: Any,
+        image_size: Optional[str],
+    ) -> Dict[str, Any]:
+        cfg = tool_conf if isinstance(tool_conf, dict) else {}
+        raw_std = cfg.get("standard_values") if isinstance(cfg.get("standard_values"), dict) else {}
+
+        standard_values: Dict[str, str] = {}
+        for dim, val in (raw_std or {}).items():
+            norm_dim = str(dim or "").strip().upper()
+            norm_val = self._normalize_kie_standard_value(norm_dim, val)
+            if norm_dim and norm_val:
+                standard_values[norm_dim] = norm_val
+
+        auto_candidates = {
+            "ASPECT_RATIO": aspect_ratio or cfg.get("aspect_ratio") or cfg.get("size"),
+            "RESOLUTION_TIER": cfg.get("resolution") or cfg.get("image_resolution"),
+            "DURATION_SECONDS": duration if duration is not None else cfg.get("duration") or cfg.get("n_frames"),
+            "MODE": cfg.get("mode"),
+            "QUALITY_LEVEL": cfg.get("quality"),
+            "OUTPUT_FORMAT": cfg.get("outputFormat") or cfg.get("output_format"),
+            "IMAGE_SIZE_CLASS": image_size or cfg.get("image_size"),
+            "SOUND_SUPPORTED": cfg.get("sound"),
+            "MULTI_SHOTS_SUPPORTED": cfg.get("multi_shots"),
+        }
+        for dim, raw in auto_candidates.items():
+            if dim in standard_values:
+                continue
+            norm_val = self._normalize_kie_standard_value(dim, raw)
+            if norm_val:
+                standard_values[dim] = norm_val
+
+        preferred_fields = {
+            "ASPECT_RATIO": ["paths.post.input.aspect_ratio", "paths.post.input.size"],
+            "RESOLUTION_TIER": ["paths.post.input.resolution", "paths.post.input.image_resolution"],
+            "DURATION_SECONDS": ["paths.post.input.duration", "paths.post.input.n_frames"],
+            "MODE": ["paths.post.input.mode"],
+            "QUALITY_LEVEL": ["paths.post.input.quality"],
+            "OUTPUT_FORMAT": ["paths.post.input.output_format"],
+            "IMAGE_SIZE_CLASS": ["paths.post.input.image_size"],
+            "SOUND_SUPPORTED": ["sound"],
+            "MULTI_SHOTS_SUPPORTED": ["multi_shots"],
+        }
+
+        resolved: Dict[str, Any] = {
+            "trace": {},
+        }
+
+        for dim, std_value in standard_values.items():
+            reverse = self._get_kie_standard_reverse_mapping(
+                model_key=model_key,
+                standard_dimension=dim,
+                standard_value=std_value,
+                preferred_fields=preferred_fields.get(dim, []),
+            )
+
+            runtime_value = None
+            source_field = None
+            if reverse:
+                source_field = str(reverse.get("source_field") or "").strip()
+                runtime_value = reverse.get("source_enum_value")
+            if runtime_value in (None, ""):
+                runtime_value = self._runtime_value_from_kie_standard(dim, std_value)
+
+            if runtime_value in (None, ""):
+                continue
+
+            if dim == "ASPECT_RATIO":
+                resolved["aspect_ratio"] = str(runtime_value).strip()
+            elif dim == "RESOLUTION_TIER":
+                resolved["resolution"] = str(runtime_value).strip()
+            elif dim == "DURATION_SECONDS":
+                resolved["duration"] = str(runtime_value).strip()
+            elif dim == "MODE":
+                resolved["mode"] = str(runtime_value).strip().lower()
+            elif dim == "QUALITY_LEVEL":
+                resolved["quality"] = str(runtime_value).strip().lower()
+            elif dim == "OUTPUT_FORMAT":
+                resolved["output_format"] = str(runtime_value).strip().lower()
+            elif dim == "IMAGE_SIZE_CLASS":
+                resolved["image_size"] = str(runtime_value).strip().lower()
+            elif dim == "SOUND_SUPPORTED":
+                resolved["sound"] = bool(runtime_value)
+            elif dim == "MULTI_SHOTS_SUPPORTED":
+                resolved["multi_shots"] = bool(runtime_value)
+
+            resolved["trace"][dim] = {
+                "standard_value": std_value,
+                "source_field": source_field,
+                "runtime_value": runtime_value,
+            }
+
+        return resolved
+
     def _is_deprecated_system_config(self, config_value: Any, deprecated_flag: Any = None) -> bool:
         if isinstance(deprecated_flag, bool):
             if deprecated_flag:
@@ -386,26 +900,8 @@ class MediaGenerationService:
         return "1K"
 
     def _repair_invalid_user_config_rows(self, session, user_id: int, category: Optional[str] = None) -> None:
-        q = session.query(
-            APISetting.id,
-            cast(APISetting.config, String).label("config_raw"),
-        ).filter(APISetting.user_id == user_id)
-        if category:
-            q = q.filter(APISetting.category == category)
-
-        bad_ids: List[int] = []
-        for row in q.all():
-            raw = getattr(row, "config_raw", None)
-            if isinstance(raw, str) and raw.strip() and not self._is_json_object_value(raw):
-                bad_ids.append(row.id)
-
-        if bad_ids:
-            logger.warning("Repair invalid api_settings.config rows in media service | user_id=%s category=%s ids=%s", user_id, category, bad_ids)
-            session.query(APISetting).filter(APISetting.id.in_(bad_ids)).update(
-                {APISetting.config: {}},
-                synchronize_session=False,
-            )
-            session.commit()
+        # api_settings no longer stores per-provider runtime config.
+        return
 
     def _repair_invalid_system_config_rows(self, session, category: Optional[str] = None, provider: Optional[str] = None) -> None:
         q = session.query(
@@ -441,50 +937,42 @@ class MediaGenerationService:
 
     def _setting_to_config(self, setting: Any, provider: str, defaults: Dict[str, Dict[str, str]]) -> Dict[str, Any]:
         return {
-            "api_key": setting.api_key,
-            "base_url": setting.base_url or defaults.get(provider, {}).get("base_url"),
-            "model": setting.model or defaults.get(provider, {}).get("model"),
-            "config": setting.config or {},
+            "api_key": "",
+            "base_url": defaults.get(provider, {}).get("base_url"),
+            "model": defaults.get(provider, {}).get("model"),
+            "config": {},
         }
 
     def _get_active_user_setting(self, session, user_id: int, category: str) -> Optional[APISetting]:
         rows = session.query(APISetting).filter(
             APISetting.user_id == user_id,
             APISetting.category == category,
-            APISetting.is_active == True,
         ).order_by(APISetting.id.desc()).all()
 
         if len(rows) > 1:
             logger.warning(
-                "Multiple active api settings found | user_id=%s category=%s active_ids=%s",
+                "Multiple api settings found | user_id=%s category=%s ids=%s",
                 user_id,
                 category,
                 [r.id for r in rows],
             )
 
         def _score(item: APISetting):
-            normalized_provider = self._normalize_provider_name(getattr(item, "provider", None), category)
-            provider_supported = 1 if self._is_supported_provider(category, normalized_provider) else 0
-            has_model = 1 if str(getattr(item, "model", "") or "").strip() else 0
-            cfg = self._safe_json_dict(getattr(item, "config", None))
-            selection_source = str((cfg or {}).get("selection_source") or "").strip().lower()
-            is_system_selected = 1 if selection_source == "system" else 0
-            return (provider_supported, has_model, is_system_selected, int(getattr(item, "id", 0) or 0))
+            has_system_setting_id = 1 if int(getattr(item, "system_api_id", 0) or 0) > 0 else 0
+            has_mode = 1 if str(getattr(item, "mode", "") or "").strip() else 0
+            return (has_system_setting_id, has_mode, int(getattr(item, "id", 0) or 0))
 
         best_active = max(rows, key=_score) if rows else None
 
         def _is_viable(item: Optional[APISetting]) -> bool:
             if not item:
                 return False
-            normalized_provider = self._normalize_provider_name(getattr(item, "provider", None), category)
-            if not self._is_supported_provider(category, normalized_provider):
-                return False
-            return bool(str(getattr(item, "model", "") or "").strip())
+            return int(getattr(item, "system_api_id", 0) or 0) > 0
 
         if _is_viable(best_active):
             return best_active
 
-        # Active row missing model/unsupported provider: promote best viable setting in this category.
+        # Latest row missing binding: select best viable setting in this category.
         all_rows = session.query(APISetting).filter(
             APISetting.user_id == user_id,
             APISetting.category == category,
@@ -494,11 +982,8 @@ class MediaGenerationService:
             return best_active
 
         promoted = max(viable_rows, key=_score)
-        for row in all_rows:
-            row.is_active = bool(row.id == promoted.id)
-        session.commit()
         logger.warning(
-            "Auto-heal active api setting in media service | user_id=%s category=%s old_active_id=%s promoted_id=%s",
+            "Auto-heal api setting selection in media service | user_id=%s category=%s old_selected_id=%s promoted_id=%s",
             user_id,
             category,
             getattr(best_active, "id", None),
@@ -538,23 +1023,33 @@ class MediaGenerationService:
     def _is_supported_provider(self, category: str, provider: Optional[str]) -> bool:
         normalized = self._normalize_provider_name(provider, category)
         cat = str(category or "").strip().lower()
+        if cat in {"llm", "vision", "tools", "digitalhuman", "music"}:
+            return bool(normalized)
         if cat == "image":
             return normalized in {"doubao", "grsai", "kie", "tencent", "stability"}
         if cat == "video":
             return normalized in {"doubao", "grsai", "kie", "tencent", "wanxiang", "vidu"}
         if cat == "voice":
             return normalized in {"kie"}
-        return False
+        return bool(normalized)
 
     def _pick_system_setting_fallback(self, session, category: str, provider: Optional[str] = None) -> Optional[SystemAPISetting]:
         # Prefer task-default system setting when no provider is pinned.
         if not str(provider or "").strip():
             default_row = get_task_default_system_setting(session, category)
             if default_row:
-                if not self._is_deprecated_system_config(getattr(default_row, "config", None), getattr(default_row, "deprecated", None)):
-                    row_provider = self._normalize_provider_name(getattr(default_row, "provider", None), category)
-                    if self._is_supported_provider(category, row_provider):
-                        return default_row
+                deprecated_default = self._is_deprecated_system_config(getattr(default_row, "config", None), getattr(default_row, "deprecated", None))
+                row_provider = self._normalize_provider_name(getattr(default_row, "provider", None), category)
+                supported_default = self._is_supported_provider(category, row_provider)
+                if not deprecated_default and supported_default:
+                    _debug_log(
+                        f"API_FALLBACK_TRACE picker category={category} provider={provider or '<none>'} selected=task_default setting_id={getattr(default_row, 'id', None)} mapped_provider={getattr(default_row, 'provider', None)} mapped_model={getattr(default_row, 'model', None)}"
+                    )
+                    return default_row
+                _debug_log(
+                    f"API_FALLBACK_TRACE picker category={category} provider={provider or '<none>'} skip_task_default setting_id={getattr(default_row, 'id', None)} deprecated={deprecated_default} supported={supported_default} mapped_provider={getattr(default_row, 'provider', None)} mapped_model={getattr(default_row, 'model', None)}",
+                    "warning",
+                )
 
         query = session.query(SystemAPISetting).filter(SystemAPISetting.category == category)
         normalized_provider = self._normalize_provider_name(provider, category) if provider else ""
@@ -568,7 +1063,14 @@ class MediaGenerationService:
             row_provider = self._normalize_provider_name(getattr(row, "provider", None), category)
             if not self._is_supported_provider(category, row_provider):
                 continue
+            _debug_log(
+                f"API_FALLBACK_TRACE picker category={category} provider={provider or '<none>'} selected=category_fallback setting_id={getattr(row, 'id', None)} selected_provider={getattr(row, 'provider', None)} selected_model={getattr(row, 'model', None)}"
+            )
             return row
+        _debug_log(
+            f"API_FALLBACK_TRACE picker category={category} provider={provider or '<none>'} selected=<none>",
+            "warning",
+        )
         return None
 
     def _is_smart_routing_enabled(self, session, user_id: int) -> bool:
@@ -580,15 +1082,15 @@ class MediaGenerationService:
         if not rows:
             return True
 
+        # APISetting is now a lightweight user/category binding and no longer stores
+        # provider/config payload. Use mode as the smart-routing switch instead.
+        # fixed -> disabled; smart_default/low_price_replace -> enabled.
         for row in rows:
-            cfg = self._safe_json_dict(row.config)
-            if row.provider == self.SMART_ROUTER_PROVIDER and "auto_intelligent_api_calling" in cfg:
-                return bool(cfg.get("auto_intelligent_api_calling"))
-
-        for row in rows:
-            cfg = self._safe_json_dict(row.config)
-            if "auto_intelligent_api_calling" in cfg:
-                return bool(cfg.get("auto_intelligent_api_calling"))
+            strategy = self._normalize_api_strategy(
+                getattr(row, "mode", None),
+                default=self.USER_API_STRATEGY_SMART_DEFAULT,
+            )
+            return strategy != self.USER_API_STRATEGY_FIXED
 
         return True
 
@@ -729,29 +1231,50 @@ class MediaGenerationService:
             return any(token in merged for token in markers)
 
         async def _dispatch_with_config(active_config: Dict[str, Any]) -> Dict[str, Any]:
+            normalized_inputs = self._apply_runtime_enum_constraints(
+                runtime_config=active_config,
+                category=category,
+                aspect_ratio=aspect_ratio,
+                duration=duration,
+                image_size=image_size,
+            )
+            effective_aspect_ratio = normalized_inputs.get("aspect_ratio")
+            effective_duration = normalized_inputs.get("duration")
+            if effective_duration is None:
+                effective_duration = duration
+            effective_image_size = normalized_inputs.get("image_size")
+
             if category == "Image":
                 if width and height:
                     if not active_config.get("config"):
                         active_config["config"] = {}
                     active_config["config"]["width"] = width
                     active_config["config"]["height"] = height
-                normalized_image_size = self._normalize_image_size_value(image_size)
+                normalized_image_size = self._normalize_image_size_value(effective_image_size)
                 if normalized_image_size:
                     if not active_config.get("config"):
                         active_config["config"] = {}
                     active_config["config"]["image_size"] = normalized_image_size
 
                 if provider in ["doubao", "ark"]:
-                    return await self._handle_doubao_generation("image", prompt, active_config, reference_image_url, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt)
+                    return await self._handle_doubao_generation(
+                        "image",
+                        prompt,
+                        active_config,
+                        reference_image_url,
+                        aspect_ratio=effective_aspect_ratio,
+                        negative_prompt=negative_prompt,
+                        image_size=normalized_image_size,
+                    )
                 if provider == "grsai":
-                    return await self._handle_grsai_generation("image", prompt, active_config, reference_image_url, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt, image_size=normalized_image_size)
+                    return await self._handle_grsai_generation("image", prompt, active_config, reference_image_url, aspect_ratio=effective_aspect_ratio, negative_prompt=negative_prompt, image_size=normalized_image_size)
                 if provider == "kie":
                     return await self._handle_kie_generation(
                         "image",
                         prompt,
                         active_config,
                         reference_image_url,
-                        aspect_ratio=aspect_ratio,
+                        aspect_ratio=effective_aspect_ratio,
                         negative_prompt=negative_prompt,
                         image_size=normalized_image_size,
                     )
@@ -773,9 +1296,9 @@ class MediaGenerationService:
 
             if category == "Video":
                 if provider in ["doubao", "ark"]:
-                    return await self._handle_doubao_generation("video", prompt, active_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt)
+                    return await self._handle_doubao_generation("video", prompt, active_config, reference_image_url, last_frame_url=last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, negative_prompt=negative_prompt)
                 if provider == "grsai":
-                    return await self._handle_grsai_generation("video", prompt, active_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt)
+                    return await self._handle_grsai_generation("video", prompt, active_config, reference_image_url, last_frame_url=last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, negative_prompt=negative_prompt)
                 if provider == "kie":
                     return await self._handle_kie_generation(
                         "video",
@@ -783,16 +1306,16 @@ class MediaGenerationService:
                         active_config,
                         reference_image_url,
                         last_frame_url=last_frame_url,
-                        duration=duration,
-                        aspect_ratio=aspect_ratio,
+                        duration=effective_duration,
+                        aspect_ratio=effective_aspect_ratio,
                         negative_prompt=negative_prompt,
                     )
                 if provider == "tencent":
-                    return await self._handle_tencent_generation("video", prompt, active_config, reference_image_url, duration=duration, negative_prompt=negative_prompt)
+                    return await self._handle_tencent_generation("video", prompt, active_config, reference_image_url, duration=effective_duration, negative_prompt=negative_prompt)
                 if provider in ["wanxiang", "wanx"]:
-                    return await self._handle_wanxiang_generation("video", prompt, active_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt)
+                    return await self._handle_wanxiang_generation("video", prompt, active_config, reference_image_url, last_frame_url=last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, negative_prompt=negative_prompt)
                 if provider == "vidu":
-                    return await self._handle_vidu_generation("video", prompt, active_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio, keyframes=keyframes, negative_prompt=negative_prompt)
+                    return await self._handle_vidu_generation("video", prompt, active_config, reference_image_url, last_frame_url=last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, keyframes=keyframes, negative_prompt=negative_prompt)
 
                 _debug_log(f"Unsupported Video provider: {provider}", "warning")
                 return {
@@ -813,7 +1336,7 @@ class MediaGenerationService:
                         prompt,
                         active_config,
                         reference_image_url,
-                        duration=duration,
+                        duration=effective_duration,
                         negative_prompt=negative_prompt,
                     )
 
@@ -1256,6 +1779,39 @@ class MediaGenerationService:
                 user_setting = self._get_active_user_setting(session, user_id, resolved_category)
                 requested_provider = self._normalize_provider_name(str(provider or "").strip(), resolved_category)
                 requested_model_value = str(requested_model or "").strip()
+                task_default_row = get_task_default_system_setting(session, resolved_category)
+
+                def _trace_default_vs_selected(stage: str, selected_row: Optional[SystemAPISetting], selected_source: str, note: str = "") -> None:
+                    mapped_id = getattr(task_default_row, "id", None)
+                    mapped_provider = getattr(task_default_row, "provider", None)
+                    mapped_model = getattr(task_default_row, "model", None)
+                    mapped_deprecated = None
+                    mapped_supported = None
+                    if task_default_row:
+                        mapped_deprecated = self._is_deprecated_system_config(
+                            getattr(task_default_row, "config", None),
+                            getattr(task_default_row, "deprecated", None),
+                        )
+                        mapped_supported = self._is_supported_provider(
+                            resolved_category,
+                            self._normalize_provider_name(mapped_provider, resolved_category),
+                        )
+
+                    selected_id = getattr(selected_row, "id", None) if selected_row else None
+                    selected_provider = getattr(selected_row, "provider", None) if selected_row else None
+                    selected_model = getattr(selected_row, "model", None) if selected_row else None
+                    mismatch = bool(task_default_row and selected_row and int(selected_id or 0) != int(mapped_id or 0))
+
+                    _debug_log(
+                        "API_FALLBACK_TRACE "
+                        f"stage={stage} user_id={user_id} category={resolved_category} requested_provider={requested_provider or '<none>'} "
+                        f"requested_model={requested_model_value or '<none>'} strict_provider={strict_provider} "
+                        f"mapped_id={mapped_id} mapped_provider={mapped_provider or '<none>'} mapped_model={mapped_model or '<none>'} "
+                        f"mapped_deprecated={mapped_deprecated} mapped_supported={mapped_supported} "
+                        f"selected_id={selected_id} selected_provider={selected_provider or '<none>'} selected_model={selected_model or '<none>'} "
+                        f"selected_source={selected_source or '<none>'} mismatch={mismatch} note={note or '<none>'}",
+                        "warning" if mismatch else "info",
+                    )
 
                 def _build_runtime_from_system_row(system_row: SystemAPISetting, resolved_source: str, selected_strategy: str) -> Dict[str, Any]:
                     resolved_provider = self._normalize_provider_name(system_row.provider, resolved_category) or requested_provider
@@ -1277,6 +1833,12 @@ class MediaGenerationService:
                         if strategy == "weighted":
                             merged_runtime_config["provider_api_key_weights"] = provider_key_pool_bundle.get("provider_api_key_weights") or []
 
+                    if user_setting is not None:
+                        user_mode = str(getattr(user_setting, "mode", "") or "").strip().lower()
+                        if user_mode:
+                            merged_runtime_config.setdefault("mode", user_mode)
+                            merged_runtime_config["__user_selected_mode"] = user_mode
+
                     return {
                         "provider": system_row.provider,
                         "api_key": self._pick_runtime_api_key(merged_runtime_config, system_row.api_key),
@@ -1291,231 +1853,112 @@ class MediaGenerationService:
                         },
                     }
 
-                if strict_provider and (not requested_provider or not self._is_supported_provider(resolved_category, requested_provider)):
-                    logger.warning(
-                        "Explicit provider unsupported/missing in media service | user_id=%s category=%s provider=%s",
-                        user_id,
-                        resolved_category,
-                        provider,
-                    )
-                    return {}
-
-                if not user_setting and not (strict_provider and requested_provider):
-                    logger.warning(
-                        "No active user api setting found in media service | user_id=%s category=%s",
-                        user_id,
-                        resolved_category,
-                    )
-                    default_row = get_task_default_system_setting(session, resolved_category)
-                    if default_row and not self._is_deprecated_system_config(default_row.config, getattr(default_row, "deprecated", None)):
-                        default_provider = self._normalize_provider_name(default_row.provider, resolved_category)
-                        if self._is_supported_provider(resolved_category, default_provider):
-                            return _build_runtime_from_system_row(
-                                default_row,
-                                f"task_default_system_setting:{default_row.provider}/{default_row.model}",
-                                self.USER_API_STRATEGY_FIXED,
-                            )
-
-                    fallback_any = self._pick_system_setting_fallback(session, resolved_category, None)
-                    if fallback_any:
-                        return _build_runtime_from_system_row(
-                            fallback_any,
-                            f"system_category_fallback_no_user:{fallback_any.provider}/{fallback_any.model}",
-                            self.USER_API_STRATEGY_FIXED,
-                        )
-                    return {}
-
-                if strict_provider and requested_provider:
-                    target_provider = requested_provider
-                    target_model = requested_model_value
-                else:
-                    target_provider = self._normalize_provider_name(str((user_setting.provider if user_setting else "") or "").strip(), resolved_category)
-                    target_model = requested_model_value or str((user_setting.model if user_setting else "") or "").strip()
-
-                provider_locked = bool(target_provider)
-
-                if not target_provider or not self._is_supported_provider(resolved_category, target_provider):
-                    logger.warning(
-                        "Active user setting provider unsupported/missing in media service | user_id=%s category=%s setting_id=%s provider=%s",
-                        user_id,
-                        resolved_category,
-                        (user_setting.id if user_setting else None),
-                        (user_setting.provider if user_setting else None),
-                    )
-                    if strict_provider and requested_provider:
-                        return {}
-                    fallback_any = self._pick_system_setting_fallback(session, resolved_category, None)
-                    if fallback_any:
-                        target_provider = self._normalize_provider_name(fallback_any.provider, resolved_category)
-                        target_model = str(fallback_any.model or "").strip()
-
-                if target_provider and not target_model:
-                    logger.warning(
-                        "Active user setting missing model in media service (same-provider fallback disabled) | user_id=%s category=%s setting_id=%s provider=%s",
-                        user_id,
-                        resolved_category,
-                        (user_setting.id if user_setting else None),
-                        target_provider,
-                    )
-
-                if not target_provider:
-                    if strict_provider and requested_provider:
+                # Strict mode: explicit provider/model request must resolve from system_api_settings directly.
+                if strict_provider:
+                    if not requested_provider or not self._is_supported_provider(resolved_category, requested_provider):
                         logger.warning(
-                            "Explicit provider has no resolvable provider in media service | user_id=%s category=%s provider=%s requested_model=%s",
+                            "Explicit provider unsupported/missing in media service | user_id=%s category=%s provider=%s",
+                            user_id,
+                            resolved_category,
+                            provider,
+                        )
+                        return {}
+
+                    strict_query = session.query(SystemAPISetting).filter(
+                        SystemAPISetting.category == resolved_category,
+                        self._provider_ci_filter(requested_provider),
+                    )
+                    if requested_model_value:
+                        strict_query = strict_query.filter(SystemAPISetting.model == requested_model_value)
+                    strict_rows = strict_query.order_by(SystemAPISetting.id.desc()).all()
+                    strict_match = None
+                    for row in strict_rows:
+                        if self._is_deprecated_system_config(row.config, getattr(row, "deprecated", None)):
+                            continue
+                        strict_match = row
+                        break
+
+                    if not strict_match:
+                        logger.warning(
+                            "Explicit provider/model has no available system setting in media service | user_id=%s category=%s provider=%s model=%s",
                             user_id,
                             resolved_category,
                             requested_provider,
                             requested_model_value,
                         )
                         return {}
-                    fallback_any = self._pick_system_setting_fallback(session, resolved_category, None)
-                    if fallback_any:
-                        target_provider = self._normalize_provider_name(fallback_any.provider, resolved_category)
-                        target_model = str(fallback_any.model or "").strip()
 
-                if target_provider and not target_model and strict_provider and requested_provider:
-                    if not user_setting:
-                        default_row = get_task_default_system_setting(session, resolved_category)
-                        if default_row and not self._is_deprecated_system_config(default_row.config, getattr(default_row, "deprecated", None)):
-                            default_provider = self._normalize_provider_name(default_row.provider, resolved_category)
-                            if self._is_supported_provider(resolved_category, default_provider):
+                    resolved_source = f"system_by_explicit_request:{requested_provider}/{requested_model_value or strict_match.model}"
+                    _trace_default_vs_selected("explicit_provider", strict_match, resolved_source, "explicit_provider_selected")
+                    return _build_runtime_from_system_row(strict_match, resolved_source, self.USER_API_STRATEGY_FIXED)
+
+                # Non-strict mode: use the per-user category binding first.
+                if user_setting:
+                    selected_system_setting_id = int(getattr(user_setting, "system_api_id", 0) or 0)
+                    if selected_system_setting_id > 0:
+                        selected_by_id = session.query(SystemAPISetting).filter(
+                            SystemAPISetting.id == selected_system_setting_id,
+                            SystemAPISetting.category == resolved_category,
+                        ).first()
+                        if selected_by_id:
+                            if self._is_deprecated_system_config(selected_by_id.config, getattr(selected_by_id, "deprecated", None)):
                                 logger.warning(
-                                    "Explicit provider has no model; fallback to task-default system setting because no active user setting | user_id=%s category=%s requested_provider=%s requested_model=%s default_provider=%s default_model=%s",
+                                    "Blocked deprecated system api setting in media service | user_id=%s category=%s system_api_id=%s",
                                     user_id,
                                     resolved_category,
-                                    requested_provider,
-                                    requested_model_value,
-                                    default_row.provider,
-                                    default_row.model,
+                                    selected_system_setting_id,
                                 )
+                                return {
+                                    "provider": selected_by_id.provider,
+                                    "model": selected_by_id.model,
+                                    "__blocked": True,
+                                    "__blocked_reason": "该 System API 配置已弃用，禁止发起 API 调用。",
+                                }
+                            selected_provider = self._normalize_provider_name(selected_by_id.provider, resolved_category)
+                            if self._is_supported_provider(resolved_category, selected_provider):
+                                resolved_source = f"system_by_user_setting_id:{selected_system_setting_id}"
+                                _trace_default_vs_selected("direct_system_api_id", selected_by_id, resolved_source, "explicit_user_category_binding")
                                 return _build_runtime_from_system_row(
-                                    default_row,
-                                    f"task_default_system_setting_explicit_missing_model:{default_row.provider}/{default_row.model}",
+                                    selected_by_id,
+                                    resolved_source,
                                     self.USER_API_STRATEGY_FIXED,
                                 )
-                    logger.warning(
-                        "Explicit provider has no resolvable model in media service | user_id=%s category=%s provider=%s requested_model=%s",
-                        user_id,
-                        resolved_category,
-                        requested_provider,
-                        requested_model_value,
-                    )
-                    return {}
-
-                if not target_provider or not target_model:
-                    logger.warning(
-                        "Unable to resolve provider/model in media service | user_id=%s category=%s setting_id=%s provider=%s model=%s",
-                        user_id,
-                        resolved_category,
-                        (user_setting.id if user_setting else None),
-                        (user_setting.provider if user_setting else None),
-                        (user_setting.model if user_setting else None),
-                    )
-                    return {}
-
-                system_setting = None
-                resolved_source = ""
-
-                # Exact provider+model should always win when both are known.
-                if target_provider and target_model:
-                    system_setting = session.query(SystemAPISetting).filter(
-                        SystemAPISetting.category == resolved_category,
-                        self._provider_ci_filter(target_provider),
-                        SystemAPISetting.model == target_model,
-                    ).order_by(SystemAPISetting.id.desc()).first()
-                    if system_setting:
-                        resolved_source = f"system_by_user_provider_model:{target_provider}/{target_model}"
-
-                if not system_setting and not strict_provider and not provider_locked:
-                    system_setting = self._pick_system_setting_fallback(session, resolved_category, None)
-                    if system_setting:
-                        resolved_source = f"system_by_category_fallback:{system_setting.provider}/{system_setting.model}"
-
-                if not system_setting:
-                    if strict_provider and requested_provider:
-                        if not user_setting:
-                            default_row = get_task_default_system_setting(session, resolved_category)
-                            if default_row and not self._is_deprecated_system_config(default_row.config, getattr(default_row, "deprecated", None)):
-                                default_provider = self._normalize_provider_name(default_row.provider, resolved_category)
-                                if self._is_supported_provider(resolved_category, default_provider):
-                                    logger.warning(
-                                        "Explicit provider/model not matched; fallback to task-default system setting because no active user setting | user_id=%s category=%s requested_provider=%s requested_model=%s default_provider=%s default_model=%s",
-                                        user_id,
-                                        resolved_category,
-                                        requested_provider,
-                                        requested_model_value,
-                                        default_row.provider,
-                                        default_row.model,
-                                    )
-                                    return _build_runtime_from_system_row(
-                                        default_row,
-                                        f"task_default_system_setting_explicit_unmatched:{default_row.provider}/{default_row.model}",
-                                        self.USER_API_STRATEGY_FIXED,
-                                    )
                         logger.warning(
-                            "Explicit provider has no available system setting after provider_model_exact in media service | user_id=%s category=%s provider=%s model=%s",
+                            "Invalid user system_api_id binding in media service | user_id=%s category=%s user_setting_id=%s system_api_id=%s",
                             user_id,
                             resolved_category,
-                            target_provider,
-                            target_model,
+                            getattr(user_setting, "id", None),
+                            selected_system_setting_id,
                         )
-                        return {}
-                    if provider_locked:
-                        logger.warning(
-                            "Provider-locked selection has no available system setting after provider_model_exact in media service | user_id=%s category=%s provider=%s model=%s",
-                            user_id,
-                            resolved_category,
-                            target_provider,
-                            target_model,
-                        )
-                        return {}
 
-                if system_setting:
-                    user_cfg = self._safe_json_dict(getattr(user_setting, "config", None)) if user_setting else {}
-                    selected_strategy = self._normalize_api_strategy(user_cfg.get("api_strategy"), default=self.USER_API_STRATEGY_FIXED)
-                    logger.warning(
-                        "Media config resolved candidate | user_id=%s category=%s source=%s setting_id=%s provider=%s model=%s deprecated_col=%s deprecated_effective=%s",
-                        user_id,
-                        resolved_category,
+                # Fallback 1: category task default system setting.
+                default_row = task_default_row
+                if default_row and not self._is_deprecated_system_config(default_row.config, getattr(default_row, "deprecated", None)):
+                    default_provider = self._normalize_provider_name(default_row.provider, resolved_category)
+                    if self._is_supported_provider(resolved_category, default_provider):
+                        resolved_source = f"task_default_system_setting:{default_row.provider}/{default_row.model}"
+                        _trace_default_vs_selected("task_default", default_row, resolved_source, "select_task_default")
+                        return _build_runtime_from_system_row(
+                            default_row,
+                            resolved_source,
+                            self.USER_API_STRATEGY_FIXED,
+                        )
+
+                # Fallback 2: any non-deprecated system setting in category.
+                fallback_any = self._pick_system_setting_fallback(session, resolved_category, None)
+                if fallback_any:
+                    resolved_source = f"system_category_fallback:{fallback_any.provider}/{fallback_any.model}"
+                    _trace_default_vs_selected("category_fallback", fallback_any, resolved_source, "task_default_unavailable")
+                    return _build_runtime_from_system_row(
+                        fallback_any,
                         resolved_source,
-                        system_setting.id,
-                        system_setting.provider,
-                        system_setting.model,
-                        getattr(system_setting, "deprecated", None),
-                        self._is_deprecated_system_config(system_setting.config, getattr(system_setting, "deprecated", None)),
+                        self.USER_API_STRATEGY_FIXED,
                     )
-                    if self._is_deprecated_system_config(system_setting.config, getattr(system_setting, "deprecated", None)):
-                        logger.warning(
-                            "Blocked deprecated system api setting in media service | user_id=%s category=%s provider=%s model=%s setting_id=%s",
-                            user_id,
-                            resolved_category,
-                            target_provider,
-                            target_model,
-                            system_setting.id,
-                        )
-                        return {
-                            "provider": system_setting.provider,
-                            "model": system_setting.model,
-                            "__blocked": True,
-                            "__blocked_reason": "该 System API 配置已弃用，禁止发起 API 调用。",
-                        }
-                    logger.info(
-                        "Resolved media API config (order: provider_model_exact -> category_fallback) | user_id=%s category=%s provider=%s source=%s selection_source=system_only setting_id=%s model=%s endpoint=%s",
-                        user_id,
-                        resolved_category,
-                        target_provider,
-                        resolved_source,
-                        system_setting.id,
-                        system_setting.model,
-                        system_setting.base_url,
-                    )
-                    return _build_runtime_from_system_row(system_setting, resolved_source, selected_strategy)
+
                 logger.warning(
-                    "No matching system api setting by provider+model in media service | user_id=%s category=%s provider=%s model=%s",
+                    "No available system api setting in media service | user_id=%s category=%s",
                     user_id,
                     resolved_category,
-                    target_provider,
-                    target_model,
                 )
         except Exception as e:
             _debug_log(f"Error fetching settings for {provider}: {e}", "error")
@@ -1524,31 +1967,28 @@ class MediaGenerationService:
 
     async def generate_image(self, prompt: str, negative_prompt: Optional[str] = None, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, width: int = None, height: int = None, image_size: Optional[str] = None, aspect_ratio: str = None, provider_options: Optional[Dict[str, Any]] = None, user_id: int = 1, user_credits: int = 0, filename_base: Optional[str] = None, asset_type: Optional[str] = None):
         explicit_provider_selected = bool((llm_config or {}).get("provider"))
-        provider = None
-        if llm_config and "provider" in llm_config and llm_config["provider"]:
-            provider = self._normalize_provider_name(llm_config["provider"], "Image")
-
-        if not provider:
-            try:
-                with SessionLocal() as session:
-                    self._repair_invalid_user_config_rows(session, user_id, category="Image")
-                    active_setting = self._get_active_user_setting(session, user_id, "Image")
-                    if active_setting and active_setting.provider:
-                        provider = self._normalize_provider_name(active_setting.provider, "Image")
-            except Exception as e:
-                _debug_log(f"Error finding active provider: {e}", "error")
-
-        if not provider:
-            provider = "grsai"
-
-        api_config = self.get_api_config(
-            provider,
-            user_id,
-            category="Image",
-            requested_model=(llm_config or {}).get("model"),
-            user_credits=user_credits,
-            strict_provider=explicit_provider_selected,
-        )
+        provider = self._normalize_provider_name((llm_config or {}).get("provider"), "Image")
+        pre_resolved_api_config = (llm_config or {}).get("__pre_resolved_api_config")
+        if isinstance(pre_resolved_api_config, dict) and pre_resolved_api_config:
+            api_config = dict(pre_resolved_api_config)
+            logger.info(
+                "Generate image provider resolution reused pre-resolved config | user_id=%s requested_provider=%s requested_model=%s resolved_provider=%s resolved_model=%s resolved_source=%s",
+                user_id,
+                self._normalize_provider_name((llm_config or {}).get("provider"), "Image") if llm_config else None,
+                (llm_config or {}).get("model"),
+                self._normalize_provider_name((api_config or {}).get("provider"), "Image") if api_config else None,
+                (api_config or {}).get("model"),
+                ((api_config or {}).get("config") or {}).get("__resolved_source"),
+            )
+        else:
+            api_config = self.get_api_config(
+                provider,
+                user_id,
+                category="Image",
+                requested_model=(llm_config or {}).get("model"),
+                user_credits=user_credits,
+                strict_provider=explicit_provider_selected,
+            )
 
         if api_config and api_config.get("__blocked"):
             return {
@@ -1623,31 +2063,19 @@ class MediaGenerationService:
 
     async def generate_video(self, prompt: str, negative_prompt: Optional[str] = None, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, last_frame_url: Optional[str] = None, duration: int = 5, aspect_ratio: Optional[str] = None, keyframes: Optional[List[str]] = None, provider_options: Optional[Dict[str, Any]] = None, user_id: int = 1, user_credits: int = 0, filename_base: Optional[str] = None):
         explicit_provider_selected = bool((llm_config or {}).get("provider"))
-        provider = None
-        if llm_config and "provider" in llm_config and llm_config["provider"]:
-            provider = self._normalize_provider_name(llm_config["provider"], "Video")
-
-        if not provider:
-            try:
-                with SessionLocal() as session:
-                    self._repair_invalid_user_config_rows(session, user_id, category="Video")
-                    active_setting = self._get_active_user_setting(session, user_id, "Video")
-                    if active_setting and active_setting.provider:
-                        provider = self._normalize_provider_name(active_setting.provider, "Video")
-            except Exception as e:
-                _debug_log(f"Error finding active provider: {e}", "error")
-
-        if not provider:
-            provider = "grsai"
-
-        api_config = self.get_api_config(
-            provider,
-            user_id,
-            category="Video",
-            requested_model=(llm_config or {}).get("model"),
-            user_credits=user_credits,
-            strict_provider=explicit_provider_selected,
-        )
+        provider = self._normalize_provider_name((llm_config or {}).get("provider"), "Video")
+        pre_resolved_api_config = (llm_config or {}).get("__pre_resolved_api_config")
+        if isinstance(pre_resolved_api_config, dict) and pre_resolved_api_config:
+            api_config = dict(pre_resolved_api_config)
+        else:
+            api_config = self.get_api_config(
+                provider,
+                user_id,
+                category="Video",
+                requested_model=(llm_config or {}).get("model"),
+                user_credits=user_credits,
+                strict_provider=explicit_provider_selected,
+            )
 
         _debug_log(
             "[MediaService][VideoConfig] requested_provider=%s requested_model=%s strict_provider=%s resolved_provider=%s resolved_model=%s resolved_source=%s has_api_config=%s"
@@ -1805,14 +2233,18 @@ class MediaGenerationService:
         if not provider:
             provider = "kie"
 
-        api_config = self.get_api_config(
-            provider,
-            user_id,
-            category="Voice",
-            requested_model=(llm_config or {}).get("model"),
-            user_credits=user_credits,
-            strict_provider=explicit_provider_selected,
-        )
+        pre_resolved_api_config = (llm_config or {}).get("__pre_resolved_api_config")
+        if isinstance(pre_resolved_api_config, dict) and pre_resolved_api_config:
+            api_config = dict(pre_resolved_api_config)
+        else:
+            api_config = self.get_api_config(
+                provider,
+                user_id,
+                category="Voice",
+                requested_model=(llm_config or {}).get("model"),
+                user_credits=user_credits,
+                strict_provider=explicit_provider_selected,
+            )
 
         if not api_config:
             api_config = {
@@ -1874,12 +2306,16 @@ class MediaGenerationService:
     
     # --- Provider Implementations ---
     
-    async def _handle_doubao_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None):
+    async def _handle_doubao_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None):
         prompt = self._merge_negative_prompt(prompt, negative_prompt)
         api_key = config.get("api_key")
         if not api_key: return {"error": "No API Key"}
         model = config.get("model")
         tool_conf = config.get("config", {}) or {}
+        # Defensive init for branches that may inspect image_size later.
+        image_size = self._normalize_image_size_value(
+            image_size or tool_conf.get("image_size") or tool_conf.get("imageSize")
+        )
         
         # Base metadata
         base_metadata = {"provider": "doubao", "model": model, "prompt": prompt}
@@ -2908,7 +3344,18 @@ class MediaGenerationService:
              # T2I
              url = f"{endpoint}/v1/generation/{model}/text-to-image"
              headers["Content-Type"] = "application/json"
-             body = {"text_prompts": [{"text": prompt}], "cfg_scale": 7, "height": 1024, "width": 1024, "samples": 1}
+             cfg_scale = 7.0
+             try:
+                 configured_cfg = tool_conf.get("cfg_scale")
+                 if configured_cfg is None:
+                     configured_cfg = tool_conf.get("cfg")
+                 if configured_cfg is not None:
+                     parsed_cfg = float(configured_cfg)
+                     if parsed_cfg > 0:
+                         cfg_scale = parsed_cfg
+             except Exception:
+                 pass
+             body = {"text_prompts": [{"text": prompt}], "cfg_scale": cfg_scale, "height": 1024, "width": 1024, "samples": 1}
              if str(negative_prompt or "").strip():
                  body["text_prompts"].append({"text": str(negative_prompt).strip(), "weight": -1})
              def _post_t2i(): return requests.post(url, headers=headers, json=body, timeout=(15, 120), verify=False)
@@ -3113,12 +3560,26 @@ class MediaGenerationService:
 
             try:
                 submit_started = time.perf_counter()
+                logger.info(
+                    "[GrsaiTrace][%s] submit begin | endpoint=%s candidate_index=%s payload_digest=%s",
+                    trace_id,
+                    submit_url,
+                    index,
+                    payload_digest,
+                )
                 try:
                     resp = await asyncio.to_thread(_post)
                 except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout):
                     logger.warning("[GrsaiTrace][%s] submit primary failed, retry without proxy | submit_url=%s", trace_id, submit_url)
                     resp = await asyncio.to_thread(_post_no_proxy)
                 submit_ms = int((time.perf_counter() - submit_started) * 1000)
+                logger.info(
+                    "[GrsaiTrace][%s] submit done | endpoint=%s status=%s latency_ms=%s",
+                    trace_id,
+                    submit_url,
+                    getattr(resp, "status_code", None),
+                    submit_ms,
+                )
             except requests.exceptions.RequestException as e:
                 last_error = str(e)
                 logger.error("[GrsaiTrace][%s] submit network_error | submit_url=%s error=%s", trace_id, submit_url, last_error)
@@ -3344,14 +3805,18 @@ class MediaGenerationService:
             "nanobanana2": "google/nanobanana2",
             "seedream4.5": "seedream/4.5-text-to-image",
             "seedream4.5-edit": "seedream/4.5-edit",
+            "seedream5-lite": "seedream/5-lite-text-to-image",
+            "seedream5-lite-i2i": "seedream/5-lite-image-to-image",
+            "seedream/5-lite-text-to-image": "seedream/5-lite-text-to-image",
+            "seedream/5-lite-image-to-image": "seedream/5-lite-image-to-image",
             "flux2-pro": "flux-2/pro-text-to-image",
             "flux2-pro-i2i": "flux-2/pro-image-to-image",
             "flux2-flex": "flux-2/flex-text-to-image",
             "flux2-flex-i2i": "flux-2/flex-image-to-image",
-            "gpt-image-1.5": "gpt-image/1-5-text-to-image",
-            "gpt-image-1.5-i2i": "gpt-image/1-5-image-to-image",
-            "gpt-image/1.5-text-to-image": "gpt-image/1-5-text-to-image",
-            "gpt-image/1.5-image-to-image": "gpt-image/1-5-image-to-image",
+            "gpt-image-1.5": "gpt-image/1.5-text-to-image",
+            "gpt-image-1.5-i2i": "gpt-image/1.5-image-to-image",
+            "gpt-image/1-5-text-to-image": "gpt-image/1.5-text-to-image",
+            "gpt-image/1-5-image-to-image": "gpt-image/1.5-image-to-image",
 
             "sora2": "sora-2-text-to-video",
             "sora2-t2v": "sora-2-text-to-video",
@@ -3428,10 +3893,11 @@ class MediaGenerationService:
                     "grok-imagine/text-to-image":     "grok-imagine/image-to-image",
                     "qwen/text-to-image":             "qwen/image-to-image",
                     "seedream/4.5-text-to-image":     "seedream/4.5-edit",
+                    "seedream/5-lite-text-to-image":  "seedream/5-lite-image-to-image",
                     "flux-2/pro-text-to-image":       "flux-2/pro-image-to-image",
                     "flux-2/flex-text-to-image":      "flux-2/flex-image-to-image",
-                    "gpt-image/1-5-text-to-image":    "gpt-image/1-5-image-to-image",
-                    "gpt-image/1.5-text-to-image":    "gpt-image/1-5-image-to-image",
+                    "gpt-image/1.5-text-to-image":    "gpt-image/1.5-image-to-image",
+                    "gpt-image/1-5-text-to-image":    "gpt-image/1.5-image-to-image",
                 }
                 i2i_model = _t2i_to_i2i_map.get(str(model or "").strip().lower())
                 if i2i_model:
@@ -3443,6 +3909,13 @@ class MediaGenerationService:
                     model = i2i_model
 
         tool_conf = config.get("config", {}) or {}
+
+        resolved_setting_id = None
+        try:
+            resolved_setting_id = int((tool_conf or {}).get("__resolved_setting_id") or 0)
+        except Exception:
+            resolved_setting_id = None
+        runtime_enum_catalog = self._load_system_api_runtime_enum_catalog(resolved_setting_id)
 
         model_lower = str(model or "").strip().lower()
         use_veo_api = bool(gen_type == "video" and model_lower.startswith("veo"))
@@ -3497,10 +3970,65 @@ class MediaGenerationService:
             "prompt": prompt,
         }
 
+        requested_mode = str(tool_conf.get("mode") or "").strip().lower()
+        mode_source_hint = str(tool_conf.get("__mode_source") or "").strip().lower()
+
+        if not requested_mode:
+            mode_binding_raw = (
+                tool_conf.get("model_mode_defaults")
+                or tool_conf.get("mode_by_model")
+                or tool_conf.get("default_mode_by_model")
+                or tool_conf.get("model_mode_bindings")
+            )
+            if isinstance(mode_binding_raw, dict):
+                lookup_keys = [
+                    str(model or "").strip(),
+                    str(model or "").strip().lower(),
+                    str(initial_submitted_model or "").strip(),
+                    str(initial_submitted_model or "").strip().lower(),
+                ]
+                for lookup_key in lookup_keys:
+                    if not lookup_key:
+                        continue
+                    bound_mode = mode_binding_raw.get(lookup_key)
+                    if bound_mode is None:
+                        continue
+                    candidate_mode = str(bound_mode).strip().lower()
+                    if candidate_mode:
+                        requested_mode = candidate_mode
+                        mode_source_hint = "settings_model_binding"
+                        break
+
+        allowed_modes = [str(item or "").strip().lower() for item in runtime_enum_catalog.get("mode") or [] if str(item or "").strip()]
+        if requested_mode and allowed_modes and requested_mode not in allowed_modes:
+            fallback_mode = allowed_modes[0]
+            logger.warning(
+                "KIE mode enum fallback | model=%s requested=%s allowed=%s fallback=%s",
+                model,
+                requested_mode,
+                allowed_modes,
+                fallback_mode,
+            )
+            requested_mode = fallback_mode
+            mode_source_hint = "enum_fallback"
+
+        if requested_mode:
+            payload_input["mode"] = requested_mode
+
         if gen_type == "audio":
-            payload_input["text"] = prompt
-            if tool_conf.get("text") is not None and str(tool_conf.get("text") or "").strip():
+            forced_submit_text = str(tool_conf.get("__voice_submit_text") or "").strip()
+            strict_text_only = bool(tool_conf.get("__voice_strict_text_only"))
+            effective_submit_text = forced_submit_text or str(prompt or "").strip()
+
+            payload_input["prompt"] = effective_submit_text
+            payload_input["text"] = effective_submit_text
+
+            # Keep backward compatibility for legacy non-strict flows only.
+            if not strict_text_only and tool_conf.get("text") is not None and str(tool_conf.get("text") or "").strip():
                 payload_input["text"] = str(tool_conf.get("text") or "").strip()
+            if not strict_text_only and tool_conf.get("prompt") is not None and str(tool_conf.get("prompt") or "").strip():
+                payload_input["prompt"] = str(tool_conf.get("prompt") or "").strip()
+
             for key in ["voice", "language_code", "previous_text", "next_text"]:
                 if tool_conf.get(key) is not None and str(tool_conf.get(key)).strip() != "":
                     payload_input[key] = tool_conf.get(key)
@@ -3532,8 +4060,33 @@ class MediaGenerationService:
         normalized_ar = self._normalize_aspect_ratio_value(aspect_ratio)
         if use_veo_api and raw_ar.lower() in {"auto", "adaptive"}:
             normalized_ar = "Auto"
+        allowed_aspect_ratios = [str(item or "").strip() for item in runtime_enum_catalog.get("aspect_ratio") or [] if str(item or "").strip()]
+        if normalized_ar and allowed_aspect_ratios:
+            allowed_aspect_ratios_lower = {item.lower(): item for item in allowed_aspect_ratios}
+            matched = allowed_aspect_ratios_lower.get(str(normalized_ar).lower())
+            if not matched:
+                fallback_ar = allowed_aspect_ratios[0]
+                logger.warning(
+                    "KIE aspect_ratio enum fallback | model=%s requested=%s allowed=%s fallback=%s",
+                    model,
+                    normalized_ar,
+                    allowed_aspect_ratios,
+                    fallback_ar,
+                )
+                normalized_ar = fallback_ar
+            else:
+                normalized_ar = matched
         if normalized_ar:
             payload_input["aspect_ratio"] = normalized_ar
+
+        is_gpt_image_15_i2i = bool(
+            gen_type == "image"
+            and str(model_lower or "").strip().lower() in {"gpt-image/1.5-image-to-image", "gpt-image/1-5-image-to-image"}
+        )
+        is_seedream_5_lite_i2i = bool(
+            gen_type == "image"
+            and str(model_lower or "").strip().lower() in {"seedream/5-lite-image-to-image"}
+        )
 
         if gen_type == "image":
             # z-image family requires aspect_ratio in input (per KIE API examples).
@@ -3543,10 +4096,54 @@ class MediaGenerationService:
             if is_z_image_model:
                 payload_input["aspect_ratio"] = str(payload_input.get("aspect_ratio") or "1:1").strip() or "1:1"
                 payload_input.pop("image_size", None)
+            elif is_gpt_image_15_i2i:
+                # KIE 1.5 Image-To-Image contract:
+                # model=gpt-image/1.5-image-to-image, input.input_urls, input.aspect_ratio, input.quality
+                allowed_ar = {"1:1", "2:3", "3:2"}
+                ar_val = str(payload_input.get("aspect_ratio") or "").strip()
+                if ar_val not in allowed_ar:
+                    ar_val = "3:2"
+                payload_input["aspect_ratio"] = ar_val
+
+                quality_val = str(tool_conf.get("quality") or payload_input.get("quality") or "").strip().lower()
+                if quality_val not in {"medium", "high"}:
+                    quality_val = "medium"
+                payload_input["quality"] = quality_val
+
+                payload_input.pop("image_size", None)
+            elif is_seedream_5_lite_i2i:
+                # KIE Seedream 5-lite I2I contract:
+                # model=seedream/5-lite-image-to-image, input.image_urls, input.aspect_ratio, input.quality
+                allowed_ar = {"1:1", "4:3", "3:4", "16:9", "9:16", "2:3", "3:2", "21:9"}
+                ar_val = str(payload_input.get("aspect_ratio") or "").strip()
+                if ar_val not in allowed_ar:
+                    ar_val = "1:1"
+                payload_input["aspect_ratio"] = ar_val
+
+                quality_val = str(tool_conf.get("quality") or payload_input.get("quality") or "").strip().lower()
+                if quality_val not in {"basic", "high"}:
+                    quality_val = "basic"
+                payload_input["quality"] = quality_val
+
+                payload_input.pop("image_size", None)
             else:
                 # Other KIE market image models may still expect image_size-style input.
                 # Map to ratio enum when available; fallback to auto.
                 kie_image_size = normalized_ar or "auto"
+                allowed_image_sizes = [str(item or "").strip().lower() for item in runtime_enum_catalog.get("image_size") or [] if str(item or "").strip()]
+                if allowed_image_sizes:
+                    if str(kie_image_size).strip().lower() in allowed_image_sizes:
+                        kie_image_size = str(kie_image_size).strip().lower()
+                    else:
+                        fallback_image_size = allowed_image_sizes[0]
+                        logger.warning(
+                            "KIE image_size enum fallback | model=%s requested=%s allowed=%s fallback=%s",
+                            model,
+                            kie_image_size,
+                            allowed_image_sizes,
+                            fallback_image_size,
+                        )
+                        kie_image_size = fallback_image_size
                 payload_input["image_size"] = kie_image_size
         elif gen_type == "video":
             duration_value = 5
@@ -3554,6 +4151,18 @@ class MediaGenerationService:
                 duration_value = int(float(duration if duration is not None else 5))
             except Exception:
                 duration_value = 5
+            allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
+            if isinstance(allowed_durations, list) and allowed_durations:
+                try:
+                    duration_value = min(allowed_durations, key=lambda x: abs(int(x) - int(duration_value)))
+                except Exception:
+                    pass
+            max_duration = runtime_enum_catalog.get("max_duration")
+            try:
+                if max_duration is not None:
+                    duration_value = min(int(duration_value), int(max_duration))
+            except Exception:
+                pass
             payload_input["duration"] = str(max(1, duration_value))
 
         if gen_type == "audio":
@@ -3572,7 +4181,12 @@ class MediaGenerationService:
 
         # Fallback: some callers pass reference images through provider_options only.
         if not resolved_refs:
-            option_refs = tool_conf.get("image_urls") or tool_conf.get("imageUrls") or []
+            option_refs = (
+                tool_conf.get("input_urls")
+                or tool_conf.get("image_urls")
+                or tool_conf.get("imageUrls")
+                or []
+            )
             if isinstance(option_refs, str):
                 option_refs = [option_refs]
             for ref in option_refs if isinstance(option_refs, list) else []:
@@ -3582,6 +4196,71 @@ class MediaGenerationService:
                     resolved = self._resolve_ref_for_api(ref, force_data_uri_for_local=True)
                 if resolved:
                     resolved_refs.append(resolved)
+
+        if resolved_refs:
+            preuploaded_refs: List[str] = []
+            for idx, ref in enumerate(resolved_refs):
+                hosted_ref = self._upload_kie_ref_to_hosted_url(
+                    ref,
+                    api_key=api_key,
+                    upload_path="market-inputs",
+                    file_name_prefix=f"kie-ref-{idx + 1}",
+                )
+                if not hosted_ref:
+                    return {
+                        "error": "KIE pre-upload failed",
+                        "details": "Failed to upload reference file before KIE submission",
+                        "submit_failed": True,
+                        "runtime_model": model,
+                    }
+                preuploaded_refs.append(hosted_ref)
+            resolved_refs = preuploaded_refs
+
+        is_sora2_i2v_model = bool(
+            gen_type == "video"
+            and str(model_lower or "").strip().lower() in {"sora-2-image-to-video", "sora-2-pro-image-to-video"}
+        )
+
+        if is_sora2_i2v_model and resolved_refs:
+            converted_refs: List[str] = []
+            for idx, ref in enumerate(resolved_refs):
+                ref_text = str(ref or "").strip()
+                if not ref_text:
+                    continue
+                if ref_text.startswith("http"):
+                    converted_refs.append(ref_text)
+                    continue
+                if not ref_text.startswith("data:"):
+                    converted_refs.append(ref_text)
+                    continue
+
+                normalized_ref = ref_text
+                mime = self._extract_data_uri_mime(ref_text)
+                if not any(token in mime for token in ("jpeg", "jpg", "png", "webp")):
+                    normalized_candidate = self._normalize_data_uri_image_for_kie(ref_text, target_format="JPEG")
+                    if normalized_candidate:
+                        normalized_ref = normalized_candidate
+                        mime = self._extract_data_uri_mime(normalized_candidate)
+
+                ext = ".jpg"
+                if "png" in mime:
+                    ext = ".png"
+                elif "webp" in mime:
+                    ext = ".webp"
+
+                uploaded_ref = self._upload_kie_data_uri(
+                    normalized_ref,
+                    api_key=api_key,
+                    file_name=f"sora2-input-{uuid.uuid4().hex[:10]}-{idx + 1}{ext}",
+                    upload_path="sora2-inputs",
+                )
+                if uploaded_ref:
+                    converted_refs.append(uploaded_ref)
+                else:
+                    converted_refs.append(normalized_ref)
+
+            if converted_refs:
+                resolved_refs = converted_refs
 
             single_ref = tool_conf.get("image_url") or tool_conf.get("imageUrl")
             if single_ref and not resolved_refs:
@@ -3593,16 +4272,98 @@ class MediaGenerationService:
                     resolved_refs.append(resolved)
 
         if resolved_refs:
-            payload_input["image_urls"] = resolved_refs
-            payload_input["image_url"] = resolved_refs[0]
+            if is_gpt_image_15_i2i:
+                payload_input["input_urls"] = resolved_refs
+                payload_input.pop("image_urls", None)
+                payload_input.pop("image_url", None)
+            elif is_seedream_5_lite_i2i:
+                payload_input["image_urls"] = resolved_refs
+                payload_input.pop("image_url", None)
+            else:
+                payload_input["image_urls"] = resolved_refs
+                payload_input["image_url"] = resolved_refs[0]
 
-        if last_frame_url:
+        if is_sora2_i2v_model:
+            sora_refs = payload_input.get("image_urls")
+            if not isinstance(sora_refs, list) or not sora_refs:
+                return {
+                    "error": "KIE submission validation failed",
+                    "details": "sora-2-image-to-video requires input.image_urls (at least one public image URL)",
+                    "submit_failed": True,
+                    "runtime_model": model,
+                }
+
+            if any(str(item or "").strip().startswith("data:") for item in sora_refs):
+                return {
+                    "error": "KIE submission validation failed",
+                    "details": "sora-2-image-to-video requires public image_urls (data URI is not supported)",
+                    "submit_failed": True,
+                    "runtime_model": model,
+                }
+
+            payload_input.pop("image_url", None)
+            payload_input.pop("last_frame_url", None)
+            payload_input.pop("duration", None)
+
+            sora_ar = str(payload_input.get("aspect_ratio") or normalized_ar or "").strip().lower()
+            if sora_ar in {"9:16", "portrait"}:
+                payload_input["aspect_ratio"] = "portrait"
+            else:
+                payload_input["aspect_ratio"] = "landscape"
+
+            n_frames_value = str(tool_conf.get("n_frames") or payload_input.get("n_frames") or "").strip()
+            if n_frames_value not in {"10", "15"}:
+                n_frames_value = "15" if int(duration_value) >= 15 else "10"
+            payload_input["n_frames"] = n_frames_value
+
+            remove_watermark_raw = tool_conf.get("remove_watermark")
+            if remove_watermark_raw is None:
+                payload_input["remove_watermark"] = True
+            elif isinstance(remove_watermark_raw, bool):
+                payload_input["remove_watermark"] = remove_watermark_raw
+            else:
+                payload_input["remove_watermark"] = str(remove_watermark_raw).strip().lower() in {"1", "true", "yes", "on", "y"}
+
+            upload_method_value = str(tool_conf.get("upload_method") or payload_input.get("upload_method") or "s3").strip().lower()
+            if upload_method_value not in {"s3", "oss"}:
+                upload_method_value = "s3"
+            payload_input["upload_method"] = upload_method_value
+
+        if is_gpt_image_15_i2i and not isinstance(payload_input.get("input_urls"), list):
+            return {
+                "error": "KIE submission validation failed",
+                "details": "gpt-image/1.5-image-to-image requires input.input_urls (at least one image URL)",
+                "submit_failed": True,
+                "runtime_model": model,
+            }
+        if is_seedream_5_lite_i2i and not isinstance(payload_input.get("image_urls"), list):
+            return {
+                "error": "KIE submission validation failed",
+                "details": "seedream/5-lite-image-to-image requires input.image_urls (at least one image URL)",
+                "submit_failed": True,
+                "runtime_model": model,
+            }
+
+        if last_frame_url and not is_sora2_i2v_model:
             if use_veo_api:
                 last_ref = self._process_veo_image(last_frame_url, normalized_ar or "16:9")
             else:
                 last_ref = self._resolve_ref_for_api(last_frame_url, force_data_uri_for_local=True)
-            if last_ref:
-                payload_input["last_frame_url"] = last_ref
+
+            hosted_last_ref = self._upload_kie_ref_to_hosted_url(
+                last_ref,
+                api_key=api_key,
+                upload_path="market-inputs",
+                file_name_prefix="kie-last-frame",
+            )
+            if not hosted_last_ref:
+                return {
+                    "error": "KIE pre-upload failed",
+                    "details": "Failed to upload last_frame_url before KIE submission",
+                    "submit_failed": True,
+                    "runtime_model": model,
+                }
+            payload_input["last_frame_url"] = hosted_last_ref
 
         if not use_veo_api and gen_type == "video":
             model_lower = str(model or "").strip().lower()
@@ -3673,6 +4434,32 @@ class MediaGenerationService:
                         "submit_failed": True,
                         "runtime_model": model,
                     }
+
+                # Hailuo 2.3 i2v rejects some data-uri formats; normalize and prefer hosted URL.
+                hailuo_image_url = str(payload_input.get("image_url") or "").strip()
+                if hailuo_image_url.startswith("data:"):
+                    hailuo_mime = self._extract_data_uri_mime(hailuo_image_url)
+                    if "jpeg" not in hailuo_mime and "jpg" not in hailuo_mime and "png" not in hailuo_mime:
+                        normalized_data_uri = self._normalize_data_uri_image_for_kie(hailuo_image_url, target_format="JPEG")
+                        if normalized_data_uri:
+                            hailuo_image_url = normalized_data_uri
+
+                    hailuo_ext = ".jpg"
+                    if "png" in self._extract_data_uri_mime(hailuo_image_url):
+                        hailuo_ext = ".png"
+
+                    uploaded_hailuo_url = self._upload_kie_data_uri(
+                        hailuo_image_url,
+                        api_key=api_key,
+                        file_name=f"hailuo-{uuid.uuid4().hex[:10]}{hailuo_ext}",
+                        upload_path="hailuo-inputs",
+                    )
+                    if uploaded_hailuo_url:
+                        payload_input["image_url"] = uploaded_hailuo_url
+                        logger.info("KIE Hailuo 2.3 image_url uploaded | hosted=true")
+                    else:
+                        payload_input["image_url"] = hailuo_image_url
+                        logger.warning("KIE Hailuo 2.3 image_url upload failed; using data URI fallback")
 
             if model_lower == "bytedance/v1-pro-text-to-video":
                 payload_input.setdefault("aspect_ratio", normalized_ar or "16:9")
@@ -4068,6 +4855,54 @@ class MediaGenerationService:
             if callback_url and callback_url != "-1":
                 payload["callBackUrl"] = callback_url
 
+        # Final enum guard: enforce payload input values against system_api dictionary catalog.
+        payload_input_obj = payload.get("input") if isinstance(payload, dict) else None
+        if isinstance(payload_input_obj, dict) and runtime_enum_catalog:
+            allowed_modes = [str(item or "").strip().lower() for item in runtime_enum_catalog.get("mode") or [] if str(item or "").strip()]
+            current_mode = str(payload_input_obj.get("mode") or "").strip().lower()
+            if current_mode and allowed_modes and current_mode not in allowed_modes:
+                payload_input_obj["mode"] = allowed_modes[0]
+
+            allowed_aspect_ratios = [str(item or "").strip() for item in runtime_enum_catalog.get("aspect_ratio") or [] if str(item or "").strip()]
+            current_ar = str(payload_input_obj.get("aspect_ratio") or "").strip()
+            if current_ar and allowed_aspect_ratios:
+                match_map = {item.lower(): item for item in allowed_aspect_ratios}
+                payload_input_obj["aspect_ratio"] = match_map.get(current_ar.lower(), allowed_aspect_ratios[0])
+
+            allowed_image_sizes = [str(item or "").strip().lower() for item in runtime_enum_catalog.get("image_size") or [] if str(item or "").strip()]
+            current_image_size = str(payload_input_obj.get("image_size") or "").strip().lower()
+            if current_image_size and allowed_image_sizes and current_image_size not in allowed_image_sizes:
+                payload_input_obj["image_size"] = allowed_image_sizes[0]
+
+            allowed_resolutions = [str(item or "").strip().lower() for item in runtime_enum_catalog.get("resolution") or [] if str(item or "").strip()]
+            current_resolution = str(payload_input_obj.get("resolution") or "").strip().lower()
+            if current_resolution and allowed_resolutions and current_resolution not in allowed_resolutions:
+                payload_input_obj["resolution"] = allowed_resolutions[0]
+
+            current_duration_text = str(payload_input_obj.get("duration") or "").strip()
+            if current_duration_text:
+                try:
+                    current_duration_int = int(float(current_duration_text))
+                    allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
+                    if isinstance(allowed_durations, list) and allowed_durations:
+                        current_duration_int = min(allowed_durations, key=lambda x: abs(int(x) - int(current_duration_int)))
+                    max_duration = runtime_enum_catalog.get("max_duration")
+                    if max_duration is not None:
+                        current_duration_int = min(int(current_duration_int), int(max_duration))
+                    payload_input_obj["duration"] = str(max(1, int(current_duration_int)))
+                except Exception:
+                    pass
+
+            sound_supported = runtime_enum_catalog.get("sound_supported")
+            if sound_supported is False and "sound" in payload_input_obj:
+                payload_input_obj["sound"] = False
+
+            multi_shots_supported = runtime_enum_catalog.get("multi_shots_supported")
+            if multi_shots_supported is False and "multi_shots" in payload_input_obj:
+                payload_input_obj["multi_shots"] = False
+
+            payload["input"] = payload_input_obj
+
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -4178,11 +5013,25 @@ class MediaGenerationService:
                 for src in src_list:
                     rebuilt = self._process_veo_image(src, normalized_ar or "16:9")
                     if rebuilt:
-                        rebuilt_refs.append(rebuilt)
+                        hosted_rebuilt = self._upload_kie_ref_to_hosted_url(
+                            rebuilt,
+                            api_key=api_key,
+                            upload_path="veo-inputs",
+                            file_name_prefix="veo-retry",
+                        )
+                        if hosted_rebuilt:
+                            rebuilt_refs.append(hosted_rebuilt)
             if last_frame_url:
                 rebuilt_last = self._process_veo_image(last_frame_url, normalized_ar or "16:9")
                 if rebuilt_last and rebuilt_last not in rebuilt_refs:
-                    rebuilt_refs.append(rebuilt_last)
+                    hosted_last = self._upload_kie_ref_to_hosted_url(
+                        rebuilt_last,
+                        api_key=api_key,
+                        upload_path="veo-inputs",
+                        file_name_prefix="veo-retry-last",
+                    )
+                    if hosted_last and hosted_last not in rebuilt_refs:
+                        rebuilt_refs.append(hosted_last)
             return rebuilt_refs
 
         async def _retry_veo_on_image_size_limit(current_resp: requests.Response, current_payload: Dict[str, Any]):
@@ -4347,7 +5196,41 @@ class MediaGenerationService:
                 except Exception as retry_err:
                     logger.warning("KIE audio voice fallback retry failed: %s", retry_err)
 
-        base_metadata = {"provider": "kie", "model": submitted_model, "prompt": prompt}
+        submitted_mode_value = ""
+        submitted_aspect_ratio_value = ""
+        submitted_quality_value = ""
+        submitted_image_count_value = 0
+        if isinstance(submit_payload, dict):
+            submit_input = submit_payload.get("input") if isinstance(submit_payload.get("input"), dict) else {}
+            submitted_mode_value = str(
+                submit_input.get("mode")
+                or submit_payload.get("mode")
+                or ""
+            ).strip().lower()
+            submitted_aspect_ratio_value = str(submit_input.get("aspect_ratio") or submit_input.get("size") or "").strip()
+            submitted_quality_value = str(submit_input.get("quality") or "").strip().lower()
+            if isinstance(submit_input.get("image_urls"), list):
+                submitted_image_count_value = len(submit_input.get("image_urls") or [])
+            elif isinstance(submit_input.get("input_urls"), list):
+                submitted_image_count_value = len(submit_input.get("input_urls") or [])
+
+        resolved_mode_source = ""
+        if requested_mode:
+            resolved_mode_source = mode_source_hint or "config"
+        elif submitted_mode_value:
+            resolved_mode_source = "model_default"
+
+        base_metadata = {
+            "provider": "kie",
+            "model": submitted_model,
+            "prompt": prompt,
+            "submit_mode": submitted_mode_value or None,
+            "submit_aspect_ratio": submitted_aspect_ratio_value or None,
+            "submit_quality": submitted_quality_value or None,
+            "submit_image_count": int(submitted_image_count_value or 0),
+            "mode_source": resolved_mode_source or None,
+            "standard_resolution_trace": tool_conf.get("__standard_resolution_trace") if isinstance(tool_conf, dict) else None,
+        }
 
         code = data.get("code")
         if code not in (None, 200, "200"):
@@ -4389,6 +5272,22 @@ class MediaGenerationService:
                 final_image_count,
                 task_id,
                 bool(str(submitted_model or "").strip().lower() != str(initial_submitted_model or "").strip().lower()),
+            )
+        elif gen_type == "image":
+            final_input = (submit_payload or {}).get("input") if isinstance((submit_payload or {}).get("input"), dict) else {}
+            final_input_count = 0
+            if isinstance(final_input.get("input_urls"), list):
+                final_input_count = len(final_input.get("input_urls") or [])
+            elif isinstance(final_input.get("image_urls"), list):
+                final_input_count = len(final_input.get("image_urls") or [])
+            logger.info(
+                "KIE image final submit resolved | endpoint=%s model=%s aspect_ratio=%s quality=%s input_count=%s taskId=%s",
+                submit_url,
+                submitted_model,
+                str(final_input.get("aspect_ratio") or "").strip(),
+                str(final_input.get("quality") or "").strip(),
+                final_input_count,
+                task_id,
             )
         elif is_kling_3_video:
             final_input = (submit_payload or {}).get("input") if isinstance((submit_payload or {}).get("input"), dict) else {}
@@ -4866,6 +5765,38 @@ class MediaGenerationService:
             return ""
         return raw[5:idx].strip().lower()
 
+    def _normalize_data_uri_image_for_kie(self, data_uri: str, target_format: str = "JPEG") -> Optional[str]:
+        raw = str(data_uri or "").strip()
+        if not raw.startswith("data:image/"):
+            return None
+
+        marker = ";base64,"
+        idx = raw.find(marker)
+        if idx <= 0:
+            return None
+
+        b64_part = raw[idx + len(marker):].strip()
+        if not b64_part:
+            return None
+
+        try:
+            binary = base64.b64decode(b64_part)
+            with Image.open(io.BytesIO(binary)) as img:
+                work = img.convert("RGB")
+                out = io.BytesIO()
+                save_format = "JPEG" if str(target_format or "").strip().upper() == "JPEG" else "PNG"
+                if save_format == "JPEG":
+                    work.save(out, format="JPEG", quality=90, optimize=True)
+                    mime = "image/jpeg"
+                else:
+                    work.save(out, format="PNG", optimize=True)
+                    mime = "image/png"
+                encoded = base64.b64encode(out.getvalue()).decode("utf-8")
+                return f"data:{mime};base64,{encoded}"
+        except Exception as e:
+            logger.warning("KIE data-uri normalize failed | error=%s", str(e)[:300])
+            return None
+
     def _upload_kie_data_uri(self, data_uri: str, api_key: str, file_name: Optional[str] = None, upload_path: str = "veo-inputs") -> Optional[str]:
         if not data_uri or not str(data_uri).startswith("data:"):
             return None
@@ -4909,6 +5840,97 @@ class MediaGenerationService:
         except Exception as e:
             logger.warning("KIE file upload exception | error=%s", str(e)[:300])
             return None
+
+    def _upload_kie_file_url(self, file_url: str, api_key: str, file_name: Optional[str] = None, upload_path: str = "market-inputs") -> Optional[str]:
+        raw_url = str(file_url or "").strip()
+        if not raw_url.startswith("http"):
+            return None
+        if not api_key:
+            return None
+
+        base_url = str(os.getenv("KIE_FILE_UPLOAD_BASE_URL", "https://kieai.redpandaai.co")).strip().rstrip("/")
+        endpoint = f"{base_url}/api/file-url-upload"
+        payload: Dict[str, Any] = {
+            "fileUrl": raw_url,
+            "uploadPath": upload_path,
+        }
+        if file_name:
+            payload["fileName"] = file_name
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        try:
+            resp = requests.post(endpoint, json=payload, headers=headers, timeout=(15, 120), verify=False)
+            if resp.status_code != 200:
+                logger.warning("KIE file-url upload failed | status=%s body=%s", resp.status_code, (resp.text or "")[:500])
+                return None
+
+            data = resp.json() if resp.content else {}
+            code = data.get("code") if isinstance(data, dict) else None
+            success = data.get("success") if isinstance(data, dict) else None
+            if code not in (None, 200, "200") and success is not True:
+                logger.warning("KIE file-url upload rejected | code=%s msg=%s", code, (data.get("msg") if isinstance(data, dict) else ""))
+                return None
+
+            data_block = data.get("data") if isinstance(data, dict) else {}
+            if not isinstance(data_block, dict):
+                return None
+            hosted_url = str(data_block.get("fileUrl") or data_block.get("downloadUrl") or "").strip()
+            if hosted_url.startswith("http"):
+                return hosted_url
+            return None
+        except Exception as e:
+            logger.warning("KIE file-url upload exception | error=%s", str(e)[:300])
+            return None
+
+    def _upload_kie_ref_to_hosted_url(self, ref_value: Any, api_key: str, upload_path: str = "market-inputs", file_name_prefix: str = "kie-input") -> Optional[str]:
+        ref_text = str(ref_value or "").strip()
+        if not ref_text or not api_key:
+            return None
+
+        if ref_text.startswith("http"):
+            from urllib.parse import urlparse
+            guessed_ext = os.path.splitext(urlparse(ref_text).path or "")[1] or ""
+            safe_ext = guessed_ext if guessed_ext and len(guessed_ext) <= 8 else ""
+            hosted = self._upload_kie_file_url(
+                ref_text,
+                api_key=api_key,
+                file_name=f"{file_name_prefix}-{uuid.uuid4().hex[:10]}{safe_ext}",
+                upload_path=upload_path,
+            )
+            if hosted:
+                return hosted
+            return None
+
+        data_uri = ref_text
+        if not ref_text.startswith("data:"):
+            resolved = self._resolve_ref_for_api(ref_text, force_data_uri_for_local=True)
+            data_uri = str(resolved or "").strip()
+
+        if not data_uri.startswith("data:"):
+            return None
+
+        mime = self._extract_data_uri_mime(data_uri)
+        ext = ".jpg"
+        if "png" in mime:
+            ext = ".png"
+        elif "webp" in mime:
+            ext = ".webp"
+        elif "gif" in mime:
+            ext = ".gif"
+        elif "mp4" in mime:
+            ext = ".mp4"
+
+        hosted = self._upload_kie_data_uri(
+            data_uri,
+            api_key=api_key,
+            file_name=f"{file_name_prefix}-{uuid.uuid4().hex[:10]}{ext}",
+            upload_path=upload_path,
+        )
+        return hosted
 
     def _optimize_image_bytes_for_data_uri(self, data: bytes, mime: str = "image/png") -> tuple[bytes, str]:
         # Keep provider compatibility while avoiding very large JSON request payloads.

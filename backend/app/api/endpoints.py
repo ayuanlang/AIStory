@@ -110,6 +110,83 @@ router = APIRouter()
 media_service = MediaGenerationService()
 logger = logging.getLogger("api_logger")
 
+_VIDEO_DEDUP_WINDOW_SECONDS = 20
+_VIDEO_DEDUP_MAX_CACHE = 256
+_VIDEO_INFLIGHT_BY_KEY: Dict[str, asyncio.Task] = {}
+_VIDEO_RECENT_RESULTS_BY_KEY: Dict[str, Dict[str, Any]] = {}
+_VIDEO_DEDUP_LOCK = asyncio.Lock()
+
+
+def _digest_text_for_dedup(value: Any) -> str:
+    text = str(value or "")
+    if not text:
+        return ""
+    if len(text) > 200:
+        return f"sha1:{hashlib.sha1(text.encode('utf-8', errors='ignore')).hexdigest()}"
+    return text
+
+
+def _compact_for_dedup(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(k): _compact_for_dedup(v) for k, v in sorted(value.items(), key=lambda item: str(item[0]))}
+    if isinstance(value, list):
+        return [_compact_for_dedup(v) for v in value]
+    if isinstance(value, tuple):
+        return [_compact_for_dedup(v) for v in value]
+    if isinstance(value, str):
+        return _digest_text_for_dedup(value)
+    return value
+
+
+def _build_video_dedup_key(req: "VideoGenerationRequest", user_id: int) -> str:
+    payload = {
+        "user_id": int(user_id or 0),
+        "provider": req.provider,
+        "model": req.model,
+        "prompt": req.prompt,
+        "negative_prompt": req.negative_prompt,
+        "ref_image_url": req.ref_image_url,
+        "image_urls": req.image_urls,
+        "last_frame_url": req.last_frame_url,
+        "duration": req.duration,
+        "aspect_ratio": req.aspect_ratio,
+        "mode": req.mode,
+        "sound": req.sound,
+        "multi_shots": req.multi_shots,
+        "multi_prompt": req.multi_prompt,
+        "kling_elements": req.kling_elements,
+        "project_id": req.project_id,
+        "shot_id": req.shot_id,
+        "shot_number": req.shot_number,
+        "shot_name": req.shot_name,
+        "entity_name": req.entity_name,
+        "subject_name": req.subject_name,
+        "asset_type": req.asset_type,
+        "keyframes": req.keyframes,
+        "seed": req.seed,
+    }
+    compact = _compact_for_dedup(payload)
+    stable = json.dumps(compact, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(stable.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _cleanup_video_dedup_cache(now_ts: float) -> None:
+    stale_keys = [
+        key for key, item in _VIDEO_RECENT_RESULTS_BY_KEY.items()
+        if (now_ts - float(item.get("ts") or 0.0)) > _VIDEO_DEDUP_WINDOW_SECONDS
+    ]
+    for key in stale_keys:
+        _VIDEO_RECENT_RESULTS_BY_KEY.pop(key, None)
+
+    if len(_VIDEO_RECENT_RESULTS_BY_KEY) > _VIDEO_DEDUP_MAX_CACHE:
+        ordered = sorted(
+            _VIDEO_RECENT_RESULTS_BY_KEY.items(),
+            key=lambda item: float((item[1] or {}).get("ts") or 0.0),
+        )
+        overflow = len(_VIDEO_RECENT_RESULTS_BY_KEY) - _VIDEO_DEDUP_MAX_CACHE
+        for key, _ in ordered[:overflow]:
+            _VIDEO_RECENT_RESULTS_BY_KEY.pop(key, None)
+
 ANALYSIS_PROMPT_TEMPLATE_SYNTAX_RULES: Dict[str, Dict[str, List[str]]] = {
     "characters": {
         "en_required": [
@@ -991,6 +1068,76 @@ def _safe_json_dict(value: Any) -> Dict[str, Any]:
     return {}
 
 
+_ALLOWED_REASONING_EFFORT = {"low", "medium", "high"}
+
+
+def _normalize_reasoning_effort(value: Any) -> Optional[str]:
+    raw = str(value or "").strip().lower()
+    return raw if raw in _ALLOWED_REASONING_EFFORT else None
+
+
+def _normalize_positive_seed(value: Any) -> Optional[int]:
+    try:
+        parsed = int(value)
+    except Exception:
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _normalize_temperature(value: Any) -> Optional[float]:
+    try:
+        parsed = float(value)
+    except Exception:
+        return None
+    if parsed < 0:
+        return 0.0
+    if parsed > 2:
+        return 2.0
+    return float(parsed)
+
+
+def _normalize_cfg(value: Any) -> Optional[float]:
+    try:
+        parsed = float(value)
+    except Exception:
+        return None
+    return float(parsed) if parsed > 0 else None
+
+
+def _read_user_advanced_model_preferences(user: Optional[User]) -> Dict[str, Any]:
+    if not user:
+        return {}
+    prefs = _safe_json_dict(getattr(user, "preferences", None))
+    advanced = _safe_json_dict(prefs.get("advanced_model"))
+    return {
+        "temperature": _normalize_temperature(advanced.get("temperature")),
+        "seed": _normalize_positive_seed(advanced.get("seed")),
+        "cfg": _normalize_cfg(advanced.get("cfg")),
+        "reasoning_effort": _normalize_reasoning_effort(advanced.get("reasoning_effort")),
+    }
+
+
+def _inject_user_advanced_llm_preferences(llm_config: Optional[Dict[str, Any]], user: Optional[User]) -> Optional[Dict[str, Any]]:
+    if not isinstance(llm_config, dict):
+        return llm_config
+
+    advanced = _read_user_advanced_model_preferences(user)
+    if not advanced:
+        return llm_config
+
+    cfg = llm_config.get("config") if isinstance(llm_config.get("config"), dict) else {}
+
+    if advanced.get("temperature") is not None:
+        cfg["temperature"] = float(advanced["temperature"])
+    if advanced.get("seed") is not None:
+        cfg["seed"] = int(advanced["seed"])
+    if advanced.get("reasoning_effort"):
+        cfg["reasoning_effort"] = advanced["reasoning_effort"]
+
+    llm_config["config"] = cfg
+    return llm_config
+
+
 def _to_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -1029,7 +1176,6 @@ def _resolve_effective_api_setting_meta(
     user_setting_query = db.query(APISetting).filter(
         APISetting.user_id == user.id,
         APISetting.category == resolved_category,
-        APISetting.is_active == True,
     )
 
     active_count = user_setting_query.count()
@@ -1048,101 +1194,117 @@ def _resolve_effective_api_setting_meta(
             "category": resolved_category,
         }
 
-    cfg = _safe_json_dict(getattr(setting, "config", None))
-    selected_system_setting_id = _safe_int(cfg.get("use_system_setting_id"), 0)
+    selected_system_setting_id = _safe_int(getattr(setting, "system_api_id", None), 0)
     if selected_system_setting_id > 0:
         system_by_id = db.query(SystemAPISetting).filter(SystemAPISetting.id == selected_system_setting_id).first()
         if not system_by_id:
             return None, "system_setting_id_not_found", {
                 "active_count": active_count,
-                "marker_id": setting.id,
+                "setting_id": setting.id,
                 "category": resolved_category,
-                "use_system_setting_id": selected_system_setting_id,
+                "system_api_id": selected_system_setting_id,
             }
         if str(system_by_id.category or "").strip() != resolved_category:
             return None, "system_setting_id_category_mismatch", {
                 "active_count": active_count,
-                "marker_id": setting.id,
+                "setting_id": setting.id,
                 "category": resolved_category,
-                "use_system_setting_id": selected_system_setting_id,
+                "system_api_id": selected_system_setting_id,
                 "resolved_category": str(system_by_id.category or "").strip(),
             }
         if _is_system_setting_deprecated(system_by_id.config, system_by_id.deprecated):
             return None, "system_setting_deprecated", {
                 "active_count": active_count,
-                "marker_id": setting.id,
+                "setting_id": setting.id,
                 "category": resolved_category,
-                "use_system_setting_id": selected_system_setting_id,
+                "system_api_id": selected_system_setting_id,
             }
         return system_by_id, "system_by_user_setting_id", {
             "active_count": active_count,
-            "marker_id": setting.id,
+            "setting_id": setting.id,
             "category": resolved_category,
-            "use_system_setting_id": selected_system_setting_id,
+            "system_api_id": selected_system_setting_id,
+            "mode": str(getattr(setting, "mode", "") or "").strip() or None,
         }
 
-    target_provider = str(setting.provider or "").strip()
-    target_model = str(setting.model or "").strip()
-    if not target_provider or not target_model:
-        return None, "active_user_missing_provider_model", {
-            "active_count": active_count,
-            "marker_id": setting.id,
-            "category": resolved_category,
-            "provider": setting.provider,
-            "model": setting.model,
-        }
-
-    system_setting = get_system_api_setting(
-        db,
-        provider=target_provider,
-        category=resolved_category,
-        model=target_model,
-    )
-    if system_setting:
-        if _is_system_setting_deprecated(system_setting.config, system_setting.deprecated):
-            return None, "system_setting_deprecated", {
-                "active_count": active_count,
-                "marker_id": setting.id,
-                "category": resolved_category,
-                "provider": target_provider,
-                "model": target_model,
-                "setting_id": system_setting.id,
-            }
-        return system_setting, "system_by_user_provider_model", {
-            "active_count": active_count,
-            "marker_id": setting.id,
-            "category": resolved_category,
-            "provider": target_provider,
-            "model": target_model,
-        }
-
-    return None, "no_matching_system_setting", {
+    return None, "active_user_missing_system_api_id", {
         "active_count": active_count,
-        "marker_id": setting.id,
+        "setting_id": setting.id,
         "category": resolved_category,
-        "provider": target_provider,
-        "model": target_model,
     }
 
 def get_effective_api_setting(db: Session, user: User, provider: str = None, category: str = None) -> Optional[APISetting]:
     """
-    Get API setting for current user. 
-    If not found AND user is authorized, fallback to system setting.
+    Unified runtime API setting resolver.
+    Uses the same flow as media generation APIs:
+    user active selection -> system category default fallback.
     """
-    resolved_setting, source, meta = _resolve_effective_api_setting_meta(db, user, provider, category)
-    if resolved_setting:
-        logger.info(
-            "Resolved API setting | user_id=%s source=%s setting_id=%s provider=%s category=%s model=%s endpoint=%s meta=%s",
+    resolved_category = str(category or "").strip()
+    if not resolved_category:
+        return None
+
+    runtime_target = _resolve_media_runtime_target(
+        provider=provider,
+        model=None,
+        media_type="runtime",
+        category=resolved_category,
+        user_id=user.id,
+        user_credits=(user.credits or 0),
+    )
+
+    pre_api_cfg = runtime_target.get("pre_api_cfg") if isinstance(runtime_target, dict) else {}
+    if not isinstance(pre_api_cfg, dict):
+        pre_api_cfg = {}
+
+    resolved_provider = str(runtime_target.get("resolved_provider") or "").strip()
+    resolved_model = str(runtime_target.get("resolved_model") or "").strip()
+    runtime_api_key = str((pre_api_cfg or {}).get("api_key") or "").strip()
+    runtime_base_url = str((pre_api_cfg or {}).get("base_url") or "").strip()
+    runtime_config = (pre_api_cfg or {}).get("config") if isinstance((pre_api_cfg or {}).get("config"), dict) else {}
+
+    if not resolved_provider or not resolved_model or not runtime_api_key:
+        logger.warning(
+            "Unified effective API setting resolve failed | user_id=%s category=%s provider=%s model=%s",
             user.id,
-            source,
-            resolved_setting.id,
-            resolved_setting.provider,
-            resolved_setting.category,
-            resolved_setting.model,
-            resolved_setting.base_url,
-            meta,
+            resolved_category,
+            resolved_provider,
+            resolved_model,
         )
-    return resolved_setting
+        return None
+
+    setting_id = _safe_int(runtime_config.get("__resolved_setting_id") or (pre_api_cfg or {}).get("system_api_id"), 0)
+    if setting_id > 0:
+        system_row = db.query(SystemAPISetting).filter(SystemAPISetting.id == setting_id).first()
+        if system_row:
+            logger.info(
+                "Resolved API setting via unified runtime | user_id=%s category=%s source=system_row setting_id=%s provider=%s model=%s",
+                user.id,
+                resolved_category,
+                system_row.id,
+                system_row.provider,
+                system_row.model,
+            )
+            return system_row
+
+    class _RuntimeSettingShim:
+        pass
+
+    shim = _RuntimeSettingShim()
+    shim.id = None
+    shim.provider = resolved_provider
+    shim.category = resolved_category
+    shim.model = resolved_model
+    shim.base_url = runtime_base_url
+    shim.api_key = runtime_api_key
+    shim.config = runtime_config or {}
+    logger.info(
+        "Resolved API setting via unified runtime | user_id=%s category=%s source=runtime_shim provider=%s model=%s",
+        user.id,
+        resolved_category,
+        resolved_provider,
+        resolved_model,
+    )
+    return shim
 
 
 def _seed_default_system_settings_for_user(db: Session, user_id: int) -> None:
@@ -1170,11 +1332,6 @@ def _seed_default_system_settings_for_user(db: Session, user_id: int) -> None:
         chosen_by_category[category] = row
 
     for category, system_setting in chosen_by_category.items():
-        marker_config = {
-            "selection_source": "system",
-            "use_system_setting_id": int(system_setting.id),
-            "api_strategy": "smart_default",
-        }
         selected_setting_id: Optional[int] = None
 
         user_setting = db.query(APISetting).filter(
@@ -1183,25 +1340,15 @@ def _seed_default_system_settings_for_user(db: Session, user_id: int) -> None:
         ).order_by(APISetting.id.desc()).first()
 
         if user_setting:
-            user_setting.name = user_setting.name or f"Use System {system_setting.provider}"
-            user_setting.provider = system_setting.provider
-            user_setting.base_url = ""
-            user_setting.model = system_setting.model
-            user_setting.config = marker_config
-            user_setting.api_key = ""
-            user_setting.is_active = True
+            user_setting.system_api_id = int(system_setting.id)
+            user_setting.mode = None
             selected_setting_id = user_setting.id
         else:
             new_setting = APISetting(
                 user_id=user_id,
-                name=f"Use System {system_setting.provider}",
                 category=system_setting.category,
-                provider=system_setting.provider,
-                api_key="",
-                base_url="",
-                model=system_setting.model,
-                config=marker_config,
-                is_active=True,
+                system_api_id=int(system_setting.id),
+                mode=None,
             )
             db.add(new_setting)
             db.flush()
@@ -1211,8 +1358,7 @@ def _seed_default_system_settings_for_user(db: Session, user_id: int) -> None:
             APISetting.user_id == user_id,
             APISetting.category == category,
             APISetting.id != selected_setting_id,
-            APISetting.is_active == True,
-        ).update({"is_active": False}, synchronize_session=False)
+        ).delete(synchronize_session=False)
 
 
 @router.get("/settings/effective")
@@ -1272,6 +1418,8 @@ _PROMPT_SKILL_ALIAS = {
     "promo_generator_global.txt": "skill:promo_generation/promo_generator_global.txt",
     "promo_generator_episode_script.txt": "skill:promo_generation/promo_generator_episode_script.txt",
     "image_style_extractor.txt": "skill:image_style_extraction/image_style_extractor.txt",
+    "voice_tts_planner_system.txt": "voice_tts_planner_system.txt",
+    "voice_tts_planner_user.txt": "voice_tts_planner_user.txt",
 }
 
 
@@ -2062,6 +2210,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         config = agent_service.get_active_llm_config(current_user.id, category="LLM")
         if not config or not config.get("api_key"):
              raise HTTPException(status_code=400, detail="LLM Configuration missing. Please check your settings.")
+        config = _inject_user_advanced_llm_preferences(config, current_user)
 
         # --- Debug / Truncation tracing ---
         debug_meta: Dict[str, Any] = {
@@ -2149,6 +2298,9 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
 
         debug_meta["config_max_tokens"] = cfg_obj.get("max_tokens")
         debug_meta["config_max_completion_tokens"] = cfg_obj.get("max_completion_tokens")
+        # analyze_scene already implements endpoint-level continuation logic.
+        # Disable generic llm_service auto-continuation here to avoid nested loops.
+        cfg_obj["auto_continue_on_length"] = False
         debug_meta["config_max_tokens_effective"] = (
             _to_int(cfg_obj.get("max_tokens"))
             or _to_int(cfg_obj.get("max_completion_tokens"))
@@ -2996,34 +3148,28 @@ async def process_agent_command(
     try:
         result = await agent_service.process_command(request_for_agent, db, current_user)
         usage_payload = result.usage if isinstance(result.usage, dict) else {}
-        
-        # Billing Finalize
-        if reservation_tx:
-            if usage_payload:
-                actual_details = {"item": "agent_intent"}
-                actual_details.update(usage_payload)
-                actual_details["input_tokens"] = usage_payload.get("prompt_tokens", 0)
-                actual_details["output_tokens"] = usage_payload.get("completion_tokens", 0)
-                actual_details["total_tokens"] = usage_payload.get("total_tokens", 0)
-                billing_service.settle_reservation(db, reservation_tx.id, actual_details)
-            else:
-                billing_service.cancel_reservation(db, reservation_tx.id, "No usage returned")
-        else:
-            details = {"query": request.query[:50]}
-            if usage_payload:
-                details["input_tokens"] = usage_payload.get("prompt_tokens", 0)
-                details["output_tokens"] = usage_payload.get("completion_tokens", 0)
-                details["total_tokens"] = usage_payload.get("total_tokens", 0)
-            billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, details)
+        _finalize_model_invocation_billing(
+            db=db,
+            current_user=current_user,
+            task_type="llm_chat",
+            provider=provider,
+            model=model,
+            reservation_tx=reservation_tx,
+            item="agent_intent",
+            usage_payload=usage_payload,
+            extra_details={
+                "query": (request.query or "")[:50],
+                "request_scope": "agent_command",
+            },
+            routing_payload=result.dict() if hasattr(result, "dict") else None,
+            cancel_if_missing_usage=True,
+            missing_usage_reason="No usage returned",
+        )
         
         return result
     except Exception as e:
         logger.error(f"Agent Command Failed: {e}")
-        try:
-            if reservation_tx:
-                billing_service.cancel_reservation(db, reservation_tx.id, str(e))
-        except:
-            pass
+        _cancel_reservation_quietly(db, reservation_tx, str(e))
         billing_service.log_failed_transaction(db, current_user.id, "llm_chat", provider, model, str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -3087,39 +3233,30 @@ async def process_system_management_agent_command(
     try:
         result = await agent_service.process_system_management_command(request, db, current_user)
         usage_payload = result.usage if isinstance(result.usage, dict) else {}
-        if reservation_tx:
-            if usage_payload:
-                actual_details = {
-                    "item": "system_management_agent_intent",
-                    "input_tokens": usage_payload.get("prompt_tokens", 0),
-                    "output_tokens": usage_payload.get("completion_tokens", 0),
-                    "total_tokens": usage_payload.get("total_tokens", 0),
-                }
-                billing_service.settle_reservation(db, reservation_tx.id, actual_details)
-            else:
-                billing_service.cancel_reservation(db, reservation_tx.id, "No usage returned")
-        else:
-            details = {"item": "system_management_agent_intent", "query": (request.query or "")[:80]}
-            if usage_payload:
-                details["input_tokens"] = usage_payload.get("prompt_tokens", 0)
-                details["output_tokens"] = usage_payload.get("completion_tokens", 0)
-                details["total_tokens"] = usage_payload.get("total_tokens", 0)
-            billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, details)
+        _finalize_model_invocation_billing(
+            db=db,
+            current_user=current_user,
+            task_type="llm_chat",
+            provider=provider,
+            model=model,
+            reservation_tx=reservation_tx,
+            item="system_management_agent_intent",
+            usage_payload=usage_payload,
+            extra_details={
+                "query": (request.query or "")[:80],
+                "request_scope": "system_management_agent_command",
+            },
+            routing_payload=result.dict() if hasattr(result, "dict") else None,
+            cancel_if_missing_usage=True,
+            missing_usage_reason="No usage returned",
+        )
         return result
     except PermissionError as e:
-        if reservation_tx:
-            try:
-                billing_service.cancel_reservation(db, reservation_tx.id, str(e))
-            except Exception:
-                pass
+        _cancel_reservation_quietly(db, reservation_tx, str(e))
         raise HTTPException(status_code=403, detail=str(e))
     except Exception as e:
         logger.error(f"System Management Agent Command Failed: {e}")
-        if reservation_tx:
-            try:
-                billing_service.cancel_reservation(db, reservation_tx.id, str(e))
-            except Exception:
-                pass
+        _cancel_reservation_quietly(db, reservation_tx, str(e))
         billing_service.log_failed_transaction(db, current_user.id, "llm_chat", provider, model, str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -3283,6 +3420,199 @@ class ProjectShareOut(BaseModel):
     created_at: Optional[str] = None
 
 
+_PROJECT_LEVEL_GENERATION_DEFAULT_KEYS = (
+    "model",
+    "quality",
+    "style",
+    "safety_tolerance",
+    "voice",
+    "reasoning_effort",
+    "aspect_ratio",
+    "resolution",
+    "size",
+    "image_resolution",
+    "image_size",
+    "horizontal_resolution",
+    "vertical_resolution",
+    "upscale_factor",
+    "character_orientation",
+    "duration",
+    "n_frames",
+    "num_images",
+)
+
+
+_PROJECT_IMAGE_SIZE_LONG_EDGE_MAP = {
+    "0.5K": 960,
+    "1K": 1920,
+    "2K": 2560,
+    "4K": 3840,
+}
+
+_PROJECT_IMAGE_SIZE_SQUARE_MAP = {
+    "0.5K": 720,
+    "1K": 1080,
+    "2K": 2048,
+    "4K": 4096,
+}
+
+_PROJECT_RESOLUTION_PRESETS = {
+    ("16:9", "0.5K"): (960, 540),
+    ("16:9", "1K"): (1920, 1080),
+    ("16:9", "2K"): (2560, 1440),
+    ("16:9", "4K"): (3840, 2160),
+    ("9:16", "0.5K"): (540, 960),
+    ("9:16", "1K"): (1080, 1920),
+    ("9:16", "2K"): (1440, 2560),
+    ("9:16", "4K"): (2160, 3840),
+    ("4:3", "0.5K"): (960, 720),
+    ("4:3", "1K"): (1440, 1080),
+    ("4:3", "2K"): (2048, 1536),
+    ("4:3", "4K"): (2880, 2160),
+    ("2.35:1", "0.5K"): (960, 409),
+    ("2.35:1", "1K"): (1920, 817),
+    ("2.35:1", "2K"): (2560, 1089),
+    ("2.35:1", "4K"): (3840, 1634),
+    ("1:1", "0.5K"): (720, 720),
+    ("1:1", "1K"): (1080, 1080),
+    ("1:1", "2K"): (2048, 2048),
+    ("1:1", "4K"): (4096, 4096),
+}
+
+
+def _normalize_project_image_size(value: Any) -> str:
+    raw = str(value or "").strip().upper().replace(" ", "")
+    return raw if raw in _PROJECT_IMAGE_SIZE_LONG_EDGE_MAP else ""
+
+
+def _parse_aspect_ratio_pair(value: Any) -> Optional[Tuple[float, float]]:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return None
+    if raw == "landscape":
+        return (16.0, 9.0)
+    if raw == "portrait":
+        return (9.0, 16.0)
+
+    match = re.match(r"^\s*(\d+(?:\.\d+)?)\s*[:/]\s*(\d+(?:\.\d+)?)\s*$", raw)
+    if not match:
+        return None
+    try:
+        left = float(match.group(1))
+        right = float(match.group(2))
+    except Exception:
+        return None
+    if left <= 0 or right <= 0:
+        return None
+    return (left, right)
+
+
+def _infer_project_resolution(aspect_ratio: Any, image_size: Any) -> Optional[Tuple[int, int]]:
+    ratio_raw = str(aspect_ratio or "").strip()
+    size_norm = _normalize_project_image_size(image_size)
+    if not ratio_raw or not size_norm:
+        return None
+
+    preset = _PROJECT_RESOLUTION_PRESETS.get((ratio_raw, size_norm))
+    if preset:
+        return preset
+
+    ratio_pair = _parse_aspect_ratio_pair(ratio_raw)
+    if not ratio_pair:
+        return None
+
+    rw, rh = ratio_pair
+    if abs(rw - rh) < 1e-9:
+        side = _PROJECT_IMAGE_SIZE_SQUARE_MAP.get(size_norm)
+        if side:
+            return (int(side), int(side))
+        return None
+
+    long_edge = _PROJECT_IMAGE_SIZE_LONG_EDGE_MAP.get(size_norm)
+    if not long_edge:
+        return None
+
+    if rw >= rh:
+        width = int(long_edge)
+        height = max(1, int(round(width * rh / rw)))
+    else:
+        height = int(long_edge)
+        width = max(1, int(round(height * rw / rh)))
+    return (width, height)
+
+
+def _to_positive_int_or_none(value: Any) -> Optional[int]:
+    try:
+        parsed = int(value)
+    except Exception:
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _ensure_project_generation_defaults(global_info: Any) -> Dict[str, Any]:
+    gi = dict(global_info) if isinstance(global_info, dict) else {}
+
+    defaults_raw = gi.get("project_generation_defaults")
+    defaults = dict(defaults_raw) if isinstance(defaults_raw, dict) else {}
+    for key in _PROJECT_LEVEL_GENERATION_DEFAULT_KEYS:
+        defaults.setdefault(key, None)
+
+    # Keep compatibility with existing visual-standard readers.
+    tech_params = gi.get("tech_params") if isinstance(gi.get("tech_params"), dict) else {}
+    visual_standard = tech_params.get("visual_standard") if isinstance(tech_params.get("visual_standard"), dict) else {}
+
+    aspect_ratio = str(gi.get("aspectRatio") or defaults.get("aspect_ratio") or "").strip()
+    if aspect_ratio:
+        defaults["aspect_ratio"] = aspect_ratio
+        visual_standard.setdefault("aspect_ratio", aspect_ratio)
+
+    image_size = _normalize_project_image_size(
+        defaults.get("image_size")
+        or defaults.get("image_resolution")
+        or visual_standard.get("image_size")
+        or visual_standard.get("imageSize")
+        or gi.get("image_size")
+        or gi.get("imageSize")
+    )
+    if image_size:
+        defaults["image_size"] = image_size
+        defaults.setdefault("image_resolution", image_size)
+        visual_standard.setdefault("image_size", image_size)
+
+    current_w = (
+        _to_positive_int_or_none(visual_standard.get("horizontal_resolution"))
+        or _to_positive_int_or_none(visual_standard.get("h_resolution"))
+        or _to_positive_int_or_none(visual_standard.get("width"))
+        or _to_positive_int_or_none(defaults.get("horizontal_resolution"))
+    )
+    current_h = (
+        _to_positive_int_or_none(visual_standard.get("vertical_resolution"))
+        or _to_positive_int_or_none(visual_standard.get("v_resolution"))
+        or _to_positive_int_or_none(visual_standard.get("height"))
+        or _to_positive_int_or_none(defaults.get("vertical_resolution"))
+    )
+
+    if (not current_w or not current_h) and aspect_ratio and image_size:
+        inferred = _infer_project_resolution(aspect_ratio, image_size)
+        if inferred:
+            current_w, current_h = inferred
+
+    if current_w and current_h:
+        defaults["horizontal_resolution"] = int(current_w)
+        defaults["vertical_resolution"] = int(current_h)
+        visual_standard.setdefault("horizontal_resolution", int(current_w))
+        visual_standard.setdefault("vertical_resolution", int(current_h))
+
+    quality = str(defaults.get("quality") or "").strip()
+    if quality:
+        visual_standard.setdefault("quality", quality)
+
+    tech_params["visual_standard"] = visual_standard
+    gi["tech_params"] = tech_params
+    gi["project_generation_defaults"] = defaults
+    return gi
+
+
 
 def _is_project_shared_with_user(db: Session, project_id: int, user_id: int) -> bool:
     share = db.query(ProjectShare).filter(
@@ -3304,6 +3634,13 @@ def _require_project_access(
 
     is_owner = project.owner_id == current_user.id
     if is_owner:
+        return project
+
+    is_root_super_system_user = (
+        bool(getattr(current_user, "is_superuser", False))
+        and str(getattr(current_user, "username", "")).strip().lower() == "ylsystem"
+    )
+    if is_root_super_system_user:
         return project
 
     if owner_only:
@@ -3827,17 +4164,18 @@ def create_project(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    if not project.global_info:
+        project.global_info = {}
+
     description = (project.description or "").strip()
     if description:
-        if not project.global_info:
-            project.global_info = {}
         project.global_info["notes"] = description
 
     # If aspectRatio is provided, merge it into global_info
     if project.aspectRatio:
-        if not project.global_info:
-            project.global_info = {}
         project.global_info['aspectRatio'] = project.aspectRatio
+
+    project.global_info = _ensure_project_generation_defaults(project.global_info)
         
     db_project = Project(title=project.title, global_info=project.global_info, owner_id=current_user.id) 
     db.add(db_project)
@@ -7166,9 +7504,10 @@ class SceneOut(BaseModel):
 
 class SceneRegenerateRequest(BaseModel):
     user_requirements: str
-    prompt_file: Optional[str] = "scene_regenerate.txt"
+    prompt_file: Optional[str] = "scene_analysis.txt"
     system_prompt: Optional[str] = None
     max_scenes: Optional[int] = 4
+    entity_only_mode: Optional[bool] = False
 
 
 def _normalize_scene_header(value: Any) -> str:
@@ -7279,6 +7618,106 @@ def _parse_scene_rows_from_markdown(markdown_text: str) -> List[Dict[str, str]]:
             return parsed_rows
 
     return []
+
+
+def _normalize_subject_entity_type(raw_type: Any) -> str:
+    text = str(raw_type or "").strip().lower()
+    if text in {"character", "characters", "char", "人物", "角色"}:
+        return "character"
+    if text in {"prop", "props", "道具", "物件"}:
+        return "prop"
+    if text in {"environment", "environments", "env", "场景", "环境"}:
+        return "environment"
+    return "character"
+
+
+def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
+    payload: Dict[str, List[Dict[str, Any]]] = {
+        "characters": [],
+        "props": [],
+        "environments": [],
+    }
+    text = str(raw_text or "").strip()
+    if not text:
+        return payload
+
+    candidates: List[str] = []
+    fence_re = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
+    for m in fence_re.finditer(text):
+        candidate = str(m.group(1) or "").strip()
+        if candidate:
+            candidates.append(candidate)
+
+    def _extract_object_near_key(source: str, key_name: str) -> Optional[str]:
+        lower = source.lower()
+        needle = f'"{key_name.lower()}"'
+        start_pos = 0
+        while True:
+            idx = lower.find(needle, start_pos)
+            if idx < 0:
+                return None
+            obj_start = source.rfind("{", 0, idx)
+            if obj_start < 0:
+                start_pos = idx + 1
+                continue
+
+            depth = 0
+            in_str = False
+            escape = False
+            for i in range(obj_start, len(source)):
+                ch = source[i]
+                if in_str:
+                    if escape:
+                        escape = False
+                        continue
+                    if ch == "\\":
+                        escape = True
+                        continue
+                    if ch == '"':
+                        in_str = False
+                    continue
+
+                if ch == '"':
+                    in_str = True
+                    continue
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        return source[obj_start:i + 1]
+
+            start_pos = idx + 1
+
+    key_object = _extract_object_near_key(text, "characters")
+    if key_object:
+        candidates.append(key_object)
+
+    dedup_keys = set()
+    for candidate in candidates:
+        dedup_key = candidate[:2000]
+        if dedup_key in dedup_keys:
+            continue
+        dedup_keys.add(dedup_key)
+
+        try:
+            parsed = json.loads(candidate)
+        except Exception:
+            continue
+
+        if not isinstance(parsed, dict):
+            continue
+
+        for section in ("characters", "props", "environments"):
+            items = parsed.get(section)
+            if not isinstance(items, list):
+                continue
+            payload[section].extend([item for item in items if isinstance(item, dict)])
+
+        if any(len(payload.get(k) or []) > 0 for k in ("characters", "props", "environments")):
+            return payload
+
+    return payload
 
 
 @router.get("/episodes/{episode_id}/scenes", response_model=List[SceneOut])
@@ -7423,11 +7862,22 @@ async def regenerate_scene(
     if req.system_prompt:
         system_instruction = str(req.system_prompt)
     else:
-        prompt_filename = str(req.prompt_file or "scene_regenerate.txt").strip() or "scene_regenerate.txt"
+        prompt_filename = str(req.prompt_file or "scene_analysis.txt").strip() or "scene_analysis.txt"
         try:
             system_instruction = _resolve_prompt_text(prompt_filename)
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail=f"Prompt file '{prompt_filename}' not found.")
+
+    regen_injection = (
+        "\n\n"
+        "[Regeneration Mode Injection]\n"
+        "You are in SCENE REGENERATION MODE for an existing scene row.\n"
+        "Primary objective: adjust output according to [User Requirements] with highest priority.\n"
+        "Keep global project/episode consistency from the base prompt, but do NOT rewrite unrelated episodes.\n"
+        f"Return 1 to {safe_max_scenes} scene rows only, in markdown table format compatible with scene_analysis conventions.\n"
+        "For this task, old scene row is replaced by regenerated row(s)."
+    )
+    system_instruction = f"{system_instruction}{regen_injection}"
 
     scene_snapshot = (
         f"| Episode ID | Scene ID | Scene No. | Scene Name | Equivalent Duration | Core Scene Info | Original Script Text | Environment Name | Linked Characters | Key Props |\n"
@@ -7435,14 +7885,104 @@ async def regenerate_scene(
         f"| EP{int(episode.id):02d} | EP{int(episode.id):02d}_SCXX | {db_scene.scene_no or ''} | {db_scene.scene_name or ''} | {db_scene.equivalent_duration or ''} | {(db_scene.core_scene_info or '').replace(chr(10), '<br>')} | {(db_scene.original_script_text or '').replace(chr(10), '<br>')} | {db_scene.environment_name or ''} | {db_scene.linked_characters or ''} | {db_scene.key_props or ''} |"
     )
 
+    existing_entities = db.query(Entity).filter(Entity.project_id == project.id).all()
+    existing_subjects: Dict[str, List[str]] = {
+        "characters": [],
+        "props": [],
+        "environments": [],
+    }
+    seen_subject_keys = set()
+    for entity in existing_entities:
+        normalized_type = _normalize_subject_entity_type(getattr(entity, "type", None))
+        target_bucket = (
+            "characters" if normalized_type == "character"
+            else "props" if normalized_type == "prop"
+            else "environments"
+        )
+        for raw_name in [getattr(entity, "name", None), getattr(entity, "name_en", None)]:
+            name = str(raw_name or "").strip()
+            key = f"{target_bucket}:{name.lower()}"
+            if not name or key in seen_subject_keys:
+                continue
+            seen_subject_keys.add(key)
+            existing_subjects[target_bucket].append(name)
+
+    def _format_existing_subject_line(category_key: str, limit: int = 80) -> str:
+        values = existing_subjects.get(category_key) or []
+        trimmed = [str(v or "").strip() for v in values if str(v or "").strip()]
+        total = len(trimmed)
+        if total == 0:
+            return f"- {category_key}: (none)"
+        shown = trimmed[:limit]
+        suffix = ""
+        if total > limit:
+            suffix = f" ... (+{total - limit} more)"
+        return f"- {category_key} ({total}): {', '.join(shown)}{suffix}"
+
+    existing_subjects_block = (
+        "Existing Entity Inventory By Category (project baseline dependencies; reusable as-is; DO NOT rewrite/rename/redefine):\n"
+        f"{_format_existing_subject_line('characters')}\n"
+        f"{_format_existing_subject_line('props')}\n"
+        f"{_format_existing_subject_line('environments')}"
+    )
+
+    existing_subjects_system_guard = (
+        "\n\n"
+        "[Existing Entity Reuse Guard - High Priority]\n"
+        "The following entities already exist in the project database and are dependency baselines.\n"
+        "You MUST treat them as immutable references: do NOT rewrite, rename, redefine, or replace these entities.\n"
+        "Do NOT output them as newly generated entities in SUBJECTS_JSON.\n"
+        "SUBJECTS_JSON must include only truly missing entities.\n"
+        f"{existing_subjects_block}"
+    )
+    system_instruction = f"{system_instruction}{existing_subjects_system_guard}"
+
+    logger.info(
+        "[regenerate_scene] entity injection scene_id=%s project_id=%s counts: characters=%s props=%s environments=%s",
+        scene_id,
+        project.id,
+        len(existing_subjects.get("characters") or []),
+        len(existing_subjects.get("props") or []),
+        len(existing_subjects.get("environments") or []),
+    )
+
     user_prompt = (
         f"Project Title: {project.title}\n"
         f"Episode Title: {episode.title}\n"
         f"Source Scene Database ID: {db_scene.id}\n\n"
         f"Current Scene (Markdown Row):\n{scene_snapshot}\n\n"
+        f"{existing_subjects_block}\n\n"
         f"User Requirements:\n{user_requirements}\n\n"
-        f"Regenerate this scene into 1 to {safe_max_scenes} new scene rows in markdown table format, following scene_analysis conventions. "
-        f"You may split into multiple rows when needed."
+        "Task Instructions:\n"
+        f"- Regenerate this scene into 1 to {safe_max_scenes} scene rows.\n"
+        "- Follow scene_analysis output table conventions.\n"
+        "- Prioritize User Requirements over the previous scene wording.\n"
+        "- Keep output concise and directly importable as scene rows.\n"
+        "- You may split into multiple rows when needed.\n"
+        "- Treat Existing Entity Inventory as dependency baselines already available in project DB.\n"
+        "- Existing entities are immutable references: MUST NOT be rewritten, renamed, redefined, or replaced.\n"
+        "- They can be referenced/reused directly, but MUST NOT be regenerated as new entities.\n"
+        "- MUST supplement complete missing subjects from script content and return JSON with keys: characters, props, environments.\n"
+        "- SUBJECTS_JSON must contain ONLY missing/new entities that are not already listed in Existing Entity Inventory.\n"
+        "- Keep existing subject names stable; do not duplicate existing names in SUBJECTS_JSON.\n"
+        "- If no missing entity exists for a category, return an empty array for that category.\n\n"
+        "Required Output Format:\n"
+        "1) Scene markdown table rows (importable by scene parser).\n"
+        "2) SUBJECTS_JSON: one valid JSON object only, with complete import-ready fields (same semantics as system subjects import):\n"
+        "{\n"
+        "  \"characters\": [{\"name\": \"...\", \"name_en\": \"...\", \"gender\": \"...\", \"role\": \"...\", \"archetype\": \"...\", \"appearance_cn\": \"...\", \"clothing\": \"...\", \"action_characteristics\": \"...\", \"generation_prompt_cn\": \"...\", \"generation_prompt_en\": \"...\", \"negative_prompt_en\": \"...\", \"anchor_description\": \"...\", \"visual_dependencies\": [], \"dependency_strategy\": {\"type\": \"...\", \"logic\": \"...\"}}],\n"
+        "  \"props\": [{\"name\": \"...\", \"name_en\": \"...\", \"description_cn\": \"...\", \"generation_prompt_cn\": \"...\", \"generation_prompt_en\": \"...\", \"negative_prompt_en\": \"...\", \"anchor_description\": \"...\", \"visual_dependencies\": [], \"dependency_strategy\": {\"type\": \"...\", \"logic\": \"...\"}}],\n"
+        "  \"environments\": [{\"name\": \"...\", \"name_en\": \"...\", \"atmosphere\": \"...\", \"visual_params\": \"...\", \"description_cn\": \"...\", \"generation_prompt_cn\": \"...\", \"generation_prompt_en\": \"...\", \"negative_prompt_en\": \"...\", \"anchor_description\": \"...\", \"visual_dependencies\": [], \"dependency_strategy\": {\"type\": \"...\", \"logic\": \"...\"}}]\n"
+        "}\n"
+        "Name fields are mandatory for each entity item. Missing optional fields should use empty string / empty array / empty object.\n"
+        "No prose outside these two parts."
+    )
+
+    logger.info(
+        "[regenerate_scene] prompt injection markers scene_id=%s has_existing_block_in_user_prompt=%s has_existing_guard_in_system_prompt=%s",
+        scene_id,
+        "Existing Entity Inventory By Category" in user_prompt,
+        "[Existing Entity Reuse Guard - High Priority]" in system_instruction,
     )
 
     llm_config = agent_service.get_active_llm_config(current_user.id)
@@ -7460,6 +8000,10 @@ async def regenerate_scene(
     if not parsed_rows:
         raise HTTPException(status_code=502, detail="Failed to parse regenerated scene markdown table")
 
+    subjects_json = _extract_subjects_json_from_text(raw)
+    if not any(len(subjects_json.get(k) or []) > 0 for k in ("characters", "props", "environments")):
+        subjects_json = _extract_subjects_json_from_text(cleaned)
+
     parsed_rows = parsed_rows[:safe_max_scenes]
 
     old_scene_no = str(db_scene.scene_no or db_scene.id)
@@ -7472,38 +8016,52 @@ async def regenerate_scene(
     fallback_key_props = db_scene.key_props
 
     created_scenes: List[Scene] = []
+    entity_only_mode = bool(req.entity_only_mode)
 
     try:
-        db.query(Shot).filter(Shot.scene_id == scene_id).delete(synchronize_session=False)
-        db.delete(db_scene)
-        db.flush()
+        if entity_only_mode:
+            preferred_row = parsed_rows[0] if parsed_rows else {}
+            if not isinstance(preferred_row, dict):
+                preferred_row = {}
 
-        total_new = len(parsed_rows)
-        for idx, row in enumerate(parsed_rows, start=1):
-            if total_new > 1:
-                next_scene_no = f"{old_scene_no}.{idx}"
-            else:
-                next_scene_no = str(row.get("scene_no") or "").strip() or old_scene_no
+            db_scene.environment_name = str(preferred_row.get("environment_name") or "").strip() or fallback_env_name
+            db_scene.linked_characters = str(preferred_row.get("linked_characters") or "").strip() or fallback_linked_chars
+            db_scene.key_props = str(preferred_row.get("key_props") or "").strip() or fallback_key_props
 
-            original_script_text = str(row.get("original_script_text") or "").strip() or fallback_original_script
-            if not original_script_text:
-                original_script_text = f"Scene regenerated from {old_scene_no}"
+            db.add(db_scene)
+            db.commit()
+            created_scenes = [db_scene]
+        else:
+            db.query(Shot).filter(Shot.scene_id == scene_id).delete(synchronize_session=False)
+            db.delete(db_scene)
+            db.flush()
 
-            new_scene = Scene(
-                episode_id=episode.id,
-                scene_no=next_scene_no,
-                scene_name=str(row.get("scene_name") or "").strip() or fallback_scene_name,
-                original_script_text=original_script_text,
-                equivalent_duration=str(row.get("equivalent_duration") or "").strip() or fallback_duration,
-                core_scene_info=str(row.get("core_scene_info") or "").strip() or fallback_core_info,
-                environment_name=str(row.get("environment_name") or "").strip() or fallback_env_name,
-                linked_characters=str(row.get("linked_characters") or "").strip() or fallback_linked_chars,
-                key_props=str(row.get("key_props") or "").strip() or fallback_key_props,
-            )
-            db.add(new_scene)
-            created_scenes.append(new_scene)
+            total_new = len(parsed_rows)
+            for idx, row in enumerate(parsed_rows, start=1):
+                if total_new > 1:
+                    next_scene_no = f"{old_scene_no}.{idx}"
+                else:
+                    next_scene_no = str(row.get("scene_no") or "").strip() or old_scene_no
 
-        db.commit()
+                original_script_text = str(row.get("original_script_text") or "").strip() or fallback_original_script
+                if not original_script_text:
+                    original_script_text = f"Scene regenerated from {old_scene_no}"
+
+                new_scene = Scene(
+                    episode_id=episode.id,
+                    scene_no=next_scene_no,
+                    scene_name=str(row.get("scene_name") or "").strip() or fallback_scene_name,
+                    original_script_text=original_script_text,
+                    equivalent_duration=str(row.get("equivalent_duration") or "").strip() or fallback_duration,
+                    core_scene_info=str(row.get("core_scene_info") or "").strip() or fallback_core_info,
+                    environment_name=str(row.get("environment_name") or "").strip() or fallback_env_name,
+                    linked_characters=str(row.get("linked_characters") or "").strip() or fallback_linked_chars,
+                    key_props=str(row.get("key_props") or "").strip() or fallback_key_props,
+                )
+                db.add(new_scene)
+                created_scenes.append(new_scene)
+
+            db.commit()
     except HTTPException:
         db.rollback()
         raise
@@ -7532,8 +8090,16 @@ async def regenerate_scene(
         "replaced_scene_id": scene_id,
         "episode_id": episode.id,
         "project_id": project.id,
+        "entity_only_mode": entity_only_mode,
+        "scene_changes_applied": not entity_only_mode,
         "generated_scene_count": len(created_scenes),
         "raw_markdown": cleaned,
+        "subjects_json": subjects_json,
+        "subjects_json_count": {
+            "characters": len(subjects_json.get("characters") or []),
+            "props": len(subjects_json.get("props") or []),
+            "environments": len(subjects_json.get("environments") or []),
+        },
         "scenes": [
             {
                 "id": s.id,
@@ -8454,6 +9020,7 @@ async def ai_generate_shots(
         if not llm_config:
             logger.error(f"[ai_generate_shots] missing_llm_config scene_id={scene_id} user_id={current_user.id}")
             raise HTTPException(status_code=400, detail="No active LLM config")
+        llm_config = _inject_user_advanced_llm_preferences(llm_config, current_user)
         
         # Billing (Reserve for token pricing)
         provider = llm_config.get("provider") 
@@ -8721,8 +9288,11 @@ def update_scene_latest_ai_result(
         "Duration (s)",
         "Keyframes",
         "End Frame",
+        "Start Frame (CN)",
+        "Video Content (CN)",
+        "Keyframes (CN)",
+        "End Frame (CN)",
         "Associated Entities",
-        "Prompt (CN)",
     ]
 
     def esc(val: str) -> str:
@@ -8839,25 +9409,57 @@ def apply_scene_ai_result(
                 return str(s_data.get(key) or "").strip()
         return default
 
-    def _split_combined_cn_prompt(raw_text: str) -> Tuple[str, str]:
+    def _split_combined_cn_prompt(raw_text: str) -> Tuple[str, str, str, str]:
         text = str(raw_text or "").strip()
         if not text:
-            return "", ""
+            return "", "", "", ""
         lines = [ln.strip() for ln in re.split(r"\n|<br\\s*/?>", text) if ln and ln.strip()]
-        image_cn = ""
+        start_cn = ""
         video_cn = ""
+        keyframes_cn = ""
+        end_cn = ""
         for ln in lines:
             lower_ln = ln.lower()
-            if lower_ln.startswith("image:") or lower_ln.startswith("image cn:") or ln.startswith("图片:") or ln.startswith("图片提示词:") or ln.startswith("图像:"):
-                image_cn = re.sub(r"^(image\s*(cn)?\s*:|图片提示词\s*[:：]|图片\s*[:：]|图像\s*[:：])", "", ln, flags=re.IGNORECASE).strip()
+            if (
+                lower_ln.startswith("start frame:")
+                or lower_ln.startswith("start frame cn:")
+                or lower_ln.startswith("start:")
+                or ln.startswith("起始帧:")
+                or ln.startswith("起始帧：")
+            ):
+                start_cn = re.sub(r"^(start\s*frame\s*(cn)?\s*:|start\s*:|起始帧\s*[:：])", "", ln, flags=re.IGNORECASE).strip()
                 continue
             if lower_ln.startswith("video:") or lower_ln.startswith("video cn:") or ln.startswith("视频:") or ln.startswith("视频提示词:"):
                 video_cn = re.sub(r"^(video\s*(cn)?\s*:|视频提示词\s*[:：]|视频\s*[:：])", "", ln, flags=re.IGNORECASE).strip()
                 continue
-        if not image_cn and not video_cn:
-            # Backward-compatible fallback: treat one-line CN as shared CN prompt.
-            return text, text
-        return image_cn, video_cn
+            if (
+                lower_ln.startswith("keyframes:")
+                or lower_ln.startswith("keyframes cn:")
+                or lower_ln.startswith("keyframe:")
+                or ln.startswith("关键帧:")
+                or ln.startswith("关键帧：")
+            ):
+                keyframes_cn = re.sub(r"^(key\s*frames?\s*(cn)?\s*:|关键帧\s*[:：])", "", ln, flags=re.IGNORECASE).strip()
+                continue
+            if (
+                lower_ln.startswith("end frame:")
+                or lower_ln.startswith("end frame cn:")
+                or lower_ln.startswith("end:")
+                or ln.startswith("收尾帧:")
+                or ln.startswith("收尾帧：")
+                or ln.startswith("结束帧:")
+                or ln.startswith("结束帧：")
+            ):
+                end_cn = re.sub(r"^(end\s*frame\s*(cn)?\s*:|end\s*:|收尾帧\s*[:：]|结束帧\s*[:：])", "", ln, flags=re.IGNORECASE).strip()
+                continue
+
+        if not start_cn and not video_cn and not keyframes_cn and not end_cn:
+            # Backward-compatible fallback: treat one-line CN as shared text for 4 fields.
+            return text, text, text, text
+
+        if not end_cn and start_cn:
+            end_cn = start_cn
+        return start_cn, video_cn, keyframes_cn, end_cn
 
     for idx, s_data in enumerate(shots_data):
         # Dur parsing
@@ -8890,26 +9492,36 @@ def apply_scene_ai_result(
         )
         start_frame_cn_text = _pick_shot_cell(s_data, ["Start Frame (CN)", "start_frame_cn", "起始帧（中文）"], "")
         video_prompt_cn_text = _pick_shot_cell(s_data, ["Video Content (CN)", "video_prompt_cn", "视频内容（中文）"], "")
+        keyframes_cn_text = _pick_shot_cell(s_data, ["Keyframes (CN)", "keyframes_cn", "关键帧（中文）", "关键帧中文"], "")
         end_frame_cn_text = _pick_shot_cell(s_data, ["End Frame (CN)", "end_frame_cn", "结束帧（中文）"], "")
 
         if prompt_cn_combined:
-            image_cn_fallback, video_cn_fallback = _split_combined_cn_prompt(prompt_cn_combined)
+            start_cn_fallback, video_cn_fallback, keyframes_cn_fallback, end_cn_fallback = _split_combined_cn_prompt(prompt_cn_combined)
             if not start_frame_cn_text:
-                start_frame_cn_text = image_cn_fallback
+                start_frame_cn_text = start_cn_fallback
             if not end_frame_cn_text:
-                end_frame_cn_text = image_cn_fallback
+                end_frame_cn_text = end_cn_fallback
             if not video_prompt_cn_text:
                 video_prompt_cn_text = video_cn_fallback
+            if not keyframes_cn_text:
+                keyframes_cn_text = keyframes_cn_fallback
 
         technical_notes_payload: Dict[str, Any] = {}
-        if prompt_cn_combined:
-            technical_notes_payload["shot_prompt_cn"] = prompt_cn_combined
         if start_frame_cn_text:
             technical_notes_payload["start_frame_cn"] = start_frame_cn_text
         if video_prompt_cn_text:
             technical_notes_payload["video_prompt_cn"] = video_prompt_cn_text
+        if keyframes_cn_text:
+            technical_notes_payload["keyframes_cn"] = keyframes_cn_text
         if end_frame_cn_text:
             technical_notes_payload["end_frame_cn"] = end_frame_cn_text
+        if start_frame_cn_text or video_prompt_cn_text or keyframes_cn_text or end_frame_cn_text:
+            technical_notes_payload["shot_prompt_cn"] = "<br>".join([
+                f"起始帧：{start_frame_cn_text or ''}",
+                f"视频：{video_prompt_cn_text or ''}",
+                f"关键帧：{keyframes_cn_text or ''}",
+                f"收尾帧：{end_frame_cn_text or ''}",
+            ])
 
         shot = Shot(
             scene_id=scene_id,
@@ -10218,6 +10830,20 @@ class LLMLogViewOut(BaseModel):
     content: str
 
 
+class RuntimeLogFileOut(BaseModel):
+    name: str
+    size_bytes: int
+    modified_at: str
+
+
+class RuntimeLogViewOut(BaseModel):
+    filename: str
+    tail_lines: int
+    size_bytes: int
+    modified_at: str
+    content: str
+
+
 class AdminStorageUsageUserOut(BaseModel):
     user_id: int
     username: str
@@ -10290,6 +10916,71 @@ def view_llm_log_file(
 
     stat = target.stat()
     return LLMLogViewOut(
+        filename=target.name,
+        tail_lines=capped_tail,
+        size_bytes=int(stat.st_size),
+        modified_at=datetime.fromtimestamp(stat.st_mtime).isoformat(),
+        content="".join(line_buffer),
+    )
+
+
+@router.get("/admin/runtime-logs/files", response_model=List[RuntimeLogFileOut])
+def list_runtime_log_files(
+    current_user: User = Depends(get_current_user)
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Only superuser can view runtime logs")
+
+    log_dir = Path(settings.BASE_DIR) / "logs"
+    if not log_dir.exists() or not log_dir.is_dir():
+        return []
+
+    files: List[RuntimeLogFileOut] = []
+    for path in sorted(log_dir.glob("app_info.log*"), key=lambda p: p.stat().st_mtime, reverse=True):
+        if not path.is_file():
+            continue
+        stat = path.stat()
+        files.append(
+            RuntimeLogFileOut(
+                name=path.name,
+                size_bytes=int(stat.st_size),
+                modified_at=datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            )
+        )
+    return files
+
+
+@router.get("/admin/runtime-logs/view", response_model=RuntimeLogViewOut)
+def view_runtime_log_file(
+    filename: str = "app_info.log",
+    tail_lines: int = 300,
+    current_user: User = Depends(get_current_user)
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Only superuser can view runtime logs")
+
+    safe_name = str(filename or "").strip()
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="filename is required")
+    if "/" in safe_name or "\\" in safe_name or not safe_name.startswith("app_info.log"):
+        raise HTTPException(status_code=400, detail="invalid filename")
+
+    capped_tail = max(1, min(int(tail_lines or 300), 5000))
+    log_dir = (Path(settings.BASE_DIR) / "logs").resolve()
+    target = (log_dir / safe_name).resolve()
+
+    if target.parent != log_dir:
+        raise HTTPException(status_code=400, detail="invalid path")
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="log file not found")
+
+    line_buffer = deque(maxlen=capped_tail)
+    with target.open("r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line_buffer.append(line)
+
+    stat = target.stat()
+    return RuntimeLogViewOut(
         filename=target.name,
         tail_lines=capped_tail,
         size_bytes=int(stat.st_size),
@@ -12310,6 +13001,8 @@ class GenerationRequest(BaseModel):
     callbackUrl: Optional[str] = None
     callBackUrl: Optional[str] = None
     seed: Optional[int] = None
+    cfg: Optional[float] = None
+    mode: Optional[str] = None
 
 class VideoGenerationRequest(BaseModel):
     prompt: str
@@ -12351,6 +13044,7 @@ class VoiceGenerationRequest(BaseModel):
     shot_name: Optional[str] = None
     asset_type: Optional[str] = None
     use_llm_param_planning: Optional[bool] = False
+    planner_system_prompt: Optional[str] = None
     language_code: Optional[str] = None
     project_language: Optional[str] = None
     seed: Optional[int] = None
@@ -12392,6 +13086,12 @@ def _resolve_project_id_for_generation(req: Any, db: Session) -> Optional[int]:
                     ep = db.query(Episode).filter(Episode.id == scene.episode_id).first()
                     if ep and ep.project_id:
                         return int(ep.project_id)
+
+    entity_id = _normalize_seed_value(getattr(req, "entity_id", None))
+    if entity_id:
+        entity = db.query(Entity).filter(Entity.id == int(entity_id)).first()
+        if entity and entity.project_id:
+            return int(entity.project_id)
 
     return None
 
@@ -12490,8 +13190,9 @@ def _build_video_provider_options(req: VideoGenerationRequest) -> Dict[str, Any]
 
     if req.mode is not None:
         mode = str(req.mode).strip().lower()
-        if mode in {"std", "pro"}:
+        if mode:
             options["mode"] = mode
+            options["__mode_source"] = "request"
 
     if req.sound is not None:
         options["sound"] = bool(req.sound)
@@ -12516,6 +13217,19 @@ def _extract_json_object_from_text(raw_text: Any) -> Dict[str, Any]:
     text = str(raw_text or "").strip()
     if not text:
         return {}
+
+    # Prefer fenced JSON blocks when the model wraps output with reasoning text.
+    fenced_matches = re.findall(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", text, flags=re.IGNORECASE)
+    for block in fenced_matches:
+        candidate = str(block or "").strip()
+        if not candidate:
+            continue
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
 
     clean = text
     if clean.startswith("```"):
@@ -12546,47 +13260,21 @@ def _extract_json_object_from_text(raw_text: Any) -> Dict[str, Any]:
     return {}
 
 
-async def _plan_voice_params_with_llm(user_id: int, video_prompt: str) -> Dict[str, Any]:
+def _build_voice_tts_planner_prompts(video_prompt: str) -> Tuple[str, str, Dict[str, Any]]:
     prompt_text = str(video_prompt or "").strip()
-    if not prompt_text:
-        return {}
+    supported_voices_hint = (
+        "Rachel, Aria, Roger, Sarah, Laura, Charlie, George, Callum, River, Liam, Charlotte, Alice, "
+        "Matilda, Will, Jessica, Eric, Chris, Brian, Daniel, Lily, Bill"
+    )
 
-    # For voice prompt planning, prefer system-default LLM category config
-    # instead of user-bound provider/model routing.
-    llm_config = agent_service.get_system_default_llm_config(user_id=user_id, category="LLM")
-    planning_category = "LLM"
-
-    if not llm_config or not llm_config.get("api_key"):
-        llm_config = agent_service.get_active_llm_config(user_id, category="LLM")
-        planning_category = "LLM"
-
-    if not llm_config or not llm_config.get("api_key"):
-        return {}
-
-    try:
-        cfg = (llm_config or {}).get("config") if isinstance(llm_config, dict) else {}
-        logger.info(
-            "[GenerateVoice] planning llm config | user_id=%s source=%s setting_id=%s provider=%s model=%s",
-            user_id,
-            (cfg or {}).get("__selection_source") or (cfg or {}).get("__resolved_source") or "unknown",
-            (cfg or {}).get("__resolved_setting_id"),
-            llm_config.get("provider") if isinstance(llm_config, dict) else None,
-            llm_config.get("model") if isinstance(llm_config, dict) else None,
-        )
-    except Exception:
-        pass
-
-    system_prompt = (
+    default_system_prompt = (
         "You are a TTS planning engine with two strict phases: "
         "(1) extract spoken dialogue from the video prompt, "
         "(2) infer voice parameters from character traits and scene intent. "
         "Output ONLY one JSON object. Do not include markdown, comments, or extra text."
     )
-    supported_voices_hint = (
-        "Rachel, Aria, Roger, Sarah, Laura, Charlie, George, Callum, River, Liam, Charlotte, Alice, "
-        "Matilda, Will, Jessica, Eric, Chris, Brian, Daniel, Lily, Bill"
-    )
-    user_prompt = (
+
+    default_user_prompt = (
         "Generate TTS planning params from a video prompt.\\n"
         "Core objective: extract dialogue text first; then tune voice parameters by character traits.\\n"
         "Rules:\\n"
@@ -12610,19 +13298,89 @@ async def _plan_voice_params_with_llm(user_id: int, video_prompt: str) -> Dict[s
         "- Input includes [Character Context] only -> text must still be \"\" unless explicit dialogue exists.\n"
         "Return JSON schema exactly:\\n"
         "{\\n"
-        "  \"text\": \"string\",\\n"
-        "  \"voice\": \"string\",\\n"
-        "  \"stability\": \"number 0..1\",\\n"
-        "  \"similarity_boost\": \"number 0..1\",\\n"
-        "  \"style\": \"number 0..1\",\\n"
-        "  \"speed\": \"number 0.7..1.2\",\\n"
-        "  \"timestamps\": \"boolean\",\\n"
-        "  \"previous_text\": \"string\",\\n"
-        "  \"next_text\": \"string\",\\n"
-        "  \"language_code\": \"ISO 639-1 string, e.g. en zh ja\"\\n"
+        "  \\\"text\\\": \\\"string\\\",\\n"
+        "  \\\"voice\\\": \\\"string\\\",\\n"
+        "  \\\"stability\\\": \\\"number 0..1\\\",\\n"
+        "  \\\"similarity_boost\\\": \\\"number 0..1\\\",\\n"
+        "  \\\"style\\\": \\\"number 0..1\\\",\\n"
+        "  \\\"speed\\\": \\\"number 0.7..1.2\\\",\\n"
+        "  \\\"timestamps\\\": \\\"boolean\\\",\\n"
+        "  \\\"previous_text\\\": \\\"string\\\",\\n"
+        "  \\\"next_text\\\": \\\"string\\\",\\n"
+        "  \\\"language_code\\\": \\\"ISO 639-1 string, e.g. en zh ja\\\"\\n"
         "}\\n\\n"
         f"Video prompt:\\n{prompt_text}"
     )
+
+    template_source = "defaults"
+    try:
+        system_template = _resolve_prompt_text("voice_tts_planner_system.txt")
+        system_prompt = str(system_template or "").strip() or default_system_prompt
+        template_source = "system_file"
+    except Exception as e:
+        logger.warning("[GenerateVoice] failed to load voice_tts_planner_system.txt: %s", e)
+        system_prompt = default_system_prompt
+
+    try:
+        user_template = _resolve_prompt_text("voice_tts_planner_user.txt")
+        user_prompt = str(user_template or "").strip()
+        if user_prompt:
+            user_prompt = user_prompt.replace("{{SUPPORTED_VOICES_HINT}}", supported_voices_hint)
+            user_prompt = user_prompt.replace("{{VIDEO_PROMPT}}", prompt_text)
+            template_source = "both_files" if template_source == "system_file" else "user_file"
+        if not user_prompt:
+            user_prompt = default_user_prompt
+    except Exception as e:
+        logger.warning("[GenerateVoice] failed to load voice_tts_planner_user.txt: %s", e)
+        user_prompt = default_user_prompt
+
+    meta = {
+        "template_source": template_source,
+        "system_prompt_len": len(system_prompt or ""),
+        "user_prompt_len": len(user_prompt or ""),
+    }
+    return system_prompt, user_prompt, meta
+
+
+async def _plan_voice_params_with_llm(
+    user_id: int,
+    video_prompt: str,
+    planner_prompts: Optional[Tuple[str, str]] = None,
+) -> Dict[str, Any]:
+    prompt_text = str(video_prompt or "").strip()
+    if not prompt_text:
+        return {}
+
+    # For voice prompt planning, prefer system-default LLM category config
+    # instead of user-bound provider/model routing.
+    llm_config = agent_service.get_system_default_llm_config(user_id=user_id, category="LLM")
+    planning_category = "LLM"
+
+    if not llm_config or not llm_config.get("api_key"):
+        llm_config = agent_service.get_active_llm_config(user_id, category="LLM")
+        planning_category = "LLM"
+
+    if not llm_config or not llm_config.get("api_key"):
+        return {}
+
+    if planner_prompts and isinstance(planner_prompts, tuple) and len(planner_prompts) == 2:
+        system_prompt = str(planner_prompts[0] or "").strip()
+        user_prompt = str(planner_prompts[1] or "").strip()
+    else:
+        system_prompt, user_prompt, _ = _build_voice_tts_planner_prompts(prompt_text)
+
+    try:
+        cfg = (llm_config or {}).get("config") if isinstance(llm_config, dict) else {}
+        logger.info(
+            "[GenerateVoice] planning llm config | user_id=%s source=%s setting_id=%s provider=%s model=%s",
+            user_id,
+            (cfg or {}).get("__selection_source") or (cfg or {}).get("__resolved_source") or "unknown",
+            (cfg or {}).get("__resolved_setting_id"),
+            llm_config.get("provider") if isinstance(llm_config, dict) else None,
+            llm_config.get("model") if isinstance(llm_config, dict) else None,
+        )
+    except Exception:
+        pass
 
     llm_resp = await llm_service.generate_content_with_fallback(
         user_prompt,
@@ -12733,13 +13491,72 @@ def _extract_dialogue_text_for_tts(value: Any) -> str:
     raw = str(value or "").replace("\r\n", "\n").strip()
     if not raw:
         return ""
+    raw_lines = [str(x or "").strip() for x in raw.split("\n") if str(x or "").strip()]
 
     picked: List[str] = []
     seen = set()
 
+    def _looks_like_non_dialogue_metadata(text_like: Any) -> bool:
+        text = str(text_like or "").strip()
+        if not text:
+            return True
+
+        low = re.sub(r"\s+", " ", text).strip().lower()
+        if not low:
+            return True
+
+        if re.fullmatch(r"[a-z]{2}", low):
+            return True
+        if low in {"中文", "chinese", "中文 / chinese", "chinese / 中文"}:
+            return True
+
+        metadata_tokens = [
+            "prompt en",
+            "prompt cn",
+            "prompt:",
+            "viewpoint",
+            "lighting",
+            "wardrobe",
+            "panel view",
+            "panel views",
+            "close-up",
+            "full-body",
+            "subject info",
+            "aspect ratio",
+            "image",
+            "background",
+            "no text",
+            "pure white",
+            "color grade",
+            "camera",
+            "ref:",
+            "style",
+            "generation_prompt_cn",
+            "generation_prompt_en",
+            "subjects_json",
+            "existing entity inventory",
+            "character context",
+            "角色设定",
+            "角色信息",
+            "角色提示词",
+            "人物提示词",
+        ]
+        if any(token in low for token in metadata_tokens):
+            return True
+
+        if "|" in text and ("prompt" in low or "subject" in low):
+            return True
+
+        if len(text) > 220:
+            return True
+
+        return False
+
     def _push(text_like: Any) -> None:
         text = str(text_like or "").strip()
         if not text:
+            return
+        if _looks_like_non_dialogue_metadata(text):
             return
         stable = re.sub(r"\s+", " ", text).strip()
         if not stable:
@@ -12761,24 +13578,93 @@ def _extract_dialogue_text_for_tts(value: Any) -> str:
         for m in re.finditer(pattern, raw):
             _push(m.group(1))
 
-    for line in [str(x or "").strip() for x in raw.split("\n") if str(x or "").strip()]:
+    for line in raw_lines:
         tagged = re.search(r'(?:^|\s)(?:dialogue|line|lines|对白|台词)\s*[:：]\s*(.+)$', line, re.IGNORECASE)
         if tagged and tagged.group(1):
             _push(tagged.group(1))
             continue
 
-        speaker = re.match(r'^[^:：\n]{1,30}[:：]\s*(.+)$', line)
-        if speaker and speaker.group(1):
-            _push(speaker.group(1))
+        speaker = re.match(r'^([^:：\n|]{1,24})[:：]\s*(.+)$', line)
+        if speaker and speaker.group(2):
+            speaker_name = str(speaker.group(1) or "").strip().lower()
+            if speaker_name and not any(k in speaker_name for k in ["prompt", "style", "view", "subject", "camera", "lighting", "character", "entity"]):
+                _push(speaker.group(2))
 
-    return "\n".join(picked)
+    # Fallback: when no quoted/speaker dialogue was detected, keep short utterance-like lines only.
+    if not picked:
+        for line in raw_lines:
+            candidate = re.sub(r"^[\-\*\d\.\)\s]+", "", str(line or "").strip())
+            if not candidate:
+                continue
+            if _looks_like_non_dialogue_metadata(candidate):
+                continue
+            if "|" in candidate:
+                continue
+            if not re.search(r"[。！？!?]", candidate):
+                continue
+            if len(candidate) > 120:
+                continue
+            _push(candidate)
+
+    # Final pass: keep only clean utterance-like lines.
+    cleaned_lines = []
+    for line in picked:
+        stable_line = re.sub(r"\s+", " ", str(line or "")).strip()
+        if not stable_line:
+            continue
+        if _looks_like_non_dialogue_metadata(stable_line):
+            continue
+        cleaned_lines.append(stable_line)
+
+    return "\n".join(cleaned_lines)
 
 
-def _sanitize_kie_tts_plan(raw_plan: Dict[str, Any], fallback_text: str) -> Dict[str, Any]:
+def _strip_subject_prompt_context_for_voice(value: Any) -> str:
+    raw = str(value or "").replace("\r\n", "\n").strip()
+    if not raw:
+        return ""
+
+    lines = raw.split("\n")
+    cleaned: List[str] = []
+
+    remove_tokens = [
+        "generation_prompt_cn",
+        "generation_prompt_en",
+        "subjects_json",
+        "existing entity inventory",
+        "reusable subject assets",
+        "subject info",
+        "subject prompt",
+        "character context",
+        "entity context",
+        "角色设定",
+        "角色信息",
+        "角色提示词",
+        "人物提示词",
+        "prompt en:",
+        "prompt cn:",
+    ]
+
+    for line in lines:
+        text = str(line or "").strip()
+        if not text:
+            cleaned.append("")
+            continue
+        low = text.lower()
+        if any(token in low for token in remove_tokens):
+            continue
+        cleaned.append(text)
+
+    compact = "\n".join(cleaned)
+    compact = re.sub(r"\n{3,}", "\n\n", compact).strip()
+    return compact
+
+
+def _sanitize_kie_tts_plan(raw_plan: Dict[str, Any], fallback_text: str = "") -> Dict[str, Any]:
     plan = raw_plan if isinstance(raw_plan, dict) else {}
     out: Dict[str, Any] = {}
 
-    fallback_dialogue = _extract_dialogue_text_for_tts(fallback_text)
+    fallback_dialogue = _extract_dialogue_text_for_tts(fallback_text) if str(fallback_text or "").strip() else ""
     planned_text_raw = str(plan.get("text") or "").strip()
     planned_dialogue_only = _extract_dialogue_text_for_tts(planned_text_raw)
     text_value = planned_dialogue_only or fallback_dialogue
@@ -13147,6 +14033,97 @@ def _apply_llm_routing_to_billing_details(details: Dict[str, Any], payload: Any)
     details.update(routing)
 
 
+def _safe_int_token(value: Any) -> int:
+    try:
+        parsed = int(value or 0)
+        return parsed if parsed > 0 else 0
+    except Exception:
+        return 0
+
+
+def _build_standard_billing_details(
+    *,
+    item: str,
+    usage_payload: Optional[Dict[str, Any]] = None,
+    extra_details: Optional[Dict[str, Any]] = None,
+    routing_payload: Any = None,
+) -> Dict[str, Any]:
+    details: Dict[str, Any] = {
+        "item": str(item or "").strip() or "unknown",
+        "billing_mode": "ACTUAL",
+        "audit_source": "endpoints",
+    }
+
+    usage = usage_payload if isinstance(usage_payload, dict) else {}
+    if usage:
+        input_tokens = _safe_int_token(usage.get("input_tokens") or usage.get("prompt_tokens"))
+        output_tokens = _safe_int_token(usage.get("output_tokens") or usage.get("completion_tokens"))
+        total_tokens = _safe_int_token(usage.get("total_tokens"))
+        if total_tokens <= 0:
+            total_tokens = input_tokens + output_tokens
+
+        details.update({
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": total_tokens,
+        })
+
+    if isinstance(extra_details, dict) and extra_details:
+        details.update(extra_details)
+
+    _apply_llm_routing_to_billing_details(details, routing_payload)
+    return details
+
+
+def _finalize_model_invocation_billing(
+    *,
+    db: Session,
+    current_user: User,
+    task_type: str,
+    provider: Optional[str],
+    model: Optional[str],
+    reservation_tx: Any,
+    item: str,
+    usage_payload: Optional[Dict[str, Any]] = None,
+    extra_details: Optional[Dict[str, Any]] = None,
+    routing_payload: Any = None,
+    cancel_if_missing_usage: bool = False,
+    missing_usage_reason: str = "No usage returned",
+) -> Dict[str, Any]:
+    details = _build_standard_billing_details(
+        item=item,
+        usage_payload=usage_payload,
+        extra_details=extra_details,
+        routing_payload=routing_payload,
+    )
+
+    if reservation_tx:
+        if cancel_if_missing_usage and not isinstance(usage_payload, dict):
+            billing_service.cancel_reservation(db, reservation_tx.id, missing_usage_reason)
+            return details
+        billing_service.settle_reservation(db, reservation_tx.id, details)
+        return details
+
+    billing_service.deduct_credits(
+        db,
+        current_user.id,
+        task_type,
+        provider,
+        model,
+        details,
+    )
+    return details
+
+
+def _cancel_reservation_quietly(db: Session, reservation_tx: Any, reason: str) -> None:
+    if not reservation_tx:
+        return
+    try:
+        billing_service.cancel_reservation(db, reservation_tx.id, str(reason or "cancelled"))
+    except Exception:
+        pass
+
+
 def _resolve_latest_asset_provider_model(
     db: Session,
     user_id: int,
@@ -13388,16 +14365,157 @@ async def generate_image_endpoint(
         )
 
 
+def _resolve_media_runtime_target(
+    *,
+    provider: Optional[str],
+    model: Optional[str],
+    media_type: str,
+    category: str,
+    user_id: int,
+    user_credits: int,
+) -> Dict[str, Any]:
+    runtime_llm_config = _build_runtime_llm_config(provider, model, media_type=media_type)
+    pre_api_cfg: Dict[str, Any] = {}
+
+    try:
+        strict_provider = bool(str(provider or "").strip())
+        pre_api_cfg = media_service.get_api_config(
+            provider=provider,
+            user_id=user_id,
+            category=category,
+            requested_model=model,
+            user_credits=user_credits,
+            strict_provider=strict_provider,
+        ) or {}
+
+        resolved_provider = str((pre_api_cfg or {}).get("provider") or "").strip()
+        resolved_model = str((pre_api_cfg or {}).get("model") or "").strip()
+        if resolved_provider and resolved_model:
+            runtime_llm_config = {"provider": resolved_provider, "model": resolved_model}
+    except Exception:
+        pre_api_cfg = pre_api_cfg or {}
+
+    resolved_provider = str((runtime_llm_config or {}).get("provider") or provider or "").strip() or None
+    resolved_model = str((runtime_llm_config or {}).get("model") or model or "").strip() or None
+
+    resolved_system_api_id = None
+    try:
+        cfg_payload = (pre_api_cfg or {}).get("config") if isinstance((pre_api_cfg or {}).get("config"), dict) else {}
+        raw_id = cfg_payload.get("__resolved_setting_id") if isinstance(cfg_payload, dict) else None
+        if raw_id is None:
+            raw_id = (pre_api_cfg or {}).get("system_api_id")
+        resolved_system_api_id = int(raw_id) if raw_id is not None else None
+    except Exception:
+        resolved_system_api_id = None
+
+    return {
+        "runtime_llm_config": runtime_llm_config or {},
+        "pre_api_cfg": pre_api_cfg or {},
+        "resolved_provider": resolved_provider,
+        "resolved_model": resolved_model,
+        "resolved_system_api_id": resolved_system_api_id,
+    }
+
+
 async def _run_generate_image(req: GenerationRequest, current_user: User, db: Session):
-    # Billing Check
-    cost = billing_service.estimate_cost(db, "image_gen", req.provider, req.model)
-    billing_service.check_can_proceed(current_user, cost)
+    reservation_tx = None
+    runtime_target = _resolve_media_runtime_target(
+        provider=req.provider,
+        model=req.model,
+        media_type="image",
+        category="Image",
+        user_id=current_user.id,
+        user_credits=(current_user.credits or 0),
+    )
+    runtime_llm_config = dict(runtime_target.get("runtime_llm_config") or {})
+    pre_api_cfg = runtime_target.get("pre_api_cfg") or {}
+    if isinstance(pre_api_cfg, dict) and pre_api_cfg:
+        runtime_llm_config["__pre_resolved_api_config"] = dict(pre_api_cfg)
+    reserve_provider = runtime_target.get("resolved_provider")
+    reserve_model = runtime_target.get("resolved_model")
+    reserve_system_api_id = runtime_target.get("resolved_system_api_id")
+    image_task_type = "image_gen"
+    is_token_billing = billing_service.is_token_pricing(db, image_task_type, reserve_provider, reserve_model)
+    estimated_total_tokens = 0
+
+    if is_token_billing:
+        est_messages = [{"role": "user", "content": str(req.prompt or "")}]
+        est_usage = billing_service.estimate_input_output_tokens_from_messages(est_messages, output_ratio=1.2)
+        estimated_total_tokens = int(est_usage.get("total_tokens") or 0)
+        reserve_details = {
+            "input_tokens": int(est_usage.get("input_tokens") or 0),
+            "output_tokens": int(est_usage.get("output_tokens") or 0),
+            "total_tokens": estimated_total_tokens,
+            "billing_mode": "RESERVE",
+            "estimation_method": "image_prompt_tokens",
+        }
+    else:
+        reserve_details = {
+            "item": "image",
+            "image_count": 1,
+            "billing_mode": "RESERVE",
+        }
+
+    if reserve_provider:
+        reserve_details["provider"] = reserve_provider
+        reserve_details["resolved_provider"] = reserve_provider
+    if reserve_model:
+        reserve_details["model"] = reserve_model
+        reserve_details["resolved_model"] = reserve_model
+    if reserve_system_api_id is not None:
+        reserve_details["system_api_id"] = reserve_system_api_id
+        reserve_details["resolved_system_api_id"] = reserve_system_api_id
+
+    reservation_tx = billing_service.reserve_credits(
+        db,
+        current_user.id,
+        image_task_type,
+        reserve_provider,
+        reserve_model,
+        reserve_details,
+    )
 
     try:
         resolved_project_id = _resolve_project_id_for_generation(req, db)
         project_seed = _ensure_project_generation_seed(db, resolved_project_id, current_user)
 
         # 1. Resolve Context for Resolution/Ratio
+        def _safe_json_dict(value: Any) -> Dict[str, Any]:
+            if isinstance(value, dict):
+                return value
+            if isinstance(value, str):
+                try:
+                    parsed = json.loads(value)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except Exception:
+                    return {}
+            return {}
+
+        def _pick_visual_from_info(info: Dict[str, Any]) -> Dict[str, Any]:
+            if not isinstance(info, dict):
+                return {}
+
+            defaults = info.get("project_generation_defaults") if isinstance(info.get("project_generation_defaults"), dict) else {}
+            tech = info.get("tech_params") if isinstance(info.get("tech_params"), dict) else {}
+            vis = tech.get("visual_standard") if isinstance(tech.get("visual_standard"), dict) else {}
+
+            out: Dict[str, Any] = {
+                "aspect_ratio": vis.get("aspect_ratio") or vis.get("aspectRatio") or defaults.get("aspect_ratio") or info.get("aspect_ratio") or info.get("aspectRatio"),
+                "width": vis.get("horizontal_resolution") or vis.get("h_resolution") or vis.get("width") or defaults.get("horizontal_resolution") or info.get("horizontal_resolution") or info.get("h_resolution") or info.get("width"),
+                "height": vis.get("vertical_resolution") or vis.get("v_resolution") or vis.get("height") or defaults.get("vertical_resolution") or info.get("vertical_resolution") or info.get("v_resolution") or info.get("height"),
+                "image_size": vis.get("image_size") or vis.get("imageSize") or defaults.get("image_size") or defaults.get("image_resolution") or info.get("image_size") or info.get("imageSize"),
+            }
+
+            nested = info.get("e_global_info") if isinstance(info.get("e_global_info"), dict) else None
+            if nested:
+                nested_values = _pick_visual_from_info(nested)
+                for key in ("aspect_ratio", "width", "height", "image_size"):
+                    if not out.get(key) and nested_values.get(key):
+                        out[key] = nested_values.get(key)
+
+            return out
+
         aspect_ratio = None
         width = None
         height = None
@@ -13405,6 +14523,7 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
         if image_size not in {"1K", "2K", "4K"}:
             image_size = None
         episode_info = {}
+        project_global_info: Dict[str, Any] = {}
 
         # Prefer explicit episode_id when provided
         if req.episode_id:
@@ -13441,6 +14560,15 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
                               else:
                                    episode_info = temp
 
+        # Project-level fallback for entity generation without episode/shot context.
+        if resolved_project_id:
+            project = db.query(Project).filter(Project.id == resolved_project_id).first()
+            if project:
+                project_global_info = _ensure_project_generation_defaults(_safe_json_dict(project.global_info))
+
+        episode_visual = _pick_visual_from_info(episode_info)
+        project_visual = _pick_visual_from_info(project_global_info)
+
         # Check tech_params -> visual_standard
         tech = episode_info.get("tech_params", {})
         if isinstance(tech, dict):
@@ -13453,6 +14581,17 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
                     raw_size = str(vis.get("image_size") or vis.get("imageSize") or "").strip().upper()
                     if raw_size in {"1K", "2K", "4K"}:
                         image_size = raw_size
+
+        if not aspect_ratio and episode_visual.get("aspect_ratio"):
+            aspect_ratio = episode_visual.get("aspect_ratio")
+        if not width and episode_visual.get("width"):
+            width = episode_visual.get("width")
+        if not height and episode_visual.get("height"):
+            height = episode_visual.get("height")
+        if not image_size:
+            raw_size = str(episode_visual.get("image_size") or "").strip().upper()
+            if raw_size in {"1K", "2K", "4K"}:
+                image_size = raw_size
         
         # Fallback top-level checks
         if not aspect_ratio:
@@ -13461,6 +14600,18 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
         if not height: height = episode_info.get("vertical_resolution") or episode_info.get("v_resolution") or episode_info.get("height")
         if not image_size:
             raw_size = str(episode_info.get("image_size") or episode_info.get("imageSize") or "").strip().upper()
+            if raw_size in {"1K", "2K", "4K"}:
+                image_size = raw_size
+
+        # Fill remaining blanks with project-level defaults.
+        if not aspect_ratio and project_visual.get("aspect_ratio"):
+            aspect_ratio = str(project_visual.get("aspect_ratio")).strip() or None
+        if not width and project_visual.get("width"):
+            width = project_visual.get("width")
+        if not height and project_visual.get("height"):
+            height = project_visual.get("height")
+        if not image_size:
+            raw_size = str(project_visual.get("image_size") or "").strip().upper()
             if raw_size in {"1K", "2K", "4K"}:
                 image_size = raw_size
 
@@ -13479,7 +14630,7 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
             else:
                 image_size = "1K"
 
-        logger.info(f"[GenerateImage] Context Params - AR: {aspect_ratio}, W: {width}, H: {height}, image_size: {image_size}")
+        logger.info(f"[GenerateImage] Context Params - AR: {aspect_ratio}, W: {width}, H: {height}, image_size: {image_size}, project_id: {resolved_project_id}")
         _log_shot_submit_debug(
             "image_submit",
             req,
@@ -13503,6 +14654,10 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
 
         image_provider_options: Dict[str, Any] = {}
         explicit_seed = _normalize_seed_value(getattr(req, "seed", None))
+        user_advanced = _read_user_advanced_model_preferences(current_user)
+        effective_cfg = _normalize_cfg(getattr(req, "cfg", None))
+        if effective_cfg is None:
+            effective_cfg = _normalize_cfg(user_advanced.get("cfg"))
         if explicit_seed:
             image_provider_options["seed"] = int(explicit_seed)
             image_provider_options["seeds"] = int(explicit_seed)
@@ -13510,11 +14665,20 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
             image_provider_options["seed"] = int(project_seed)
             image_provider_options["seeds"] = int(project_seed)
 
+        if effective_cfg is not None:
+            image_provider_options["cfg"] = float(effective_cfg)
+            image_provider_options["cfg_scale"] = float(effective_cfg)
+
+        if req.mode is not None:
+            image_mode = str(req.mode).strip().lower()
+            if image_mode:
+                image_provider_options["mode"] = image_mode
+
         # Assuming generate_image returns {"url": "...", ...}
         result = await media_service.generate_image(
             prompt=req.prompt, 
             negative_prompt=req.negative_prompt,
-            llm_config=_build_runtime_llm_config(req.provider, req.model, media_type="image"),
+            llm_config=runtime_llm_config,
             reference_image_url=req.ref_image_url,
             width=width,
             height=height,
@@ -13539,9 +14703,27 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
         result_meta = result.get("metadata") if isinstance(result, dict) else {}
         if not isinstance(result_meta, dict):
             result_meta = {}
-        billing_provider = str(result_meta.get("provider") or req.provider or "").strip() or None
-        billing_model = str(result_meta.get("model") or req.model or "").strip() or None
-        billing_system_api_id = result_meta.get("system_api_id")
+
+        smart_meta = result_meta.get("smart_routing") if isinstance(result_meta.get("smart_routing"), dict) else {}
+        billing_provider = str(
+            result_meta.get("provider")
+            or smart_meta.get("provider")
+            or reserve_provider
+            or req.provider
+            or ""
+        ).strip() or None
+        billing_model = str(
+            result_meta.get("model")
+            or smart_meta.get("model")
+            or reserve_model
+            or req.model
+            or ""
+        ).strip() or None
+        billing_system_api_id = (
+            result_meta.get("system_api_id")
+            if result_meta.get("system_api_id") is not None
+            else smart_meta.get("system_api_id")
+        )
         try:
             billing_system_api_id = int(billing_system_api_id) if billing_system_api_id is not None else None
         except Exception:
@@ -13566,6 +14748,13 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
              # Log full error for image gen
              logger.error(f"[GenerateImage] Failed: {detail}")
              billing_service.log_failed_transaction(db, current_user.id, "image_gen", billing_provider, billing_model, detail)
+
+             if reservation_tx:
+                 try:
+                     billing_service.cancel_reservation(db, reservation_tx.id, detail)
+                     reservation_tx = None
+                 except Exception:
+                     pass
              
              raise HTTPException(status_code=400, detail=detail)
 
@@ -13577,23 +14766,63 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
             media_type="image",
         )
 
-        # Billing Deduct
-        billing_service.deduct_credits(
-            db,
-            current_user.id,
-            "image_gen",
-            billing_provider,
-            billing_model,
-            {
-                "item": "image",
-                "provider": billing_provider,
-                "model": billing_model,
-                "system_api_id": billing_system_api_id,
-                "resolved_provider": billing_provider,
-                "resolved_model": billing_model,
-                "resolved_system_api_id": billing_system_api_id,
-            },
-        )
+        if reservation_tx:
+            if is_token_billing:
+                raw_resp = (result_meta or {}).get("raw") if isinstance(result_meta, dict) else {}
+                usage = raw_resp.get("usage") if isinstance(raw_resp, dict) else {}
+                actual_total_tokens = int(
+                    (usage or {}).get("total_tokens")
+                    or (usage or {}).get("output_tokens")
+                    or estimated_total_tokens
+                    or 0
+                )
+                settle_details = {
+                    "input_tokens": int((usage or {}).get("input_tokens") or (usage or {}).get("prompt_tokens") or 0),
+                    "output_tokens": int((usage or {}).get("output_tokens") or (usage or {}).get("completion_tokens") or actual_total_tokens),
+                    "total_tokens": actual_total_tokens,
+                    "status": "SETTLED",
+                    "billing_mode": "ACTUAL",
+                    "token_source": "api_usage" if int((usage or {}).get("total_tokens") or 0) > 0 else "estimate",
+                }
+            else:
+                settle_details = {
+                    "item": "image",
+                    "image_count": 1,
+                    "width": int(width or 0),
+                    "height": int(height or 0),
+                    "status": "SETTLED",
+                    "billing_mode": "ACTUAL",
+                }
+
+                submitted_ar = str(result_meta.get("submit_aspect_ratio") or aspect_ratio or "").strip()
+                if submitted_ar:
+                    settle_details["aspect_ratio"] = submitted_ar
+
+                submitted_quality = str(result_meta.get("submit_quality") or "").strip().lower()
+                if submitted_quality:
+                    settle_details["quality"] = submitted_quality
+
+                submitted_image_count = result_meta.get("submit_image_count")
+                try:
+                    submitted_image_count = int(submitted_image_count) if submitted_image_count is not None else None
+                except Exception:
+                    submitted_image_count = None
+                if submitted_image_count and submitted_image_count > 0:
+                    settle_details["image_count"] = int(submitted_image_count)
+
+            if billing_provider:
+                settle_details["provider"] = billing_provider
+            if billing_model:
+                settle_details["model"] = billing_model
+            if billing_system_api_id is not None:
+                settle_details["system_api_id"] = billing_system_api_id
+
+            billing_service.settle_reservation(
+                db,
+                reservation_tx.id,
+                settle_details,
+            )
+            reservation_tx = None
         
         # Register Asset
         if result.get("url"):
@@ -13604,8 +14833,18 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
 
         return result
     except asyncio.CancelledError:
+        if reservation_tx:
+            try:
+                billing_service.cancel_reservation(db, reservation_tx.id, "image generation cancelled")
+            except Exception:
+                pass
         raise
     except HTTPException:
+        if reservation_tx:
+            try:
+                billing_service.cancel_reservation(db, reservation_tx.id, "image generation http exception")
+            except Exception:
+                pass
         # Keep an auditable failure record for submit-based async jobs.
         try:
             billing_service.log_failed_transaction(
@@ -13624,6 +14863,11 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
             logger.exception("Failed to log image_gen HTTPException transaction")
         raise
     except Exception as e:
+        if reservation_tx:
+            try:
+                billing_service.cancel_reservation(db, reservation_tx.id, str(e))
+            except Exception:
+                pass
         billing_service.log_failed_transaction(db, current_user.id, "image_gen", req.provider, req.model, str(e))
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
@@ -13764,6 +15008,13 @@ async def _run_generate_image_job(job_id: str, user_id: int, req_payload: Dict[s
 
         req_obj = GenerationRequest(**req_payload)
         _set_image_job(job_id, status="running", started_at=now_bj_iso())
+        logger.info(
+            "[ImageJob] started | job_id=%s user_id=%s provider=%s model=%s",
+            job_id,
+            user_id,
+            req_provider,
+            req_model,
+        )
         result = await asyncio.wait_for(
             _run_generate_image(req_obj, user, db),
             timeout=IMAGE_JOB_MAX_RUNNING_SECONDS,
@@ -13986,7 +15237,20 @@ async def submit_generate_image_endpoint(
         error=None,
     )
 
-    image_task = asyncio.create_task(_run_generate_image_job(job_id, current_user.id, req_payload))
+    logger.info(
+        "[ImageJob] queued | job_id=%s user_id=%s scope=%s idempotency=%s",
+        job_id,
+        current_user.id,
+        scope_key,
+        bool(idempotency_key),
+    )
+
+    async def _deferred_image_job_start() -> None:
+        # Let FastAPI flush submit response first, then start heavy background work.
+        await asyncio.sleep(0)
+        await _run_generate_image_job(job_id, current_user.id, req_payload)
+
+    image_task = asyncio.create_task(_deferred_image_job_start())
     with IMAGE_JOB_LOCK:
         IMAGE_JOB_TASKS[job_id] = image_task
     return {"job_id": job_id, "status": "queued", "created_at": now}
@@ -14284,7 +15548,53 @@ async def generate_video_endpoint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    return await _run_generate_video(req, current_user, db)
+    dedup_key = _build_video_dedup_key(req, current_user.id)
+    created_task = False
+
+    async with _VIDEO_DEDUP_LOCK:
+        now_ts = time.time()
+        _cleanup_video_dedup_cache(now_ts)
+
+        recent = _VIDEO_RECENT_RESULTS_BY_KEY.get(dedup_key)
+        if isinstance(recent, dict) and (now_ts - float(recent.get("ts") or 0.0)) <= _VIDEO_DEDUP_WINDOW_SECONDS:
+            logger.info(
+                "[GenerateVideo] dedup recent-hit | user_id=%s shot_id=%s key=%s age_ms=%s",
+                current_user.id,
+                req.shot_id,
+                dedup_key[:12],
+                int((now_ts - float(recent.get("ts") or 0.0)) * 1000),
+            )
+            return recent.get("result")
+
+        existing_task = _VIDEO_INFLIGHT_BY_KEY.get(dedup_key)
+        if existing_task is None:
+            existing_task = asyncio.create_task(_run_generate_video(req, current_user, db))
+            _VIDEO_INFLIGHT_BY_KEY[dedup_key] = existing_task
+            created_task = True
+        else:
+            logger.info(
+                "[GenerateVideo] dedup inflight-hit | user_id=%s shot_id=%s key=%s",
+                current_user.id,
+                req.shot_id,
+                dedup_key[:12],
+            )
+
+    try:
+        result = await existing_task
+    finally:
+        if created_task:
+            async with _VIDEO_DEDUP_LOCK:
+                if _VIDEO_INFLIGHT_BY_KEY.get(dedup_key) is existing_task:
+                    _VIDEO_INFLIGHT_BY_KEY.pop(dedup_key, None)
+
+    if created_task:
+        async with _VIDEO_DEDUP_LOCK:
+            _VIDEO_RECENT_RESULTS_BY_KEY[dedup_key] = {
+                "ts": time.time(),
+                "result": result,
+            }
+
+    return result
 
 
 @router.post("/generate/voice")
@@ -14293,10 +15603,66 @@ async def generate_voice_endpoint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    reservation_tx = None
+    voice_task_type = "voice_gen"
+    runtime_target = _resolve_media_runtime_target(
+        provider=req.provider,
+        model=req.model,
+        media_type="voice",
+        category="Voice",
+        user_id=current_user.id,
+        user_credits=(current_user.credits or 0),
+    )
+    runtime_llm_config = dict(runtime_target.get("runtime_llm_config") or {})
+    pre_api_cfg = runtime_target.get("pre_api_cfg") or {}
+    if isinstance(pre_api_cfg, dict) and pre_api_cfg:
+        runtime_llm_config["__pre_resolved_api_config"] = dict(pre_api_cfg)
+    reserve_provider = runtime_target.get("resolved_provider")
+    reserve_model = runtime_target.get("resolved_model")
+    reserve_system_api_id = runtime_target.get("resolved_system_api_id")
+    is_token_billing = billing_service.is_token_pricing(db, voice_task_type, reserve_provider, reserve_model)
+
     try:
-        stable_prompt = str(req.prompt or "").strip()
+        stable_prompt_raw = str(req.prompt or "").strip()
+        stable_prompt = _strip_subject_prompt_context_for_voice(stable_prompt_raw)
         if not stable_prompt:
             raise HTTPException(status_code=400, detail="Voice prompt is empty")
+
+        if is_token_billing:
+            est_messages = [{"role": "user", "content": stable_prompt}]
+            est_usage = billing_service.estimate_input_output_tokens_from_messages(est_messages, output_ratio=1.2)
+            reserve_details = {
+                "input_tokens": int(est_usage.get("input_tokens") or 0),
+                "output_tokens": int(est_usage.get("output_tokens") or 0),
+                "total_tokens": int(est_usage.get("total_tokens") or 0),
+                "billing_mode": "RESERVE",
+                "estimation_method": "voice_prompt_tokens",
+            }
+        else:
+            reserve_details = {
+                "duration": 5,
+                "duration_seconds": 5,
+                "billing_mode": "RESERVE",
+            }
+
+        if reserve_provider:
+            reserve_details["provider"] = reserve_provider
+            reserve_details["resolved_provider"] = reserve_provider
+        if reserve_model:
+            reserve_details["model"] = reserve_model
+            reserve_details["resolved_model"] = reserve_model
+        if reserve_system_api_id is not None:
+            reserve_details["system_api_id"] = reserve_system_api_id
+            reserve_details["resolved_system_api_id"] = reserve_system_api_id
+
+        reservation_tx = billing_service.reserve_credits(
+            db,
+            current_user.id,
+            voice_task_type,
+            reserve_provider,
+            reserve_model,
+            reserve_details,
+        )
 
         resolved_project_id = _resolve_project_id_for_generation(req, db)
         project_seed = _ensure_project_generation_seed(db, resolved_project_id, current_user)
@@ -14308,23 +15674,49 @@ async def generate_voice_endpoint(
 
         provider_options: Dict[str, Any] = {}
         planned_payload: Dict[str, Any] = {}
+        planner_system_prompt = ""
+        planner_user_prompt = ""
+        planner_prompt_meta: Dict[str, Any] = {}
         effective_prompt = stable_prompt
         explicit_language_code = _normalize_language_code(req.language_code)
         explicit_project_language = str(req.project_language or "").strip()
 
         if bool(req.use_llm_param_planning):
+            # Strict mode: voice TTS input must come from planner-extracted dialogue only.
+            effective_prompt = ""
+            planner_system_prompt, planner_user_prompt, planner_prompt_meta = _build_voice_tts_planner_prompts(stable_prompt)
+            planner_system_prompt_override = str(req.planner_system_prompt or "").strip()
+            if planner_system_prompt_override:
+                planner_system_prompt = planner_system_prompt_override
+                planner_prompt_meta = {
+                    **(planner_prompt_meta or {}),
+                    "template_source": "superuser_override",
+                    "system_prompt_len": len(planner_system_prompt),
+                    "user_prompt_len": len(planner_user_prompt or ""),
+                }
+            logger.info(
+                "[GenerateVoice] planner prompts | user_id=%s source=%s system_prompt_len=%s user_prompt_len=%s",
+                current_user.id,
+                planner_prompt_meta.get("template_source"),
+                planner_prompt_meta.get("system_prompt_len"),
+                planner_prompt_meta.get("user_prompt_len"),
+            )
             try:
-                planned_payload = await _plan_voice_params_with_llm(current_user.id, stable_prompt)
+                planned_payload = await _plan_voice_params_with_llm(
+                    current_user.id,
+                    stable_prompt,
+                    planner_prompts=(planner_system_prompt, planner_user_prompt),
+                )
             except Exception as planning_err:
                 logger.warning("[GenerateVoice] LLM planning failed: %s", planning_err)
                 planned_payload = {}
 
             if planned_payload:
                 raw_planned_text = str((planned_payload or {}).get("text") or "").strip()
-                planned_payload = _sanitize_kie_tts_plan(planned_payload, stable_prompt)
+                planned_payload = _sanitize_kie_tts_plan(planned_payload)
                 planned_text = str(planned_payload.get("text") or "").strip()
                 non_dialogue_text_stripped = bool(raw_planned_text) and (raw_planned_text != planned_text)
-                fallback_dialogue_used = bool(extracted_dialogue) and planned_text == extracted_dialogue
+                fallback_dialogue_used = False
                 logger.warning(
                     "[GenerateVoice] dialogue extraction | user_id=%s prompt_chars=%s has_explicit_dialogue=%s dialogue_line_count=%s dialogue_chars=%s planned_text_chars=%s fallback_dialogue_used=%s non_dialogue_text_stripped=%s",
                     current_user.id,
@@ -14338,6 +15730,7 @@ async def generate_voice_endpoint(
                 )
                 if planned_text:
                     effective_prompt = planned_text
+                    effective_prompt = _extract_dialogue_text_for_tts(effective_prompt)
                 for key in [
                     "text",
                     "voice",
@@ -14352,6 +15745,16 @@ async def generate_voice_endpoint(
                 ]:
                     if planned_payload.get(key) is not None:
                         provider_options[key] = planned_payload.get(key)
+
+                if planned_text:
+                    provider_options["text"] = planned_text
+                    logger.info(
+                        "[GenerateVoice] planner text applied | user_id=%s raw_len=%s sanitized_len=%s preview=%s",
+                        current_user.id,
+                        len(raw_planned_text),
+                        len(planned_text),
+                        planned_text[:120],
+                    )
             else:
                 logger.warning(
                     "[GenerateVoice] dialogue extraction | user_id=%s prompt_chars=%s has_explicit_dialogue=%s dialogue_line_count=%s dialogue_chars=%s planned_text_chars=0 fallback_dialogue_used=%s",
@@ -14360,7 +15763,13 @@ async def generate_voice_endpoint(
                     has_explicit_dialogue,
                     len(extracted_dialogue_lines),
                     len(extracted_dialogue),
-                    bool(extracted_dialogue),
+                    False,
+                )
+
+            if not str(effective_prompt or "").strip():
+                raise HTTPException(
+                    status_code=400,
+                    detail="No explicit dialogue extracted by LLM planner; voice generation cancelled in strict dialogue mode",
                 )
 
         if explicit_language_code:
@@ -14394,10 +15803,32 @@ async def generate_voice_endpoint(
             provider_options.get("seed") or provider_options.get("seeds"),
         )
 
+        # Final strict gate before provider submission: never send non-dialogue text.
+        final_dialogue_prompt = _extract_dialogue_text_for_tts(provider_options.get("text") or effective_prompt)
+        if bool(req.use_llm_param_planning) and not str(final_dialogue_prompt or "").strip():
+            raise HTTPException(
+                status_code=400,
+                detail="No valid dialogue remained after final sanitization; voice generation cancelled",
+            )
+        if str(final_dialogue_prompt or "").strip():
+            effective_prompt = str(final_dialogue_prompt).strip()
+            provider_options["text"] = effective_prompt
+            provider_options["prompt"] = effective_prompt
+            provider_options["__voice_submit_text"] = effective_prompt
+            provider_options["__voice_strict_text_only"] = bool(req.use_llm_param_planning)
+
+        logger.info(
+            "[GenerateVoice] final submit text | user_id=%s prompt_len=%s text_len=%s preview=%s",
+            current_user.id,
+            len(str(effective_prompt or "")),
+            len(str(provider_options.get("text") or "")),
+            str(effective_prompt or "")[:120],
+        )
+
         result = await media_service.generate_voice(
             prompt=effective_prompt,
             negative_prompt=req.negative_prompt,
-            llm_config=_build_runtime_llm_config(req.provider, req.model, media_type="voice"),
+            llm_config=runtime_llm_config,
             duration=5,
             provider_options=provider_options,
             user_id=current_user.id,
@@ -14417,11 +15848,84 @@ async def generate_voice_endpoint(
             detail = result["error"]
             if "details" in result:
                 detail = f"{detail}: {result['details']}"
+            if reservation_tx:
+                try:
+                    billing_service.cancel_reservation(db, reservation_tx.id, detail)
+                    reservation_tx = None
+                except Exception:
+                    pass
             raise HTTPException(status_code=400, detail=detail)
 
         voice_url = str((result or {}).get("url") or "").strip()
         if not voice_url:
+            if reservation_tx:
+                try:
+                    billing_service.cancel_reservation(db, reservation_tx.id, "Voice generation returned empty URL")
+                    reservation_tx = None
+                except Exception:
+                    pass
             raise HTTPException(status_code=400, detail="Voice generation returned empty URL")
+
+        final_meta = result.get("metadata") if isinstance(result, dict) else {}
+        final_meta = final_meta if isinstance(final_meta, dict) else {}
+        smart_meta = final_meta.get("smart_routing") if isinstance(final_meta.get("smart_routing"), dict) else {}
+
+        final_provider = str(
+            final_meta.get("provider")
+            or smart_meta.get("provider")
+            or reserve_provider
+            or req.provider
+            or ""
+        ).strip() or None
+        final_model = str(
+            final_meta.get("model")
+            or smart_meta.get("model")
+            or reserve_model
+            or req.model
+            or ""
+        ).strip() or None
+        final_system_api_id_raw = (
+            final_meta.get("system_api_id")
+            if final_meta.get("system_api_id") is not None
+            else smart_meta.get("system_api_id")
+        )
+        try:
+            final_system_api_id = int(final_system_api_id_raw) if final_system_api_id_raw is not None else None
+        except Exception:
+            final_system_api_id = None
+
+        if reservation_tx:
+            if is_token_billing:
+                raw_resp = (final_meta or {}).get("raw") if isinstance(final_meta, dict) else {}
+                usage = raw_resp.get("usage") if isinstance(raw_resp, dict) else {}
+                settle_details = {
+                    "input_tokens": int((usage or {}).get("input_tokens") or (usage or {}).get("prompt_tokens") or 0),
+                    "output_tokens": int((usage or {}).get("output_tokens") or (usage or {}).get("completion_tokens") or 0),
+                    "total_tokens": int((usage or {}).get("total_tokens") or 0),
+                    "status": "SETTLED",
+                    "billing_mode": "ACTUAL",
+                }
+            else:
+                settle_details = {
+                    "duration": 5,
+                    "duration_seconds": 5,
+                    "status": "SETTLED",
+                    "billing_mode": "ACTUAL",
+                }
+
+            if final_provider:
+                settle_details["provider"] = final_provider
+            if final_model:
+                settle_details["model"] = final_model
+            if final_system_api_id is not None:
+                settle_details["system_api_id"] = final_system_api_id
+
+            billing_service.settle_reservation(
+                db,
+                reservation_tx.id,
+                settle_details,
+            )
+            reservation_tx = None
 
         if req.shot_id:
             shot = db.query(Shot).filter(Shot.id == int(req.shot_id)).first()
@@ -14437,6 +15941,11 @@ async def generate_voice_endpoint(
                 tech["voiceover_prompt"] = effective_prompt
                 if bool(req.use_llm_param_planning):
                     tech["voiceover_plan"] = planned_payload
+                    tech["voiceover_plan_prompts"] = {
+                        "system_prompt": planner_system_prompt,
+                        "user_prompt": planner_user_prompt,
+                        "template_source": (planner_prompt_meta or {}).get("template_source"),
+                    }
                 shot.technical_notes = json.dumps(tech, ensure_ascii=False)
                 db.add(shot)
                 db.commit()
@@ -14454,42 +15963,62 @@ async def generate_voice_endpoint(
             except Exception as asset_err:
                 logger.warning("[GenerateVoice] asset registration failed: %s", asset_err)
 
+        if isinstance(result, dict):
+            result["effective_prompt"] = effective_prompt
+            if bool(req.use_llm_param_planning):
+                result["voiceover_plan"] = planned_payload if isinstance(planned_payload, dict) else {}
+                result["voiceover_plan_prompts"] = {
+                    "system_prompt": planner_system_prompt,
+                    "user_prompt": planner_user_prompt,
+                    "template_source": (planner_prompt_meta or {}).get("template_source"),
+                }
+
         return result
     except HTTPException:
+        if reservation_tx:
+            try:
+                billing_service.cancel_reservation(db, reservation_tx.id, "voice generation http exception")
+            except Exception:
+                pass
         raise
     except Exception as e:
+        if reservation_tx:
+            try:
+                billing_service.cancel_reservation(db, reservation_tx.id, str(e))
+            except Exception:
+                pass
+        try:
+            billing_service.log_failed_transaction(db, current_user.id, voice_task_type, req.provider, req.model, str(e))
+        except Exception:
+            pass
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 
 async def _run_generate_video(req: VideoGenerationRequest, current_user: User, db: Session):
     reservation_tx = None
-    _is_token_billing = billing_service.is_token_pricing(db, "video_gen", req.provider, req.model)
+    runtime_target = _resolve_media_runtime_target(
+        provider=req.provider,
+        model=req.model,
+        media_type="video",
+        category="Video",
+        user_id=current_user.id,
+        user_credits=(current_user.credits or 0),
+    )
+    runtime_llm_config = dict(runtime_target.get("runtime_llm_config") or {})
+    pre_api_cfg = runtime_target.get("pre_api_cfg") or {}
+    if isinstance(pre_api_cfg, dict) and pre_api_cfg:
+        runtime_llm_config["__pre_resolved_api_config"] = dict(pre_api_cfg)
+    reserve_provider = runtime_target.get("resolved_provider")
+    reserve_model = runtime_target.get("resolved_model")
+    reserve_system_api_id = runtime_target.get("resolved_system_api_id")
+
+    _is_token_billing = billing_service.is_token_pricing(db, "video_gen", reserve_provider, reserve_model)
     _video_token_cfg = {}
     _estimated_tokens = 0
-    runtime_llm_config = _build_runtime_llm_config(req.provider, req.model, media_type="video")
-
-    if not runtime_llm_config:
-        try:
-            strict_provider = bool(str(req.provider or "").strip())
-            pre_api_cfg = media_service.get_api_config(
-                provider=req.provider,
-                user_id=current_user.id,
-                category="Video",
-                requested_model=req.model,
-                user_credits=(current_user.credits or 0),
-                strict_provider=strict_provider,
-            )
-            pre_provider = str((pre_api_cfg or {}).get("provider") or "").strip()
-            pre_model = str((pre_api_cfg or {}).get("model") or "").strip()
-            if pre_provider and pre_model:
-                runtime_llm_config = {"provider": pre_provider, "model": pre_model}
-        except Exception:
-            # Keep reserve path resilient; fallback to request provider/model handling.
-            runtime_llm_config = runtime_llm_config or None
 
     try:
         if _is_token_billing:
-            _video_token_cfg = billing_service.resolve_video_token_config(db, req.provider, req.model)
+            _video_token_cfg = billing_service.resolve_video_token_config(db, reserve_provider, reserve_model)
             est_duration = max(5, int(req.duration or 5)) if (req.duration and req.duration > 0) else 5
             _estimated_tokens = billing_service.estimate_video_output_tokens(
                 width=_video_token_cfg.get("default_width", 1280),
@@ -14511,37 +16040,22 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
                 "duration_seconds": req.duration,
                 "billing_mode": "RESERVE",
             }
-        if isinstance(runtime_llm_config, dict):
-            reserve_provider = str(runtime_llm_config.get("provider") or "").strip()
-            reserve_model = str(runtime_llm_config.get("model") or "").strip()
-            if reserve_provider:
-                reserve_details["provider"] = reserve_provider
-                reserve_details["resolved_provider"] = reserve_provider
-            if reserve_model:
-                reserve_details["model"] = reserve_model
-                reserve_details["resolved_model"] = reserve_model
+        if reserve_provider:
+            reserve_details["provider"] = reserve_provider
+            reserve_details["resolved_provider"] = reserve_provider
+        if reserve_model:
+            reserve_details["model"] = reserve_model
+            reserve_details["resolved_model"] = reserve_model
         if req.sound is not None:
             reserve_details["has_audio"] = bool(req.sound)
-        reserve_system_api_id = None
-        try:
-            if isinstance(runtime_llm_config, dict):
-                reserve_provider = str(runtime_llm_config.get("provider") or "").strip()
-                reserve_model = str(runtime_llm_config.get("model") or "").strip()
-                if reserve_provider and reserve_model:
-                    reserve_row = billing_service._resolve_system_api_row(db, "video_gen", reserve_provider, reserve_model)
-                    if reserve_row is not None:
-                        reserve_system_api_id = int(getattr(reserve_row, "id", 0) or 0) or None
-        except Exception:
-            reserve_system_api_id = None
+        if req.mode is not None and str(req.mode).strip():
+            reserve_details["mode"] = str(req.mode).strip().lower()
         if reserve_system_api_id is not None:
             reserve_details["system_api_id"] = reserve_system_api_id
             reserve_details["resolved_system_api_id"] = reserve_system_api_id
 
-        reserve_provider_arg = req.provider
-        reserve_model_arg = req.model
-        if isinstance(runtime_llm_config, dict):
-            reserve_provider_arg = runtime_llm_config.get("provider") or reserve_provider_arg
-            reserve_model_arg = runtime_llm_config.get("model") or reserve_model_arg
+        reserve_provider_arg = reserve_provider or req.provider
+        reserve_model_arg = reserve_model or req.model
         reservation_tx = billing_service.reserve_credits(
             db,
             current_user.id,
@@ -17039,11 +18553,13 @@ async def analyze_asset_image(
         result = response_data.get("content", "")
         usage = response_data.get("usage", {})
         
-        # Billing Deduct - Include Usage
-        billing_details = {"item": "asset_analysis"}
-        if usage:
-             billing_details.update(usage) # e.g. input_tokens, output_tokens
-             
+        billing_details = _build_standard_billing_details(
+            item="asset_analysis",
+            usage_payload=usage,
+            extra_details={"request_scope": "analyze_asset_image"},
+            routing_payload=response_data,
+        )
+
         # HEURISTIC: Ensure image tokens are accounted for if usage seems low or missing
         # Standard GPT-4o high res is ~1000 tokens.
         # If input_tokens < 100, we likely didn't count the image.
@@ -17061,15 +18577,18 @@ async def analyze_asset_image(
             else:
                 billing_details["total_tokens"] = billing_details["input_tokens"] + billing_details.get("output_tokens", 0)
 
-        if reservation_tx:
-            # Normalize usage keys if provider uses OpenAI naming.
-            if "prompt_tokens" in billing_details and "input_tokens" not in billing_details:
-                billing_details["input_tokens"] = billing_details.get("prompt_tokens", 0)
-            if "completion_tokens" in billing_details and "output_tokens" not in billing_details:
-                billing_details["output_tokens"] = billing_details.get("completion_tokens", 0)
-            billing_service.settle_reservation(db, reservation_tx.id, billing_details)
-        else:
-            billing_service.deduct_credits(db, current_user.id, "analysis", api_setting.provider, api_setting.model, billing_details)
+        _finalize_model_invocation_billing(
+            db=db,
+            current_user=current_user,
+            task_type="analysis",
+            provider=api_setting.provider,
+            model=api_setting.model,
+            reservation_tx=reservation_tx,
+            item="asset_analysis",
+            usage_payload=usage if isinstance(usage, dict) else None,
+            extra_details=billing_details,
+            routing_payload=response_data,
+        )
         
         # 6. Save Result (Optional)
         # We don't have a specific field on Asset to store analysis unless we add one or use remark/meta.
@@ -17092,12 +18611,7 @@ async def analyze_asset_image(
         return {"result": result}
     except Exception as e:
         logger.error(f"Image analysis failed: {e}")
-        try:
-            reservation_tx = locals().get("reservation_tx")
-            if reservation_tx:
-                billing_service.cancel_reservation(db, reservation_tx.id, str(e))
-        except:
-            pass
+        _cancel_reservation_quietly(db, locals().get("reservation_tx"), str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -17535,14 +19049,15 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
         logger.info(f"Entity Updated. New Prompt Length: {len(entity.generation_prompt_en) if entity.generation_prompt_en else 0}")
 
         # Billing finalize (after successful parse/update)
-        billing_details = {"item": "entity_image_analysis", "entity_id": entity.id}
-        if usage:
-            billing_details.update(usage)
-        _apply_llm_routing_to_billing_details(billing_details, effective_llm_response)
-        if "prompt_tokens" in billing_details and "input_tokens" not in billing_details:
-            billing_details["input_tokens"] = billing_details.get("prompt_tokens", 0)
-        if "completion_tokens" in billing_details and "output_tokens" not in billing_details:
-            billing_details["output_tokens"] = billing_details.get("completion_tokens", 0)
+        billing_details = _build_standard_billing_details(
+            item="entity_image_analysis",
+            usage_payload=usage if isinstance(usage, dict) else None,
+            extra_details={
+                "entity_id": entity.id,
+                "request_scope": "analyze_entity_image",
+            },
+            routing_payload=effective_llm_response,
+        )
 
         if reservation_tx:
             # If usage seems to miss image tokens, add a conservative estimate to avoid under-charging.
@@ -17555,15 +19070,30 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
                     billing_details["total_tokens"] += estimated_image_tokens
                 else:
                     billing_details["total_tokens"] = billing_details["input_tokens"] + billing_details.get("output_tokens", 0)
-            billing_service.settle_reservation(db, reservation_tx.id, billing_details)
+            _finalize_model_invocation_billing(
+                db=db,
+                current_user=current_user,
+                task_type="analysis_character",
+                provider=api_setting.provider,
+                model=api_setting.model,
+                reservation_tx=reservation_tx,
+                item="entity_image_analysis",
+                usage_payload=usage if isinstance(usage, dict) else None,
+                extra_details=billing_details,
+                routing_payload=effective_llm_response,
+            )
         else:
-            billing_service.deduct_credits(
-                db,
-                current_user.id,
-                "analysis_character",
-                api_setting.provider,
-                api_setting.model,
-                billing_details,
+            _finalize_model_invocation_billing(
+                db=db,
+                current_user=current_user,
+                task_type="analysis_character",
+                provider=api_setting.provider,
+                model=api_setting.model,
+                reservation_tx=None,
+                item="entity_image_analysis",
+                usage_payload=usage if isinstance(usage, dict) else None,
+                extra_details=billing_details,
+                routing_payload=effective_llm_response,
             )
         
         # We no longer save the prompt as a separate asset file to avoid clutter.
@@ -17574,19 +19104,11 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
 
     except HTTPException as e:
         logger.error(f"Entity Analysis failed with HTTPException: {str(e.detail)}", exc_info=True)
-        try:
-            if reservation_tx:
-                billing_service.cancel_reservation(db, reservation_tx.id, str(e.detail))
-        except:
-            pass
+        _cancel_reservation_quietly(db, reservation_tx, str(e.detail))
         raise
     except Exception as e:
         logger.error(f"Entity Analysis failed: {str(e)}", exc_info=True)
-        try:
-            if reservation_tx:
-                billing_service.cancel_reservation(db, reservation_tx.id, str(e))
-        except:
-            pass
+        _cancel_reservation_quietly(db, reservation_tx, str(e))
         raise HTTPException(status_code=502, detail=f"Analysis failed: {str(e)}")
 
 @router.get("/entities/{entity_id}/latest_analysis")

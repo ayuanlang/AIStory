@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import cast, String, func, inspect, or_, and_
+from sqlalchemy import cast, String, func, inspect, or_, and_, text
 import logging
 import json
 import asyncio
@@ -9,6 +9,7 @@ import ast
 import random
 import re
 import time
+from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 import math
 from types import SimpleNamespace
@@ -41,6 +42,8 @@ from app.services.system_default_api_service import (
 from app.schemas.settings import (
     APISettingOut,
     APISettingUpdate,
+    UserPreferencesOut,
+    UserPreferencesUpdate,
     SystemAPIModelOption,
     SystemAPIProviderModelCatalog,
     SystemAPIProviderSettings,
@@ -92,6 +95,11 @@ from app.schemas.settings import (
     SystemAPIMissingBillingRuleOut,
     SystemAPIBillingRuleMultiplierResetRequest,
     SystemAPIBillingRuleMultiplierResetResponse,
+    KIEDataStandardValueOut,
+    KIEDataStandardMappingCreate,
+    KIEDataStandardMappingUpdate,
+    KIEDataStandardMappingOut,
+    KIEDataStandardBillingInferenceResponse,
 )
 from app.api.deps import get_current_user
 from app.services.billing_service import BillingService
@@ -101,6 +109,15 @@ HAS_TASK_DEFAULT_SYSTEM_API_MODEL = True
 router = APIRouter()
 logger = logging.getLogger("settings_api")
 logger.setLevel(logging.INFO)
+api_logger = logging.getLogger("api_logger")
+
+_PROVIDER_POOL_CACHE_TTL_SECONDS = 10.0
+_provider_pool_cache = {
+    "ts": 0.0,
+    "runtime_key_map": {},
+    "alias_map": {},
+}
+_settings_system_indexes_ensured = False
 
 _AGENT_POLICY_CATEGORY = "System_Payment"
 _AGENT_POLICY_PROVIDER = "agent_policy"
@@ -120,6 +137,106 @@ _KIE_TO_SYSTEM_CREDIT_RATIO = 3.0
 _USD_TO_CNY_RATE = 7.0
 _SYSTEM_CREDIT_PER_CNY = 100.0
 _USER_API_STRATEGIES = {"fixed", "smart_default", "low_price_replace"}
+_MODEL_MODE_DEFAULTS_KEY = "model_mode_defaults"
+_MODEL_MODE_DEFAULTS_ALIASES = (
+    "model_mode_defaults",
+    "mode_by_model",
+    "default_mode_by_model",
+    "model_mode_bindings",
+)
+
+_USER_PREF_ALLOWED_PROMPT_SUBMIT_LANGUAGE = {"en", "cn", "auto"}
+_USER_PREF_ALLOWED_REASONING_EFFORT = {"low", "medium", "high"}
+_USER_PREF_DEFAULTS: Dict[str, Any] = {
+    "prompt_submit_language": "en",
+    "auto_download_local": False,
+    "generation": {},
+    "advanced_model": {
+        "temperature": 0.7,
+        "seed": None,
+        "cfg": None,
+        "reasoning_effort": "high",
+    },
+}
+
+def _normalize_prompt_submit_language(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if raw in {"zh", "zh-cn"}:
+        raw = "cn"
+    return raw if raw in _USER_PREF_ALLOWED_PROMPT_SUBMIT_LANGUAGE else "en"
+
+
+def _normalize_reasoning_effort(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    return raw if raw in _USER_PREF_ALLOWED_REASONING_EFFORT else "high"
+
+
+def _normalize_user_preferences(payload: Any) -> Dict[str, Any]:
+    raw = _safe_json_dict(payload)
+    defaults = dict(_USER_PREF_DEFAULTS)
+
+    generation = raw.get("generation") if isinstance(raw.get("generation"), dict) else {}
+    advanced_raw = raw.get("advanced_model") if isinstance(raw.get("advanced_model"), dict) else {}
+
+    advanced_defaults = defaults.get("advanced_model") if isinstance(defaults.get("advanced_model"), dict) else {}
+    advanced_model: Dict[str, Any] = {
+        **advanced_defaults,
+        **advanced_raw,
+    }
+
+    try:
+        temp = float(advanced_model.get("temperature"))
+        if not math.isfinite(temp):
+            raise ValueError("not finite")
+        advanced_model["temperature"] = max(0.0, min(2.0, temp))
+    except Exception:
+        advanced_model["temperature"] = float(advanced_defaults.get("temperature", 0.7))
+
+    try:
+        seed = advanced_model.get("seed")
+        if seed is None or str(seed).strip() == "":
+            advanced_model["seed"] = None
+        else:
+            parsed_seed = int(seed)
+            advanced_model["seed"] = parsed_seed if parsed_seed > 0 else None
+    except Exception:
+        advanced_model["seed"] = None
+
+    try:
+        cfg = advanced_model.get("cfg")
+        if cfg is None or str(cfg).strip() == "":
+            advanced_model["cfg"] = None
+        else:
+            parsed_cfg = float(cfg)
+            advanced_model["cfg"] = parsed_cfg if math.isfinite(parsed_cfg) and parsed_cfg > 0 else None
+    except Exception:
+        advanced_model["cfg"] = None
+
+    advanced_model["reasoning_effort"] = _normalize_reasoning_effort(advanced_model.get("reasoning_effort"))
+
+    return {
+        "prompt_submit_language": _normalize_prompt_submit_language(raw.get("prompt_submit_language")),
+        "auto_download_local": bool(raw.get("auto_download_local", False)),
+        "generation": generation,
+        "advanced_model": advanced_model,
+    }
+
+
+def _merge_user_preferences(current: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any]:
+    merged: Dict[str, Any] = dict(current or {})
+    for key in ("prompt_submit_language", "auto_download_local"):
+        if key in patch:
+            merged[key] = patch.get(key)
+
+    if "generation" in patch and isinstance(patch.get("generation"), dict):
+        current_generation = merged.get("generation") if isinstance(merged.get("generation"), dict) else {}
+        merged["generation"] = {**current_generation, **patch.get("generation")}
+
+    if "advanced_model" in patch and isinstance(patch.get("advanced_model"), dict):
+        current_adv = merged.get("advanced_model") if isinstance(merged.get("advanced_model"), dict) else {}
+        merged["advanced_model"] = {**current_adv, **patch.get("advanced_model")}
+
+    return _normalize_user_preferences(merged)
 
 
 def _default_agent_tool_policy() -> Dict[str, Any]:
@@ -735,6 +852,10 @@ def _build_modality_from_feature_profile(profile: Dict[str, Any]) -> Dict[str, A
         out["supported_resolutions"] = image_caps.get("supported_resolutions")
     if image_caps.get("aspect_ratios"):
         out["aspect_ratios"] = image_caps.get("aspect_ratios")
+    if image_caps.get("image_size_values"):
+        out["image_size_values"] = image_caps.get("image_size_values")
+    if image_caps.get("quality_values"):
+        out["quality_values"] = image_caps.get("quality_values")
 
     if video_caps.get("supported_resolutions") and not out.get("supported_resolutions"):
         out["supported_resolutions"] = video_caps.get("supported_resolutions")
@@ -749,6 +870,16 @@ def _build_modality_from_feature_profile(profile: Dict[str, Any]) -> Dict[str, A
                 continue
         if durations:
             out["max_duration"] = max(durations)
+    if video_caps.get("quality_values") and not out.get("quality_values"):
+        out["quality_values"] = video_caps.get("quality_values")
+    if video_caps.get("image_size_values") and not out.get("image_size_values"):
+        out["image_size_values"] = video_caps.get("image_size_values")
+    if video_caps.get("sound_supported") is not None:
+        out["sound_supported"] = bool(video_caps.get("sound_supported"))
+    elif video_caps.get("has_audio") is not None:
+        out["sound_supported"] = bool(video_caps.get("has_audio"))
+    if video_caps.get("multi_shots_supported") is not None:
+        out["multi_shots_supported"] = bool(video_caps.get("multi_shots_supported"))
 
     if bool(digital_caps.get("supported")):
         out["has_digital_human"] = True
@@ -877,7 +1008,8 @@ def _assign_wide_modality_fields(target: SystemAPISetting, source: Any) -> None:
     field_names = [
         "generation_modes", "input_formats", "output_format", "supported_resolutions", "aspect_ratios",
         "max_images_per_call", "reference_image_limit", "reference_video_limit", "durations_seconds",
-        "max_duration", "fps_options", "has_audio", "mode_values", "text_capabilities",
+        "max_duration", "fps_options", "image_size_values", "quality_values", "has_audio",
+        "sound_supported", "multi_shots_supported", "mode_values", "text_capabilities",
         "image_capabilities", "video_capabilities", "digital_human_capabilities", "voice_capabilities",
         "music_capabilities", "pricing_unit", "token_billing_supported", "input_token_price",
         "output_token_price", "per_resolution_price_map", "per_duration_price_map", "has_tiered_pricing",
@@ -907,6 +1039,11 @@ def _safe_int(value: Any, default: Optional[int] = 0) -> Optional[int]:
 def _normalize_user_api_strategy(value: Any, default: str = "smart_default") -> str:
     raw = str(value or "").strip().lower()
     return raw if raw in _USER_API_STRATEGIES else default
+
+
+def _normalize_user_mode(value: Any) -> Optional[str]:
+    text = str(value or "").strip().lower()
+    return text or None
 
 
 def _is_json_object_value(value: Any) -> bool:
@@ -981,6 +1118,61 @@ def _normalize_api_keys(values) -> List[str]:
         seen.add(key)
         result.append(key)
     return result
+
+
+def _get_provider_pool_runtime_maps(db: Session) -> Tuple[Dict[str, str], Dict[str, Optional[str]], int]:
+    now_ts = time.time()
+    cached_ts = float(_provider_pool_cache.get("ts") or 0.0)
+    if (now_ts - cached_ts) < _PROVIDER_POOL_CACHE_TTL_SECONDS:
+        return (
+            dict(_provider_pool_cache.get("runtime_key_map") or {}),
+            dict(_provider_pool_cache.get("alias_map") or {}),
+            int(_provider_pool_cache.get("row_count") or 0),
+        )
+
+    provider_pool_rows = db.query(
+        ProviderKeyPool.provider,
+        ProviderKeyPool.provider_alias,
+        ProviderKeyPool.api_keys,
+    ).all()
+
+    runtime_key_map: Dict[str, str] = {}
+    alias_map: Dict[str, Optional[str]] = {}
+    for row in provider_pool_rows:
+        provider_key = str(getattr(row, "provider", "") or "").strip().lower()
+        if not provider_key:
+            continue
+        keys = _normalize_api_keys(getattr(row, "api_keys", None))
+        runtime_key_map[provider_key] = keys[0] if keys else ""
+        alias = str(getattr(row, "provider_alias", "") or "").strip()
+        alias_map[provider_key] = alias or None
+
+    _provider_pool_cache["ts"] = now_ts
+    _provider_pool_cache["runtime_key_map"] = dict(runtime_key_map)
+    _provider_pool_cache["alias_map"] = dict(alias_map)
+    _provider_pool_cache["row_count"] = len(provider_pool_rows)
+
+    return runtime_key_map, alias_map, len(provider_pool_rows)
+
+
+def _ensure_settings_system_indexes(db: Session) -> None:
+    global _settings_system_indexes_ensured
+    if _settings_system_indexes_ensured:
+        return
+    try:
+        db.execute(text("CREATE INDEX IF NOT EXISTS ix_system_api_settings_cat_depr ON system_api_settings(category, deprecated)"))
+        db.execute(text("CREATE INDEX IF NOT EXISTS ix_system_api_settings_provider_cat_model ON system_api_settings(provider, category, model)"))
+        db.execute(text("CREATE INDEX IF NOT EXISTS ix_api_settings_user_category ON api_settings(user_id, category)"))
+        db.execute(text("CREATE INDEX IF NOT EXISTS ix_provider_key_pool_provider ON provider_key_pool(provider)"))
+        db.commit()
+        _settings_system_indexes_ensured = True
+        logger.info("settings.system.indexes ensured")
+    except Exception as exc:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        logger.warning("settings.system.index ensure skipped: %s", str(exc)[:300])
 
 
 def _normalize_key_strategy(value: str) -> str:
@@ -1265,10 +1457,9 @@ def _can_manage_system_settings(user: User) -> bool:
 
 
 def _ensure_default_system_selection_for_user(db: Session, user_id: int) -> None:
-    # Get all active categories the user has configured
+    # Get all categories the user has configured
     user_active_categories = db.query(APISetting.category).filter(
         APISetting.user_id == user_id,
-        APISetting.is_active == True
     ).distinct().all()
     user_active_categories_set = {str(cat[0]).strip() for cat in user_active_categories if cat[0]}
 
@@ -1295,22 +1486,11 @@ def _ensure_default_system_selection_for_user(db: Session, user_id: int) -> None
             selected_by_category[category] = row
 
     for _, system_setting in selected_by_category.items():
-        marker_config = {
-            "selection_source": "system",
-            "use_system_setting_id": int(system_setting.id),
-            "api_strategy": "smart_default",
-        }
-
         db.add(APISetting(
             user_id=user_id,
-            name=f"Use System {system_setting.provider}",
             category=system_setting.category,
-            provider=system_setting.provider,
-            api_key="",
-            base_url="",
-            model=system_setting.model,
-            config=marker_config,
-            is_active=True,
+            system_api_id=int(system_setting.id),
+            mode=None,
         ))
 
     db.flush()
@@ -1319,7 +1499,6 @@ def _ensure_default_system_selection_for_user(db: Session, user_id: int) -> None
 def _normalize_user_active_settings(db: Session, user_id: int) -> None:
     rows = db.query(APISetting).filter(
         APISetting.user_id == user_id,
-        APISetting.is_active == True,
     ).order_by(APISetting.category.asc(), APISetting.id.desc()).all()
 
     grouped: Dict[str, List[APISetting]] = {}
@@ -1333,23 +1512,17 @@ def _normalize_user_active_settings(db: Session, user_id: int) -> None:
             continue
 
         def _score(item: APISetting):
-            cfg = _safe_json_dict(item.config)
-            selection_source = str((cfg or {}).get("selection_source") or "").strip().lower()
-            has_system_setting_id = 1 if _safe_int((cfg or {}).get("use_system_setting_id"), None) else 0
-            is_system_selected = 1 if (selection_source == "system" or has_system_setting_id) else 0
-            has_model = 1 if str(item.model or "").strip() else 0
-            has_provider = 1 if str(item.provider or "").strip() else 0
-            return (has_system_setting_id, is_system_selected, has_model, has_provider, int(item.id or 0))
+            has_system_setting_id = 1 if _safe_int(getattr(item, "system_api_id", None), None) else 0
+            has_mode = 1 if str(getattr(item, "mode", "") or "").strip() else 0
+            return (has_system_setting_id, has_mode, int(item.id or 0))
 
         winner = max(items, key=_score)
-        dropped_ids: List[int] = []
+        dropped_ids: List[int] = [item.id for item in items if item.id != winner.id]
         for item in items:
-            should_active = (item.id == winner.id)
-            if bool(item.is_active) != should_active:
-                item.is_active = should_active
-                changed = True
-            if not should_active:
-                dropped_ids.append(item.id)
+            if item.id == winner.id:
+                continue
+            db.delete(item)
+            changed = True
 
         logger.warning(
             "Normalize duplicate active api settings | user_id=%s category=%s keep_id=%s drop_ids=%s",
@@ -1361,6 +1534,17 @@ def _normalize_user_active_settings(db: Session, user_id: int) -> None:
 
     if changed:
         db.flush()
+
+
+def _keep_only_active_setting_row_for_category(db: Session, user_id: int, category: str, keep_id: int) -> None:
+    """Delete all other rows in the same category and keep only one binding row."""
+    if not keep_id:
+        return
+    db.query(APISetting).filter(
+        APISetting.user_id == user_id,
+        APISetting.category == category,
+        APISetting.id != int(keep_id),
+    ).delete(synchronize_session=False)
 
 
 def _normalize_setting_category_name(category: Any) -> str:
@@ -1397,64 +1581,13 @@ def _cleanup_user_api_settings_records(db: Session, user_id: int) -> None:
             row.category = normalized_category
             changed = True
 
-        cfg = _safe_json_dict(row.config)
-        selection_source = str((cfg or {}).get("selection_source") or "").strip().lower()
-        use_system_setting_id = _safe_int((cfg or {}).get("use_system_setting_id"), None)
-        is_system_marker = (selection_source == "system") or bool(use_system_setting_id)
-
-        if not is_system_marker:
-            continue
-
-        if not use_system_setting_id:
-            matched = _find_system_setting_by_normalized_triplet(
-                db,
-                row.provider,
-                normalized_category,
-                row.model,
-            )
-            if matched and not _is_setting_deprecated(matched.config, matched.deprecated):
-                use_system_setting_id = int(matched.id)
-
-        next_cfg = {"selection_source": "system"}
-        if use_system_setting_id:
-            next_cfg["use_system_setting_id"] = int(use_system_setting_id)
-
-        if cfg != next_cfg:
-            row.config = next_cfg
-            changed = True
-
-        if (row.api_key or "").strip():
-            row.api_key = ""
-            changed = True
-        if (row.base_url or "").strip():
-            row.base_url = ""
+        normalized_mode = _normalize_user_mode(getattr(row, "mode", None))
+        if normalized_mode != getattr(row, "mode", None):
+            row.mode = normalized_mode
             changed = True
 
     if changed:
         db.flush()
-
-
-def _sync_provider_shared_key(db: Session, user_id: int, provider: str, current_setting_id: int, incoming_api_key: str = None) -> str:
-    if not provider:
-        return incoming_api_key or ""
-
-    key = (incoming_api_key or "").strip()
-    provider_settings = db.query(APISetting).filter(
-        APISetting.user_id == user_id,
-        APISetting.provider == provider,
-    ).all()
-
-    if key:
-        for item in provider_settings:
-            if item.id != current_setting_id:
-                item.api_key = key
-        return key
-
-    # No incoming key: inherit existing provider key (shared by provider)
-    for item in provider_settings:
-        if item.id != current_setting_id and (item.api_key or "").strip():
-            return item.api_key
-    return ""
 
 
 def _sync_system_provider_shared_key(db: Session, provider: str, current_setting_id: int, incoming_api_key: str = None) -> str:
@@ -1593,6 +1726,127 @@ def _extract_rule_match_signature(rule: SystemAPIBillingRule) -> Dict[str, Any]:
         extra_copy.pop("rule_kind", None)
         if extra_copy:
             out["extra_conditions"] = extra_copy
+    return out
+
+
+def _ensure_kie_standard_tables_for_admin(db: Session) -> None:
+    db.execute(text("""
+        CREATE TABLE IF NOT EXISTS kie_system_data_standard_values (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            standard_dimension TEXT NOT NULL,
+            standard_value TEXT NOT NULL,
+            value_type TEXT NOT NULL,
+            definition TEXT,
+            alias_values TEXT,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(standard_dimension, standard_value)
+        )
+    """))
+    db.execute(text("""
+        CREATE TABLE IF NOT EXISTS kie_system_data_standard_mappings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            provider TEXT NOT NULL,
+            model_key_inferred TEXT,
+            model_title TEXT,
+            model_url TEXT,
+            source_field TEXT NOT NULL,
+            source_enum_value TEXT NOT NULL,
+            standard_dimension TEXT NOT NULL,
+            standard_value TEXT NOT NULL,
+            confidence TEXT,
+            note TEXT,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(provider, model_key_inferred, source_field, source_enum_value, standard_dimension, standard_value)
+        )
+    """))
+
+    cols = {
+        str(col.get("name") or "").strip().lower()
+        for col in inspect(db.bind).get_columns("kie_system_data_standard_mappings")
+    }
+    if "is_billing_related" not in cols:
+        db.execute(text("ALTER TABLE kie_system_data_standard_mappings ADD COLUMN is_billing_related INTEGER NOT NULL DEFAULT 0"))
+
+    db.execute(text("""
+        CREATE INDEX IF NOT EXISTS ix_kie_std_values_dim
+        ON kie_system_data_standard_values(standard_dimension, is_active)
+    """))
+    db.execute(text("""
+        CREATE INDEX IF NOT EXISTS ix_kie_std_mappings_lookup
+        ON kie_system_data_standard_mappings(provider, model_key_inferred, standard_dimension, source_field, is_active)
+    """))
+
+
+def _row_to_kie_standard_value_out(row: Dict[str, Any]) -> KIEDataStandardValueOut:
+    return KIEDataStandardValueOut(
+        id=int(row.get("id") or 0),
+        standard_dimension=str(row.get("standard_dimension") or ""),
+        standard_value=str(row.get("standard_value") or ""),
+        value_type=str(row.get("value_type") or ""),
+        definition=row.get("definition"),
+        alias_values=row.get("alias_values"),
+        is_active=bool(_to_bool(row.get("is_active"))),
+        created_at=row.get("created_at"),
+        updated_at=row.get("updated_at"),
+    )
+
+
+def _row_to_kie_mapping_out(row: Dict[str, Any]) -> KIEDataStandardMappingOut:
+    return KIEDataStandardMappingOut(
+        id=int(row.get("id") or 0),
+        provider=str(row.get("provider") or ""),
+        model_key_inferred=row.get("model_key_inferred"),
+        model_title=row.get("model_title"),
+        model_url=row.get("model_url"),
+        source_field=str(row.get("source_field") or ""),
+        source_enum_value=str(row.get("source_enum_value") or ""),
+        standard_dimension=str(row.get("standard_dimension") or ""),
+        standard_value=str(row.get("standard_value") or ""),
+        confidence=row.get("confidence"),
+        note=row.get("note"),
+        is_active=bool(_to_bool(row.get("is_active"))),
+        is_billing_related=bool(_to_bool(row.get("is_billing_related"))),
+        created_at=row.get("created_at"),
+        updated_at=row.get("updated_at"),
+    )
+
+
+def _extract_billing_related_dimensions(rule: SystemAPIBillingRule) -> set:
+    out = set()
+    if str(getattr(rule, "generation_mode", "") or "").strip():
+        out.add("MODE")
+    if str(getattr(rule, "output_format", "") or "").strip():
+        out.add("OUTPUT_FORMAT")
+    if getattr(rule, "has_audio", None) is not None:
+        out.add("SOUND_SUPPORTED")
+    if getattr(rule, "duration_seconds_min", None) is not None or getattr(rule, "duration_seconds_max", None) is not None:
+        out.add("DURATION_SECONDS")
+
+    extra = _rule_extra_conditions(rule)
+    standard_values = extra.get("standard_values") if isinstance(extra.get("standard_values"), dict) else {}
+    for key in standard_values.keys():
+        dim = str(key or "").strip().upper()
+        if dim:
+            out.add(dim)
+
+    for key in extra.keys():
+        k = str(key or "").strip()
+        if not k:
+            continue
+        low = k.lower()
+        if low.startswith("standard."):
+            dim = k.split(".", 1)[1].strip().upper()
+            if dim:
+                out.add(dim)
+        elif low.startswith("standard_values."):
+            dim = k.split(".", 1)[1].strip().upper()
+            if dim:
+                out.add(dim)
+
     return out
 
 
@@ -1897,7 +2151,8 @@ def _resolve_system_setting_billing(db: Session, row: SystemAPISetting) -> Dict[
 
 def _setting_to_out(db: Session, row: SystemAPISetting) -> SystemAPISettingOut:
     billing = _resolve_system_setting_billing(db, row)
-    out_cfg = _strip_billing_from_config(row.config)
+    out_cfg = _sync_model_mode_defaults_config(_strip_billing_from_config(row.config))
+    model_mode_defaults = _extract_model_mode_defaults(out_cfg)
     base_model = _resolve_base_model(getattr(row, "base_model", None), getattr(row, "model", None))
     return SystemAPISettingOut(
         id=row.id,
@@ -1921,7 +2176,11 @@ def _setting_to_out(db: Session, row: SystemAPISetting) -> SystemAPISettingOut:
         durations_seconds=getattr(row, "durations_seconds", None),
         max_duration=getattr(row, "max_duration", None),
         fps_options=getattr(row, "fps_options", None),
+        image_size_values=getattr(row, "image_size_values", None),
+        quality_values=getattr(row, "quality_values", None),
         has_audio=getattr(row, "has_audio", None),
+        sound_supported=getattr(row, "sound_supported", None),
+        multi_shots_supported=getattr(row, "multi_shots_supported", None),
         mode_values=getattr(row, "mode_values", None),
         text_capabilities=getattr(row, "text_capabilities", None),
         image_capabilities=getattr(row, "image_capabilities", None),
@@ -1938,6 +2197,7 @@ def _setting_to_out(db: Session, row: SystemAPISetting) -> SystemAPISettingOut:
         has_tiered_pricing=getattr(row, "has_tiered_pricing", None),
         free_quota=getattr(row, "free_quota", None),
         currency=getattr(row, "currency", None),
+        model_mode_defaults=(model_mode_defaults or None),
         config=out_cfg,
         billing_unit_type=billing["unit_type"],
         billing_cost=billing["cost"],
@@ -2237,6 +2497,240 @@ def _system_api_pricing_from_rules_and_audit(
     }
 
 
+def _batch_system_api_pricing_from_rules_and_audit(
+    db: Session,
+    system_api_ids: List[int],
+    include_audit: bool = True,
+) -> Dict[int, Dict[str, Any]]:
+    normalized_ids = sorted({_safe_int(sid, 0) for sid in (system_api_ids or []) if _safe_int(sid, 0) > 0})
+    if not normalized_ids:
+        return {}
+
+    id_set = set(normalized_ids)
+    default_value = {
+        "average_cost": 0,
+        "source": "rules_and_audit_only",
+        "min_cost": 0,
+        "max_cost": 0,
+        "sample_prices": [],
+    }
+    result: Dict[int, Dict[str, Any]] = {sid: dict(default_value) for sid in normalized_ids}
+
+    rule_rows = db.query(
+        SystemAPIBillingRule.id,
+        SystemAPIBillingRule.system_api_id,
+        SystemAPIBillingRule.billing_cost,
+        SystemAPIBillingRule.billing_cost_input,
+        SystemAPIBillingRule.billing_cost_output,
+    ).filter(
+        SystemAPIBillingRule.system_api_id.in_(normalized_ids)
+    ).all()
+
+    rule_ids: List[int] = []
+    rule_id_to_sid: Dict[int, int] = {}
+    rule_costs_by_sid: Dict[int, List[int]] = defaultdict(list)
+    for row in rule_rows:
+        sid = _safe_int(getattr(row, "system_api_id", 0), 0)
+        rid = _safe_int(getattr(row, "id", 0), 0)
+        if sid <= 0:
+            continue
+        if rid > 0:
+            rule_ids.append(rid)
+            rule_id_to_sid[rid] = sid
+        c = max(
+            _non_negative_int(getattr(row, "billing_cost", 0), 0),
+            _non_negative_int(getattr(row, "billing_cost_input", 0), 0),
+            _non_negative_int(getattr(row, "billing_cost_output", 0), 0),
+        )
+        if c > 0:
+            rule_costs_by_sid[sid].append(int(c))
+
+    for sid, costs in rule_costs_by_sid.items():
+        if sid not in result or not costs:
+            continue
+        result[sid]["min_cost"] = int(min(costs))
+        result[sid]["max_cost"] = int(max(costs))
+
+    # Fast path for settings page: avoid scanning large audit tables.
+    if not include_audit:
+        for sid in normalized_ids:
+            costs = rule_costs_by_sid.get(sid) or []
+            if costs:
+                result[sid]["average_cost"] = int(round(sum(costs) / float(len(costs))))
+                result[sid]["sample_prices"] = sorted(set(int(v) for v in costs if int(v) > 0))[:5]
+            result[sid]["source"] = "rules_only_fast"
+        return result
+
+    action_filter = [TransactionAction.system_api_id.in_(normalized_ids)]
+    if rule_ids:
+        action_filter.append(
+            and_(
+                TransactionAction.system_api_id.is_(None),
+                TransactionAction.matched_rule_id.in_(rule_ids),
+            )
+        )
+
+    action_limit = max(1000, min(10000, len(normalized_ids) * 200))
+    action_rows = db.query(
+        TransactionAction.id,
+        TransactionAction.system_api_id,
+        TransactionAction.matched_rule_id,
+        TransactionAction.actual_cost,
+        TransactionAction.reserved_cost,
+    ).filter(
+        or_(*action_filter)
+    ).order_by(TransactionAction.id.desc()).limit(action_limit).all()
+
+    audit_costs_by_sid: Dict[int, List[int]] = defaultdict(list)
+    for row in action_rows:
+        sid = _safe_int(getattr(row, "system_api_id", 0), 0)
+        if sid <= 0:
+            rid = _safe_int(getattr(row, "matched_rule_id", 0), 0)
+            sid = _safe_int(rule_id_to_sid.get(rid), 0)
+        if sid <= 0 or sid not in id_set:
+            continue
+        c = _safe_int(getattr(row, "actual_cost", 0), 0)
+        if c <= 0:
+            c = _safe_int(getattr(row, "reserved_cost", 0), 0)
+        if c > 0:
+            audit_costs_by_sid[sid].append(int(c))
+
+    missing_ids = [sid for sid in normalized_ids if not audit_costs_by_sid.get(sid)]
+    # TransactionHistory scan is expensive on hot /settings/system reads; keep it bounded.
+    use_tx_fallback = bool(missing_ids) and len(missing_ids) <= 20 and len(normalized_ids) <= 120
+    if use_tx_fallback:
+        tx_limit = max(400, min(1200, len(missing_ids) * 40))
+        tx_rows = db.query(
+            TransactionHistory.id,
+            TransactionHistory.amount,
+            TransactionHistory.details,
+        ).order_by(TransactionHistory.id.desc()).limit(tx_limit).all()
+        for tx in tx_rows or []:
+            amount = _safe_int(getattr(tx, "amount", 0), 0)
+            if amount >= 0:
+                continue
+            details = _safe_json_dict(getattr(tx, "details", {}))
+            bb = details.get("billing_breakdown") if isinstance(details.get("billing_breakdown"), dict) else {}
+            tx_sid = _safe_int(
+                bb.get("system_api_id") if bb.get("system_api_id") is not None else details.get("system_api_id"),
+                0,
+            )
+            if tx_sid <= 0 or tx_sid not in id_set:
+                continue
+            if audit_costs_by_sid.get(tx_sid):
+                continue
+            audit_costs_by_sid[tx_sid].append(abs(int(amount)))
+
+    for sid in normalized_ids:
+        costs = audit_costs_by_sid.get(sid) or []
+        avg_cost = int(round(sum(costs) / float(len(costs)))) if costs else 0
+        result[sid]["average_cost"] = max(0, int(avg_cost))
+        result[sid]["sample_prices"] = sorted(set(int(v) for v in costs if int(v) > 0))[:5] if costs else []
+
+    return result
+
+
+_SETTINGS_PRICE_CACHE_KEY = "settings_price_summary"
+
+
+def _read_settings_price_cache(config_value: Any) -> Dict[str, Any]:
+    cfg = _safe_json_dict(config_value)
+    raw = cfg.get(_SETTINGS_PRICE_CACHE_KEY) if isinstance(cfg.get(_SETTINGS_PRICE_CACHE_KEY), dict) else {}
+    return {
+        "average_cost": _safe_int(raw.get("average_cost"), 0),
+        "source": str(raw.get("source") or "") or None,
+        "min_cost": _safe_int(raw.get("min_cost"), 0),
+        "max_cost": _safe_int(raw.get("max_cost"), 0),
+        "sample_prices": [
+            int(v)
+            for v in (raw.get("sample_prices") or [])
+            if _safe_int(v, 0) > 0
+        ],
+    }
+
+
+def _extract_webhook_and_price_cache(config_value: Any) -> Tuple[Optional[str], Dict[str, Any]]:
+    if isinstance(config_value, dict):
+        webhook = str(config_value.get("webHook") or "").strip() or None
+        return webhook, _read_settings_price_cache(config_value)
+
+    if isinstance(config_value, str):
+        raw = config_value
+        has_webhook_hint = '"webHook"' in raw
+        has_price_hint = _SETTINGS_PRICE_CACHE_KEY in raw
+        if not has_webhook_hint and not has_price_hint:
+            return None, {
+                "average_cost": 0,
+                "source": None,
+                "min_cost": 0,
+                "max_cost": 0,
+                "sample_prices": [],
+            }
+
+        cfg = _safe_json_dict(raw)
+        webhook = str(cfg.get("webHook") or "").strip() or None
+        return webhook, _read_settings_price_cache(cfg)
+
+    return None, {
+        "average_cost": 0,
+        "source": None,
+        "min_cost": 0,
+        "max_cost": 0,
+        "sample_prices": [],
+    }
+
+
+def _refresh_settings_price_cache_for_system_apis(db: Session, system_api_ids: List[int]) -> int:
+    ids = sorted({_safe_int(sid, 0) for sid in (system_api_ids or []) if _safe_int(sid, 0) > 0})
+    if not ids:
+        return 0
+
+    pricing_map = _batch_system_api_pricing_from_rules_and_audit(db, ids, include_audit=False)
+    rows = db.query(SystemAPISetting).filter(SystemAPISetting.id.in_(ids)).all()
+    changed = 0
+    now_iso = now_bj_iso()
+
+    for row in rows:
+        sid = int(getattr(row, "id", 0) or 0)
+        next_price = pricing_map.get(sid, {
+            "average_cost": 0,
+            "source": "rules_only_fast",
+            "min_cost": 0,
+            "max_cost": 0,
+            "sample_prices": [],
+        })
+
+        cfg = _safe_json_dict(getattr(row, "config", {}))
+        current = _read_settings_price_cache(cfg)
+        current_cmp = {
+            "average_cost": int(current.get("average_cost") or 0),
+            "source": str(current.get("source") or "") or None,
+            "min_cost": int(current.get("min_cost") or 0),
+            "max_cost": int(current.get("max_cost") or 0),
+            "sample_prices": [int(v) for v in (current.get("sample_prices") or []) if int(v or 0) > 0],
+        }
+        next_cmp = {
+            "average_cost": int(next_price.get("average_cost") or 0),
+            "source": str(next_price.get("source") or "") or None,
+            "min_cost": int(next_price.get("min_cost") or 0),
+            "max_cost": int(next_price.get("max_cost") or 0),
+            "sample_prices": [int(v) for v in (next_price.get("sample_prices") or []) if int(v or 0) > 0],
+        }
+        if current_cmp == next_cmp:
+            continue
+
+        cfg[_SETTINGS_PRICE_CACHE_KEY] = {
+            **next_cmp,
+            "updated_at": now_iso,
+        }
+        row.config = cfg
+        changed += 1
+
+    if changed:
+        db.flush()
+    return changed
+
+
 def _compute_cost_scaled_multiplier(cost_score: int, min_cost: int, max_cost: int, min_multiplier: float, max_multiplier: float) -> float:
     if max_cost <= min_cost:
         return float(round((float(min_multiplier) + float(max_multiplier)) / 2.0, 4))
@@ -2249,6 +2743,46 @@ def _compute_cost_scaled_multiplier(cost_score: int, min_cost: int, max_cost: in
 
 
 _BILLING_CONFIG_KEYS = {"api_pricing", "billing_unit_type", "billing_cost", "billing_cost_input", "billing_cost_output"}
+
+
+def _normalize_model_mode_defaults(value: Any) -> Dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    normalized: Dict[str, str] = {}
+    for raw_model, raw_mode in value.items():
+        model_name = str(raw_model or "").strip()
+        mode_name = str(raw_mode or "").strip()
+        if not model_name or not mode_name:
+            continue
+        normalized[model_name] = mode_name
+    return normalized
+
+
+def _extract_model_mode_defaults(config_value: Any) -> Dict[str, str]:
+    cfg = _safe_json_dict(config_value)
+    for key in _MODEL_MODE_DEFAULTS_ALIASES:
+        normalized = _normalize_model_mode_defaults(cfg.get(key))
+        if normalized:
+            return normalized
+    return {}
+
+
+def _sync_model_mode_defaults_config(config_value: Any, model_mode_defaults: Any = None, provided: bool = False) -> Dict[str, Any]:
+    cfg = _safe_json_dict(config_value)
+    existing_defaults = _extract_model_mode_defaults(cfg)
+
+    for key in _MODEL_MODE_DEFAULTS_ALIASES:
+        cfg.pop(key, None)
+
+    if provided:
+        next_defaults = _normalize_model_mode_defaults(model_mode_defaults)
+        if next_defaults:
+            cfg[_MODEL_MODE_DEFAULTS_KEY] = next_defaults
+        return cfg
+
+    if existing_defaults:
+        cfg[_MODEL_MODE_DEFAULTS_KEY] = existing_defaults
+    return cfg
 
 
 def _extract_billing_from_config(config_value: Any) -> Dict[str, Any]:
@@ -2741,25 +3275,15 @@ def get_settings(
     current_user: User = Depends(get_current_user)
 ):
     try:
-        _ensure_default_system_selection_for_user(db, current_user.id)
-        _cleanup_user_api_settings_records(db, current_user.id)
-        _normalize_user_active_settings(db, current_user.id)
-        db.commit()
-
         rows = db.query(APISetting).filter(APISetting.user_id == current_user.id).all()
         result: List[APISettingOut] = []
         for row in rows:
             result.append(APISettingOut(
                 id=row.id,
                 user_id=row.user_id,
-                name=row.name,
-                provider=row.provider,
                 category=row.category,
-                api_key=row.api_key,
-                base_url=row.base_url,
-                model=row.model,
-        config=_safe_json_dict(row.config),
-                is_active=bool(row.is_active),
+                system_api_id=_safe_int(getattr(row, "system_api_id", None), None),
+                mode=_normalize_user_mode(getattr(row, "mode", None)),
             ))
         return result
     except Exception as exc:
@@ -2769,6 +3293,45 @@ def get_settings(
         except Exception:
             pass
         return []
+
+
+@router.get("/settings/preferences", response_model=UserPreferencesOut)
+def get_user_preferences(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        user_row = db.query(User).filter(User.id == current_user.id).first()
+        if not user_row:
+            raise HTTPException(status_code=404, detail="User not found")
+        normalized = _normalize_user_preferences(getattr(user_row, "preferences", {}) or {})
+        return UserPreferencesOut(**normalized)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Failed to get user preferences | user_id=%s err=%s", getattr(current_user, "id", None), exc)
+        return UserPreferencesOut(**_normalize_user_preferences({}))
+
+
+@router.put("/settings/preferences", response_model=UserPreferencesOut)
+def update_user_preferences(
+    payload: UserPreferencesUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    user_row = db.query(User).filter(User.id == current_user.id).first()
+    if not user_row:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    current_normalized = _normalize_user_preferences(getattr(user_row, "preferences", {}) or {})
+    patch = payload.dict(exclude_unset=True)
+    merged = _merge_user_preferences(current_normalized, patch)
+
+    user_row.preferences = merged
+    db.add(user_row)
+    db.commit()
+    db.refresh(user_row)
+    return UserPreferencesOut(**merged)
 
 @router.post("/settings", response_model=APISettingOut)
 def update_setting(
@@ -2786,20 +3349,21 @@ def update_setting(
         if not existing_setting:
             raise HTTPException(status_code=404, detail="Setting not found")
 
-    # Identify effective provider/category with existing-row fallback.
-    provider = setting_in.provider or (existing_setting.provider if existing_setting else None)
-    default_info = DEFAULTS.get(provider, {})
-    category = setting_in.category or (existing_setting.category if existing_setting else None) or default_info.get("category", "LLM")
+    category = _normalize_setting_category_name(
+        setting_in.category or (existing_setting.category if existing_setting else None) or "LLM"
+    )
 
-    # If this request is setting item to Active, deactivate others in the same effective category.
-    if setting_in.is_active:
-        existing_active = db.query(APISetting).filter(
-            APISetting.user_id == current_user.id,
-            APISetting.category == category,
-            APISetting.is_active == True,
-        ).all()
-        for s in existing_active:
-            s.is_active = False
+    target_system_api_id = _safe_int(getattr(setting_in, "system_api_id", None), None)
+    if target_system_api_id is None and existing_setting is not None:
+        target_system_api_id = _safe_int(getattr(existing_setting, "system_api_id", None), None)
+
+    if target_system_api_id is not None:
+        target_system_row = db.query(SystemAPISetting).filter(SystemAPISetting.id == int(target_system_api_id)).first()
+        if not target_system_row:
+            raise HTTPException(status_code=404, detail="System API setting not found")
+        target_category = _normalize_setting_category_name(getattr(target_system_row, "category", None))
+        if target_category != category:
+            raise HTTPException(status_code=400, detail="system_api_id category mismatch")
 
     if setting_in.id:
         db_setting = existing_setting
@@ -2815,42 +3379,54 @@ def update_setting(
         if not db_setting.category:
             db_setting.category = category
 
-        if not db_setting.provider and provider:
-            db_setting.provider = provider
+        db_setting.category = category
+        if hasattr(setting_in, "mode") and setting_in.mode is not None:
+            db_setting.mode = _normalize_user_mode(setting_in.mode)
+        if hasattr(setting_in, "system_api_id"):
+            db_setting.system_api_id = _safe_int(setting_in.system_api_id, None)
+
+        # Merge collision if another row already owns this (user_id, category).
+        conflict_row = db.query(APISetting).filter(
+            APISetting.user_id == current_user.id,
+            APISetting.category == db_setting.category,
+            APISetting.id != db_setting.id,
+        ).order_by(APISetting.id.desc()).first()
+        if conflict_row:
+            conflict_row.system_api_id = db_setting.system_api_id
+            conflict_row.mode = _normalize_user_mode(db_setting.mode)
+            db.delete(db_setting)
+            db_setting = conflict_row
             
     else:
-        # Create New
-        if not provider:
-            raise HTTPException(status_code=400, detail="provider is required when creating a setting")
+        # Create/Upsert by (user_id, category)
+        existing_by_category = db.query(APISetting).filter(
+            APISetting.user_id == current_user.id,
+            APISetting.category == category,
+        ).order_by(APISetting.id.desc()).first()
 
-        new_setting = APISetting(
-            user_id=current_user.id,
-            name=setting_in.name or default_info.get("name", provider),
-            category=category,
-            provider=provider,
-            api_key=setting_in.api_key or "",
-            base_url=setting_in.base_url or default_info.get("base_url"),
-            model=setting_in.model or default_info.get("model"),
-            config=setting_in.config or default_info.get("config"),
-            is_active=setting_in.is_active
-        )
-        db.add(new_setting)
-        db_setting = new_setting
-
-    # Provider-level shared key strategy:
-    # Same user + same provider should share one API key across multiple model rows.
-    effective_provider = db_setting.provider
-    effective_key = _sync_provider_shared_key(
-        db,
-        current_user.id,
-        effective_provider,
-        db_setting.id or -1,
-        setting_in.api_key,
-    )
-    db_setting.api_key = effective_key
+        if existing_by_category:
+            existing_by_category.system_api_id = _safe_int(getattr(setting_in, "system_api_id", None), None) if setting_in.system_api_id is not None else existing_by_category.system_api_id
+            existing_by_category.mode = _normalize_user_mode(getattr(setting_in, "mode", None)) if setting_in.mode is not None else _normalize_user_mode(existing_by_category.mode)
+            db_setting = existing_by_category
+        else:
+            new_setting = APISetting(
+                user_id=current_user.id,
+                category=category,
+                system_api_id=_safe_int(getattr(setting_in, "system_api_id", None), None),
+                mode=_normalize_user_mode(getattr(setting_in, "mode", None)),
+            )
+            db.add(new_setting)
+            db_setting = new_setting
 
     _cleanup_user_api_settings_records(db, current_user.id)
     _normalize_user_active_settings(db, current_user.id)
+    db.flush()
+    _keep_only_active_setting_row_for_category(
+        db,
+        current_user.id,
+        str(db_setting.category or category or "LLM"),
+        int(db_setting.id or 0),
+    )
 
     db.commit()
     db.refresh(db_setting)
@@ -2866,13 +3442,9 @@ def get_system_settings(
         return []
 
     try:
-        _ensure_builtin_system_settings(db)
-
-        _ensure_default_system_selection_for_user(db, current_user.id)
-        _cleanup_user_api_settings_records(db, current_user.id)
-        _normalize_user_active_settings(db, current_user.id)
-        db.commit()
-
+        _ensure_settings_system_indexes(db)
+        t0 = time.perf_counter()
+        t_prev = t0
         system_settings = db.query(
             SystemAPISetting.id,
             SystemAPISetting.name,
@@ -2888,57 +3460,52 @@ def get_system_settings(
             SystemAPISetting.supported_resolutions,
             SystemAPISetting.aspect_ratios,
             SystemAPISetting.max_duration,
+            SystemAPISetting.image_size_values,
+            SystemAPISetting.quality_values,
             SystemAPISetting.has_audio,
+            SystemAPISetting.sound_supported,
+            SystemAPISetting.multi_shots_supported,
             SystemAPISetting.mode_values,
             SystemAPISetting.tags,
-            cast(SystemAPISetting.config, String).label("config_raw"),
+            SystemAPISetting.config,
         ).filter(
-            ~SystemAPISetting.category.like("System_%")
+            ~SystemAPISetting.category.like("System_%"),
+            or_(SystemAPISetting.deprecated.is_(False), SystemAPISetting.deprecated.is_(None)),
         ).all()
+        t_query_system_settings_ms = int((time.perf_counter() - t_prev) * 1000)
+        t_prev = time.perf_counter()
 
         user_active_by_category: Dict[str, Dict] = {}
         user_active_rows = db.query(
             APISetting.id,
             APISetting.category,
-            APISetting.provider,
-            APISetting.model,
-            cast(APISetting.config, String).label("config_raw"),
+            APISetting.system_api_id,
+            APISetting.mode,
         ).filter(
             APISetting.user_id == current_user.id,
-            APISetting.is_active == True,
         ).all()
         for row in user_active_rows:
             cat = row.category or "LLM"
-            row_cfg = _safe_json_dict(getattr(row, "config_raw", None))
             row_data = {
                 "id": row.id,
                 "category": row.category,
-                "provider": row.provider,
-                "model": row.model,
-                "config": row_cfg,
-                "use_system_setting_id": _safe_int(row_cfg.get("use_system_setting_id"), None),
+                "system_api_id": _safe_int(getattr(row, "system_api_id", None), None),
+                "mode": _normalize_user_mode(getattr(row, "mode", None)),
             }
             if cat not in user_active_by_category or (row.id or 0) > (user_active_by_category[cat].get("id") or 0):
                 user_active_by_category[cat] = row_data
+        t_query_user_active_ms = int((time.perf_counter() - t_prev) * 1000)
+        t_prev = time.perf_counter()
+
+        provider_runtime_key_map, provider_alias_map, provider_pool_row_count = _get_provider_pool_runtime_maps(db)
+        t_query_provider_pool_ms = int((time.perf_counter() - t_prev) * 1000)
+        t_prev = time.perf_counter()
 
         grouped: Dict[Tuple[str, str], Dict] = {}
-        provider_alias_map = {
-            str(row.provider or "").strip().lower(): (str(getattr(row, "provider_alias", "") or "").strip() or None)
-            for row in db.query(ProviderKeyPool.provider, ProviderKeyPool.provider_alias).all()
-            if str(row.provider or "").strip()
-        }
         for item in system_settings:
             provider = item.provider or "unknown"
             category = item.category or "LLM"
-            raw_config = getattr(item, "config_raw", None)
-            item_config = _safe_json_dict(getattr(item, "config_raw", None))
-            if isinstance(raw_config, str) and raw_config.strip() and not _is_json_object_value(raw_config):
-                logger.warning(
-                    "Invalid JSON in system setting config, fallback to empty dict | setting_id=%s provider=%s category=%s",
-                    item.id,
-                    provider,
-                    category,
-                )
+            webhook_url, avg_pricing = _extract_webhook_and_price_cache(getattr(item, "config", None))
             key = (provider, category)
             if key not in grouped:
                 grouped[key] = {
@@ -2949,23 +3516,18 @@ def get_system_settings(
                     "models_map": {},
                 }
 
-            key_pool = _get_system_provider_key_pool(db, provider)
+            provider_key = str(provider or "").strip().lower()
+            key_pool_first = provider_runtime_key_map.get(provider_key, "")
             fallback_key = str(item.api_key or "").strip()
-            runtime_key = key_pool[0] if key_pool else fallback_key
+            runtime_key = key_pool_first or fallback_key
             has_key = bool(runtime_key)
             grouped[key]["shared_key_configured"] = grouped[key]["shared_key_configured"] or has_key
 
             user_active = user_active_by_category.get(category)
             user_is_active_for_row = False
             if user_active:
-                selected_system_id = _safe_int(user_active.get("use_system_setting_id"), None)
-                if selected_system_id:
-                    user_is_active_for_row = int(item.id or 0) == int(selected_system_id)
-                else:
-                    user_is_active_for_row = (
-                        (user_active.get("provider") == item.provider)
-                        and ((user_active.get("model") or "") == (item.model or ""))
-                    )
+                selected_system_id = _safe_int(user_active.get("system_api_id"), None)
+                user_is_active_for_row = bool(selected_system_id and int(item.id or 0) == int(selected_system_id))
 
             option = SystemAPIModelOption(
                 id=item.id,
@@ -2979,18 +3541,21 @@ def get_system_settings(
                 supported_resolutions=(getattr(item, "supported_resolutions", None) or []),
                 aspect_ratios=(getattr(item, "aspect_ratios", None) or []),
                 max_duration=getattr(item, "max_duration", None),
+                image_size_values=(getattr(item, "image_size_values", None) or []),
+                quality_values=(getattr(item, "quality_values", None) or []),
                 has_audio=getattr(item, "has_audio", None),
+                sound_supported=getattr(item, "sound_supported", None),
+                multi_shots_supported=getattr(item, "multi_shots_supported", None),
                 mode_values=(getattr(item, "mode_values", None) or []),
                 tags=getattr(item, "tags", None),
                 base_url=item.base_url,
-                webhook_url=(item_config or {}).get("webHook"),
-                deprecated=_is_setting_deprecated(item_config, getattr(item, "deprecated_flag", None)),
+                webhook_url=webhook_url,
+                deprecated=bool(getattr(item, "deprecated_flag", False)),
                 is_active=bool(user_is_active_for_row),
                 has_api_key=has_key,
                 api_key_masked=_mask_api_key(runtime_key) if has_key else "",
             )
 
-            avg_pricing = _system_api_pricing_from_rules_and_audit(db, int(item.id))
             option.avg_price_estimate = int(avg_pricing.get("average_cost") or 0)
             option.avg_price_source = str(avg_pricing.get("source") or "") or None
             option.price_range_min = int(avg_pricing.get("min_cost") or 0)
@@ -3008,6 +3573,8 @@ def get_system_settings(
             existing_option = grouped[key]["models_map"].get(model_key)
             if existing_option is None or (option.id or 0) >= (existing_option.id or 0):
                 grouped[key]["models_map"][model_key] = option
+        t_group_build_ms = int((time.perf_counter() - t_prev) * 1000)
+        t_prev = time.perf_counter()
 
         result = []
         for _, row in grouped.items():
@@ -3016,6 +3583,39 @@ def get_system_settings(
             if not row["models"]:
                 continue
             result.append(SystemAPIProviderSettings(**row))
+
+        t_result_build_ms = int((time.perf_counter() - t_prev) * 1000)
+        total_ms = int((time.perf_counter() - t0) * 1000)
+        logger.info(
+            "settings.system.timing user_id=%s total_ms=%s query_system_ms=%s query_user_active_ms=%s query_provider_pool_ms=%s group_build_ms=%s result_build_ms=%s system_rows=%s user_rows=%s provider_rows=%s provider_groups=%s result_groups=%s",
+            getattr(current_user, "id", None),
+            total_ms,
+            t_query_system_settings_ms,
+            t_query_user_active_ms,
+            t_query_provider_pool_ms,
+            t_group_build_ms,
+            t_result_build_ms,
+            len(system_settings),
+            len(user_active_rows),
+            provider_pool_row_count,
+            len(grouped),
+            len(result),
+        )
+        api_logger.info(
+            "settings.system.timing user_id=%s total_ms=%s query_system_ms=%s query_user_active_ms=%s query_provider_pool_ms=%s group_build_ms=%s result_build_ms=%s system_rows=%s user_rows=%s provider_rows=%s provider_groups=%s result_groups=%s",
+            getattr(current_user, "id", None),
+            total_ms,
+            t_query_system_settings_ms,
+            t_query_user_active_ms,
+            t_query_provider_pool_ms,
+            t_group_build_ms,
+            t_result_build_ms,
+            len(system_settings),
+            len(user_active_rows),
+            provider_pool_row_count,
+            len(grouped),
+            len(result),
+        )
 
         return sorted(result, key=lambda r: (r.category, r.provider))
     except Exception as exc:
@@ -3034,11 +3634,6 @@ def get_system_settings_catalog(
 ):
     if not _can_use_system_settings(current_user) and not _can_manage_system_settings(current_user):
         return []
-
-    _ensure_builtin_system_settings(db)
-    if _is_system_api_auto_billing_sync_enabled():
-        _migrate_system_api_pricing_to_base_rules(db)
-    db.commit()
 
     grouped: Dict[Tuple[str, str], set] = {}
 
@@ -3085,13 +3680,6 @@ def select_system_setting(
     _cleanup_user_api_settings_records(db, current_user.id)
     _normalize_user_active_settings(db, current_user.id)
 
-    # Enforce one-active-per-category for current user.
-    db.query(APISetting).filter(
-        APISetting.user_id == current_user.id,
-        APISetting.category == system_setting.category,
-        APISetting.is_active == True,
-    ).update({"is_active": False})
-
     # api_settings is a lightweight per-category preference marker only.
     # Keep a single latest row per category, and store selected system setting id.
     user_setting = db.query(APISetting).filter(
@@ -3099,35 +3687,28 @@ def select_system_setting(
         APISetting.category == system_setting.category,
     ).order_by(APISetting.id.desc()).first()
 
-    marker_config = {
-        "selection_source": "system",
-        "use_system_setting_id": int(system_setting.id),
-        "api_strategy": _normalize_user_api_strategy(selection.api_strategy, default="smart_default"),
-    }
+    selection_mode = _normalize_user_mode(getattr(selection, "mode", None))
 
     if user_setting:
-        user_setting.name = f"Use System {system_setting.provider}"
-        user_setting.provider = system_setting.provider
-        user_setting.base_url = ""
-        user_setting.model = system_setting.model
-        user_setting.config = marker_config
-        user_setting.is_active = True
-        # Keep API key empty to force runtime lookup from system-side key.
-        user_setting.api_key = ""
+        user_setting.system_api_id = int(system_setting.id)
+        user_setting.mode = selection_mode
         selected = user_setting
     else:
         selected = APISetting(
             user_id=current_user.id,
-            name=f"Use System {system_setting.provider}",
             category=system_setting.category,
-            provider=system_setting.provider,
-            api_key="",
-            base_url="",
-            model=system_setting.model,
-        config=marker_config,
-            is_active=True,
+            system_api_id=int(system_setting.id),
+            mode=selection_mode,
         )
         db.add(selected)
+
+    db.flush()
+    _keep_only_active_setting_row_for_category(
+        db,
+        current_user.id,
+        str(system_setting.category or "LLM"),
+        int(selected.id or 0),
+    )
 
     db.commit()
     db.refresh(selected)
@@ -3141,12 +3722,6 @@ def list_system_settings_for_manage(
 ):
     if not _can_manage_system_settings(current_user):
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
-
-    _ensure_builtin_system_settings(db)
-    migrated_base_count = _migrate_system_api_pricing_to_base_rules(db) if _is_system_api_auto_billing_sync_enabled() else 0
-    if migrated_base_count:
-        logger.info("[system_api.pricing.base_rule.migrate] migrated_rows=%s", migrated_base_count)
-    db.commit()
 
     rows = db.query(SystemAPISetting).filter(
         ~SystemAPISetting.category.like("System_%"),
@@ -3244,6 +3819,12 @@ def list_system_api_billing_rules_batch(
         SystemAPIBillingRule.id.desc(),
     ).all()
 
+    touched_ids = sorted(set(ids)) if ids else sorted({int(getattr(row, "system_api_id", 0) or 0) for row in rows if int(getattr(row, "system_api_id", 0) or 0) > 0})
+    if touched_ids:
+        changed = _refresh_settings_price_cache_for_system_apis(db, touched_ids)
+        if changed:
+            db.commit()
+
     grouped: Dict[str, List[SystemAPIBillingRuleOut]] = {}
     for row in rows:
         sid = str(int(row.system_api_id))
@@ -3254,6 +3835,382 @@ def list_system_api_billing_rules_batch(
             grouped.setdefault(str(sid), [])
 
     return grouped
+
+
+@router.get("/settings/system/manage/kie-standard-values", response_model=List[KIEDataStandardValueOut])
+def list_kie_standard_values_manage(
+    standard_dimension: Optional[str] = Query(default=None),
+    active_only: bool = Query(default=True),
+    limit: int = Query(default=1000, ge=1, le=5000),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+
+    _ensure_kie_standard_tables_for_admin(db)
+
+    where = ["1=1"]
+    params: Dict[str, Any] = {"limit": int(limit)}
+    if standard_dimension:
+        where.append("upper(standard_dimension) = upper(:standard_dimension)")
+        params["standard_dimension"] = str(standard_dimension).strip()
+    if active_only:
+        where.append("coalesce(is_active, 1) = 1")
+
+    rows = db.execute(text(f"""
+        SELECT id, standard_dimension, standard_value, value_type, definition, alias_values, is_active, created_at, updated_at
+        FROM kie_system_data_standard_values
+        WHERE {' AND '.join(where)}
+        ORDER BY standard_dimension ASC, standard_value ASC, id ASC
+        LIMIT :limit
+    """), params).mappings().all()
+    return [_row_to_kie_standard_value_out(dict(row)) for row in rows]
+
+
+@router.get("/settings/system/kie-standard-values/options", response_model=Dict[str, List[str]])
+def get_kie_standard_value_options(
+    dimensions: Optional[str] = Query(default="type,language,base_positioning,aspect_ratio,image_size"),
+    active_only: bool = Query(default=True),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    # Any authenticated user can read dictionary options used by project-creation forms.
+    _ = current_user
+    _ensure_kie_standard_tables_for_admin(db)
+
+    raw_dimensions = [str(x or "").strip() for x in str(dimensions or "").split(",")]
+    target_dimensions = [x for x in raw_dimensions if x]
+    if not target_dimensions:
+        target_dimensions = ["type", "language", "base_positioning", "aspect_ratio", "image_size"]
+
+    where = ["1=1"]
+    params: Dict[str, Any] = {}
+    if active_only:
+        where.append("coalesce(is_active, 1) = 1")
+
+    dim_placeholders: List[str] = []
+    for idx, dim in enumerate(target_dimensions):
+        key = f"dim_{idx}"
+        dim_placeholders.append(f":{key}")
+        params[key] = dim
+    where.append(f"standard_dimension IN ({', '.join(dim_placeholders)})")
+
+    rows = db.execute(text(f"""
+        SELECT standard_dimension, standard_value
+        FROM kie_system_data_standard_values
+        WHERE {' AND '.join(where)}
+        ORDER BY standard_dimension ASC, standard_value ASC, id ASC
+    """), params).mappings().all()
+
+    grouped: Dict[str, List[str]] = {dim: [] for dim in target_dimensions}
+    seen: Dict[str, set] = {dim: set() for dim in target_dimensions}
+
+    for row in rows:
+        dim = str(row.get("standard_dimension") or "").strip()
+        val = str(row.get("standard_value") or "").strip()
+        if not dim or not val or dim not in grouped:
+            continue
+        if val in seen[dim]:
+            continue
+        seen[dim].add(val)
+        grouped[dim].append(val)
+
+    return grouped
+
+
+@router.get("/settings/system/manage/kie-standard-mappings", response_model=List[KIEDataStandardMappingOut])
+def list_kie_standard_mappings_manage(
+    provider: Optional[str] = Query(default="kie"),
+    standard_dimension: Optional[str] = Query(default=None),
+    model_key_inferred: Optional[str] = Query(default=None),
+    source_field: Optional[str] = Query(default=None),
+    q: Optional[str] = Query(default=None),
+    active_only: bool = Query(default=False),
+    billing_related_only: bool = Query(default=False),
+    limit: int = Query(default=1000, ge=1, le=5000),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+
+    _ensure_kie_standard_tables_for_admin(db)
+
+    where = ["1=1"]
+    params: Dict[str, Any] = {"limit": int(limit)}
+
+    if provider is not None and str(provider).strip():
+        where.append("lower(coalesce(provider, '')) = lower(:provider)")
+        params["provider"] = str(provider).strip()
+    if standard_dimension:
+        where.append("upper(standard_dimension) = upper(:standard_dimension)")
+        params["standard_dimension"] = str(standard_dimension).strip()
+    if model_key_inferred:
+        where.append("lower(coalesce(model_key_inferred, '')) = lower(:model_key_inferred)")
+        params["model_key_inferred"] = str(model_key_inferred).strip()
+    if source_field:
+        where.append("lower(coalesce(source_field, '')) = lower(:source_field)")
+        params["source_field"] = str(source_field).strip()
+    if q:
+        where.append("(" 
+                     "lower(coalesce(model_key_inferred, '')) LIKE :q OR "
+                     "lower(coalesce(model_title, '')) LIKE :q OR "
+                     "lower(coalesce(source_field, '')) LIKE :q OR "
+                     "lower(coalesce(source_enum_value, '')) LIKE :q OR "
+                     "lower(coalesce(standard_dimension, '')) LIKE :q OR "
+                     "lower(coalesce(standard_value, '')) LIKE :q"
+                     ")")
+        params["q"] = f"%{str(q).strip().lower()}%"
+    if active_only:
+        where.append("coalesce(is_active, 1) = 1")
+    if billing_related_only:
+        where.append("coalesce(is_billing_related, 0) = 1")
+
+    rows = db.execute(text(f"""
+        SELECT id, provider, model_key_inferred, model_title, model_url,
+               source_field, source_enum_value, standard_dimension, standard_value,
+               confidence, note, is_active, is_billing_related, created_at, updated_at
+        FROM kie_system_data_standard_mappings
+        WHERE {' AND '.join(where)}
+        ORDER BY standard_dimension ASC, model_key_inferred ASC, source_field ASC, source_enum_value ASC, id ASC
+        LIMIT :limit
+    """), params).mappings().all()
+    return [_row_to_kie_mapping_out(dict(row)) for row in rows]
+
+
+@router.post("/settings/system/manage/kie-standard-mappings", response_model=KIEDataStandardMappingOut)
+def create_kie_standard_mapping_manage(
+    payload: KIEDataStandardMappingCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+
+    _ensure_kie_standard_tables_for_admin(db)
+
+    values = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
+    now_iso = now_bj_iso()
+    db.execute(text("""
+        INSERT INTO kie_system_data_standard_mappings (
+            provider, model_key_inferred, model_title, model_url,
+            source_field, source_enum_value, standard_dimension, standard_value,
+            confidence, note, is_active, is_billing_related, created_at, updated_at
+        ) VALUES (
+            :provider, :model_key_inferred, :model_title, :model_url,
+            :source_field, :source_enum_value, :standard_dimension, :standard_value,
+            :confidence, :note, :is_active, :is_billing_related, :created_at, :updated_at
+        )
+    """), {
+        "provider": str(values.get("provider") or "kie").strip() or "kie",
+        "model_key_inferred": str(values.get("model_key_inferred") or "").strip() or None,
+        "model_title": values.get("model_title"),
+        "model_url": values.get("model_url"),
+        "source_field": str(values.get("source_field") or "").strip(),
+        "source_enum_value": str(values.get("source_enum_value") or "").strip(),
+        "standard_dimension": str(values.get("standard_dimension") or "").strip().upper(),
+        "standard_value": str(values.get("standard_value") or "").strip(),
+        "confidence": values.get("confidence"),
+        "note": values.get("note"),
+        "is_active": 1 if _to_bool(values.get("is_active")) else 0,
+        "is_billing_related": 1 if _to_bool(values.get("is_billing_related")) else 0,
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    })
+
+    row = db.execute(text("""
+        SELECT id, provider, model_key_inferred, model_title, model_url,
+               source_field, source_enum_value, standard_dimension, standard_value,
+               confidence, note, is_active, is_billing_related, created_at, updated_at
+        FROM kie_system_data_standard_mappings
+        WHERE provider = :provider
+          AND coalesce(model_key_inferred, '') = coalesce(:model_key_inferred, '')
+          AND source_field = :source_field
+          AND source_enum_value = :source_enum_value
+          AND standard_dimension = :standard_dimension
+          AND standard_value = :standard_value
+        ORDER BY id DESC
+        LIMIT 1
+    """), {
+        "provider": str(values.get("provider") or "kie").strip() or "kie",
+        "model_key_inferred": str(values.get("model_key_inferred") or "").strip() or None,
+        "source_field": str(values.get("source_field") or "").strip(),
+        "source_enum_value": str(values.get("source_enum_value") or "").strip(),
+        "standard_dimension": str(values.get("standard_dimension") or "").strip().upper(),
+        "standard_value": str(values.get("standard_value") or "").strip(),
+    }).mappings().first()
+
+    db.commit()
+    if not row:
+        raise HTTPException(status_code=500, detail="Failed to create mapping")
+    return _row_to_kie_mapping_out(dict(row))
+
+
+@router.post("/settings/system/manage/kie-standard-mappings/{mapping_id:int}", response_model=KIEDataStandardMappingOut)
+def update_kie_standard_mapping_manage(
+    mapping_id: int,
+    payload: KIEDataStandardMappingUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+
+    _ensure_kie_standard_tables_for_admin(db)
+    existing = db.execute(text("SELECT id FROM kie_system_data_standard_mappings WHERE id = :id"), {"id": int(mapping_id)}).first()
+    if not existing:
+        raise HTTPException(status_code=404, detail="KIE mapping not found")
+
+    patch = payload.model_dump(exclude_unset=True) if hasattr(payload, "model_dump") else payload.dict(exclude_unset=True)
+    if not patch:
+        row = db.execute(text("""
+            SELECT id, provider, model_key_inferred, model_title, model_url,
+                   source_field, source_enum_value, standard_dimension, standard_value,
+                   confidence, note, is_active, is_billing_related, created_at, updated_at
+            FROM kie_system_data_standard_mappings
+            WHERE id = :id
+            LIMIT 1
+        """), {"id": int(mapping_id)}).mappings().first()
+        return _row_to_kie_mapping_out(dict(row))
+
+    allowed = {
+        "provider", "model_key_inferred", "model_title", "model_url",
+        "source_field", "source_enum_value", "standard_dimension", "standard_value",
+        "confidence", "note", "is_active", "is_billing_related",
+    }
+    assignments = []
+    params: Dict[str, Any] = {"id": int(mapping_id), "updated_at": now_bj_iso()}
+    for key, value in patch.items():
+        if key not in allowed:
+            continue
+        if key == "standard_dimension" and value is not None:
+            value = str(value).strip().upper()
+        elif key in {"provider", "source_field", "source_enum_value"} and value is not None:
+            value = str(value).strip()
+        elif key == "model_key_inferred" and value is not None:
+            value = str(value).strip() or None
+        elif key in {"is_active", "is_billing_related"}:
+            value = 1 if _to_bool(value) else 0
+        assignments.append(f"{key} = :{key}")
+        params[key] = value
+
+    if assignments:
+        assignments.append("updated_at = :updated_at")
+        db.execute(text(f"UPDATE kie_system_data_standard_mappings SET {', '.join(assignments)} WHERE id = :id"), params)
+
+    row = db.execute(text("""
+        SELECT id, provider, model_key_inferred, model_title, model_url,
+               source_field, source_enum_value, standard_dimension, standard_value,
+               confidence, note, is_active, is_billing_related, created_at, updated_at
+        FROM kie_system_data_standard_mappings
+        WHERE id = :id
+        LIMIT 1
+    """), {"id": int(mapping_id)}).mappings().first()
+
+    db.commit()
+    return _row_to_kie_mapping_out(dict(row))
+
+
+@router.delete("/settings/system/manage/kie-standard-mappings/{mapping_id:int}")
+def delete_kie_standard_mapping_manage(
+    mapping_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+
+    _ensure_kie_standard_tables_for_admin(db)
+    result = db.execute(text("DELETE FROM kie_system_data_standard_mappings WHERE id = :id"), {"id": int(mapping_id)})
+    db.commit()
+    if int(result.rowcount or 0) <= 0:
+        raise HTTPException(status_code=404, detail="KIE mapping not found")
+    return {"ok": True, "deleted_id": int(mapping_id)}
+
+
+@router.post("/settings/system/manage/kie-standard-mappings/infer-billing-related", response_model=KIEDataStandardBillingInferenceResponse)
+def infer_kie_standard_mapping_billing_related_manage(
+    provider: str = Query(default="kie"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+
+    provider_norm = str(provider or "kie").strip().lower() or "kie"
+    _ensure_kie_standard_tables_for_admin(db)
+
+    rows = db.query(SystemAPIBillingRule, SystemAPISetting).join(
+        SystemAPISetting,
+        SystemAPISetting.id == SystemAPIBillingRule.system_api_id,
+    ).filter(
+        SystemAPIBillingRule.is_active == True,
+        func.lower(func.trim(func.coalesce(SystemAPISetting.provider, ""))) == provider_norm,
+    ).all()
+
+    dimensions_global: set = set()
+    dimensions_by_model: Dict[str, set] = {}
+    for rule, system_api in rows:
+        dims = _extract_billing_related_dimensions(rule)
+        if not dims:
+            continue
+        dimensions_global.update(dims)
+        model_key = str(getattr(system_api, "model", "") or "").strip().lower()
+        if model_key:
+            bucket = dimensions_by_model.setdefault(model_key, set())
+            bucket.update(dims)
+
+    updated_count = 0
+    reset_result = db.execute(text("""
+        UPDATE kie_system_data_standard_mappings
+        SET is_billing_related = 0,
+            updated_at = datetime('now')
+        WHERE lower(coalesce(provider, '')) = :provider
+          AND coalesce(is_billing_related, 0) <> 0
+    """), {"provider": provider_norm})
+    updated_count += int(reset_result.rowcount or 0)
+
+    if dimensions_global:
+        for dim in sorted(dimensions_global):
+            global_result = db.execute(text("""
+                UPDATE kie_system_data_standard_mappings
+                SET is_billing_related = 1,
+                    updated_at = datetime('now')
+                WHERE lower(coalesce(provider, '')) = :provider
+                  AND upper(coalesce(standard_dimension, '')) = :dim
+                  AND (coalesce(model_key_inferred, '') = '')
+            """), {
+                "provider": provider_norm,
+                "dim": dim,
+            })
+            updated_count += int(global_result.rowcount or 0)
+
+    for model_key, dims in dimensions_by_model.items():
+        if not dims:
+            continue
+        for dim in sorted(dims):
+            result = db.execute(text("""
+                UPDATE kie_system_data_standard_mappings
+                SET is_billing_related = 1,
+                    updated_at = datetime('now')
+                WHERE lower(coalesce(provider, '')) = :provider
+                  AND lower(coalesce(model_key_inferred, '')) = :model_key
+                  AND upper(coalesce(standard_dimension, '')) = :dim
+            """), {
+                "provider": provider_norm,
+                "model_key": model_key,
+                "dim": dim,
+            })
+            updated_count += int(result.rowcount or 0)
+
+    db.commit()
+    return KIEDataStandardBillingInferenceResponse(
+        ok=True,
+        updated_count=updated_count,
+        matched_dimension_count=len(dimensions_global),
+        matched_dimensions=sorted(dimensions_global),
+    )
 
 
 @router.get("/settings/system/agent/tools-policy", response_model=AgentToolPolicyOut)
@@ -3350,6 +4307,7 @@ def create_system_api_billing_rule(
     db.add(rule)
     db.flush()
     _refresh_has_granular_billing_rules_flag(db, system_api_id)
+    _refresh_settings_price_cache_for_system_apis(db, [system_api_id])
     db.commit()
     db.refresh(rule)
     return _rule_to_out(rule)
@@ -3376,6 +4334,7 @@ def update_system_api_billing_rule(
         setattr(rule, key, value)
     rule.updated_at = now_bj_iso()
     _refresh_has_granular_billing_rules_flag(db, int(rule.system_api_id))
+    _refresh_settings_price_cache_for_system_apis(db, [int(rule.system_api_id)])
     db.commit()
     db.refresh(rule)
     return _rule_to_out(rule)
@@ -3398,6 +4357,7 @@ def delete_system_api_billing_rule(
     db.delete(rule)
     db.flush()
     _refresh_has_granular_billing_rules_flag(db, system_api_id)
+    _refresh_settings_price_cache_for_system_apis(db, [system_api_id])
     db.commit()
     return {"ok": True, "deleted_id": rule_id}
 
@@ -3438,6 +4398,7 @@ def batch_delete_system_api_billing_rules(
     db.flush()
     for system_api_id in touched_system_api_ids:
         _refresh_has_granular_billing_rules_flag(db, system_api_id)
+    _refresh_settings_price_cache_for_system_apis(db, list(touched_system_api_ids))
     db.commit()
 
     return {
@@ -3603,6 +4564,9 @@ def reset_system_api_billing_rule_charge_multipliers(
                 "new_multiplier": float(new_multiplier),
             })
 
+    touched_system_api_ids = sorted({int(getattr(item.get("row"), "system_api_id", 0) or 0) for item in planned_rows if item.get("row") is not None})
+    if touched_system_api_ids:
+        _refresh_settings_price_cache_for_system_apis(db, touched_system_api_ids)
     db.commit()
 
     return SystemAPIBillingRuleMultiplierResetResponse(
@@ -4235,7 +5199,11 @@ def _apply_supplier_feature_models_to_db(
             "durations_seconds": feature_payload.get("durations_seconds"),
             "max_duration": feature_payload.get("max_duration"),
             "fps_options": feature_payload.get("fps_options"),
+            "image_size_values": feature_payload.get("image_size_values"),
+            "quality_values": feature_payload.get("quality_values"),
             "has_audio": feature_payload.get("has_audio"),
+            "sound_supported": feature_payload.get("sound_supported"),
+            "multi_shots_supported": feature_payload.get("multi_shots_supported"),
             "mode_values": feature_payload.get("mode_values"),
             "text_capabilities": feature_payload.get("text_capabilities"),
             "image_capabilities": feature_payload.get("image_capabilities"),
@@ -4281,7 +5249,11 @@ def _apply_supplier_feature_models_to_db(
                 durations_seconds=wide_payload.get("durations_seconds"),
                 max_duration=wide_payload.get("max_duration"),
                 fps_options=wide_payload.get("fps_options"),
+                image_size_values=wide_payload.get("image_size_values"),
+                quality_values=wide_payload.get("quality_values"),
                 has_audio=wide_payload.get("has_audio"),
+                sound_supported=wide_payload.get("sound_supported"),
+                multi_shots_supported=wide_payload.get("multi_shots_supported"),
                 mode_values=wide_payload.get("mode_values"),
                 text_capabilities=wide_payload.get("text_capabilities"),
                 image_capabilities=wide_payload.get("image_capabilities"),
@@ -4832,6 +5804,11 @@ def create_system_setting_for_manage(
         raw_cfg = payload.config if isinstance(payload.config, dict) else _safe_json_dict(existing.config)
         billing = _billing_from_payload_or_config(payload, raw_cfg)
         target_cfg = _strip_billing_from_config(raw_cfg)
+        target_cfg = _sync_model_mode_defaults_config(
+            target_cfg,
+            getattr(payload, "model_mode_defaults", None),
+            provided=getattr(payload, "model_mode_defaults", None) is not None,
+        )
         existing.name = (payload.name or existing.name or "System Setting").strip() or "System Setting"
         existing.base_url = payload.base_url
         existing.model = payload.model
@@ -4849,7 +5826,11 @@ def create_system_setting_for_manage(
         existing.durations_seconds = getattr(payload, "durations_seconds", None)
         existing.max_duration = getattr(payload, "max_duration", None)
         existing.fps_options = getattr(payload, "fps_options", None)
+        existing.image_size_values = getattr(payload, "image_size_values", None)
+        existing.quality_values = getattr(payload, "quality_values", None)
         existing.has_audio = getattr(payload, "has_audio", None)
+        existing.sound_supported = getattr(payload, "sound_supported", None)
+        existing.multi_shots_supported = getattr(payload, "multi_shots_supported", None)
         existing.mode_values = getattr(payload, "mode_values", None)
         existing.text_capabilities = getattr(payload, "text_capabilities", None)
         existing.image_capabilities = getattr(payload, "image_capabilities", None)
@@ -4894,6 +5875,11 @@ def create_system_setting_for_manage(
     raw_create_config = payload.config if isinstance(payload.config, dict) else {}
     create_billing = _billing_from_payload_or_config(payload, raw_create_config)
     create_config = _strip_billing_from_config(raw_create_config)
+    create_config = _sync_model_mode_defaults_config(
+        create_config,
+        getattr(payload, "model_mode_defaults", None),
+        provided=getattr(payload, "model_mode_defaults", None) is not None,
+    )
     new_setting = SystemAPISetting(
         name=(payload.name or "System Setting").strip() or "System Setting",
         category=category,
@@ -4915,7 +5901,11 @@ def create_system_setting_for_manage(
         durations_seconds=getattr(payload, "durations_seconds", None),
         max_duration=getattr(payload, "max_duration", None),
         fps_options=getattr(payload, "fps_options", None),
+        image_size_values=getattr(payload, "image_size_values", None),
+        quality_values=getattr(payload, "quality_values", None),
         has_audio=getattr(payload, "has_audio", None),
+        sound_supported=getattr(payload, "sound_supported", None),
+        multi_shots_supported=getattr(payload, "multi_shots_supported", None),
         mode_values=getattr(payload, "mode_values", None),
         text_capabilities=getattr(payload, "text_capabilities", None),
         image_capabilities=getattr(payload, "image_capabilities", None),
@@ -4984,6 +5974,8 @@ def update_system_setting_for_manage(
     update_data = payload.dict(exclude_unset=True)
     billing_keys = ("billing_unit_type", "billing_cost", "billing_cost_input", "billing_cost_output")
     payload_billing = {k: update_data.pop(k) for k in billing_keys if k in update_data}
+    has_model_mode_defaults = "model_mode_defaults" in update_data
+    payload_model_mode_defaults = update_data.pop("model_mode_defaults", None)
     for key, value in update_data.items():
         setattr(target, key, value)
     target.base_model = _resolve_base_model(getattr(target, "base_model", None), getattr(target, "model", None))
@@ -4998,7 +5990,11 @@ def update_system_setting_for_manage(
         }
     else:
         update_billing = existing_billing
-    target.config = _strip_billing_from_config(target.config)
+    target.config = _sync_model_mode_defaults_config(
+        _strip_billing_from_config(target.config),
+        payload_model_mode_defaults,
+        provided=has_model_mode_defaults,
+    )
     _clear_row_billing_columns(target)
 
     if payload.is_active is True:
@@ -5330,11 +6326,6 @@ def export_system_settings_for_manage(
     if not _can_manage_system_settings(current_user):
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
-    _ensure_builtin_system_settings(db)
-    if _is_system_api_auto_billing_sync_enabled():
-        _migrate_system_api_pricing_to_base_rules(db)
-    db.commit()
-
     rows = db.query(SystemAPISetting).filter(
         ~SystemAPISetting.category.like("System_%"),
     ).order_by(SystemAPISetting.category.asc(), SystemAPISetting.provider.asc(), SystemAPISetting.model.asc(), SystemAPISetting.id.asc()).all()
@@ -5490,9 +6481,6 @@ def export_system_provider_bundle_for_manage(
 ):
     if not _can_manage_system_settings(current_user):
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
-
-    _ensure_builtin_system_settings(db)
-    db.commit()
 
     rows = db.query(SystemAPISetting).filter(
         ~SystemAPISetting.category.like("System_%"),

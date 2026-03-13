@@ -88,6 +88,22 @@ def check_and_migrate_tables():
         except Exception as e:
             logger.error(f"Failed to ensure system_api_settings table: {e}")
 
+        # Ensure users.preferences exists for per-user non-API settings persistence.
+        try:
+            if inspector.has_table("users"):
+                existing_user_cols = {c['name'] for c in inspector.get_columns('users')}
+                if 'preferences' not in existing_user_cols:
+                    with engine.begin() as conn:
+                        if is_postgres:
+                            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS preferences JSON"))
+                            conn.execute(text("UPDATE users SET preferences = '{}'::json WHERE preferences IS NULL"))
+                        else:
+                            conn.execute(text("ALTER TABLE users ADD COLUMN preferences JSON"))
+                            conn.execute(text("UPDATE users SET preferences = '{}' WHERE preferences IS NULL"))
+                    logger.info("Ensured users.preferences column")
+        except Exception as e:
+            logger.error(f"Failed to ensure users.preferences column: {e}")
+
         # Ensure provider_key_pool table exists
         try:
             if not inspector.has_table("provider_key_pool"):
@@ -241,7 +257,11 @@ def check_and_migrate_tables():
                 ("durations_seconds", "JSON"),
                 ("max_duration", "INTEGER"),
                 ("fps_options", "JSON"),
+                ("image_size_values", "JSON"),
+                ("quality_values", "JSON"),
                 ("has_audio", "BOOLEAN"),
+                ("sound_supported", "BOOLEAN"),
+                ("multi_shots_supported", "BOOLEAN"),
                 ("mode_values", "JSON"),
                 # Category-specific capability objects
                 ("text_capabilities", "JSON"),
@@ -326,6 +346,11 @@ def check_and_migrate_tables():
                 except Exception as e:
                     logger.warning(f"Failed to drop legacy table pricing_rules: {e}")
 
+                inspector = inspect(engine)
+                existing_legacy_cols = {
+                    c["name"] for c in inspector.get_columns("system_api_settings")
+                } if inspector.has_table("system_api_settings") else set()
+
                 for legacy_col in [
                     "billing_unit_type",
                     "billing_cost",
@@ -334,14 +359,94 @@ def check_and_migrate_tables():
                     "has_granular_billing_rules",
                 ]:
                     try:
+                        # Skip drop when the legacy column is already absent.
+                        if legacy_col not in existing_legacy_cols:
+                            continue
+
                         if is_postgres:
                             conn.execute(text(f"ALTER TABLE system_api_settings DROP COLUMN IF EXISTS {legacy_col}"))
                         else:
                             conn.execute(text(f"ALTER TABLE system_api_settings DROP COLUMN {legacy_col}"))
+                        existing_legacy_cols.discard(legacy_col)
                     except Exception as e:
                         logger.warning(f"Failed to drop legacy column system_api_settings.{legacy_col}: {e}")
         except Exception as e:
             logger.error(f"Failed to migrate system_api_settings schema: {e}")
+
+        # --- Migrate user api_settings to explicit per-category binding ---
+        try:
+            inspector = inspect(engine)
+            if inspector.has_table("api_settings"):
+                existing_api_cols = {c["name"] for c in inspector.get_columns("api_settings")}
+                with engine.begin() as conn:
+                    if "system_api_id" not in existing_api_cols:
+                        if is_postgres:
+                            conn.execute(text("ALTER TABLE api_settings ADD COLUMN IF NOT EXISTS system_api_id INTEGER"))
+                        else:
+                            conn.execute(text("ALTER TABLE api_settings ADD COLUMN system_api_id INTEGER"))
+                    if "mode" not in existing_api_cols:
+                        if is_postgres:
+                            conn.execute(text("ALTER TABLE api_settings ADD COLUMN IF NOT EXISTS mode VARCHAR"))
+                        else:
+                            conn.execute(text("ALTER TABLE api_settings ADD COLUMN mode VARCHAR"))
+
+                with SessionLocal() as session:
+                    rows = session.query(APISetting).order_by(APISetting.id.desc()).all()
+                    seen_keys = set()
+                    dropped = 0
+                    changed = 0
+
+                    for row in rows:
+                        category = str(getattr(row, "category", "") or "").strip() or "LLM"
+                        if category != (getattr(row, "category", None) or ""):
+                            row.category = category
+                            changed += 1
+
+                        row_mode = str(getattr(row, "mode", "") or "").strip().lower()
+                        normalized_mode = row_mode or None
+                        if normalized_mode != getattr(row, "mode", None):
+                            row.mode = normalized_mode
+                            changed += 1
+
+                        system_api_id = int(getattr(row, "system_api_id", 0) or 0)
+
+                        key = (int(getattr(row, "user_id", 0) or 0), category)
+                        if key in seen_keys:
+                            session.delete(row)
+                            dropped += 1
+                            continue
+                        seen_keys.add(key)
+
+                    if changed > 0 or dropped > 0:
+                        session.commit()
+                        logger.info(
+                            "Migrated api_settings per-category binding | updated=%s dropped_duplicates=%s",
+                            changed,
+                            dropped,
+                        )
+
+                with engine.begin() as conn:
+                    if is_postgres:
+                        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_api_settings_user_category_idx ON api_settings (user_id, category)"))
+                    else:
+                        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_api_settings_user_category_idx ON api_settings (user_id, category)"))
+
+                    # Remove deprecated user-scoped payload columns.
+                    legacy_api_cols = ["name", "is_active", "provider", "api_key", "base_url", "model", "config"]
+                    existing_api_cols = {c["name"] for c in inspect(engine).get_columns("api_settings")}
+                    for legacy_col in legacy_api_cols:
+                        if legacy_col not in existing_api_cols:
+                            continue
+                        try:
+                            if is_postgres:
+                                conn.execute(text(f"ALTER TABLE api_settings DROP COLUMN IF EXISTS {legacy_col}"))
+                            else:
+                                conn.execute(text(f"ALTER TABLE api_settings DROP COLUMN {legacy_col}"))
+                            logger.info("Dropped deprecated api_settings column: %s", legacy_col)
+                        except Exception as drop_err:
+                            logger.warning("Failed to drop deprecated api_settings.%s: %s", legacy_col, drop_err)
+        except Exception as e:
+            logger.error(f"Failed to migrate api_settings schema: {e}")
 
         # --- Migrate legacy category defaults from system_api_settings.is_active ---
         try:
@@ -586,24 +691,10 @@ def check_and_migrate_tables():
                 with SessionLocal() as session:
                     system_count = session.query(SystemAPISetting).count()
                     if system_count == 0:
-                        legacy_rows = session.query(APISetting).join(User, APISetting.user_id == User.id).filter(
-                            User.is_system == True,
-                            APISetting.category != "System_Payment",
-                        ).all()
-                        for row in legacy_rows:
-                            session.add(SystemAPISetting(
-                                name=row.name,
-                                category=row.category or "LLM",
-                                provider=row.provider or "unknown",
-                                api_key=row.api_key or "",
-                                base_url=row.base_url,
-                                model=row.model,
-                                config=row.config or {},
-                                is_active=bool(row.is_active),
-                            ))
-                        if legacy_rows:
-                            session.commit()
-                            logger.info("Migrated %s legacy system API rows into system_api_settings", len(legacy_rows))
+                        logger.info(
+                            "Skipped legacy api_settings -> system_api_settings migration: "
+                            "api_settings no longer stores provider/model/key payload fields"
+                        )
             except Exception as e:
                 logger.error(f"Failed migrating legacy system API settings: {e}")
         else:
@@ -813,84 +904,19 @@ def check_and_migrate_tables():
         logger.critical(f"Migration CRITICAL FAILURE: {e}")
 
 def init_api_settings(db):
-    # Check if system user has settings
-    system_user = db.query(User).filter(User.username == "ylsystem").first()
-    if not system_user:
-        logger.warning("System user not found, skipping api settings init.")
-        return
-
-    if db.query(APISetting).filter(APISetting.user_id == system_user.id).first():
-        return
-
-    logger.info("Initializing default API settings for system user...")
-    
-    # Defaults
-    settings_list = [
-        APISetting(
-            user_id=system_user.id,
-            name="System OpenAI",
-            category="LLM",
-            provider="openai",
-            model="gpt-4o",
-            api_key="sk-CHANGE_ME",
-            is_active=True
-        ),
-        APISetting(
-            user_id=system_user.id,
-            name="System Midjourney",
-            category="Image",
-            provider="midjourney",
-            api_key="CHANGE_ME",
-            base_url="https://api.midjourney.com",
-            is_active=True
-        ),
-        APISetting(
-            user_id=system_user.id,
-            name="Runway Gen3",
-            category="Video",
-            provider="runway",
-            api_key="CHANGE_ME",
-            is_active=True
-        ),
-        APISetting(
-            user_id=system_user.id,
-            name="Doubao System",
-            category="LLM",
-            provider="doubao",
-            api_key="CHANGE_ME",
-            is_active=True
-        ),
-        APISetting(
-            user_id=system_user.id,
-            name="Grsai System",
-            category="LLM",
-            provider="grsai",
-            api_key="CHANGE_ME",
-            is_active=True
-        ),
-        APISetting(
-            user_id=system_user.id,
-            name="Baidu Translate",
-            category="LLM",
-            provider="baidu_translate",
-            api_key="CHANGE_ME",
-            is_active=True
-        )
-    ]
-    
-    for s in settings_list:
-        db.add(s)
-    db.commit()
-    logger.info("Default API settings created.")
+    # No-op: user api_settings rows are now lightweight bindings to system_api_settings.
+    # Defaults are seeded by selection helpers based on system task defaults.
+    del db
+    logger.info("Skip legacy init_api_settings: api_settings now stores only user/category -> system_api_id mapping")
 
 
 def cleanup_api_settings_active_conflicts(db):
     """
-    Ensure only one active API setting per (user_id, category).
-    Keeps the newest active row (highest id), deactivates older duplicates.
+    Ensure only one API setting row per (user_id, category).
+    Keeps newest row and deletes older duplicates.
     Safe to run repeatedly.
     """
-    active_rows = db.query(APISetting).filter(APISetting.is_active == True).order_by(
+    rows = db.query(APISetting).order_by(
         APISetting.user_id.asc(),
         APISetting.category.asc(),
         APISetting.id.desc(),
@@ -899,54 +925,24 @@ def cleanup_api_settings_active_conflicts(db):
     seen = set()
     changed = 0
 
-    for row in active_rows:
+    for row in rows:
         key = (row.user_id, row.category or "LLM")
         if key in seen:
-            row.is_active = False
+            db.delete(row)
             changed += 1
         else:
             seen.add(key)
 
     if changed > 0:
         db.commit()
-        logger.info(f"API settings cleanup: deactivated {changed} duplicate active rows.")
+        logger.info(f"API settings cleanup: deleted {changed} duplicate rows.")
     else:
-        logger.info("API settings cleanup: no duplicate active rows found.")
+        logger.info("API settings cleanup: no duplicate rows found.")
 
 
 def normalize_grsai_user_api_settings(db):
-    """Normalize legacy grsai rows in user-scoped api_settings."""
-
-    rows = db.query(APISetting).filter(APISetting.provider == "grsai").all()
-    changed = 0
-    for row in rows:
-        row_name = (row.name or "").lower()
-        row_category = (row.category or "").lower()
-
-        if row_category in ("vision", "llm") and "sora" in row_name and (row.model or "") != "gemini-3-pro":
-            row.model = "gemini-3-pro"
-            changed += 1
-            if row.category != "LLM":
-                row.category = "LLM"
-                changed += 1
-        elif row_category == "video" and "video" in row_name and "sora" in row_name and (row.model or "") != "veo3.1-fast":
-            row.model = "veo3.1-fast"
-            changed += 1
-        elif row_category == "image" and "dakka" in row_name and (row.model or "") != "nano-banana-fast":
-            row.model = "nano-banana-fast"
-            changed += 1
-
-        current_base_url = (row.base_url or "").strip()
-        normalized_base_url = current_base_url.replace("grsaiapi.com", "grsai.dakka.com.cn").rstrip("/")
-        if normalized_base_url and not normalized_base_url.endswith("/chat/completions") and not normalized_base_url.endswith("/v1"):
-            normalized_base_url = f"{normalized_base_url}/v1"
-        if normalized_base_url and normalized_base_url != current_base_url:
-            row.base_url = normalized_base_url
-            changed += 1
-
-    if changed > 0:
-        db.commit()
-        logger.info("Normalized %s legacy grsai api_settings rows", changed)
+    """No-op: api_settings no longer stores provider/model/base_url fields."""
+    return None
 
 
 def init_system_api_settings(db):

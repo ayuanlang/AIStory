@@ -1,5 +1,5 @@
 
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, JSON, Boolean, Float
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, JSON, Boolean, Float, UniqueConstraint
 from sqlalchemy.orm import relationship
 from app.db.session import Base
 from app.core.time_utils import now_bj_iso
@@ -21,6 +21,7 @@ class User(Base):
     is_superuser = Column(Boolean, default=False)
     is_authorized = Column(Boolean, default=False) # Can reuse system keys
     is_system = Column(Boolean, default=False) # Provider of shared keys
+    preferences = Column(JSON, default={})
     
     credits = Column(Integer, default=0) # User points/credits
 
@@ -234,19 +235,17 @@ class Asset(Base):
 
 class APISetting(Base):
     __tablename__ = "api_settings"
+    __table_args__ = (
+        UniqueConstraint("user_id", "category", name="uq_api_settings_user_category"),
+    )
+
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
-    
-    name = Column(String, default="Default")
+
     category = Column(String, index=True) # LLM, Image, Video, Voice
-    provider = Column(String) # openai, midjourney, stability, etc.
-    api_key = Column(String)
-    base_url = Column(String, nullable=True)
-    model = Column(String, nullable=True)
-    config = Column(JSON, default={}) # Extra params
-    
-    is_active = Column(Boolean, default=False)
-    
+    system_api_id = Column(Integer, ForeignKey("system_api_settings.id"), index=True, nullable=True)
+    mode = Column(String, nullable=True)
+
     user = relationship("User", back_populates="api_settings")
 
 
@@ -308,7 +307,11 @@ class SystemAPISetting(Base):
     durations_seconds = Column(JSON, nullable=True)             # [3,5,10]
     max_duration = Column(Integer, nullable=True)               # seconds
     fps_options = Column(JSON, nullable=True)                   # [24,30,60]
+    image_size_values = Column(JSON, nullable=True)             # ["1K", "2K", "4K", ...]
+    quality_values = Column(JSON, nullable=True)                # ["standard", "pro", ...]
     has_audio = Column(Boolean, nullable=True)
+    sound_supported = Column(Boolean, nullable=True)            # explicit sound toggle support
+    multi_shots_supported = Column(Boolean, nullable=True)      # supports multi_shots input
     mode_values = Column(JSON, nullable=True)                   # provider mode enums (std/pro/fast/...)
 
     # Category-specific capability objects (wide columns)

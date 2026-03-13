@@ -536,6 +536,7 @@ class LLMService:
             "tool_choice",
             "response_format",
             "include_thoughts",
+            "reasoning_effort",
             "stop",
             "seed",
         }
@@ -1158,6 +1159,182 @@ class LLMService:
             logger.error(f"LLM Raw Completion failed: {e}")
             provider = (extra_config or {}).get("__provider") or config.get("provider") or self._infer_provider(base_url, model)
             raise Exception(self._vendor_failed_message(provider, e))
+
+    def _to_positive_int(self, value: Any, default: int = 0) -> int:
+        try:
+            parsed = int(value)
+            return parsed if parsed > 0 else int(default)
+        except Exception:
+            return int(default)
+
+    def _merge_usage_dict(self, total: Dict[str, Any], part: Dict[str, Any]) -> Dict[str, Any]:
+        merged = dict(total or {})
+        incoming = dict(part or {})
+
+        def _add(key: str, value: Any) -> None:
+            if value is None:
+                return
+            try:
+                iv = int(value)
+            except Exception:
+                return
+            merged[key] = int(merged.get(key) or 0) + iv
+
+        for k in ["prompt_tokens", "completion_tokens", "total_tokens", "input_tokens", "output_tokens"]:
+            _add(k, incoming.get(k))
+
+        for k, v in incoming.items():
+            if k in merged:
+                continue
+            if isinstance(v, (int, float, str)):
+                merged[k] = v
+
+        return merged
+
+    def _dedupe_continuation_overlap(self, existing: str, incoming: str) -> str:
+        if not existing or not incoming:
+            return incoming
+
+        for size in (200, 400, 800):
+            suffix = existing[-size:]
+            if suffix and incoming.startswith(suffix):
+                return incoming[len(suffix):]
+
+        incoming_lstrip = incoming.lstrip()
+        for size in (200, 400, 800):
+            suffix = existing[-size:]
+            if suffix and incoming_lstrip.startswith(suffix):
+                return incoming_lstrip[len(suffix):]
+
+        return incoming
+
+    async def _auto_continue_chat_completion_on_length(
+        self,
+        messages: List[Dict],
+        config: Dict[str, Any],
+        first_result: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        cfg = (config or {}).get("config") or {}
+        auto_continue = str(cfg.get("auto_continue_on_length", "1")).strip().lower() not in {"0", "false", "no", "off"}
+        if not auto_continue:
+            return first_result
+
+        max_segments = min(20, max(1, self._to_positive_int(cfg.get("continuation_max_segments"), 4)))
+        if max_segments <= 1:
+            return first_result
+
+        tail_chars = min(3000, max(400, self._to_positive_int(cfg.get("continuation_tail_chars"), 1600)))
+        continuation_instruction_tpl = (
+            "Continue exactly where you left off, immediately after the suffix below. "
+            "Do NOT repeat any suffix text. "
+            "Return ONLY the continuation in the same format.\n\n"
+            "SUFFIX (do not repeat):\n{suffix}"
+        )
+
+        first_raw = first_result.get("raw_content")
+        if not isinstance(first_raw, str):
+            first_raw = str(first_result.get("content") or "")
+        first_finish_reason = first_result.get("finish_reason")
+        if not self._is_length_limited_finish_reason(first_finish_reason):
+            return first_result
+        if not first_raw.strip():
+            return first_result
+
+        accumulated_raw = first_raw
+        usage_total = self._merge_usage_dict({}, first_result.get("usage") or {})
+        finish_reason = first_finish_reason
+        token_limit_hints: List[str] = []
+        for hint in (first_result.get("token_limit_hints") or []):
+            hint_text = str(hint or "").strip()
+            if hint_text and hint_text not in token_limit_hints:
+                token_limit_hints.append(hint_text)
+
+        segments: List[Dict[str, Any]] = [{
+            "index": 1,
+            "finish_reason": first_finish_reason,
+            "output_chars": len(first_raw),
+            "usage": first_result.get("usage") or {},
+        }]
+        continuation_stopped_by_max_segments = False
+
+        system_only_messages: List[Dict[str, Any]] = []
+        try:
+            if messages and isinstance(messages[0], dict) and messages[0].get("role") == "system":
+                system_only_messages = [messages[0]]
+        except Exception:
+            system_only_messages = []
+
+        current_messages = list(messages)
+        for seg_idx in range(2, max_segments + 1):
+            if not self._is_length_limited_finish_reason(finish_reason):
+                break
+
+            suffix = accumulated_raw[-tail_chars:] if len(accumulated_raw) > tail_chars else accumulated_raw
+            continuation_instruction = continuation_instruction_tpl.format(suffix=suffix)
+            base_messages = system_only_messages or list(messages)
+            current_messages = list(base_messages) + [
+                {"role": "assistant", "content": suffix},
+                {"role": "user", "content": continuation_instruction},
+            ]
+
+            next_result = await self.chat_completion(current_messages, config)
+            next_raw = next_result.get("raw_content")
+            if not isinstance(next_raw, str):
+                next_raw = str(next_result.get("content") or "")
+            if not next_raw.strip():
+                finish_reason = next_result.get("finish_reason")
+                break
+
+            deduped_next_raw = self._dedupe_continuation_overlap(accumulated_raw, next_raw)
+            accumulated_raw += deduped_next_raw
+
+            usage_total = self._merge_usage_dict(usage_total, next_result.get("usage") or {})
+            finish_reason = next_result.get("finish_reason")
+            for hint in (next_result.get("token_limit_hints") or []):
+                hint_text = str(hint or "").strip()
+                if hint_text and hint_text not in token_limit_hints:
+                    token_limit_hints.append(hint_text)
+
+            segments.append({
+                "index": seg_idx,
+                "finish_reason": finish_reason,
+                "output_chars": len(next_raw),
+                "deduped_chars": len(deduped_next_raw),
+                "usage": next_result.get("usage") or {},
+            })
+
+        if self._is_length_limited_finish_reason(finish_reason) and len(segments) >= max_segments:
+            continuation_stopped_by_max_segments = True
+
+        if len(segments) <= 1:
+            return first_result
+
+        logger.warning(
+            "LLM auto-continuation applied | provider=%s model=%s segments=%s final_finish_reason=%s output_chars=%s stopped_by_max_segments=%s",
+            config.get("provider"),
+            config.get("model"),
+            len(segments),
+            finish_reason,
+            len(accumulated_raw),
+            continuation_stopped_by_max_segments,
+        )
+
+        return {
+            "raw_content": accumulated_raw,
+            "content": self._sanitize_response_content(accumulated_raw),
+            "usage": usage_total,
+            "finish_reason": finish_reason,
+            "token_limit_hints": token_limit_hints,
+            "extraction_diagnostics": {
+                "auto_continuation_applied": True,
+                "segments": segments,
+                "max_segments": max_segments,
+                "continuation_stopped_by_max_segments": continuation_stopped_by_max_segments,
+            },
+            "auto_continuation_applied": True,
+            "continuation_segments": len(segments),
+            "continuation_stopped_by_max_segments": continuation_stopped_by_max_segments,
+        }
 
     async def _call_openai_compatible(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> Dict[str, Any]:
         full_response = await self._raw_llm_request_full(base_url, api_key, model, messages, extra_config)
@@ -2061,6 +2238,7 @@ class LLMService:
         for attempt in range(1, 3):
             try:
                 result = await self.chat_completion(messages, config)
+                result = await self._auto_continue_chat_completion_on_length(messages, config, result)
                 result = self._attach_routing_metadata(result, config)
                 return _attach_fallback_warnings(result)
             except Exception as e:
@@ -2083,6 +2261,7 @@ class LLMService:
                     idx, len(fallbacks), fb_cfg.get("provider"), fb_cfg.get("model"),
                 )
                 result = await self.chat_completion(messages, fb_cfg)
+                result = await self._auto_continue_chat_completion_on_length(messages, fb_cfg, result)
                 result = self._attach_routing_metadata(result, fb_cfg)
                 return _attach_fallback_warnings(result)
             except Exception as e:

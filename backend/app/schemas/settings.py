@@ -2,28 +2,18 @@ from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List
 
 class APISettingBase(BaseModel):
-    name: Optional[str] = "Default"
-    provider: str
     category: Optional[str] = "LLM"
-    api_key: Optional[str] = None
-    base_url: Optional[str] = None
-    model: Optional[str] = None
-    config: Optional[Dict[str, Any]] = {}
-    is_active: bool = False
+    system_api_id: Optional[int] = None
+    mode: Optional[str] = None
 
 class APISettingCreate(APISettingBase):
     pass
 
 class APISettingUpdate(BaseModel):
     id: Optional[int] = None
-    name: Optional[str] = None
-    provider: Optional[str] = None
     category: Optional[str] = None
-    api_key: Optional[str] = None
-    base_url: Optional[str] = None
-    model: Optional[str] = None
-    config: Optional[Dict[str, Any]] = None
-    is_active: Optional[bool] = None
+    system_api_id: Optional[int] = None
+    mode: Optional[str] = None
 
 class APISettingOut(APISettingBase):
     id: int
@@ -31,6 +21,25 @@ class APISettingOut(APISettingBase):
     
     class Config:
         from_attributes = True
+
+
+class UserPreferencesUpdate(BaseModel):
+    prompt_submit_language: Optional[str] = None
+    auto_download_local: Optional[bool] = None
+    generation: Optional[Dict[str, Any]] = None
+    advanced_model: Optional[Dict[str, Any]] = None
+
+
+class UserPreferencesOut(BaseModel):
+    prompt_submit_language: str = "en"
+    auto_download_local: bool = False
+    generation: Dict[str, Any] = Field(default_factory=dict)
+    advanced_model: Dict[str, Any] = Field(default_factory=lambda: {
+        "temperature": 0.7,
+        "seed": None,
+        "cfg": None,
+        "reasoning_effort": "high",
+    })
 
 class UserSettings(BaseModel):
     api_settings: List[APISettingOut] = []
@@ -56,7 +65,11 @@ class SystemAPIModelOption(BaseModel):
     supported_resolutions: Optional[List[str]] = None
     aspect_ratios: Optional[List[str]] = None
     max_duration: Optional[int] = None
+    image_size_values: Optional[List[str]] = None
+    quality_values: Optional[List[str]] = None
     has_audio: Optional[bool] = None
+    sound_supported: Optional[bool] = None
+    multi_shots_supported: Optional[bool] = None
     mode_values: Optional[List[str]] = None
     tags: Optional[List[str]] = None           # 模型标签
     base_url: Optional[str] = None
@@ -82,7 +95,7 @@ class SystemAPIProviderSettings(BaseModel):
 
 class SystemAPISelectionRequest(BaseModel):
     setting_id: int
-    api_strategy: Optional[str] = "smart_default"
+    mode: Optional[str] = None
 
 
 class SystemAPISettingManageUpdate(BaseModel):
@@ -106,7 +119,11 @@ class SystemAPISettingManageUpdate(BaseModel):
     durations_seconds: Optional[List[float]] = None
     max_duration: Optional[int] = None
     fps_options: Optional[List[float]] = None
+    image_size_values: Optional[List[str]] = None
+    quality_values: Optional[List[str]] = None
     has_audio: Optional[bool] = None
+    sound_supported: Optional[bool] = None
+    multi_shots_supported: Optional[bool] = None
     mode_values: Optional[List[str]] = None
     text_capabilities: Optional[Dict[str, Any]] = None
     image_capabilities: Optional[Dict[str, Any]] = None
@@ -123,6 +140,7 @@ class SystemAPISettingManageUpdate(BaseModel):
     has_tiered_pricing: Optional[bool] = None
     free_quota: Optional[str] = None
     currency: Optional[str] = None
+    model_mode_defaults: Optional[Dict[str, str]] = None
     config: Optional[Dict[str, Any]] = None
     billing_unit_type: Optional[str] = None
     billing_cost: Optional[int] = None
@@ -153,7 +171,11 @@ class SystemAPISettingManageCreate(BaseModel):
     durations_seconds: Optional[List[float]] = None
     max_duration: Optional[int] = None
     fps_options: Optional[List[float]] = None
+    image_size_values: Optional[List[str]] = None
+    quality_values: Optional[List[str]] = None
     has_audio: Optional[bool] = None
+    sound_supported: Optional[bool] = None
+    multi_shots_supported: Optional[bool] = None
     mode_values: Optional[List[str]] = None
     text_capabilities: Optional[Dict[str, Any]] = None
     image_capabilities: Optional[Dict[str, Any]] = None
@@ -170,6 +192,7 @@ class SystemAPISettingManageCreate(BaseModel):
     has_tiered_pricing: Optional[bool] = None
     free_quota: Optional[str] = None
     currency: Optional[str] = None
+    model_mode_defaults: Optional[Dict[str, str]] = None
     config: Optional[Dict[str, Any]] = {}
     billing_unit_type: Optional[str] = "per_call"
     billing_cost: Optional[int] = 0
@@ -224,7 +247,11 @@ class SystemAPISettingOut(BaseModel):
     durations_seconds: Optional[List[float]] = None
     max_duration: Optional[int] = None
     fps_options: Optional[List[float]] = None
+    image_size_values: Optional[List[str]] = None
+    quality_values: Optional[List[str]] = None
     has_audio: Optional[bool] = None
+    sound_supported: Optional[bool] = None
+    multi_shots_supported: Optional[bool] = None
     mode_values: Optional[List[str]] = None
     text_capabilities: Optional[Dict[str, Any]] = None
     image_capabilities: Optional[Dict[str, Any]] = None
@@ -241,6 +268,7 @@ class SystemAPISettingOut(BaseModel):
     has_tiered_pricing: Optional[bool] = None
     free_quota: Optional[str] = None
     currency: Optional[str] = None
+    model_mode_defaults: Optional[Dict[str, str]] = None
     config: Optional[Dict[str, Any]] = {}
     billing_unit_type: Optional[str] = "per_call"
     billing_cost: Optional[int] = 0
@@ -273,7 +301,11 @@ class SystemAPISettingImportItem(BaseModel):
     durations_seconds: Optional[List[float]] = None
     max_duration: Optional[int] = None
     fps_options: Optional[List[float]] = None
+    image_size_values: Optional[List[str]] = None
+    quality_values: Optional[List[str]] = None
     has_audio: Optional[bool] = None
+    sound_supported: Optional[bool] = None
+    multi_shots_supported: Optional[bool] = None
     mode_values: Optional[List[str]] = None
     text_capabilities: Optional[Dict[str, Any]] = None
     image_capabilities: Optional[Dict[str, Any]] = None
@@ -324,7 +356,11 @@ class SystemAPIProviderModelImportItem(BaseModel):
     durations_seconds: Optional[List[float]] = None
     max_duration: Optional[int] = None
     fps_options: Optional[List[float]] = None
+    image_size_values: Optional[List[str]] = None
+    quality_values: Optional[List[str]] = None
     has_audio: Optional[bool] = None
+    sound_supported: Optional[bool] = None
+    multi_shots_supported: Optional[bool] = None
     mode_values: Optional[List[str]] = None
     text_capabilities: Optional[Dict[str, Any]] = None
     image_capabilities: Optional[Dict[str, Any]] = None
@@ -481,6 +517,65 @@ class SystemAPIBillingRuleMultiplierResetResponse(BaseModel):
     max_rule_increase_credits: float = 0
     increase_cap_applied: bool = False
     preview: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class KIEDataStandardValueOut(BaseModel):
+    id: int
+    standard_dimension: str
+    standard_value: str
+    value_type: str
+    definition: Optional[str] = None
+    alias_values: Optional[str] = None
+    is_active: bool = True
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class KIEDataStandardMappingBase(BaseModel):
+    provider: str = "kie"
+    model_key_inferred: Optional[str] = None
+    model_title: Optional[str] = None
+    model_url: Optional[str] = None
+    source_field: str
+    source_enum_value: str
+    standard_dimension: str
+    standard_value: str
+    confidence: Optional[str] = None
+    note: Optional[str] = None
+    is_active: bool = True
+    is_billing_related: bool = False
+
+
+class KIEDataStandardMappingCreate(KIEDataStandardMappingBase):
+    pass
+
+
+class KIEDataStandardMappingUpdate(BaseModel):
+    provider: Optional[str] = None
+    model_key_inferred: Optional[str] = None
+    model_title: Optional[str] = None
+    model_url: Optional[str] = None
+    source_field: Optional[str] = None
+    source_enum_value: Optional[str] = None
+    standard_dimension: Optional[str] = None
+    standard_value: Optional[str] = None
+    confidence: Optional[str] = None
+    note: Optional[str] = None
+    is_active: Optional[bool] = None
+    is_billing_related: Optional[bool] = None
+
+
+class KIEDataStandardMappingOut(KIEDataStandardMappingBase):
+    id: int
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class KIEDataStandardBillingInferenceResponse(BaseModel):
+    ok: bool = True
+    updated_count: int = 0
+    matched_dimension_count: int = 0
+    matched_dimensions: List[str] = Field(default_factory=list)
 
 
 class SystemAPIProviderImportItem(BaseModel):

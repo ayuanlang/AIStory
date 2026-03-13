@@ -1,0 +1,102 @@
+﻿# KIE Market Model Params Summary (Auto-extracted)
+Generated at: 2026-03-12T23:00:26
+Total models: 96
+
+| Model | URL | Resolutions (detected) | Aspect Ratios (detected) | Durations (detected) | Modes/Variants (detected) |
+|---|---|---|---|---|---|
+| AI Video Extension Callbacks | https://docs.kie.ai/runway-api/extend-ai-video-callbacks.md |  |  |  | standard |
+| Bytedance - V1 Lite Image to Video | https://docs.kie.ai/market/bytedance/v1-lite-image-to-video.md | 480P, 720P |  |  | quality |
+| Bytedance - V1 Lite Text to Video | https://docs.kie.ai/market/bytedance/v1-lite-text-to-video.md | 480P, 720P | 16:9 |  | quality |
+| Bytedance - V1 Pro Text to Video | https://docs.kie.ai/market/bytedance/v1-pro-text-to-video.md | 1080P, 480P, 720P | 16:9 |  | quality |
+| Bytedance Seedance 1.5 Pro | https://docs.kie.ai/market/bytedance/seedance-1-5-pro.md |  |  |  | pro, text-to-video |
+| Bytedance V1 Pro Fast Image to Video | https://docs.kie.ai/market/bytedance/v1-pro-fast-image-to-video.md | 1080P, 480P, 720P | 16:9 |  | fast, image-to-video, pro, quality |
+| Bytedance V1 Pro Image to Video | https://docs.kie.ai/market/bytedance/v1-pro-image-to-video.md | 1080P, 480P, 720P |  |  | quality |
+| Claude Opus 4.5 | https://docs.kie.ai/market/claude/claude-opus-4-5.md |  |  |  |  |
+| Claude Sonnet 4.5 | https://docs.kie.ai/market/claude/claude-sonnet-4-5.md |  |  |  |  |
+| elevenlabs/audio-isolation | https://docs.kie.ai/market/elevenlabs/audio-isolation.md |  |  |  |  |
+| elevenlabs/sound-effect-v2 | https://docs.kie.ai/market/elevenlabs/sound-effect-v2.md |  |  |  |  |
+| elevenlabs/speech-to-text | https://docs.kie.ai/market/elevenlabs/speech-to-text.md |  |  |  |  |
+| elevenlabs/text-to-dialogue-v3 | https://docs.kie.ai/market/elevenlabs/text-to-dialogue-v3.md |  |  |  |  |
+| elevenlabs/text-to-speech-multilingual-v2 | https://docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2.md |  |  |  | quality, turbo |
+| elevenlabs/text-to-speech-turbo-2-5 | https://docs.kie.ai/market/elevenlabs/text-to-speech-turbo-2-5.md |  |  |  | quality, turbo |
+| Extend AI Video | https://docs.kie.ai/runway-api/extend-ai-video.md | 1080P, 720P |  |  | quality |
+| Flux-2 - Image to Image | https://docs.kie.ai/market/flux2/flex-image-to-image.md | 1K | 1:1, auto |  | image-to-image |
+| Flux-2 - Pro Image to Image | https://docs.kie.ai/market/flux2/pro-image-to-image.md | 1K | 1:1, auto |  | image-to-image, pro |
+| Flux-2 - Pro Text to Image | https://docs.kie.ai/market/flux2/pro-text-to-image.md |  | auto |  | pro, quality, text-to-image |
+| Flux-2 - Text to Image | https://docs.kie.ai/market/flux2/flex-text-to-image.md | 1K | 1:1, auto |  | quality, text-to-image |
+| Gemini  2.5 Pro | https://docs.kie.ai/market/gemini/gemini-2-5-pro.md |  |  |  |  |
+| Gemini 2.5 Flash | https://docs.kie.ai/market/gemini/gemini-2-5-flash.md |  |  |  |  |
+| Gemini 3 Pro | https://docs.kie.ai/market/gemini/gemini-3-pro.md |  |  |  |  |
+| Generate 4o Image | https://docs.kie.ai/4o-image-api/generate-4-o-image.md |  | 1:1 |  |  |
+| Generate AI Video | https://docs.kie.ai/runway-api/generate-ai-video.md | 1080P, 720P | 9:16 | 10 seconds | quality, text-to-video |
+| Generate Aleph Video | https://docs.kie.ai/runway-api/generate-aleph-video.md |  | 16:9 |  | video-to-video |
+| Generate or Edit Image | https://docs.kie.ai/flux-kontext-api/generate-or-edit-image.md |  | 16:9, 3:4, 9:16, portrait |  | pro, standard, text-to-image |
+| Google - imagen4 | https://docs.kie.ai/market/google/imagen4.md |  | 1:1 |  |  |
+| Google - imagen4-fast | https://docs.kie.ai/market/google/imagen4-fast.md |  | 16:9 |  | fast |
+| Google - imagen4-ultra | https://docs.kie.ai/market/google/imagen4-ultra.md |  | 1:1 |  |  |
+| Google - Nano Banana | https://docs.kie.ai/market/google/nano-banana.md |  | 1:1 |  |  |
+| Google - Nano Banana 2 | https://docs.kie.ai/market/google/nanobanana2.md | 1K | 1:1 |  |  |
+| Google - Nano Banana Edit | https://docs.kie.ai/market/google/nano-banana-edit.md |  |  |  |  |
+| Google - Nano Banana Pro | https://docs.kie.ai/market/google/pro-image-to-image.md | 1K | 1:1 |  | pro |
+| GPT Image-1.5 - Image to Image | https://docs.kie.ai/market/gpt-image/1-5-image-to-image.md |  | 3:2 |  | image-to-image, quality |
+| GPT Image-1.5 - Text to Image | https://docs.kie.ai/market/gpt-image/1-5-text-to-image.md |  | 1:1 |  | quality, text-to-image |
+| GPT-5-2 | https://docs.kie.ai/market/chat/gpt-5-2.md |  |  |  |  |
+| Grok Imagine - image to image | https://docs.kie.ai/market/grok-imagine/image-to-image.md |  |  |  | image-to-image |
+| Grok Imagine - Text to Image | https://docs.kie.ai/market/grok-imagine/text-to-image.md |  | 1:1, 16:9, 3:2, 9:16 |  | text-to-image |
+| Grok Imagine - Video Upscale | https://docs.kie.ai/market/grok-imagine/upscale.md |  |  |  | text-to-video |
+| Grok Imagine Image to Video | https://docs.kie.ai/market/grok-imagine/image-to-video.md |  |  |  | quality |
+| Grok Imagine Text to Video | https://docs.kie.ai/market/grok-imagine/text-to-video.md |  | 1:1, 16:9, 2:3, 9:16 |  | quality |
+| Hailuo 2.3 Pro Image to Video | https://docs.kie.ai/market/hailuo/2-3-image-to-video-pro.md | 1080P |  | 10 seconds | image-to-video, pro |
+| Hailuo 2.3 Standard Image to Video | https://docs.kie.ai/market/hailuo/2-3-image-to-video-standard.md | 1080P |  | 10 seconds | quality |
+| Hailuo Pro Image to Video | https://docs.kie.ai/market/hailuo/02-image-to-video-pro.md |  |  |  | image-to-video, pro |
+| Hailuo Pro Text to Video | https://docs.kie.ai/market/hailuo/02-text-to-video-pro.md |  |  |  | pro, text-to-video |
+| Hailuo Standard Image to Video | https://docs.kie.ai/market/hailuo/02-image-to-video-standard.md | 1080P |  | 10 seconds |  |
+| Hailuo Standard Text to Video | https://docs.kie.ai/market/hailuo/02-text-to-video-standard.md | 1080P |  | 10 seconds | standard, text-to-video |
+| Ideogram - Character | https://docs.kie.ai/market/ideogram/character.md |  |  |  | quality |
+| Ideogram - Character Edit | https://docs.kie.ai/market/ideogram/character-edit.md |  |  |  | quality |
+| Ideogram - Character Remix | https://docs.kie.ai/market/ideogram/character-remix.md |  |  |  | quality |
+| Ideogram - V3 Reframe | https://docs.kie.ai/market/ideogram/v3-reframe.md |  |  |  | quality |
+| Infinitalk - From Audio | https://docs.kie.ai/market/infinitalk/from-audio.md |  |  |  |  |
+| Kling - V2.5 Turbo Image to Video Pro | https://docs.kie.ai/market/kling/v25-turbo-image-to-video-pro.md |  |  |  | image-to-video, master, quality |
+| Kling - V2.5 Turbo Text to Video Pro | https://docs.kie.ai/market/kling/v25-turbo-text-to-video-pro.md |  | 16:9 |  | pro, quality, text-to-video, turbo |
+| Kling 2.6 Image to Video | https://docs.kie.ai/market/kling/image-to-video.md |  |  |  | image-to-video |
+| Kling 2.6 motion-control | https://docs.kie.ai/market/kling/motion-control.md |  | 2:5, 5:2 | 30         seconds, 30 seconds |  |
+| Kling 2.6 Text to Video | https://docs.kie.ai/market/kling/text-to-video.md |  | 1:1 |  | text-to-video |
+| Kling 3.0 | https://docs.kie.ai/market/kling/kling-3-0.md |  | 1:1, 16:9, 9:16 | 12 seconds, 15 seconds | multi_shots, pro, quality, standard, std |
+| Kling AI Avatar Pro | https://docs.kie.ai/market/kling/ai-avatar-pro.md |  |  |  | pro |
+| Kling AI Avatar Standard | https://docs.kie.ai/market/kling/ai-avatar-standard.md |  |  |  | standard |
+| Kling V2.1 Master Image to Video | https://docs.kie.ai/market/kling/v2-1-master-image-to-video.md |  |  |  | image-to-video, master, quality |
+| Kling V2.1 Master Text to Video | https://docs.kie.ai/market/kling/v2-1-master-text-to-video.md |  | 16:9 |  | master, quality, text-to-video |
+| Kling V2.1 Pro | https://docs.kie.ai/market/kling/v2-1-pro.md |  |  |  | quality |
+| Kling V2.1 Standard | https://docs.kie.ai/market/kling/v2-1-standard.md |  |  |  | quality, standard |
+| Qwen - Image Edit | https://docs.kie.ai/market/qwen/image-edit.md |  |  |  | quality |
+| Qwen - Image to Image | https://docs.kie.ai/market/qwen/image-to-image.md |  |  |  | quality |
+| Qwen - Text to Image | https://docs.kie.ai/market/qwen/text-to-image.md |  |  |  | quality |
+| Recraft - Crisp Upscale | https://docs.kie.ai/market/recraft/crisp-upscale.md |  |  |  | quality |
+| Recraft - Remove Background | https://docs.kie.ai/market/recraft/remove-background.md |  |  |  |  |
+| Seedream3.0 - Text to Image | https://docs.kie.ai/market/seedream/seedream.md |  |  |  |  |
+| Seedream4.0 - Edit | https://docs.kie.ai/market/seedream/seedream-v4-edit.md |  |  |  |  |
+| Seedream4.0 - Text to Image | https://docs.kie.ai/market/seedream/seedream-v4-text-to-image.md |  |  |  | quality, text-to-image |
+| Seedream4.5 - Edit | https://docs.kie.ai/market/seedream/4-5-edit.md |  |  |  |  |
+| Seedream4.5 - Text to Image | https://docs.kie.ai/market/seedream/4-5-text-to-image.md | 2K, 4K | 1:1, 16:9 |  | quality, text-to-image |
+| Sora2 - Characters | https://docs.kie.ai/market/sora2/sora-2-characters.md |  |  | 4 seconds |  |
+| Sora2 - Characters Pro | https://docs.kie.ai/market/sora2/sora-2-characters-pro.md |  |  | 4 seconds | pro |
+| Sora2 - Image to Video | https://docs.kie.ai/market/sora2/sora-2-image-to-video.md |  | landscape |  | image-to-video |
+| Sora2 - Pro Image to Video | https://docs.kie.ai/market/sora2/sora-2-pro-image-to-video.md |  | landscape |  | image-to-video, pro, quality, standard |
+| Sora2 - Pro Storyboard | https://docs.kie.ai/market/sora-2-pro-storyboard.md |  |  |  |  |
+| Sora2 - Pro Text to Video | https://docs.kie.ai/market/sora2/sora-2-pro-text-to-video.md |  | landscape |  | pro, quality, text-to-video |
+| Sora2 - Text to Video | https://docs.kie.ai/market/sora2/sora-2-text-to-video.md |  | landscape |  | quality, text-to-video |
+| Sora2 - Watermark Remover | https://docs.kie.ai/market/sora2/sora-watermark-remover.md |  |  |  |  |
+| Topaz - Image Upscale | https://docs.kie.ai/market/topaz/image-upscale.md |  |  |  | quality |
+| Topaz - Video Upscale | https://docs.kie.ai/market/topaz/video-upscale.md |  |  |  | quality |
+| Wan - 2.2 A14B Speech to Video Turbo | https://docs.kie.ai/market/wan/2-2-a14b-speech-to-video-turbo.md | 480P, 580P, 720P |  |  |  |
+| Wan - 2.6-flash-image-to-video | https://docs.kie.ai/market/wan/2-6-flash-image-to-video.md | 1080P |  |  | multi_shots |
+| Wan - 2-6-flash-video-to-video | https://docs.kie.ai/market/wan/2-6-flash-video-to-video.md | 1080P |  |  | multi_shots |
+| Wan - Animate Move | https://docs.kie.ai/market/wan/2-2-animate-move.md | 480P, 580P, 720P |  |  |  |
+| Wan - Animate Replace | https://docs.kie.ai/market/wan/2-2-animate-replace.md | 480P, 580P, 720P |  |  |  |
+| Wan - Image to Video | https://docs.kie.ai/market/wan/2-2-a14b-image-to-video-turbo.md | 480P, 720P |  |  | quality |
+| Wan - Text to Video | https://docs.kie.ai/market/wan/2-2-a14b-text-to-video-turbo.md | 480P, 720P | 16:9, 9:16 |  | quality |
+| Wan 2.6 - Image to Video | https://docs.kie.ai/market/wan/2-6-image-to-video.md |  |  |  |  |
+| Wan 2.6 - Text to Video | https://docs.kie.ai/market/wan/2-6-text-to-video.md | 1080P |  |  | quality, text-to-video |
+| Wan 2.6 - Video to Video | https://docs.kie.ai/market/wan/2-6-video-to-video.md |  |  |  |  |
+| Z-Image | https://docs.kie.ai/market/z-image/z-image.md |  | 1:1, auto |  |  |

@@ -1,0 +1,50 @@
+Generate TTS planning params from a video prompt.
+
+Core objective:
+- Extract dialogue text first.
+- Then tune voice parameters by character traits.
+
+Rules:
+A. Dialogue extraction (highest priority)
+1) Extract ONLY explicit spoken lines (quoted lines or speaker: line).
+2) NEVER convert action, narration, camera or scene description into speech text.
+3) Keep wording close to original spoken content; do not rewrite plot into dialogue.
+4) If no explicit spoken dialogue exists, set text to an empty string.
+5) NEVER include language labels or metadata lines in text, such as: "中文 / Chinese", "zh", "Prompt EN:", "Viewpoint", "Lighting", "Wardrobe", "Panel views", "Subject Info".
+6) NEVER include profile/reference blocks or any line containing "| Prompt" or character-sheet instructions.
+7) If input contains one spoken sentence and many metadata lines, keep only the spoken sentence in text.
+
+B. Parameter inference (secondary)
+5) Use character context ONLY to infer voice/style parameters: voice, stability, similarity_boost, style, speed, language_code.
+6) Character traits/context MUST NOT be copied into text.
+7) If multiple characters are present, choose one coherent voice profile that best matches dominant speaker tone in extracted dialogue.
+8) Voice must be one of supported names (or a valid official voice id).
+9) If uncertain, use conservative defaults:
+   voice=Rachel, stability=0.5, similarity_boost=0.75, style=0, speed=1.0, timestamps=false.
+10) language_code should be ISO 639-1 (en/zh/ja/ko/es/fr/de/it/pt/ru/ar/hi etc).
+
+Supported voice names include:
+{{SUPPORTED_VOICES_HINT}}
+
+Examples:
+- Input: Character falls backward, boss rushes into building. -> text: ""
+- Input: Boss: "Get out!" -> text: "Get out!"
+- Input includes [Character Context] only -> text must still be "" unless explicit dialogue exists.
+- Bad Input: "你追了七天七夜...\n中文 / Chinese\nzh\nXu Taiping | Prompt EN: ..." -> text must be only "你追了七天七夜...".
+
+Return JSON schema exactly:
+{
+  "text": "string",
+  "voice": "string",
+  "stability": "number 0..1",
+  "similarity_boost": "number 0..1",
+  "style": "number 0..1",
+  "speed": "number 0.7..1.2",
+  "timestamps": "boolean",
+  "previous_text": "string",
+  "next_text": "string",
+  "language_code": "ISO 639-1 string, e.g. en zh ja"
+}
+
+Video prompt:
+{{VIDEO_PROMPT}}

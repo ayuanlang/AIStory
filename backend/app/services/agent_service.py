@@ -1368,33 +1368,9 @@ Output ONLY the JSON object now."""
         category: Optional[str] = None,
         provider: Optional[str] = None,
     ) -> None:
-        q = session.query(
-            APISetting.id,
-            cast(APISetting.config, String).label("config_raw"),
-        ).filter(APISetting.user_id == user_id)
-        if category:
-            q = q.filter(APISetting.category == category)
-        if provider:
-            q = q.filter(APISetting.provider == provider)
-
-        bad_ids: List[int] = []
-        for row in q.all():
-            if self._safe_json_dict_or_none(row.config_raw) is None:
-                bad_ids.append(row.id)
-
-        if bad_ids:
-            logger.warning(
-                "Repair invalid api_settings.config rows | user_id=%s category=%s provider=%s ids=%s",
-                user_id,
-                category,
-                provider,
-                bad_ids,
-            )
-            session.query(APISetting).filter(APISetting.id.in_(bad_ids)).update(
-                {APISetting.config: {}},
-                synchronize_session=False,
-            )
-            session.commit()
+        # api_settings is now a lightweight binding table (user/category/system_api_id/mode)
+        # and no longer carries JSON config fields.
+        return None
 
     def _repair_invalid_system_config_rows(self, session: Session, category: Optional[str] = None) -> None:
         q = session.query(
@@ -1515,7 +1491,7 @@ Output ONLY the JSON object now."""
         """
         Resolves API configuration by:
         1) finding user's active api_settings row in the given category,
-        2) using that row's provider+model to match system_api_settings.
+        2) resolving system_api_settings by api_settings.system_api_id.
         """
         defaults = {
             "openai": {"base_url": "https://api.openai.com/v1", "model": "gpt-4-turbo-preview"},
@@ -1536,78 +1512,171 @@ Output ONLY the JSON object now."""
                     logger.warning("Missing category when resolving API config | user_id=%s", user_id)
                     return {}
 
-                self._repair_invalid_user_config_rows(session, user_id, category=resolved_category)
-                self._repair_invalid_system_config_rows(session, category=resolved_category)
+                category_lc = resolved_category.lower()
+                if category_lc in {"llm", "text", "chat"}:
+                    user_category_candidates = ["LLM"]
+                    system_category_candidates = ["LLM"]
+                elif category_lc in {"image", "img", "t2i", "i2i"}:
+                    user_category_candidates = ["Image", "IMAGE"]
+                    system_category_candidates = ["Image", "IMAGE"]
+                elif category_lc in {"video", "t2v", "i2v", "v2v"}:
+                    user_category_candidates = ["Video", "VIDEO"]
+                    system_category_candidates = ["Video", "VIDEO"]
+                elif category_lc in {"voice", "audio", "speech", "tts", "asr"}:
+                    user_category_candidates = ["Voice", "VOICE"]
+                    system_category_candidates = ["Voice", "VOICE"]
+                else:
+                    user_category_candidates = [resolved_category]
+                    system_category_candidates = [resolved_category]
 
-                active_user_setting = session.query(APISetting).filter(
+                # Keep the original spelling first for logs/metadata, but query with compatible aliases.
+                if resolved_category not in user_category_candidates:
+                    user_category_candidates.insert(0, resolved_category)
+                if resolved_category not in system_category_candidates:
+                    system_category_candidates.insert(0, resolved_category)
+
+                self._repair_invalid_user_config_rows(session, user_id, category=user_category_candidates[0])
+                self._repair_invalid_system_config_rows(session, category=system_category_candidates[0])
+
+                def _resolve_system_default_fallback(selection_source: str) -> Dict[str, Any]:
+                    sys_candidates: List[SystemAPISetting] = []
+                    default_row = get_task_default_system_setting(session, resolved_category)
+                    if default_row is not None:
+                        sys_candidates.append(default_row)
+
+                    extra_rows = session.query(SystemAPISetting).filter(
+                        SystemAPISetting.category.in_(system_category_candidates),
+                        SystemAPISetting.id != (int(default_row.id) if default_row else -1),
+                    ).order_by(SystemAPISetting.id.desc()).all()
+                    sys_candidates.extend(extra_rows)
+
+                    selected_row = None
+                    for row in sys_candidates:
+                        if self._is_deprecated_system_config(row.config, getattr(row, "deprecated", None)):
+                            continue
+                        selected_row = row
+                        break
+
+                    if not selected_row:
+                        logger.warning(
+                            "No usable system fallback in get_api_config | user_id=%s category=%s source=%s",
+                            user_id,
+                            resolved_category,
+                            selection_source,
+                        )
+                        return {}
+
+                    fallback_default = defaults.get(str(selected_row.provider or "").strip(), {})
+                    merged_config = dict(selected_row.config or {})
+                    merged_config["__selection_source"] = selection_source
+                    merged_config["__resolved_source"] = f"system_fallback:{selected_row.provider}/{selected_row.model}"
+                    merged_config["__resolved_setting_id"] = selected_row.id
+                    merged_config["__resolved_user_id"] = user_id
+                    merged_config["__resolved_category"] = resolved_category
+                    logger.warning(
+                        "API_CONFIG_FALLBACK_TRACE user_id=%s category=%s source=%s setting_id=%s provider=%s model=%s",
+                        user_id,
+                        resolved_category,
+                        selection_source,
+                        selected_row.id,
+                        selected_row.provider,
+                        selected_row.model,
+                    )
+                    return {
+                        "provider": selected_row.provider,
+                        "api_key": self._pick_runtime_api_key(selected_row.config, selected_row.api_key, session=session, provider_name=selected_row.provider),
+                        "base_url": selected_row.base_url or fallback_default.get("base_url"),
+                        "model": selected_row.model or fallback_default.get("model"),
+                        "config": merged_config,
+                    }
+
+                active_user_settings = session.query(APISetting).filter(
                     APISetting.user_id == user_id,
-                    APISetting.category == resolved_category,
-                    APISetting.is_active == True,
-                ).order_by(APISetting.id.desc()).first()
+                    APISetting.category.in_(user_category_candidates),
+                ).order_by(APISetting.id.desc()).all()
+
+                def _pick_active_user_setting(rows: List[APISetting]) -> Optional[APISetting]:
+                    if not rows:
+                        return None
+
+                    def _score(item: APISetting):
+                        use_system_setting_id = int(getattr(item, "system_api_id", 0) or 0)
+                        has_mode = 1 if str(getattr(item, "mode", "") or "").strip() else 0
+                        return (1 if use_system_setting_id > 0 else 0, use_system_setting_id, has_mode, int(getattr(item, "id", 0) or 0))
+
+                    return max(rows, key=_score)
+
+                active_user_setting = _pick_active_user_setting(active_user_settings)
 
                 if not active_user_setting:
                     logger.warning(
-                        "No active user api setting found | user_id=%s category=%s",
+                        "No active user api setting found | user_id=%s category=%s -> system fallback",
                         user_id,
                         resolved_category,
                     )
-                    return {}
+                    return _resolve_system_default_fallback("system_fallback_no_user_setting")
 
-                target_provider = str(active_user_setting.provider or "").strip()
-                target_model = str(active_user_setting.model or "").strip()
-                if not target_provider or not target_model:
+                selected_system_setting_id = int(getattr(active_user_setting, "system_api_id", 0) or 0)
+                if selected_system_setting_id <= 0:
                     logger.warning(
-                        "Active user setting missing provider/model | user_id=%s category=%s setting_id=%s provider=%s model=%s",
+                        "Active user setting missing system_api_id | user_id=%s category=%s user_setting_id=%s",
                         user_id,
                         resolved_category,
                         active_user_setting.id,
-                        active_user_setting.provider,
-                        active_user_setting.model,
                     )
-                    return {}
+                    return _resolve_system_default_fallback("system_fallback_user_setting_missing_system_marker")
 
-                setting = session.query(SystemAPISetting).filter(
-                    SystemAPISetting.category == resolved_category,
-                    SystemAPISetting.provider == target_provider,
-                    SystemAPISetting.model == target_model,
-                ).order_by(SystemAPISetting.id.desc()).first()
-
-                if setting:
-                    logger.warning(
-                        "Agent config resolved candidate | user_id=%s category=%s source=%s setting_id=%s provider=%s model=%s deprecated_col=%s deprecated_effective=%s",
+                setting_by_id = session.query(SystemAPISetting).filter(
+                    SystemAPISetting.id == selected_system_setting_id,
+                    SystemAPISetting.category.in_(system_category_candidates),
+                ).first()
+                if setting_by_id:
+                    logger.info(
+                        "Agent config resolved by user marker id | user_id=%s category=%s user_setting_id=%s system_setting_id=%s provider=%s model=%s",
                         user_id,
                         resolved_category,
-                        f"system_by_user_provider_model:{target_provider}/{target_model}",
-                        setting.id,
-                        setting.provider,
-                        setting.model,
-                        getattr(setting, "deprecated", None),
-                        self._is_deprecated_system_config(setting.config, getattr(setting, "deprecated", None)),
+                        active_user_setting.id,
+                        setting_by_id.id,
+                        setting_by_id.provider,
+                        setting_by_id.model,
                     )
-                    if self._is_deprecated_system_config(setting.config, getattr(setting, "deprecated", None)):
+                    if self._is_deprecated_system_config(setting_by_id.config, getattr(setting_by_id, "deprecated", None)):
                         logger.warning(
-                            "Blocked deprecated system api setting | user_id=%s category=%s provider=%s model=%s setting_id=%s",
+                            "Blocked deprecated system api setting by marker id | user_id=%s category=%s user_setting_id=%s system_setting_id=%s",
                             user_id,
                             resolved_category,
-                            target_provider,
-                            target_model,
-                            setting.id,
+                            active_user_setting.id,
+                            setting_by_id.id,
                         )
-                        return {}
+                        return _resolve_system_default_fallback("system_fallback_selected_deprecated")
+
+                    fallback_default = defaults.get(str(setting_by_id.provider or "").strip(), {})
+                    merged_config = dict(setting_by_id.config or {})
+                    merged_config["__selection_source"] = "system_marker_id"
+                    merged_config["__resolved_source"] = f"system_by_user_setting_id:{setting_by_id.id}"
+                    merged_config["__resolved_setting_id"] = setting_by_id.id
+                    merged_config["__resolved_user_id"] = user_id
+                    merged_config["__resolved_user_setting_id"] = active_user_setting.id
+                    merged_config["__resolved_category"] = resolved_category
+                    selected_mode = str(getattr(active_user_setting, "mode", "") or "").strip().lower()
+                    if selected_mode:
+                        merged_config.setdefault("mode", selected_mode)
+                        merged_config["__user_selected_mode"] = selected_mode
                     return {
-                        "provider": setting.provider,
-                        "api_key": self._pick_runtime_api_key(setting.config, setting.api_key, session=session, provider_name=setting.provider),
-                        "base_url": setting.base_url or defaults.get(target_provider, {}).get("base_url"),
-                        "model": setting.model or defaults.get(target_provider, {}).get("model"),
-                        "config": setting.config or {}
+                        "provider": setting_by_id.provider,
+                        "api_key": self._pick_runtime_api_key(setting_by_id.config, setting_by_id.api_key, session=session, provider_name=setting_by_id.provider),
+                        "base_url": setting_by_id.base_url or fallback_default.get("base_url"),
+                        "model": setting_by_id.model or fallback_default.get("model"),
+                        "config": merged_config,
                     }
-                logger.warning(
-                    "No matching system api setting by provider+model | user_id=%s category=%s provider=%s model=%s",
-                    user_id,
-                    resolved_category,
-                    target_provider,
-                    target_model,
-                )
+                    logger.warning(
+                        "User marker points to missing system setting id | user_id=%s category=%s user_setting_id=%s system_setting_id=%s",
+                        user_id,
+                        resolved_category,
+                        active_user_setting.id,
+                        selected_system_setting_id,
+                    )
+                return _resolve_system_default_fallback("system_fallback_marker_id_unmatched")
         except Exception as e:
             logger.error(f"Error fetching system settings for {provider}: {e}")
 
@@ -1616,8 +1685,55 @@ Output ONLY the JSON object now."""
     def get_active_llm_config(self, user_id: int = 1, category: str = "LLM") -> Dict[str, Any]:
         """
         Retrieves active API configuration by category by matching
-        active user api_settings(provider+model) -> system_api_settings.
+        active user api_settings.system_api_id -> system_api_settings.
         """
+        resolved_category = str(category or "LLM").strip() or "LLM"
+
+        # Unified runtime resolver (same path as Image/Video/Voice):
+        # user active selection -> system category default fallback.
+        try:
+            from app.services.media_service import media_service as _media_service
+
+            unified = _media_service.get_api_config(
+                provider=None,
+                user_id=user_id,
+                category=resolved_category,
+                requested_model=None,
+                user_credits=0,
+                strict_provider=False,
+            ) or {}
+
+            if (
+                str(unified.get("provider") or "").strip()
+                and str(unified.get("model") or "").strip()
+                and str(unified.get("api_key") or "").strip()
+            ):
+                merged_config = dict(unified.get("config") or {})
+                merged_config.setdefault("__selection_source", "unified_media_api_config")
+                merged_config.setdefault("__resolved_category", resolved_category)
+                logger.info(
+                    "Resolved active API config via unified media resolver | user_id=%s category=%s provider=%s model=%s source=%s",
+                    user_id,
+                    resolved_category,
+                    unified.get("provider"),
+                    unified.get("model"),
+                    merged_config.get("__resolved_source") or merged_config.get("__selection_source"),
+                )
+                return {
+                    "provider": unified.get("provider"),
+                    "api_key": unified.get("api_key"),
+                    "base_url": unified.get("base_url"),
+                    "model": unified.get("model"),
+                    "config": merged_config,
+                }
+        except Exception as unify_err:
+            logger.warning(
+                "Unified media resolver unavailable for get_active_llm_config | user_id=%s category=%s err=%s",
+                user_id,
+                resolved_category,
+                unify_err,
+            )
+
         try:
             with SessionLocal() as session:
                 resolved_category = str(category or "LLM").strip() or "LLM"
@@ -1721,7 +1837,6 @@ Output ONLY the JSON object now."""
                 active_user_setting = session.query(APISetting).filter(
                     APISetting.user_id == user_id,
                     APISetting.category == resolved_category,
-                    APISetting.is_active == True
                 ).order_by(APISetting.id.desc()).first()
 
                 if not active_user_setting:
@@ -1735,26 +1850,39 @@ Output ONLY the JSON object now."""
                 selected: Optional[SystemAPISetting] = None
                 selected_source = "none"
 
-                target_provider = active_user_setting.provider if active_user_setting else None
-                target_model = active_user_setting.model if active_user_setting else None
+                selected_system_setting_id = int(getattr(active_user_setting, "system_api_id", 0) or 0)
 
-                if target_provider and target_model:
-                    selected = session.query(SystemAPISetting).filter(
-                        SystemAPISetting.category == resolved_category,
-                        SystemAPISetting.provider == target_provider,
-                        SystemAPISetting.model == target_model,
-                    ).order_by(SystemAPISetting.id.desc()).first()
-                    if selected:
-                        selected_source = f"system_by_user_provider_model:{target_provider}/{target_model}->{selected.id}"
-
-                if not selected and active_user_setting:
+                if selected_system_setting_id <= 0:
                     logger.warning(
-                        "No matching system api setting by provider+model | user_id=%s category=%s user_setting_id=%s provider=%s model=%s",
+                        "Active user setting missing system_api_id | user_id=%s category=%s user_setting_id=%s",
                         user_id,
                         resolved_category,
                         active_user_setting.id,
-                        target_provider,
-                        target_model,
+                    )
+                    return _resolve_system_default_fallback("system_fallback_user_setting_missing_system_marker")
+
+                selected = session.query(SystemAPISetting).filter(
+                    SystemAPISetting.id == selected_system_setting_id,
+                    SystemAPISetting.category == resolved_category,
+                ).first()
+                if selected:
+                    selected_source = f"system_by_user_setting_id:{selected_system_setting_id}->{selected.id}"
+                else:
+                    logger.warning(
+                        "Active user marker points to missing system setting | user_id=%s category=%s user_setting_id=%s marker_id=%s",
+                        user_id,
+                        resolved_category,
+                        active_user_setting.id,
+                        selected_system_setting_id,
+                    )
+
+                if not selected and active_user_setting:
+                    logger.warning(
+                        "No matching system api setting by user marker id | user_id=%s category=%s user_setting_id=%s marker_id=%s",
+                        user_id,
+                        resolved_category,
+                        active_user_setting.id,
+                        selected_system_setting_id,
                     )
 
                 if selected:
@@ -3009,37 +3137,32 @@ Output ONLY the JSON object now."""
         """Build a summary of the user's active API settings with model details & pricing."""
         rows = db.query(APISetting).filter(
             APISetting.user_id == user_id,
-            APISetting.is_active == True,
         ).order_by(APISetting.category, APISetting.id.desc()).all()
 
         items = []
         for row in rows:
-            provider = str(row.provider or "").strip()
-            model = str(row.model or "").strip()
             category = str(row.category or "").strip()
-            if not provider or not model:
+            selected_system_setting_id = int(getattr(row, "system_api_id", 0) or 0)
+            if selected_system_setting_id <= 0:
                 continue
 
+            sys_setting = None
             sys_setting = db.query(SystemAPISetting).filter(
-                SystemAPISetting.provider == provider,
-                SystemAPISetting.model == model,
-                SystemAPISetting.category == category,
+                SystemAPISetting.id == selected_system_setting_id,
             ).first()
+
             if not sys_setting:
-                sys_setting = db.query(SystemAPISetting).filter(
-                    SystemAPISetting.provider == provider,
-                    SystemAPISetting.model == model,
-                ).first()
+                continue
 
             item: Dict[str, Any] = {
-                "category": category,
-                "provider": provider,
-                "model": model,
+                "category": str(getattr(sys_setting, "category", category) or category),
+                "provider": str(getattr(sys_setting, "provider", "") or "").strip(),
+                "model": str(getattr(sys_setting, "model", "") or "").strip(),
+                "system_setting_id": int(getattr(sys_setting, "id", 0) or 0),
             }
-            if sys_setting:
-                api_pricing = self._read_billing_from_row(sys_setting, session=db)
-                item["name"] = sys_setting.name
-                item["api_pricing"] = api_pricing
+            api_pricing = self._read_billing_from_row(sys_setting, session=db)
+            item["name"] = sys_setting.name
+            item["api_pricing"] = api_pricing
             items.append(item)
         return items
 
@@ -4486,42 +4609,21 @@ Output ONLY the JSON object now."""
                     if not system_setting.is_active:
                         return {"status": "failed", "result": f"Model {system_setting.model} is not enabled by admin"}
 
-                    # Deactivate all current user settings in same category
-                    session.query(APISetting).filter(
-                        APISetting.user_id == user_id,
-                        APISetting.category == system_setting.category,
-                        APISetting.is_active == True,
-                    ).update({"is_active": False})
-
-                    # Find or create user setting
+                    # Find or create user/category binding setting
                     user_setting = session.query(APISetting).filter(
                         APISetting.user_id == user_id,
-                        APISetting.provider == system_setting.provider,
                         APISetting.category == system_setting.category,
-                        APISetting.model == system_setting.model,
                     ).first()
 
-                    marker_config = dict(system_setting.config or {})
-                    marker_config["selection_source"] = "agent_recommendation"
-
                     if user_setting:
-                        user_setting.name = user_setting.name or f"Use System {system_setting.provider}"
-                        user_setting.base_url = system_setting.base_url
-                        user_setting.model = system_setting.model
-                        user_setting.config = marker_config
-                        user_setting.is_active = True
-                        user_setting.api_key = ""
+                        user_setting.system_api_id = int(system_setting.id)
+                        user_setting.mode = None
                     else:
                         user_setting = APISetting(
                             user_id=user_id,
-                            name=f"Use System {system_setting.provider}",
                             category=system_setting.category,
-                            provider=system_setting.provider,
-                            api_key="",
-                            base_url=system_setting.base_url,
-                            model=system_setting.model,
-                            config=marker_config,
-                            is_active=True,
+                            system_api_id=int(system_setting.id),
+                            mode=None,
                         )
                         session.add(user_setting)
 

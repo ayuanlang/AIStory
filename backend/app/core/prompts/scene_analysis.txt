@@ -115,6 +115,9 @@
 
 ### 2) Core Scene Info 必备结构
 Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`{Layout}`、`{Axis}`、`{Observer View}`、`{Scene Subjects}`、`{Beats}`。
+- `Core Scene Info` 必须显式包含当前行环境锚点：`ENV:[<Environment Name>]`（逐字符一致）。
+- 若 `Core Scene Info` 中的 `ENV:[...]` 与 `Environment Name` 不一致，判定为无效输出，必须重写。
+- 若本行环境存在依赖（`Environment Relation=REUSE/VARIANT_OF`、`Base Environment Reference` 非空或存在 `visual_dependencies`），`Core Scene Info` 必须显式描述依赖环境：写出 `ENV:[依赖环境名]` 与依赖关系（继承锚点/变化点），不得只描述当前环境。
 
 #### {Scene Subjects}（场景实体先抽取，Mandatory）
 - 每个 Scene 在写 `{Beats}` 前必须先完成该场景实体抽取，形成“实体清单 + 实体落点”闭环。
@@ -290,7 +293,9 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - **禁止混表（Hard Rule）**：`Subject Index` 与 `Part 2` 不得使用 Markdown 表格展示；请分别使用“编号列表/键值列表 + JSON”。
 
 ### Part 1: Scenes Table (Markdown)
-- `Core Scene Info` 至少包含：`{Stage}`, `{Environment Context}`, `{Layout}`, `{Axis}`, `{Observer View}`, `{Beats}`。
+- `Core Scene Info` 至少包含：`{Stage}`, `{Environment Context}`, `{Layout}`, `{Axis}`, `{Observer View}`, `{Scene Subjects}`, `{Beats}`。
+- `Core Scene Info` 必须包含 `**{Env Anchor}**: ENV:[<Environment Name>]`，且该名称与本行 `Environment Name` 完全一致。
+- 当 `Environment Relation` 为 `REUSE:<EnvName>` 或 `VARIANT_OF:<EnvName>`（或存在 `visual_dependencies`）时，`Core Scene Info` 还必须包含 `**{Dependent Envs}**`，列出所有依赖环境（`ENV:[...]`）及关系说明。
 - 二维背景显著变化必须新起 Scene。
 - 每行必须包含并满足：
   - `Episode ID`、`Scene ID`（`EPxx_SCyy` 一致性）
@@ -307,7 +312,7 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 
 | Episode ID | Scene ID | Scene No. | Scene Name | Equivalent Duration | Core Scene Info | Original Script Text | Environment Name | Environment Relation | Base Environment Reference | Environment Delta | Entry State | Exit State | Linked Characters | Key Props |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| EP01 | EP01_SC01 | 1 | {Name} | {Times} | **{Stage} (核心舞台)**: 中文描述。<br>**{Environment Context}**: 中文描述。<br>**{Layout}**: 中文描述。<br>**{Axis}**: 中文描述（含观察方向与是否跨线）。<br>**{Observer View}**: 机位站位 + 朝向 + 轴线侧（e.g., 沿轴正向看向{Stage}）。<br>**{Split Reason}**: 拆分原因。<br>**{Beats}**:<br>1. {镜头} 机位在ENV:[Bed]脚端左侧，朝向{Stage}；{空间} CHAR:[@Char A]在ENV:[Bed]右侧边缘坐姿；{角色-镜头关系} CHAR:[@Char A]位于中景偏右；{主体关系} CHAR:[@Char A]侧对CHAR:[@Char B]并看向其胸前，未接触；{动作变化过程} CHAR:[@Char A]前倾半步并抬手；-> {新状态} 与CHAR:[@Char B]近距对峙。 | {Original} | `{Env Name}` | `NEW / REUSE / VARIANT_OF` | `{Base Env Name / Ref ID}` | `仅写相对变化项；REUSE=No visual delta` | {Entry Snapshot} | {Exit Snapshot} | `CHAR:[@Char A]`, `CHAR:[@Char B]` | `PROP:[Prop]` |
+| EP01 | EP01_SC01 | 1 | {Name} | {Times} | **{Env Anchor}**: ENV:[{Env Name}]。<br>**{Dependent Envs}**: ENV:[{Base Env Name}]（{REUSE/VARIANT_OF，继承结构与材质锚点，仅写本场景变化项}）。<br>**{Stage} (核心舞台)**: 中文描述。<br>**{Environment Context}**: 中文描述。<br>**{Layout}**: 中文描述。<br>**{Axis}**: 中文描述（含观察方向与是否跨线）。<br>**{Observer View}**: 机位站位 + 朝向 + 轴线侧（e.g., 沿轴正向看向{Stage}）。<br>**{Split Reason}**: 拆分原因。<br>**{Scene Subjects}**: CHAR:[@Char A], CHAR:[@Char B], ENV:[{Env Name}], ENV:[{Base Env Name}], PROP:[Prop]。<br>**{Beats}**:<br>1. {镜头} 机位在ENV:[Bed]脚端左侧，朝向{Stage}；{空间} CHAR:[@Char A]在ENV:[Bed]右侧边缘坐姿；{角色-镜头关系} CHAR:[@Char A]位于中景偏右；{主体关系} CHAR:[@Char A]侧对CHAR:[@Char B]并看向其胸前，未接触；{动作变化过程} CHAR:[@Char A]前倾半步并抬手；-> {新状态} 与CHAR:[@Char B]近距对峙。 | {Original} | `{Env Name}` | `NEW / REUSE / VARIANT_OF` | `{Base Env Name / Ref ID}` | `仅写相对变化项；REUSE=No visual delta` | {Entry Snapshot} | {Exit Snapshot} | `CHAR:[@Char A]`, `CHAR:[@Char B]` | `PROP:[Prop]` |
 
 ### Subject Index（紧跟 Part 1，非 Markdown 表）
 - **模板锁定（Mandatory）**：Subject Index 每一行必须严格采用固定骨架，禁止改序、改键、增键、删键：
