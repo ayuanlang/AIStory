@@ -2,6 +2,7 @@
 from contextlib import asynccontextmanager
 from typing import Iterable, Tuple
 from datetime import datetime
+import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -52,7 +53,11 @@ def _bootstrap_db():
                              _DB_BOOT_MAX_RETRIES, exc)
 
 
-_bootstrap_db()
+_RUN_DB_BOOTSTRAP_ON_START = os.getenv("RUN_DB_BOOTSTRAP_ON_START", "1").strip().lower() in {"1", "true", "yes", "on"}
+if _RUN_DB_BOOTSTRAP_ON_START:
+    _bootstrap_db()
+else:
+    logger.warning("RUN_DB_BOOTSTRAP_ON_START is disabled; skipping startup DB bootstrap")
 
 limiter = Limiter(key_func=get_remote_address)
 
@@ -100,7 +105,6 @@ app.add_middleware(
 )
 
 # Ensure upload dir exists
-import os
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads")
 

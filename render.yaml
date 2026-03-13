@@ -21,6 +21,8 @@ services:
       else
         echo "[boot] RUN_KIE_SEED_ON_BOOT!=1, skip KIE standard seed"
       fi
+      export RUN_DB_BOOTSTRAP_ON_START=0
+      echo "[boot] RUN_DB_BOOTSTRAP_ON_START=0 for fast health readiness"
       echo "[boot] starting gunicorn on PORT=${PORT}"
       exec gunicorn app.main:app \
         -k uvicorn.workers.UvicornWorker \
