@@ -14,6 +14,14 @@ OUT_REVERSE_SUMMARY = ROOT / "_kie_standard_to_api_enum_mapping_summary.md"
 
 EXCLUDED_STANDARD_DIMENSIONS = {"MODEL_ID", "VOICE_ID"}
 
+# For one-to-one standard->API enum mapping, each model+dimension chooses one
+# canonical source field, then every standard value maps only within that field.
+FIELD_PRIORITY = {
+    "ASPECT_RATIO": ["paths.post.input.aspect_ratio", "paths.post.input.size"],
+    "RESOLUTION_TIER": ["paths.post.input.resolution", "paths.post.input.image_resolution"],
+    "DURATION_SECONDS": ["paths.post.input.duration", "paths.post.input.n_frames"],
+}
+
 
 def clean(v: Any) -> str:
     return str(v or "").strip()
@@ -368,6 +376,37 @@ def load_api_enum_groups() -> Dict[Tuple[str, str, str, str], List[Dict[str, str
     return groups
 
 
+def select_canonical_field_groups(
+    groups: Dict[Tuple[str, str, str, str], List[Dict[str, str]]]
+) -> Dict[Tuple[str, str, str, str], List[Dict[str, str]]]:
+    bucket: Dict[Tuple[str, str, str, str], List[Tuple[str, List[Dict[str, str]]]]] = defaultdict(list)
+
+    for (provider, model_key, model_title, field_path), enum_rows in groups.items():
+        std_dim = map_field_to_standard(field_path)
+        if not std_dim:
+            continue
+        key = (provider, model_key, model_title, std_dim)
+        bucket[key].append((field_path, enum_rows))
+
+    selected: Dict[Tuple[str, str, str, str], List[Dict[str, str]]] = {}
+
+    for (provider, model_key, model_title, std_dim), field_rows in bucket.items():
+        priority_map = {name: idx for idx, name in enumerate(FIELD_PRIORITY.get(std_dim, []))}
+
+        def _rank(item: Tuple[str, List[Dict[str, str]]]) -> Tuple[int, int, str]:
+            field_path, enum_rows = item
+            # lower is better
+            priority_rank = priority_map.get(field_path, 999)
+            # more enum coverage is better
+            enum_count_rank = -len(enum_rows)
+            return (priority_rank, enum_count_rank, field_path)
+
+        best_field_path, best_rows = sorted(field_rows, key=_rank)[0]
+        selected[(provider, model_key, model_title, best_field_path)] = best_rows
+
+    return selected
+
+
 def main() -> None:
     if not ENUM_CSV.exists():
         raise FileNotFoundError(f"Missing {ENUM_CSV}")
@@ -376,6 +415,7 @@ def main() -> None:
 
     std_dict = load_standard_dictionary()
     enum_groups = load_api_enum_groups()
+    enum_groups = select_canonical_field_groups(enum_groups)
 
     out_rows: List[Dict[str, str]] = []
     coverage: Dict[str, Dict[str, int]] = defaultdict(lambda: {"mapped": 0, "total": 0})
