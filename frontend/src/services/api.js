@@ -753,7 +753,7 @@ export const fetchSceneShotsPrompt = async (sceneId) => {
     return response.data;
 }
 
-export const generateSceneShots = async (sceneId, promptData = null) => {
+export const generateSceneShots = async (sceneId, promptData = null, runtimeHooks = {}) => {
     // This now returns the Staging result (timestamp, content=[]), not the applied shots
     const payloadMeta = {
         hasUserPrompt: Boolean(promptData?.user_prompt),
@@ -762,7 +762,10 @@ export const generateSceneShots = async (sceneId, promptData = null) => {
         systemPromptLen: String(promptData?.system_prompt || '').length,
     };
     try {
-        return await asyncLLMPost(`/scenes/${sceneId}/ai_generate_shots`, promptData);
+        return await asyncLLMPost(`/scenes/${sceneId}/ai_generate_shots`, promptData, {
+            onTaskCreated: runtimeHooks?.onTaskCreated,
+            pollOptions: runtimeHooks?.pollOptions,
+        });
     } catch (error) {
         console.error('[API] generateSceneShots failed', {
             sceneId,

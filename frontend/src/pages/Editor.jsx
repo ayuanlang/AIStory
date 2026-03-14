@@ -10305,6 +10305,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
     });
     const [isStoppingBatchAiShots, setIsStoppingBatchAiShots] = useState(false);
     const batchAiShotsStatusTimerRef = useRef(null);
+    const aiShotsResumeInFlightRef = useRef(false);
     const [aiShotsStaging, setAiShotsStaging] = useState({
         loading: false,
         sceneId: null,
@@ -10321,6 +10322,64 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         index: -1,
         data: null,
     });
+
+    const getAiShotsTaskStorageKey = useCallback((episodeId) => {
+        if (!episodeId) return '';
+        return `aistory:scene-ai-shots-task:${episodeId}`;
+    }, []);
+
+    const loadAiShotsTaskMarker = useCallback((episodeId) => {
+        try {
+            const key = getAiShotsTaskStorageKey(episodeId);
+            if (!key || !window?.localStorage) return null;
+            const raw = window.localStorage.getItem(key);
+            if (!raw) return null;
+
+            const parsed = JSON.parse(raw);
+            const taskId = String(parsed?.taskId || '').trim();
+            const sceneId = Number(parsed?.sceneId || 0);
+            const startedAt = Number(parsed?.startedAt || 0);
+            if (!taskId || !Number.isFinite(sceneId) || sceneId <= 0) return null;
+
+            const normalizedStartedAt = (Number.isFinite(startedAt) && startedAt > 0) ? startedAt : Date.now();
+            // Expire stale marker after 30 minutes.
+            if ((Date.now() - normalizedStartedAt) > (30 * 60 * 1000)) {
+                window.localStorage.removeItem(key);
+                return null;
+            }
+            return { taskId, sceneId, startedAt: normalizedStartedAt };
+        } catch (_) {
+            return null;
+        }
+    }, [getAiShotsTaskStorageKey]);
+
+    const saveAiShotsTaskMarker = useCallback((episodeId, marker) => {
+        try {
+            const key = getAiShotsTaskStorageKey(episodeId);
+            if (!key || !window?.localStorage) return;
+            const taskId = String(marker?.taskId || '').trim();
+            const sceneId = Number(marker?.sceneId || 0);
+            if (!taskId || !Number.isFinite(sceneId) || sceneId <= 0) return;
+            const payload = {
+                taskId,
+                sceneId,
+                startedAt: Number(marker?.startedAt || Date.now()),
+            };
+            window.localStorage.setItem(key, JSON.stringify(payload));
+        } catch (_) {
+            // Ignore localStorage failures.
+        }
+    }, [getAiShotsTaskStorageKey]);
+
+    const clearAiShotsTaskMarker = useCallback((episodeId) => {
+        try {
+            const key = getAiShotsTaskStorageKey(episodeId);
+            if (!key || !window?.localStorage) return;
+            window.localStorage.removeItem(key);
+        } catch (_) {
+            // Ignore localStorage failures.
+        }
+    }, [getAiShotsTaskStorageKey]);
     const normalizeOriginalScriptText = (value) => {
         const raw = typeof value === 'string' ? value.trim() : '';
         if (!raw) return '';
@@ -11350,6 +11409,105 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         return match ? match.image_url : null;
     };
 
+    const finalizeAiShotsGenerationResult = useCallback(async ({ sceneId, result }) => {
+        const generatedRows = Array.isArray(result?.content) ? result.content : [];
+        const generatedRaw = String(result?.raw_text || '').trim();
+        if (generatedRows.length === 0) {
+            if (generatedRaw) {
+                const rawPreview = generatedRaw.replace(/\s+/g, ' ').slice(0, 300);
+                onLog?.(`SceneManager: Generate Shots returned 0 parsed rows. Raw preview: ${rawPreview}`, 'warning');
+                console.warn('[SceneManager] Generate Shots parse-empty with raw_text preview', {
+                    sceneId,
+                    rawLen: generatedRaw.length,
+                    rawPreview,
+                });
+                throw new Error(`Generate Shots returned 0 parsed rows; raw preview: ${rawPreview}`);
+            }
+            throw new Error('Generate Shots returned empty result (no rows and no raw text)');
+        }
+
+        onLog?.(`SceneManager: Shot list generated for Scene ${sceneId}.`, 'success');
+        setShotPromptModal({ open: false, sceneId: null, data: null, loading: false });
+
+        const sceneObj = scenes.find(s => Number(s?.id) === Number(sceneId)) || { id: sceneId, scene_no: sceneId };
+        setEditingScene(sceneObj);
+        setAiShotsStaging(prev => ({
+            ...prev,
+            sceneId,
+            content: generatedRows,
+            rawText: result?.raw_text || '',
+            usage: result?.usage || null,
+            timestamp: result?.timestamp || null,
+            loading: false,
+            error: null,
+        }));
+
+        setAiShotsFlowStatus({
+            phase: 'importing',
+            sceneId,
+            message: t('生成完成，正在自动导入 Shots...', 'Generated. Auto-importing into Shots...'),
+        });
+        onLog?.(`SceneManager: Auto-importing shots for Scene ${sceneId}...`, 'info');
+
+        await applySceneAIResult(sceneId, { content: generatedRows });
+
+        onLog?.(`SceneManager: Auto-import finished for Scene ${sceneId}.`, 'success');
+        if (typeof onSwitchToShots === 'function') {
+            onSwitchToShots();
+        }
+        setAiShotsFlowStatus({
+            phase: 'completed',
+            sceneId,
+            message: t('AI Shots 已导入，已切换到 Shots 页面。', 'AI Shots imported. Switched to Shots page.'),
+        });
+    }, [onLog, onSwitchToShots, scenes, t]);
+
+    const resumeAiShotsFromTaskMarker = useCallback(async (marker) => {
+        if (!activeEpisode?.id || !marker?.taskId || !marker?.sceneId) return;
+        if (aiShotsResumeInFlightRef.current) return;
+        aiShotsResumeInFlightRef.current = true;
+
+        const sceneId = Number(marker.sceneId);
+        setAiShotsFlowStatus({
+            phase: 'generating',
+            sceneId,
+            message: t('检测到进行中的 AI Shots 任务，正在恢复状态...', 'Detected an in-progress AI Shots task, reconnecting...'),
+        });
+
+        try {
+            const result = await waitForAsyncTask(marker.taskId, { interval: 1200, timeout: 600000 });
+            clearAiShotsTaskMarker(activeEpisode.id);
+            await finalizeAiShotsGenerationResult({ sceneId, result });
+        } catch (e) {
+            const canceled = Boolean(e?.isCanceled) || Number(e?.errorCode || e?.response?.status || 0) === 499;
+            clearAiShotsTaskMarker(activeEpisode.id);
+            setAiShotsFlowStatus(
+                canceled
+                    ? {
+                        phase: 'failed',
+                        sceneId,
+                        message: t('AI Shots 任务已停止。', 'AI Shots task was stopped.'),
+                    }
+                    : {
+                        phase: 'failed',
+                        sceneId,
+                        message: t(`AI Shots 失败：${e?.message || e}`, `AI Shots failed: ${e?.message || e}`),
+                    }
+            );
+            onLog?.(`SceneManager: Failed to resume AI Shots task - ${e?.message || e}`, canceled ? 'warning' : 'error');
+        } finally {
+            aiShotsResumeInFlightRef.current = false;
+        }
+    }, [activeEpisode?.id, clearAiShotsTaskMarker, finalizeAiShotsGenerationResult, onLog, t]);
+
+    useEffect(() => {
+        if (!activeEpisode?.id) return;
+        const marker = loadAiShotsTaskMarker(activeEpisode.id);
+        if (!marker?.taskId || !marker?.sceneId) return;
+        if (aiShotsFlowStatus.phase === 'generating' || aiShotsFlowStatus.phase === 'importing') return;
+        resumeAiShotsFromTaskMarker(marker);
+    }, [activeEpisode?.id, aiShotsFlowStatus.phase, loadAiShotsTaskMarker, resumeAiShotsFromTaskMarker]);
+
     const executeGenerateShots = async ({ sceneId, promptData }) => {
         setAiShotsFlowStatus({
             phase: 'generating',
@@ -11359,63 +11517,24 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         onLog?.(`SceneManager: Generating shots for Scene ${sceneId}...`, 'info');
 
         try {
+            const startedAt = Date.now();
             const result = await generateSceneShots(sceneId, {
                 user_prompt: promptData?.user_prompt,
                 system_prompt: promptData?.system_prompt,
-            });
-
-            const generatedRows = Array.isArray(result?.content) ? result.content : [];
-            const generatedRaw = String(result?.raw_text || '').trim();
-            if (generatedRows.length === 0) {
-                if (generatedRaw) {
-                    const rawPreview = generatedRaw.replace(/\s+/g, ' ').slice(0, 300);
-                    onLog?.(`SceneManager: Generate Shots returned 0 parsed rows. Raw preview: ${rawPreview}`, 'warning');
-                    console.warn('[SceneManager] Generate Shots parse-empty with raw_text preview', {
+            }, {
+                onTaskCreated: (taskId) => {
+                    saveAiShotsTaskMarker(activeEpisode?.id, {
+                        taskId,
                         sceneId,
-                        rawLen: generatedRaw.length,
-                        rawPreview,
+                        startedAt,
                     });
-                    throw new Error(`Generate Shots returned 0 parsed rows; raw preview: ${rawPreview}`);
-                }
-                throw new Error('Generate Shots returned empty result (no rows and no raw text)');
-            }
-
-            onLog?.(`SceneManager: Shot list generated for Scene ${sceneId}.`, 'success');
-            setShotPromptModal({ open: false, sceneId: null, data: null, loading: false });
-
-            const sceneObj = scenes.find(s => s.id === sceneId) || { id: sceneId, scene_no: sceneId };
-            setEditingScene(sceneObj);
-            setAiShotsStaging(prev => ({
-                ...prev,
-                sceneId,
-                content: generatedRows,
-                rawText: result?.raw_text || '',
-                usage: result?.usage || null,
-                timestamp: result?.timestamp || null,
-                loading: false,
-                error: null,
-            }));
-
-            setAiShotsFlowStatus({
-                phase: 'importing',
-                sceneId,
-                message: t('生成完成，正在自动导入 Shots...', 'Generated. Auto-importing into Shots...'),
+                },
             });
-            onLog?.(`SceneManager: Auto-importing shots for Scene ${sceneId}...`, 'info');
-
-            await applySceneAIResult(sceneId, { content: generatedRows });
-
-            onLog?.(`SceneManager: Auto-import finished for Scene ${sceneId}.`, 'success');
-            if (typeof onSwitchToShots === 'function') {
-                onSwitchToShots();
-            }
-            setAiShotsFlowStatus({
-                phase: 'completed',
-                sceneId,
-                message: t('AI Shots 已导入，已切换到 Shots 页面。', 'AI Shots imported. Switched to Shots page.'),
-            });
+            clearAiShotsTaskMarker(activeEpisode?.id);
+            await finalizeAiShotsGenerationResult({ sceneId, result });
         } catch (e) {
             console.error(e);
+            clearAiShotsTaskMarker(activeEpisode?.id);
             onLog?.(`SceneManager: Failed to generate/apply shots - ${e.message}`, 'error');
             setAiShotsFlowStatus({
                 phase: 'failed',
@@ -13154,6 +13273,8 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     const [batchEntityProgress, setBatchEntityProgress] = useState(null);
     const [isBatchAnalyzingEntities, setIsBatchAnalyzingEntities] = useState(false);
     const [batchAnalyzeProgress, setBatchAnalyzeProgress] = useState(null);
+    const [isBatchReconstructingEntities, setIsBatchReconstructingEntities] = useState(false);
+    const [batchReconstructProgress, setBatchReconstructProgress] = useState(null);
     const [isReconstructingEntity, setIsReconstructingEntity] = useState(false);
     const [reconstructProgress, setReconstructProgress] = useState(null);
     const [pickerConfig, setPickerConfig] = useState({ isOpen: false, callback: null });
@@ -13512,6 +13633,83 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         }
     };
 
+    const collectAssetUrlTokens = useCallback((rawUrl) => {
+        const tokens = new Set();
+        const stableRaw = String(rawUrl || '').trim();
+        if (!stableRaw) return tokens;
+
+        const pushToken = (value) => {
+            const stable = String(value || '').trim().toLowerCase();
+            if (!stable) return;
+            tokens.add(stable);
+        };
+
+        pushToken(stableRaw);
+
+        let parsedPath = '';
+        try {
+            const parsed = new URL(stableRaw, window.location.origin);
+            parsedPath = decodeURIComponent(String(parsed.pathname || '')).trim();
+        } catch {
+            try {
+                parsedPath = decodeURIComponent(stableRaw).trim();
+            } catch {
+                parsedPath = stableRaw;
+            }
+        }
+
+        if (!parsedPath) return tokens;
+
+        pushToken(parsedPath);
+        const stripped = parsedPath.replace(/^\/+/, '');
+        pushToken(stripped);
+
+        if (parsedPath.includes('/uploads/')) {
+            const idx = parsedPath.indexOf('/uploads/');
+            const tail = parsedPath.slice(idx + '/uploads/'.length);
+            pushToken(tail);
+            pushToken(`uploads/${tail}`);
+        }
+
+        if (stripped.startsWith('uploads/')) {
+            pushToken(stripped.slice('uploads/'.length));
+        }
+
+        const segments = parsedPath.split('/').filter(Boolean);
+        if (segments.length > 0) {
+            pushToken(segments[segments.length - 1]);
+        }
+
+        return tokens;
+    }, []);
+
+    const buildUploadedImageTokenSet = useCallback(async () => {
+        const tokenSet = new Set();
+        const assetRows = await fetchAssets();
+        const imageAssets = Array.isArray(assetRows) ? assetRows.filter((item) => String(item?.type || '').toLowerCase() === 'image') : [];
+        imageAssets.forEach((asset) => {
+            const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
+            const source = String(meta?.source || '').trim().toLowerCase();
+            if (source !== 'file_upload') return;
+            const tokens = collectAssetUrlTokens(asset?.url);
+            tokens.forEach((token) => tokenSet.add(token));
+        });
+        return tokenSet;
+    }, [collectAssetUrlTokens]);
+
+    const isUserUploadedEntityImage = useCallback((entity, uploadedTokenSet) => {
+        if (!entity || !entity.id) return false;
+        const imageUrl = String(entity?.image_url || '').trim();
+        if (!imageUrl) return false;
+        const tokenSet = uploadedTokenSet instanceof Set ? uploadedTokenSet : new Set();
+        if (tokenSet.size === 0) return false;
+        const tokens = collectAssetUrlTokens(imageUrl);
+        for (const token of tokens) {
+            if (tokenSet.has(token)) return true;
+        }
+        return false;
+    }, [collectAssetUrlTokens]);
+
     const handleBatchAnalyzeExistingSubjects = async () => {
         const runtimeSnapshot = getSubjectBatchSnapshot();
         if (runtimeSnapshot?.analyze?.running && runtimeSnapshot?.analyze?.scopeKey === subjectBatchScopeKey) {
@@ -13519,15 +13717,31 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
             return;
         }
 
-        const targets = allEntities.filter(item => item?.id && String(item?.image_url || '').trim());
+        if (isBatchReconstructingEntities) {
+            alert(t('批量分析并重生图任务正在运行中，请稍候。', 'Batch analyze + regenerate task is already running.'));
+            return;
+        }
+
+        let uploadedImageTokens = new Set();
+        try {
+            uploadedImageTokens = await buildUploadedImageTokenSet();
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'Unknown error';
+            alert(t(`读取上传资产失败：${detail}`, `Failed to load uploaded assets: ${detail}`));
+            return;
+        }
+
+        const hasImageEntities = allEntities.filter(item => item?.id && String(item?.image_url || '').trim());
+        const targets = hasImageEntities.filter((item) => isUserUploadedEntityImage(item, uploadedImageTokens));
+        const skippedSystemCount = Math.max(0, hasImageEntities.length - targets.length);
         if (targets.length === 0) {
-            alert(t('当前没有可分析的已配图主体。', 'No subjects with images available for analysis.'));
+            alert(t('当前没有可分析的“用户上传图片”主体。系统生成图片将被自动跳过。', 'No user-uploaded subject images available for analysis. System-generated images are skipped.'));
             return;
         }
 
         const confirmed = await confirmUiMessage(t(
-            `将批量分析并反写 ${targets.length} 个已有图片主体信息，是否继续？`,
-            `Analyze and write back metadata for ${targets.length} subjects with existing images?`
+            `将批量分析并反写 ${targets.length} 个“用户上传图片”主体信息${skippedSystemCount > 0 ? `（自动跳过系统生成 ${skippedSystemCount} 个）` : ''}，是否继续？`,
+            `Analyze and write back metadata for ${targets.length} user-uploaded subject images${skippedSystemCount > 0 ? ` (skip ${skippedSystemCount} system-generated)` : ''}?`
         ));
         if (!confirmed) return;
 
@@ -13567,13 +13781,176 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
             }
 
             const summary = t(
-                `批量分析完成：成功 ${successCount}，失败 ${failedCount}`,
-                `Batch analyze complete: ${successCount} succeeded, ${failedCount} failed`
+                `批量分析完成（仅用户上传图片）：成功 ${successCount}，失败 ${failedCount}${skippedSystemCount > 0 ? `，跳过系统生成 ${skippedSystemCount}` : ''}`,
+                `Batch analyze complete (uploaded images only): ${successCount} succeeded, ${failedCount} failed${skippedSystemCount > 0 ? `, skipped ${skippedSystemCount} system-generated` : ''}`
             );
             if (onLog) onLog(summary, failedCount > 0 ? 'warning' : 'success');
             alert(summary);
         } finally {
             updateAnalyzeBatchRuntimeState(false, null);
+        }
+    };
+
+    const reconstructEntityAssetCore = useCallback(async (entity, onProgress) => {
+        const progress = typeof onProgress === 'function' ? onProgress : () => {};
+
+        const setStep = (step, zh, en, percent) => {
+            progress({ step, label: t(zh, en), percent: Number(percent || 0) });
+        };
+
+        setStep('analyzing', '正在分析当前图片...', 'Analyzing current image...', 20);
+        const analyzed = await analyzeEntityImage(entity.id);
+        setViewingEntity(prev => (prev?.id === analyzed.id ? analyzed : prev));
+        setEntities(prev => prev.map(e => e.id === analyzed.id ? analyzed : e));
+        setAllEntities(prev => prev.map(e => e.id === analyzed.id ? analyzed : e));
+
+        setStep('prompt', '正在整理新的提示词...', 'Refining prompt...', 55);
+
+        const epInfo = currentEpisode?.episode_info || {};
+        const preferredImageSize = getEpisodePreferredImageSize(epInfo);
+        let rawPrompt = getEntityPromptByLang(analyzed, resolvedPromptSubmitLang);
+        if (!rawPrompt && analyzed.description) {
+            const match = analyzed.description.match(/Prompt:\s*(.*)/);
+            if (match && match[1]) {
+                rawPrompt = match[1].trim();
+            }
+        }
+
+        let finalPrompt = processPrompt(rawPrompt, epInfo, allEntities) || rawPrompt || '';
+        const infoSource = epInfo.e_global_info || epInfo;
+        const suffixes = [
+            infoSource?.type,
+            infoSource?.lighting,
+            infoSource?.tech_params?.visual_standard?.quality,
+        ].filter(Boolean);
+        if (suffixes.length > 0) {
+            finalPrompt = `${finalPrompt}${finalPrompt ? ', ' : ''}${suffixes.join(', ')}`;
+        }
+
+        const primaryRefUrl = String(analyzed?.image_url || entity?.image_url || '').trim();
+        const depUrls = [];
+        const deps = Array.isArray(analyzed.visual_dependencies) ? analyzed.visual_dependencies : [];
+        deps.forEach(dep => {
+            const depValue = String(dep).trim();
+            const depNormalized = normalizeEntityToken(depValue);
+            const target = allEntities.find(e => {
+                if (!e) return false;
+                if (String(e.id).trim() === depValue) return true;
+                if (normalizeEntityToken(e.name || '') === depNormalized) return true;
+                if (normalizeEntityToken(e.name_en || '') === depNormalized) return true;
+                return false;
+            });
+            if (target?.image_url) depUrls.push(target.image_url);
+        });
+        const combinedRefs = [primaryRefUrl, ...depUrls]
+            .map(url => String(url || '').trim())
+            .filter(Boolean);
+        const uniqueRefs = [...new Set(combinedRefs)];
+
+        setStep('generating', '正在根据新提示词生成图片...', 'Generating image with new prompt...', 80);
+        const asset = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
+            project_id: projectId,
+            episode_id: currentEpisode?.id,
+            entity_id: analyzed?.id,
+            entity_name: analyzed?.name || analyzed?.name_en,
+            subject_name: analyzed?.name || analyzed?.name_en,
+            subject_type: analyzed?.type,
+            entity_type: analyzed?.type,
+            prompt_language: resolvedPromptSubmitLang,
+            asset_type: 'subject',
+            ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
+            negative_prompt: buildEntityNegativePrompt(rawPrompt, analyzed || entity, allEntities)
+        });
+
+        if (!asset?.url) {
+            throw new Error(t('生成结果缺少图片地址', 'Generated result missing image URL'));
+        }
+
+        await updateEntity(analyzed.id, { image_url: asset.url });
+        const updatedEntity = { ...analyzed, image_url: asset.url };
+        setViewingEntity(prev => (prev?.id === updatedEntity.id ? updatedEntity : prev));
+        setEntities(prev => prev.map(e => e.id === updatedEntity.id ? updatedEntity : e));
+        setAllEntities(prev => prev.map(e => e.id === updatedEntity.id ? updatedEntity : e));
+
+        setStep('done', '重构完成', 'Refactor completed', 100);
+        return updatedEntity;
+    }, [allEntities, currentEpisode?.episode_info, currentEpisode?.id, getEntityPromptByLang, projectId, resolvedPromptSubmitLang, t]);
+
+    const handleBatchAnalyzeAndReconstructSubjects = async () => {
+        if (isBatchGeneratingEntities || isBatchAnalyzingEntities || isReconstructingEntity) {
+            alert(t('有其他批量任务正在运行，请稍后。', 'Another batch task is running. Please wait.'));
+            return;
+        }
+
+        let uploadedImageTokens = new Set();
+        try {
+            uploadedImageTokens = await buildUploadedImageTokenSet();
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'Unknown error';
+            alert(t(`读取上传资产失败：${detail}`, `Failed to load uploaded assets: ${detail}`));
+            return;
+        }
+
+        const hasImageEntities = allEntities.filter(item => item?.id && String(item?.image_url || '').trim());
+        const targets = hasImageEntities.filter((item) => isUserUploadedEntityImage(item, uploadedImageTokens));
+        const skippedSystemCount = Math.max(0, hasImageEntities.length - targets.length);
+        if (targets.length === 0) {
+            alert(t('当前没有可执行“批量分析并重生图”的用户上传图片主体。', 'No user-uploaded subject images available for batch analyze + regenerate.'));
+            return;
+        }
+
+        const confirmed = await confirmUiMessage(t(
+            `将对 ${targets.length} 个“用户上传图片”主体执行“批量分析并重生图”${skippedSystemCount > 0 ? `（自动跳过系统生成 ${skippedSystemCount} 个）` : ''}，是否继续？`,
+            `Run batch analyze + regenerate for ${targets.length} user-uploaded subject images${skippedSystemCount > 0 ? ` (skip ${skippedSystemCount} system-generated)` : ''}?`
+        ));
+        if (!confirmed) return;
+
+        setIsBatchReconstructingEntities(true);
+        setBatchReconstructProgress({ current: 0, total: targets.length, status: t('准备开始...', 'Preparing...') });
+
+        let successCount = 0;
+        let failedCount = 0;
+
+        try {
+            for (let idx = 0; idx < targets.length; idx += 1) {
+                const entity = targets[idx];
+                const current = idx + 1;
+                setBatchReconstructProgress({
+                    current,
+                    total: targets.length,
+                    status: t(
+                        `处理中：${entity?.name || entity?.name_en || entity?.id}`,
+                        `Processing: ${entity?.name || entity?.name_en || entity?.id}`
+                    ),
+                });
+
+                try {
+                    // eslint-disable-next-line no-await-in-loop
+                    await reconstructEntityAssetCore(entity);
+                    successCount += 1;
+                } catch (err) {
+                    failedCount += 1;
+                    if (onLog) {
+                        onLog(
+                            t(
+                                `批量分析并重生图失败：${entity?.name || entity?.name_en || entity?.id} - ${err?.response?.data?.detail || err?.message || 'Unknown error'}`,
+                                `Batch analyze + regenerate failed: ${entity?.name || entity?.name_en || entity?.id} - ${err?.response?.data?.detail || err?.message || 'Unknown error'}`
+                            ),
+                            'error'
+                        );
+                    }
+                }
+            }
+
+            const summary = t(
+                `批量分析并重生图完成（仅用户上传图片）：成功 ${successCount}，失败 ${failedCount}${skippedSystemCount > 0 ? `，跳过系统生成 ${skippedSystemCount}` : ''}`,
+                `Batch analyze + regenerate complete (uploaded images only): ${successCount} succeeded, ${failedCount} failed${skippedSystemCount > 0 ? `, skipped ${skippedSystemCount} system-generated` : ''}`
+            );
+            if (onLog) onLog(summary, failedCount > 0 ? 'warning' : 'success');
+            alert(summary);
+        } finally {
+            setIsBatchReconstructingEntities(false);
+            setBatchReconstructProgress(null);
         }
     };
 
@@ -13593,87 +13970,9 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         if (onLog) onLog(`Refactoring subject asset: ${entity.name || entity.name_en || entity.id}`, 'process');
 
         try {
-            const analyzed = await analyzeEntityImage(entity.id);
-            setViewingEntity(prev => (prev?.id === analyzed.id ? analyzed : prev));
-            setEntities(prev => prev.map(e => e.id === analyzed.id ? analyzed : e));
-            setAllEntities(prev => prev.map(e => e.id === analyzed.id ? analyzed : e));
-
-            setReconstructProgress({ step: 'prompt', label: t('正在整理新的提示词...', 'Refining prompt...'), percent: 55 });
-
-            const epInfo = currentEpisode?.episode_info || {};
-            const preferredImageSize = getEpisodePreferredImageSize(epInfo);
-            let rawPrompt = getEntityPromptByLang(analyzed, resolvedPromptSubmitLang);
-            if (!rawPrompt && analyzed.description) {
-                const match = analyzed.description.match(/Prompt:\s*(.*)/);
-                if (match && match[1]) {
-                    rawPrompt = match[1].trim();
-                }
-            }
-
-            let finalPrompt = processPrompt(rawPrompt, epInfo, allEntities) || rawPrompt || '';
-            const infoSource = epInfo.e_global_info || epInfo;
-            const suffixes = [
-                infoSource?.type,
-                infoSource?.lighting,
-                infoSource?.tech_params?.visual_standard?.quality,
-            ].filter(Boolean);
-            if (suffixes.length > 0) {
-                finalPrompt = `${finalPrompt}${finalPrompt ? ', ' : ''}${suffixes.join(', ')}`;
-            }
-
-            const primaryRefUrl = String(analyzed?.image_url || entity?.image_url || '').trim();
-            const depUrls = [];
-            const deps = Array.isArray(analyzed.visual_dependencies) ? analyzed.visual_dependencies : [];
-            deps.forEach(dep => {
-                const depValue = String(dep).trim();
-                const depNormalized = normalizeEntityToken(depValue);
-                const target = allEntities.find(e => {
-                    if (!e) return false;
-                    if (String(e.id).trim() === depValue) return true;
-                    if (normalizeEntityToken(e.name || '') === depNormalized) return true;
-                    if (normalizeEntityToken(e.name_en || '') === depNormalized) return true;
-                    return false;
-                });
-                if (target?.image_url) depUrls.push(target.image_url);
+            await reconstructEntityAssetCore(entity, (progress) => {
+                setReconstructProgress(progress);
             });
-            const combinedRefs = [primaryRefUrl, ...depUrls]
-                .map(url => String(url || '').trim())
-                .filter(Boolean);
-            const uniqueRefs = [...new Set(combinedRefs)];
-            if (onLog) {
-                onLog(
-                    `Subject refactor references prepared: primary=${primaryRefUrl ? 'yes' : 'no'}, dependencies=${depUrls.length}, total_unique=${uniqueRefs.length}`,
-                    'process'
-                );
-            }
-
-            setReconstructProgress({ step: 'generating', label: t('正在根据新提示词生成图片...', 'Generating image with new prompt...'), percent: 80 });
-
-            const asset = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
-                project_id: projectId,
-                episode_id: currentEpisode?.id,
-                entity_id: analyzed?.id,
-                entity_name: analyzed?.name || analyzed?.name_en,
-                subject_name: analyzed?.name || analyzed?.name_en,
-                subject_type: analyzed?.type,
-                entity_type: analyzed?.type,
-                prompt_language: resolvedPromptSubmitLang,
-                asset_type: 'subject',
-                ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
-                negative_prompt: buildEntityNegativePrompt(rawPrompt, analyzed || entity, allEntities)
-            });
-
-            if (!asset?.url) {
-                throw new Error(t('生成结果缺少图片地址', 'Generated result missing image URL'));
-            }
-
-            await updateEntity(analyzed.id, { image_url: asset.url });
-            const updatedEntity = { ...analyzed, image_url: asset.url };
-            setViewingEntity(prev => (prev?.id === updatedEntity.id ? updatedEntity : prev));
-            setEntities(prev => prev.map(e => e.id === updatedEntity.id ? updatedEntity : e));
-            setAllEntities(prev => prev.map(e => e.id === updatedEntity.id ? updatedEntity : e));
-
-            setReconstructProgress({ step: 'done', label: t('重构完成', 'Refactor completed'), percent: 100 });
             if (onLog) onLog(`Subject asset refactor completed: ${entity.name || entity.name_en || entity.id}`, 'success');
         } catch (e) {
             console.error(e);
@@ -14322,7 +14621,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                     </button>
                      <button 
                         onClick={handleBatchGenerateEntities}
-                        disabled={isBatchGeneratingEntities}
+                        disabled={isBatchGeneratingEntities || isBatchReconstructingEntities}
                         className="px-3 py-2 text-xs font-bold uppercase rounded-md bg-white/10 hover:bg-white/20 text-white flex items-center gap-2 disabled:opacity-50 transition-all border border-white/10"
                         title={t('批量生成全部实体（遵循依赖）', 'Batch Generate All Entities (Respects Dependencies)')}
                     >
@@ -14339,9 +14638,9 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                     </button>
                     <button
                         onClick={handleBatchAnalyzeExistingSubjects}
-                        disabled={isBatchAnalyzingEntities || isBatchGeneratingEntities || isReconstructingEntity || isAnalyzingEntity}
+                        disabled={isBatchAnalyzingEntities || isBatchGeneratingEntities || isBatchReconstructingEntities || isReconstructingEntity || isAnalyzingEntity}
                         className="px-3 py-2 text-xs font-bold uppercase rounded-md bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-200 flex items-center gap-2 disabled:opacity-50 transition-all border border-indigo-400/20"
-                        title={t('批量分析所有已有图片的主体并反写信息', 'Batch analyze all subjects with existing images and write back metadata')}
+                        title={t('仅批量分析“用户上传图片”的主体并反写信息', 'Batch analyze user-uploaded subject images only and write back metadata')}
                     >
                         {isBatchAnalyzingEntities ? (
                             <>
@@ -14350,7 +14649,24 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                             </>
                         ) : (
                             <>
-                                <Sparkles size={12} /> {t('批量分析', 'Analyze Images')}
+                                <Sparkles size={12} /> {t('批量分析(上传图)', 'Analyze Uploaded')}
+                            </>
+                        )}
+                    </button>
+                    <button
+                        onClick={handleBatchAnalyzeAndReconstructSubjects}
+                        disabled={isBatchReconstructingEntities || isBatchAnalyzingEntities || isBatchGeneratingEntities || isReconstructingEntity || isAnalyzingEntity}
+                        className="px-3 py-2 text-xs font-bold uppercase rounded-md bg-violet-500/20 hover:bg-violet-500/30 text-violet-100 flex items-center gap-2 disabled:opacity-50 transition-all border border-violet-400/20"
+                        title={t('仅对用户上传图片执行：批量分析并重生图', 'Analyze + regenerate in batch for user-uploaded images only')}
+                    >
+                        {isBatchReconstructingEntities ? (
+                            <>
+                                <RefreshCw className="animate-spin" size={12} />
+                                {t('批量重生图中', 'Batch Rebuilding')} {batchReconstructProgress ? `${batchReconstructProgress.current}/${batchReconstructProgress.total}` : '...'}
+                            </>
+                        ) : (
+                            <>
+                                <Wand2 size={12} /> {t('批量分析并重生图(上传图)', 'Analyze + Regenerate')}
                             </>
                         )}
                     </button>
@@ -14391,6 +14707,15 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                         {batchAnalyzeProgress.status}
                     </span>
                     <span className="font-mono">{Math.round((batchAnalyzeProgress.current / batchAnalyzeProgress.total) * 100)}%</span>
+                </div>
+            )}
+            {isBatchReconstructingEntities && batchReconstructProgress && (
+                <div className="mb-4 bg-violet-500/10 border border-violet-400/20 rounded-lg p-3 flex items-center justify-between text-xs text-violet-100">
+                    <span className="font-bold flex items-center gap-2">
+                        <RefreshCw className="animate-spin" size={12} />
+                        {batchReconstructProgress.status}
+                    </span>
+                    <span className="font-mono">{Math.round((batchReconstructProgress.current / batchReconstructProgress.total) * 100)}%</span>
                 </div>
             )}
             
