@@ -412,6 +412,49 @@ class KIEDataStandardBillingInferenceResponse(BaseModel):
     matched_dimensions: List[str] = Field(default_factory=list)
 
 
+class KIEDataStandardMappingExportResponse(BaseModel):
+    provider: str = "kie"
+    total: int = 0
+    items: List[KIEDataStandardMappingOut] = Field(default_factory=list)
+    csv: Optional[str] = None
+
+
+class KIEDataStandardMappingImportRequest(BaseModel):
+    items: List[KIEDataStandardMappingCreate] = Field(default_factory=list)
+    # Import defaults to clear mode: wipe provider scope before insert.
+    replace_all: bool = True
+    upsert_by_natural_key: bool = True
+
+
+class KIEDataStandardMappingImportResponse(BaseModel):
+    ok: bool = True
+    received: int = 0
+    created: int = 0
+    updated: int = 0
+    skipped: int = 0
+
+
+class KIEDataStandardValueMappingImportItem(BaseModel):
+    provider: str = "kie"
+    model_key_inferred: Optional[str] = None
+    model_title: Optional[str] = None
+    model_url: Optional[str] = None
+    source_field: str
+    standard_dimension: str
+    standard_value: str
+    mapped_api_enum_value: str
+    mapping_rule: Optional[str] = None
+    is_mapped: bool = True
+    is_active: bool = True
+    is_billing_related: bool = False
+
+
+class KIEDataStandardValueMappingImportRequest(BaseModel):
+    items: List[KIEDataStandardValueMappingImportItem] = Field(default_factory=list)
+    replace_all: bool = False
+    upsert_by_natural_key: bool = True
+
+
 class SystemAPIProviderImportItem(BaseModel):
     provider: str
     api_keys: List[str] = Field(default_factory=list)

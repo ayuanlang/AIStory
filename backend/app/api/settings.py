@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import cast, String, func, inspect, or_, and_, text
 import logging
 import csv
+import io
 import json
 import asyncio
 import os
@@ -104,6 +105,10 @@ from app.schemas.settings import (
     KIEDataStandardMappingUpdate,
     KIEDataStandardMappingOut,
     KIEDataStandardBillingInferenceResponse,
+    KIEDataStandardMappingExportResponse,
+    KIEDataStandardMappingImportRequest,
+    KIEDataStandardMappingImportResponse,
+    KIEDataStandardValueMappingImportRequest,
 )
 from app.api.deps import get_current_user
 from app.services.billing_service import BillingService
@@ -4099,6 +4104,224 @@ def list_kie_standard_mappings_manage(
         LIMIT :limit
     """), params).mappings().all()
     return [_row_to_kie_mapping_out(dict(row)) for row in rows]
+
+
+@router.get("/settings/system/manage/kie-standard-mappings/export", response_model=KIEDataStandardMappingExportResponse)
+def export_kie_standard_mappings_manage(
+    provider: Optional[str] = Query(default="kie"),
+    standard_dimension: Optional[str] = Query(default=None),
+    model_key_inferred: Optional[str] = Query(default=None),
+    source_field: Optional[str] = Query(default=None),
+    q: Optional[str] = Query(default=None),
+    active_only: bool = Query(default=False),
+    billing_related_only: bool = Query(default=False),
+    include_csv: bool = Query(default=True),
+    limit: int = Query(default=10000, ge=1, le=50000),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+
+    _ensure_kie_standard_tables_for_admin(db)
+
+    where = ["1=1"]
+    params: Dict[str, Any] = {"limit": int(limit)}
+
+    if provider is not None and str(provider).strip():
+        where.append("lower(coalesce(provider, '')) = lower(:provider)")
+        params["provider"] = str(provider).strip()
+    if standard_dimension:
+        where.append("upper(standard_dimension) = upper(:standard_dimension)")
+        params["standard_dimension"] = str(standard_dimension).strip()
+    if model_key_inferred:
+        where.append("lower(coalesce(model_key_inferred, '')) = lower(:model_key_inferred)")
+        params["model_key_inferred"] = str(model_key_inferred).strip()
+    if source_field:
+        where.append("lower(coalesce(source_field, '')) = lower(:source_field)")
+        params["source_field"] = str(source_field).strip()
+    if q:
+        where.append("(" 
+                     "lower(coalesce(model_key_inferred, '')) LIKE :q OR "
+                     "lower(coalesce(model_title, '')) LIKE :q OR "
+                     "lower(coalesce(source_field, '')) LIKE :q OR "
+                     "lower(coalesce(source_enum_value, '')) LIKE :q OR "
+                     "lower(coalesce(standard_dimension, '')) LIKE :q OR "
+                     "lower(coalesce(standard_value, '')) LIKE :q"
+                     ")")
+        params["q"] = f"%{str(q).strip().lower()}%"
+    if active_only:
+        where.append("coalesce(is_active, 1) = 1")
+    if billing_related_only:
+        where.append("coalesce(is_billing_related, 0) = 1")
+
+    rows = db.execute(text(f"""
+        SELECT id, provider, model_key_inferred, model_title, model_url,
+               source_field, source_enum_value, standard_dimension, standard_value,
+               confidence, note, is_active, is_billing_related, created_at, updated_at
+        FROM kie_system_data_standard_mappings
+        WHERE {' AND '.join(where)}
+        ORDER BY standard_dimension ASC, model_key_inferred ASC, source_field ASC, source_enum_value ASC, id ASC
+        LIMIT :limit
+    """), params).mappings().all()
+
+    items = [_row_to_kie_mapping_out(dict(row)) for row in rows]
+    csv_text: Optional[str] = None
+    if include_csv:
+        csv_headers = [
+            "id", "provider", "model_key_inferred", "model_title", "model_url",
+            "source_field", "source_enum_value", "standard_dimension", "standard_value",
+            "confidence", "note", "is_active", "is_billing_related", "created_at", "updated_at",
+        ]
+        sio = io.StringIO()
+        writer = csv.DictWriter(sio, fieldnames=csv_headers)
+        writer.writeheader()
+        for item in items:
+            payload = item.model_dump() if hasattr(item, "model_dump") else item.dict()
+            writer.writerow({k: payload.get(k) for k in csv_headers})
+        csv_text = sio.getvalue()
+
+    return KIEDataStandardMappingExportResponse(
+        provider=str(provider or "kie").strip() or "kie",
+        total=len(items),
+        items=items,
+        csv=csv_text,
+    )
+
+
+@router.post("/settings/system/manage/kie-standard-mappings/import", response_model=KIEDataStandardMappingImportResponse)
+def import_kie_standard_mappings_manage(
+    payload: KIEDataStandardMappingImportRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+
+    _ensure_kie_standard_tables_for_admin(db)
+
+    items = payload.items or []
+    received = len(items)
+    created = 0
+    updated = 0
+    skipped = 0
+
+    # KIE mapping feature import is designed as clear-import mode.
+    clear_import = True
+    if clear_import:
+        providers_to_clear = {"kie"}
+        for item in items:
+            provider_value = str(getattr(item, "provider", "kie") or "kie").strip() or "kie"
+            providers_to_clear.add(provider_value)
+        for provider_value in providers_to_clear:
+            db.execute(
+                text("DELETE FROM kie_system_data_standard_mappings WHERE lower(coalesce(provider, '')) = lower(:provider)"),
+                {"provider": provider_value},
+            )
+
+    for item in items:
+        values = item.model_dump() if hasattr(item, "model_dump") else item.dict()
+
+        provider_value = str(values.get("provider") or "kie").strip() or "kie"
+        model_key_value = str(values.get("model_key_inferred") or "").strip() or None
+        source_field_value = str(values.get("source_field") or "").strip()
+        source_enum_value_value = str(values.get("source_enum_value") or "").strip()
+        standard_dimension_value = str(values.get("standard_dimension") or "").strip().upper()
+        standard_value_value = str(values.get("standard_value") or "").strip()
+
+        if not source_field_value or not source_enum_value_value or not standard_dimension_value or not standard_value_value:
+            skipped += 1
+            continue
+
+        _validate_kie_mapping_source_enum_allowed(
+            provider=provider_value,
+            model_key_inferred=model_key_value,
+            source_field=source_field_value,
+            source_enum_value=source_enum_value_value,
+        )
+
+        now_iso = now_bj_iso()
+        if payload.upsert_by_natural_key:
+            existing = db.execute(text("""
+                SELECT id
+                FROM kie_system_data_standard_mappings
+                WHERE lower(coalesce(provider, '')) = lower(:provider)
+                  AND coalesce(model_key_inferred, '') = coalesce(:model_key_inferred, '')
+                  AND source_field = :source_field
+                  AND source_enum_value = :source_enum_value
+                  AND standard_dimension = :standard_dimension
+                  AND standard_value = :standard_value
+                ORDER BY id DESC
+                LIMIT 1
+            """), {
+                "provider": provider_value,
+                "model_key_inferred": model_key_value,
+                "source_field": source_field_value,
+                "source_enum_value": source_enum_value_value,
+                "standard_dimension": standard_dimension_value,
+                "standard_value": standard_value_value,
+            }).mappings().first()
+
+            if existing:
+                db.execute(text("""
+                    UPDATE kie_system_data_standard_mappings
+                    SET model_title = :model_title,
+                        model_url = :model_url,
+                        confidence = :confidence,
+                        note = :note,
+                        is_active = :is_active,
+                        is_billing_related = :is_billing_related,
+                        updated_at = :updated_at
+                    WHERE id = :id
+                """), {
+                    "id": int(existing.get("id") or 0),
+                    "model_title": values.get("model_title"),
+                    "model_url": values.get("model_url"),
+                    "confidence": values.get("confidence"),
+                    "note": values.get("note"),
+                    "is_active": 1 if _to_bool(values.get("is_active")) else 0,
+                    "is_billing_related": 1 if _to_bool(values.get("is_billing_related")) else 0,
+                    "updated_at": now_iso,
+                })
+                updated += 1
+                continue
+
+        db.execute(text("""
+            INSERT INTO kie_system_data_standard_mappings (
+                provider, model_key_inferred, model_title, model_url,
+                source_field, source_enum_value, standard_dimension, standard_value,
+                confidence, note, is_active, is_billing_related, created_at, updated_at
+            ) VALUES (
+                :provider, :model_key_inferred, :model_title, :model_url,
+                :source_field, :source_enum_value, :standard_dimension, :standard_value,
+                :confidence, :note, :is_active, :is_billing_related, :created_at, :updated_at
+            )
+        """), {
+            "provider": provider_value,
+            "model_key_inferred": model_key_value,
+            "model_title": values.get("model_title"),
+            "model_url": values.get("model_url"),
+            "source_field": source_field_value,
+            "source_enum_value": source_enum_value_value,
+            "standard_dimension": standard_dimension_value,
+            "standard_value": standard_value_value,
+            "confidence": values.get("confidence"),
+            "note": values.get("note"),
+            "is_active": 1 if _to_bool(values.get("is_active")) else 0,
+            "is_billing_related": 1 if _to_bool(values.get("is_billing_related")) else 0,
+            "created_at": now_iso,
+            "updated_at": now_iso,
+        })
+        created += 1
+
+    db.commit()
+    return KIEDataStandardMappingImportResponse(
+        ok=True,
+        received=received,
+        created=created,
+        updated=updated,
+        skipped=skipped,
+    )
 
 
 @router.post("/settings/system/manage/kie-standard-mappings", response_model=KIEDataStandardMappingOut)
