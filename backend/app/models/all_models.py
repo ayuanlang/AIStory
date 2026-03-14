@@ -295,44 +295,6 @@ class SystemAPISetting(Base):
     base_model = Column(String, nullable=True)  # 基础模型归类名（�?qwen-plus / gpt-4o�?
     modality = Column(JSON, nullable=True)      # 模态描�?v2 JSON), 详见 docstring
 
-    # Wide modality columns (normalized from modality JSON + supplier docs extraction)
-    generation_modes = Column(JSON, nullable=True)              # [t2i, i2i, i2v, t2v, s2v, image_edit, t2a, a2t, a2a, t2m]
-    input_formats = Column(JSON, nullable=True)                 # generic input formats
-    output_format = Column(String, nullable=True)               # generic output format
-    supported_resolutions = Column(JSON, nullable=True)         # ["1280x720", "1080p", "4k", ...]
-    aspect_ratios = Column(JSON, nullable=True)                 # ["1:1", "16:9", ...]
-    max_images_per_call = Column(Integer, nullable=True)
-    reference_image_limit = Column(String, nullable=True)       # e.g. "1-2 images"
-    reference_video_limit = Column(String, nullable=True)
-    durations_seconds = Column(JSON, nullable=True)             # [3,5,10]
-    max_duration = Column(Integer, nullable=True)               # seconds
-    fps_options = Column(JSON, nullable=True)                   # [24,30,60]
-    image_size_values = Column(JSON, nullable=True)             # ["1K", "2K", "4K", ...]
-    quality_values = Column(JSON, nullable=True)                # ["standard", "pro", ...]
-    has_audio = Column(Boolean, nullable=True)
-    sound_supported = Column(Boolean, nullable=True)            # explicit sound toggle support
-    multi_shots_supported = Column(Boolean, nullable=True)      # supports multi_shots input
-    mode_values = Column(JSON, nullable=True)                   # provider mode enums (std/pro/fast/...)
-
-    # Category-specific capability objects (wide columns)
-    text_capabilities = Column(JSON, nullable=True)             # LLM
-    image_capabilities = Column(JSON, nullable=True)            # Image
-    video_capabilities = Column(JSON, nullable=True)            # Video
-    digital_human_capabilities = Column(JSON, nullable=True)    # DigitalHuman
-    voice_capabilities = Column(JSON, nullable=True)            # Voice
-    music_capabilities = Column(JSON, nullable=True)            # Music
-
-    # Billing-related hints extracted from supplier docs
-    pricing_unit = Column(String, nullable=True)                # per_call/per_image/per_second/per_minute/per_1k_tokens
-    token_billing_supported = Column(Boolean, nullable=True)
-    input_token_price = Column(Float, nullable=True)
-    output_token_price = Column(Float, nullable=True)
-    per_resolution_price_map = Column(JSON, nullable=True)
-    per_duration_price_map = Column(JSON, nullable=True)
-    has_tiered_pricing = Column(Boolean, nullable=True)
-    free_quota = Column(String, nullable=True)
-    currency = Column(String, nullable=True)
-
     tags = Column(JSON, nullable=True)          # 模型标签 string[]
     supplier_info = Column(JSON, nullable=True) # 原供应商API定价信息(审计对照�?
     deprecated = Column(Boolean, default=False) # 是否弃用

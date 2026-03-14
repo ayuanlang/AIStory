@@ -1045,19 +1045,53 @@ def _safe_json_dict(value) -> Dict:
 
 
 def _assign_wide_modality_fields(target: SystemAPISetting, source: Any) -> None:
-    field_names = [
-        "generation_modes", "input_formats", "output_format", "supported_resolutions", "aspect_ratios",
-        "max_images_per_call", "reference_image_limit", "reference_video_limit", "durations_seconds",
-        "max_duration", "fps_options", "image_size_values", "quality_values", "has_audio",
-        "sound_supported", "multi_shots_supported", "mode_values", "text_capabilities",
-        "image_capabilities", "video_capabilities", "digital_human_capabilities", "voice_capabilities",
-        "music_capabilities", "pricing_unit", "token_billing_supported", "input_token_price",
-        "output_token_price", "per_resolution_price_map", "per_duration_price_map", "has_tiered_pricing",
-        "free_quota", "currency",
+    # Wide dimension fields were removed from system_api_settings.
+    # Keep this as a no-op to preserve import compatibility with historical payloads.
+    return
+
+
+def _build_modality_payload_from_item(source: Any) -> Optional[Dict[str, Any]]:
+    raw_modality = _safe_json_dict(getattr(source, "modality", None))
+    if raw_modality:
+        return raw_modality
+
+    profile = {
+        "base_model": getattr(source, "base_model", None),
+        "generation_modes": getattr(source, "generation_modes", None),
+        "text_capabilities": getattr(source, "text_capabilities", None),
+        "image_capabilities": getattr(source, "image_capabilities", None),
+        "video_capabilities": getattr(source, "video_capabilities", None),
+        "digital_human_capabilities": getattr(source, "digital_human_capabilities", None),
+        "voice_capabilities": getattr(source, "voice_capabilities", None),
+        "music_capabilities": getattr(source, "music_capabilities", None),
+    }
+    modality = _build_modality_from_feature_profile(profile)
+
+    # Keep compatibility with older import payloads where these values were top-level fields.
+    top_level_keys = [
+        "input_formats",
+        "output_format",
+        "supported_resolutions",
+        "aspect_ratios",
+        "max_images_per_call",
+        "reference_image_limit",
+        "reference_video_limit",
+        "durations_seconds",
+        "max_duration",
+        "fps_options",
+        "image_size_values",
+        "quality_values",
+        "has_audio",
+        "sound_supported",
+        "multi_shots_supported",
+        "mode_values",
     ]
-    for field_name in field_names:
-        if hasattr(source, field_name):
-            setattr(target, field_name, getattr(source, field_name, None))
+    for key in top_level_keys:
+        value = getattr(source, key, None)
+        if value is not None:
+            modality[key] = value
+
+    return modality or None
 
 
 def _primary_generation_mode_from_wide(generation_modes: Any) -> Optional[str]:
@@ -2305,40 +2339,9 @@ def _setting_to_out(db: Session, row: SystemAPISetting) -> SystemAPISettingOut:
         base_url=row.base_url,
         model=row.model,
         base_model=base_model,
+        modality=getattr(row, "modality", None),
         tags=getattr(row, "tags", None),
         supplier_info=getattr(row, "supplier_info", None),
-        generation_modes=getattr(row, "generation_modes", None),
-        input_formats=getattr(row, "input_formats", None),
-        output_format=getattr(row, "output_format", None),
-        supported_resolutions=getattr(row, "supported_resolutions", None),
-        aspect_ratios=getattr(row, "aspect_ratios", None),
-        max_images_per_call=getattr(row, "max_images_per_call", None),
-        reference_image_limit=getattr(row, "reference_image_limit", None),
-        reference_video_limit=getattr(row, "reference_video_limit", None),
-        durations_seconds=getattr(row, "durations_seconds", None),
-        max_duration=getattr(row, "max_duration", None),
-        fps_options=getattr(row, "fps_options", None),
-        image_size_values=getattr(row, "image_size_values", None),
-        quality_values=getattr(row, "quality_values", None),
-        has_audio=getattr(row, "has_audio", None),
-        sound_supported=getattr(row, "sound_supported", None),
-        multi_shots_supported=getattr(row, "multi_shots_supported", None),
-        mode_values=getattr(row, "mode_values", None),
-        text_capabilities=getattr(row, "text_capabilities", None),
-        image_capabilities=getattr(row, "image_capabilities", None),
-        video_capabilities=getattr(row, "video_capabilities", None),
-        digital_human_capabilities=getattr(row, "digital_human_capabilities", None),
-        voice_capabilities=getattr(row, "voice_capabilities", None),
-        music_capabilities=getattr(row, "music_capabilities", None),
-        pricing_unit=getattr(row, "pricing_unit", None),
-        token_billing_supported=getattr(row, "token_billing_supported", None),
-        input_token_price=getattr(row, "input_token_price", None),
-        output_token_price=getattr(row, "output_token_price", None),
-        per_resolution_price_map=getattr(row, "per_resolution_price_map", None),
-        per_duration_price_map=getattr(row, "per_duration_price_map", None),
-        has_tiered_pricing=getattr(row, "has_tiered_pricing", None),
-        free_quota=getattr(row, "free_quota", None),
-        currency=getattr(row, "currency", None),
         model_mode_defaults=(model_mode_defaults or None),
         config=out_cfg,
         billing_unit_type=billing["unit_type"],
@@ -3596,18 +3599,6 @@ def get_system_settings(
             SystemAPISetting.base_url,
             SystemAPISetting.api_key,
             SystemAPISetting.deprecated.label("deprecated_flag"),
-            SystemAPISetting.generation_modes,
-            SystemAPISetting.input_formats,
-            SystemAPISetting.output_format,
-            SystemAPISetting.supported_resolutions,
-            SystemAPISetting.aspect_ratios,
-            SystemAPISetting.max_duration,
-            SystemAPISetting.image_size_values,
-            SystemAPISetting.quality_values,
-            SystemAPISetting.has_audio,
-            SystemAPISetting.sound_supported,
-            SystemAPISetting.multi_shots_supported,
-            SystemAPISetting.mode_values,
             SystemAPISetting.tags,
             SystemAPISetting.config,
         ).filter(
@@ -3677,18 +3668,7 @@ def get_system_settings(
                 provider=provider,
                 category=category,
                 model=item.model,
-                generation_modes=(getattr(item, "generation_modes", None) or []),
-                input_formats=(getattr(item, "input_formats", None) or []),
-                output_format=getattr(item, "output_format", None),
-                supported_resolutions=(getattr(item, "supported_resolutions", None) or []),
-                aspect_ratios=(getattr(item, "aspect_ratios", None) or []),
-                max_duration=getattr(item, "max_duration", None),
-                image_size_values=(getattr(item, "image_size_values", None) or []),
-                quality_values=(getattr(item, "quality_values", None) or []),
-                has_audio=getattr(item, "has_audio", None),
-                sound_supported=getattr(item, "sound_supported", None),
-                multi_shots_supported=getattr(item, "multi_shots_supported", None),
-                mode_values=(getattr(item, "mode_values", None) or []),
+                modality=getattr(item, "modality", None),
                 tags=getattr(item, "tags", None),
                 base_url=item.base_url,
                 webhook_url=webhook_url,
@@ -5416,8 +5396,7 @@ def _apply_supplier_feature_models_to_db(
 
         if existing:
             existing.base_model = _resolve_base_model(item.base_model, existing.model or model_name)
-            for k, v in wide_payload.items():
-                setattr(existing, k, v)
+            existing.modality = feature_payload
             supplier_info = _safe_json_dict(existing.supplier_info)
             supplier_info.setdefault("feature_profiles", {})
             supplier_info["feature_profiles"][model_name] = profile_dict
@@ -5439,29 +5418,7 @@ def _apply_supplier_feature_models_to_db(
                 base_url=None,
                 model=model_name,
                 base_model=_resolve_base_model(item.base_model, model_name),
-                generation_modes=wide_payload.get("generation_modes"),
-                input_formats=wide_payload.get("input_formats"),
-                output_format=wide_payload.get("output_format"),
-                supported_resolutions=wide_payload.get("supported_resolutions"),
-                aspect_ratios=wide_payload.get("aspect_ratios"),
-                max_images_per_call=wide_payload.get("max_images_per_call"),
-                reference_image_limit=wide_payload.get("reference_image_limit"),
-                reference_video_limit=wide_payload.get("reference_video_limit"),
-                durations_seconds=wide_payload.get("durations_seconds"),
-                max_duration=wide_payload.get("max_duration"),
-                fps_options=wide_payload.get("fps_options"),
-                image_size_values=wide_payload.get("image_size_values"),
-                quality_values=wide_payload.get("quality_values"),
-                has_audio=wide_payload.get("has_audio"),
-                sound_supported=wide_payload.get("sound_supported"),
-                multi_shots_supported=wide_payload.get("multi_shots_supported"),
-                mode_values=wide_payload.get("mode_values"),
-                text_capabilities=wide_payload.get("text_capabilities"),
-                image_capabilities=wide_payload.get("image_capabilities"),
-                video_capabilities=wide_payload.get("video_capabilities"),
-                digital_human_capabilities=wide_payload.get("digital_human_capabilities"),
-                voice_capabilities=wide_payload.get("voice_capabilities"),
-                music_capabilities=wide_payload.get("music_capabilities"),
+                modality=feature_payload,
                 tags=[],
                 supplier_info=supplier_info,
                 deprecated=False,
@@ -6014,40 +5971,9 @@ def create_system_setting_for_manage(
         existing.base_url = payload.base_url
         existing.model = payload.model
         existing.base_model = base_model
+        existing.modality = _build_modality_payload_from_item(payload)
         existing.tags = getattr(payload, "tags", None)
         existing.supplier_info = getattr(payload, "supplier_info", None) or existing.supplier_info
-        existing.generation_modes = getattr(payload, "generation_modes", None)
-        existing.input_formats = getattr(payload, "input_formats", None)
-        existing.output_format = getattr(payload, "output_format", None)
-        existing.supported_resolutions = getattr(payload, "supported_resolutions", None)
-        existing.aspect_ratios = getattr(payload, "aspect_ratios", None)
-        existing.max_images_per_call = getattr(payload, "max_images_per_call", None)
-        existing.reference_image_limit = getattr(payload, "reference_image_limit", None)
-        existing.reference_video_limit = getattr(payload, "reference_video_limit", None)
-        existing.durations_seconds = getattr(payload, "durations_seconds", None)
-        existing.max_duration = getattr(payload, "max_duration", None)
-        existing.fps_options = getattr(payload, "fps_options", None)
-        existing.image_size_values = getattr(payload, "image_size_values", None)
-        existing.quality_values = getattr(payload, "quality_values", None)
-        existing.has_audio = getattr(payload, "has_audio", None)
-        existing.sound_supported = getattr(payload, "sound_supported", None)
-        existing.multi_shots_supported = getattr(payload, "multi_shots_supported", None)
-        existing.mode_values = getattr(payload, "mode_values", None)
-        existing.text_capabilities = getattr(payload, "text_capabilities", None)
-        existing.image_capabilities = getattr(payload, "image_capabilities", None)
-        existing.video_capabilities = getattr(payload, "video_capabilities", None)
-        existing.digital_human_capabilities = getattr(payload, "digital_human_capabilities", None)
-        existing.voice_capabilities = getattr(payload, "voice_capabilities", None)
-        existing.music_capabilities = getattr(payload, "music_capabilities", None)
-        existing.pricing_unit = getattr(payload, "pricing_unit", None)
-        existing.token_billing_supported = getattr(payload, "token_billing_supported", None)
-        existing.input_token_price = getattr(payload, "input_token_price", None)
-        existing.output_token_price = getattr(payload, "output_token_price", None)
-        existing.per_resolution_price_map = getattr(payload, "per_resolution_price_map", None)
-        existing.per_duration_price_map = getattr(payload, "per_duration_price_map", None)
-        existing.has_tiered_pricing = getattr(payload, "has_tiered_pricing", None)
-        existing.free_quota = getattr(payload, "free_quota", None)
-        existing.currency = getattr(payload, "currency", None)
         existing.config = target_cfg
         existing.is_active = bool(existing.is_active)
         _clear_row_billing_columns(existing)
@@ -6091,38 +6017,7 @@ def create_system_setting_for_manage(
         base_model=base_model,
         tags=getattr(payload, "tags", None),
         supplier_info=getattr(payload, "supplier_info", None),
-        generation_modes=getattr(payload, "generation_modes", None),
-        input_formats=getattr(payload, "input_formats", None),
-        output_format=getattr(payload, "output_format", None),
-        supported_resolutions=getattr(payload, "supported_resolutions", None),
-        aspect_ratios=getattr(payload, "aspect_ratios", None),
-        max_images_per_call=getattr(payload, "max_images_per_call", None),
-        reference_image_limit=getattr(payload, "reference_image_limit", None),
-        reference_video_limit=getattr(payload, "reference_video_limit", None),
-        durations_seconds=getattr(payload, "durations_seconds", None),
-        max_duration=getattr(payload, "max_duration", None),
-        fps_options=getattr(payload, "fps_options", None),
-        image_size_values=getattr(payload, "image_size_values", None),
-        quality_values=getattr(payload, "quality_values", None),
-        has_audio=getattr(payload, "has_audio", None),
-        sound_supported=getattr(payload, "sound_supported", None),
-        multi_shots_supported=getattr(payload, "multi_shots_supported", None),
-        mode_values=getattr(payload, "mode_values", None),
-        text_capabilities=getattr(payload, "text_capabilities", None),
-        image_capabilities=getattr(payload, "image_capabilities", None),
-        video_capabilities=getattr(payload, "video_capabilities", None),
-        digital_human_capabilities=getattr(payload, "digital_human_capabilities", None),
-        voice_capabilities=getattr(payload, "voice_capabilities", None),
-        music_capabilities=getattr(payload, "music_capabilities", None),
-        pricing_unit=getattr(payload, "pricing_unit", None),
-        token_billing_supported=getattr(payload, "token_billing_supported", None),
-        input_token_price=getattr(payload, "input_token_price", None),
-        output_token_price=getattr(payload, "output_token_price", None),
-        per_resolution_price_map=getattr(payload, "per_resolution_price_map", None),
-        per_duration_price_map=getattr(payload, "per_duration_price_map", None),
-        has_tiered_pricing=getattr(payload, "has_tiered_pricing", None),
-        free_quota=getattr(payload, "free_quota", None),
-        currency=getattr(payload, "currency", None),
+        modality=_build_modality_payload_from_item(payload),
         deprecated=False,
         config=create_config,
         is_active=False,
@@ -6623,34 +6518,7 @@ def export_system_settings_to_seed_file(
             "base_url": row.base_url,
             "model": row.model,
             "base_model": row.base_model,
-            "generation_modes": getattr(row, "generation_modes", None),
-            "input_formats": getattr(row, "input_formats", None),
-            "output_format": getattr(row, "output_format", None),
-            "supported_resolutions": getattr(row, "supported_resolutions", None),
-            "aspect_ratios": getattr(row, "aspect_ratios", None),
-            "max_images_per_call": getattr(row, "max_images_per_call", None),
-            "reference_image_limit": getattr(row, "reference_image_limit", None),
-            "reference_video_limit": getattr(row, "reference_video_limit", None),
-            "durations_seconds": getattr(row, "durations_seconds", None),
-            "max_duration": getattr(row, "max_duration", None),
-            "fps_options": getattr(row, "fps_options", None),
-            "has_audio": getattr(row, "has_audio", None),
-            "mode_values": getattr(row, "mode_values", None),
-            "text_capabilities": getattr(row, "text_capabilities", None),
-            "image_capabilities": getattr(row, "image_capabilities", None),
-            "video_capabilities": getattr(row, "video_capabilities", None),
-            "digital_human_capabilities": getattr(row, "digital_human_capabilities", None),
-            "voice_capabilities": getattr(row, "voice_capabilities", None),
-            "music_capabilities": getattr(row, "music_capabilities", None),
-            "pricing_unit": getattr(row, "pricing_unit", None),
-            "token_billing_supported": getattr(row, "token_billing_supported", None),
-            "input_token_price": getattr(row, "input_token_price", None),
-            "output_token_price": getattr(row, "output_token_price", None),
-            "per_resolution_price_map": getattr(row, "per_resolution_price_map", None),
-            "per_duration_price_map": getattr(row, "per_duration_price_map", None),
-            "has_tiered_pricing": getattr(row, "has_tiered_pricing", None),
-            "free_quota": getattr(row, "free_quota", None),
-            "currency": getattr(row, "currency", None),
+            "modality": row.modality,
             "tags": getattr(row, "tags", None),
             "supplier_info": getattr(row, "supplier_info", None),
             "config": config,
@@ -6706,34 +6574,7 @@ def export_system_provider_bundle_for_manage(
                 "base_url": row.base_url,
                 "model": row.model,
                 "base_model": row.base_model,
-                "generation_modes": getattr(row, "generation_modes", None),
-                "input_formats": getattr(row, "input_formats", None),
-                "output_format": getattr(row, "output_format", None),
-                "supported_resolutions": getattr(row, "supported_resolutions", None),
-                "aspect_ratios": getattr(row, "aspect_ratios", None),
-                "max_images_per_call": getattr(row, "max_images_per_call", None),
-                "reference_image_limit": getattr(row, "reference_image_limit", None),
-                "reference_video_limit": getattr(row, "reference_video_limit", None),
-                "durations_seconds": getattr(row, "durations_seconds", None),
-                "max_duration": getattr(row, "max_duration", None),
-                "fps_options": getattr(row, "fps_options", None),
-                "has_audio": getattr(row, "has_audio", None),
-                "mode_values": getattr(row, "mode_values", None),
-                "text_capabilities": getattr(row, "text_capabilities", None),
-                "image_capabilities": getattr(row, "image_capabilities", None),
-                "video_capabilities": getattr(row, "video_capabilities", None),
-                "digital_human_capabilities": getattr(row, "digital_human_capabilities", None),
-                "voice_capabilities": getattr(row, "voice_capabilities", None),
-                "music_capabilities": getattr(row, "music_capabilities", None),
-                "pricing_unit": getattr(row, "pricing_unit", None),
-                "token_billing_supported": getattr(row, "token_billing_supported", None),
-                "input_token_price": getattr(row, "input_token_price", None),
-                "output_token_price": getattr(row, "output_token_price", None),
-                "per_resolution_price_map": getattr(row, "per_resolution_price_map", None),
-                "per_duration_price_map": getattr(row, "per_duration_price_map", None),
-                "has_tiered_pricing": getattr(row, "has_tiered_pricing", None),
-                "free_quota": getattr(row, "free_quota", None),
-                "currency": getattr(row, "currency", None),
+                "modality": row.modality,
                 "tags": getattr(row, "tags", None),
                 "supplier_info": getattr(row, "supplier_info", None),
                 "config": _strip_billing_from_config(row.config),
@@ -6822,6 +6663,7 @@ def import_system_provider_bundle_for_manage(
                     target.model = model
                     target.base_model = _resolve_base_model(getattr(model_item, "base_model", None), model)
                     _assign_wide_modality_fields(target, model_item)
+                    target.modality = _build_modality_payload_from_item(model_item)
                     target.tags = getattr(model_item, "tags", None)
                     target.supplier_info = getattr(model_item, "supplier_info", None) or target.supplier_info
                     target.config = clean_model_cfg
@@ -6841,6 +6683,7 @@ def import_system_provider_bundle_for_manage(
                         base_url=model_item.base_url,
                         model=model,
                         base_model=_resolve_base_model(getattr(model_item, "base_model", None), model),
+                        modality=_build_modality_payload_from_item(model_item),
                         tags=getattr(model_item, "tags", None),
                         supplier_info=getattr(model_item, "supplier_info", None),
                         deprecated=_is_setting_deprecated(clean_model_cfg, model_item.deprecated),
@@ -7000,69 +6843,8 @@ def _is_system_api_settings_missing_column_error(exc: Exception) -> bool:
 
 
 def _patch_system_api_settings_missing_columns_via_conn(db: Session) -> int:
-    required_columns = [
-        ("generation_modes", "JSON"),
-        ("input_formats", "JSON"),
-        ("output_format", "VARCHAR"),
-        ("supported_resolutions", "JSON"),
-        ("aspect_ratios", "JSON"),
-        ("max_images_per_call", "INTEGER"),
-        ("reference_image_limit", "VARCHAR"),
-        ("reference_video_limit", "VARCHAR"),
-        ("durations_seconds", "JSON"),
-        ("max_duration", "INTEGER"),
-        ("fps_options", "JSON"),
-        ("image_size_values", "JSON"),
-        ("quality_values", "JSON"),
-        ("has_audio", "BOOLEAN"),
-        ("sound_supported", "BOOLEAN"),
-        ("multi_shots_supported", "BOOLEAN"),
-        ("mode_values", "JSON"),
-        ("text_capabilities", "JSON"),
-        ("image_capabilities", "JSON"),
-        ("video_capabilities", "JSON"),
-        ("digital_human_capabilities", "JSON"),
-        ("voice_capabilities", "JSON"),
-        ("music_capabilities", "JSON"),
-        ("pricing_unit", "VARCHAR"),
-        ("token_billing_supported", "BOOLEAN"),
-        ("input_token_price", "FLOAT"),
-        ("output_token_price", "FLOAT"),
-        ("per_resolution_price_map", "JSON"),
-        ("per_duration_price_map", "JSON"),
-        ("has_tiered_pricing", "BOOLEAN"),
-        ("free_quota", "VARCHAR"),
-        ("currency", "VARCHAR"),
-    ]
-
-    engine = db.get_bind()
-    inspector = inspect(engine)
-    if not inspector.has_table("system_api_settings"):
-        return 0
-
-    existing_cols = {c["name"] for c in inspector.get_columns("system_api_settings")}
-    is_postgres = getattr(engine.dialect, "name", "") == "postgresql"
-    added = 0
-
-    for col_name, col_type in required_columns:
-        if col_name in existing_cols:
-            continue
-        if is_postgres:
-            sql = f"ALTER TABLE system_api_settings ADD COLUMN IF NOT EXISTS {col_name} {col_type}"
-        else:
-            sql = f"ALTER TABLE system_api_settings ADD COLUMN {col_name} {col_type}"
-        try:
-            db.execute(text(sql))
-            added += 1
-            existing_cols.add(col_name)
-        except Exception as exc:
-            msg = str(exc or "").lower()
-            if "duplicate" in msg or "already exists" in msg:
-                existing_cols.add(col_name)
-                continue
-            raise
-
-    return added
+    # Wide fields are intentionally removed from system_api_settings.
+    return 0
 
 
 def _try_patch_system_api_settings_missing_columns(db: Session) -> bool:
@@ -7076,17 +6858,7 @@ def _try_patch_system_api_settings_missing_columns(db: Session) -> bool:
         except Exception:
             pass
 
-        # Keep patch implementation in one place and reuse deployment script.
-        from migrate_system_api_settings_missing_columns import migrate as migrate_missing_columns
-
-        try:
-            bind = db.get_bind()
-            db_url = str(getattr(bind, "url", "") or "").strip() or None
-        except Exception:
-            db_url = None
-
-        migrate_missing_columns(db_url=db_url)
-        return True
+        return False
     except Exception as patch_exc:
         logger.warning("Auto patch for system_api_settings missing columns failed: %s", patch_exc)
         return False
@@ -7241,6 +7013,7 @@ def _import_provider_bundle_no_commit(db: Session, providers: List[Any], replace
                 target.model = model
                 target.base_model = _resolve_base_model(getattr(model_item, "base_model", None), model)
                 _assign_wide_modality_fields(target, model_item)
+                target.modality = _build_modality_payload_from_item(model_item)
                 target.tags = getattr(model_item, "tags", None)
                 target.supplier_info = getattr(model_item, "supplier_info", None) or target.supplier_info
                 target.config = clean_model_cfg
@@ -7260,6 +7033,7 @@ def _import_provider_bundle_no_commit(db: Session, providers: List[Any], replace
                     base_url=getattr(model_item, "base_url", None),
                     model=model,
                     base_model=_resolve_base_model(getattr(model_item, "base_model", None), model),
+                    modality=_build_modality_payload_from_item(model_item),
                     tags=getattr(model_item, "tags", None),
                     supplier_info=getattr(model_item, "supplier_info", None),
                     deprecated=_is_setting_deprecated(clean_model_cfg, getattr(model_item, "deprecated", None)),
@@ -7818,6 +7592,7 @@ def import_system_settings_for_manage(
             target.model = item.model
             target.base_model = _resolve_base_model(getattr(item, "base_model", None), item.model)
             _assign_wide_modality_fields(target, item)
+            target.modality = _build_modality_payload_from_item(item)
             target.tags = getattr(item, "tags", None)
             target.supplier_info = getattr(item, "supplier_info", None) or target.supplier_info
             import_raw_cfg = item.config if isinstance(item.config, dict) else {}
@@ -7841,6 +7616,7 @@ def import_system_settings_for_manage(
                 base_url=item.base_url,
                 model=item.model,
                 base_model=_resolve_base_model(getattr(item, "base_model", None), item.model),
+                modality=_build_modality_payload_from_item(item),
                 tags=getattr(item, "tags", None),
                 supplier_info=getattr(item, "supplier_info", None),
                 deprecated=_is_setting_deprecated(create_raw_cfg, item.deprecated),
