@@ -1,4 +1,4 @@
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 from app.models.all_models import (
     User,
     TransactionHistory,
@@ -55,6 +55,29 @@ class BillingService:
         "llm_chat": 1,
     }
     KIE_STANDARD_PROVIDER = "kie"
+
+    @staticmethod
+    def _system_setting_query(db: Session):
+        # Keep SystemAPISetting reads compatible with environments where legacy
+        # price_* columns were dropped from the physical table.
+        return db.query(SystemAPISetting).options(
+            load_only(
+                SystemAPISetting.id,
+                SystemAPISetting.name,
+                SystemAPISetting.category,
+                SystemAPISetting.provider,
+                SystemAPISetting.api_key,
+                SystemAPISetting.base_url,
+                SystemAPISetting.model,
+                SystemAPISetting.base_model,
+                SystemAPISetting.modality,
+                SystemAPISetting.tags,
+                SystemAPISetting.supplier_info,
+                SystemAPISetting.deprecated,
+                SystemAPISetting.config,
+                SystemAPISetting.is_active,
+            )
+        )
 
     @staticmethod
     def _task_type_for_category(category: str) -> str:
@@ -117,7 +140,7 @@ class BillingService:
                 "sample_prices": [],
             }
 
-        system_row = db.query(SystemAPISetting).filter(SystemAPISetting.id == api_id).first()
+        system_row = BillingService._system_setting_query(db).filter(SystemAPISetting.id == api_id).first()
         if not system_row:
             return {
                 "average_cost": 0,
@@ -584,7 +607,7 @@ class BillingService:
 
     @staticmethod
     def get_default_api_pricing_map(db: Session) -> Dict[str, Dict[str, Any]]:
-        row = db.query(SystemAPISetting).filter(
+        row = BillingService._system_setting_query(db).filter(
             SystemAPISetting.category == "System_Payment",
             SystemAPISetting.provider == BillingService.DEFAULT_API_PRICING_PROVIDER,
             SystemAPISetting.model == BillingService.DEFAULT_API_PRICING_MODEL,
@@ -626,7 +649,7 @@ class BillingService:
 
     @staticmethod
     def get_content_fallback_pricing(db: Session) -> Dict[str, Any]:
-        row = db.query(SystemAPISetting).filter(
+        row = BillingService._system_setting_query(db).filter(
             SystemAPISetting.category == "System_Payment",
             SystemAPISetting.provider == BillingService.DEFAULT_API_PRICING_PROVIDER,
             SystemAPISetting.model == BillingService.DEFAULT_API_PRICING_MODEL,
@@ -642,7 +665,7 @@ class BillingService:
     @staticmethod
     def set_content_fallback_pricing(db: Session, fallback_pricing: Dict[str, Any]) -> Dict[str, Any]:
         normalized = BillingService._normalize_content_fallback_pricing(fallback_pricing)
-        row = db.query(SystemAPISetting).filter(
+        row = BillingService._system_setting_query(db).filter(
             SystemAPISetting.category == "System_Payment",
             SystemAPISetting.provider == BillingService.DEFAULT_API_PRICING_PROVIDER,
             SystemAPISetting.model == BillingService.DEFAULT_API_PRICING_MODEL,
@@ -779,7 +802,7 @@ class BillingService:
     def set_default_api_pricing_map(db: Session, pricing_map: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         normalized = BillingService._normalize_default_api_pricing_map(pricing_map)
 
-        row = db.query(SystemAPISetting).filter(
+        row = BillingService._system_setting_query(db).filter(
             SystemAPISetting.category == "System_Payment",
             SystemAPISetting.provider == BillingService.DEFAULT_API_PRICING_PROVIDER,
             SystemAPISetting.model == BillingService.DEFAULT_API_PRICING_MODEL,
@@ -827,7 +850,7 @@ class BillingService:
 
     @staticmethod
     def get_feature_pricing_map(db: Session) -> Dict[str, int]:
-        row = db.query(SystemAPISetting).filter(
+        row = BillingService._system_setting_query(db).filter(
             SystemAPISetting.category == "System_Payment",
             SystemAPISetting.provider == BillingService.FEATURE_PRICING_PROVIDER,
             SystemAPISetting.model == BillingService.FEATURE_PRICING_MODEL,
@@ -855,7 +878,7 @@ class BillingService:
                 continue
             normalized[text_key] = max(0, BillingService._to_int(value, 0))
 
-        row = db.query(SystemAPISetting).filter(
+        row = BillingService._system_setting_query(db).filter(
             SystemAPISetting.category == "System_Payment",
             SystemAPISetting.provider == BillingService.FEATURE_PRICING_PROVIDER,
             SystemAPISetting.model == BillingService.FEATURE_PRICING_MODEL,
@@ -913,7 +936,7 @@ class BillingService:
         category = BillingService._task_type_to_category(task_type)
         default_pricing = BillingService._default_api_pricing_config(db, task_type)
 
-        query = db.query(SystemAPISetting).filter(
+        query = BillingService._system_setting_query(db).filter(
             SystemAPISetting.category == category,
             SystemAPISetting.provider == provider_text,
         )
@@ -922,14 +945,14 @@ class BillingService:
         row = query.order_by(SystemAPISetting.id.desc()).first()
 
         if not row and provider_text and model_text:
-            row = db.query(SystemAPISetting).filter(
+            row = BillingService._system_setting_query(db).filter(
                 SystemAPISetting.category == category,
                 SystemAPISetting.provider == provider_text,
                 SystemAPISetting.model == None,
             ).order_by(SystemAPISetting.id.desc()).first()
 
         if not row and provider_text:
-            query_any_category = db.query(SystemAPISetting).filter(
+            query_any_category = BillingService._system_setting_query(db).filter(
                 SystemAPISetting.provider == provider_text,
             )
             if model_text:
@@ -1240,7 +1263,7 @@ class BillingService:
         model_text = str(model or "").strip()
         category = BillingService._task_type_to_category(task_type)
 
-        query = db.query(SystemAPISetting).filter(
+        query = BillingService._system_setting_query(db).filter(
             SystemAPISetting.category == category,
             SystemAPISetting.provider == provider_text,
         )
@@ -1249,14 +1272,14 @@ class BillingService:
         row = query.order_by(SystemAPISetting.id.desc()).first()
 
         if not row and provider_text and model_text:
-            row = db.query(SystemAPISetting).filter(
+            row = BillingService._system_setting_query(db).filter(
                 SystemAPISetting.category == category,
                 SystemAPISetting.provider == provider_text,
                 SystemAPISetting.model == None,
             ).order_by(SystemAPISetting.id.desc()).first()
 
         if not row and provider_text:
-            query_any_category = db.query(SystemAPISetting).filter(SystemAPISetting.provider == provider_text)
+            query_any_category = BillingService._system_setting_query(db).filter(SystemAPISetting.provider == provider_text)
             if model_text:
                 query_any_category = query_any_category.filter(SystemAPISetting.model == model_text)
             row = query_any_category.order_by(SystemAPISetting.id.desc()).first()
@@ -1768,7 +1791,7 @@ class BillingService:
         mode = BillingService._task_type_to_mode(task_type)
         system_row = None
         if forced_system_api_id is not None:
-            system_row = db.query(SystemAPISetting).filter(SystemAPISetting.id == forced_system_api_id).first()
+            system_row = BillingService._system_setting_query(db).filter(SystemAPISetting.id == forced_system_api_id).first()
         if not system_row:
             system_row = BillingService._resolve_system_api_row(db, task_type, provider_text, model_text)
         if system_row:
@@ -2188,13 +2211,13 @@ class BillingService:
         model_text = str(model or "").strip()
         row = None
         if provider_text and model_text:
-            row = db.query(SystemAPISetting).filter(
+            row = BillingService._system_setting_query(db).filter(
                 SystemAPISetting.category == "Video",
                 SystemAPISetting.provider == provider_text,
                 SystemAPISetting.model == model_text,
             ).order_by(SystemAPISetting.id.desc()).first()
         if not row and provider_text:
-            row = db.query(SystemAPISetting).filter(
+            row = BillingService._system_setting_query(db).filter(
                 SystemAPISetting.category == "Video",
                 SystemAPISetting.provider == provider_text,
             ).order_by(SystemAPISetting.id.desc()).first()
