@@ -1122,6 +1122,13 @@ def _episode_info_from_episode(episode: Optional[Episode]) -> Dict[str, Any]:
     return _read_episode_info_payload(getattr(episode, "episode_info", None))
 
 
+def _episode_runtime_info_from_episode(episode: Optional[Episode]) -> Dict[str, Any]:
+    """Read raw episode_info for runtime status keys even when generic reads are disabled."""
+    if not episode:
+        return {}
+    return _safe_json_dict(getattr(episode, "episode_info", None))
+
+
 _ALLOWED_REASONING_EFFORT = {"low", "medium", "high"}
 
 
@@ -5897,7 +5904,7 @@ EPISODE_SCENE_GEN_STATUS_KEY = "episode_scene_generation_status"
 
 def _read_episode_scene_generation_status(episode: Episode) -> Dict[str, Any]:
     try:
-        info = _episode_info_from_episode(episode)
+        info = _episode_runtime_info_from_episode(episode)
         payload = info.get(EPISODE_SCENE_GEN_STATUS_KEY)
         if isinstance(payload, dict):
             return dict(payload)
@@ -5921,7 +5928,7 @@ def _persist_episode_scene_generation_status(db: Session, episode: Episode, stat
     )
     target_episode = latest_episode or episode
 
-    info = _episode_info_from_episode(target_episode)
+    info = _episode_runtime_info_from_episode(target_episode)
     existing_status = info.get(EPISODE_SCENE_GEN_STATUS_KEY)
     merged_status = dict(status_payload or {})
     has_incoming_force_flag = "force_stopped" in merged_status
@@ -8651,7 +8658,7 @@ SCENE_AI_SHOTS_BATCH_PER_SCENE_TIMEOUT_SEC = 300
 
 def _read_scene_ai_shots_batch_status(episode: Episode) -> Dict[str, Any]:
     try:
-        info = _episode_info_from_episode(episode)
+        info = _episode_runtime_info_from_episode(episode)
         payload = info.get(SCENE_AI_SHOTS_BATCH_STATUS_KEY)
         if isinstance(payload, dict):
             return dict(payload)
@@ -8679,7 +8686,7 @@ def _persist_scene_ai_shots_batch_status(db: Session, episode: Episode, status_p
     )
     target_episode = latest_episode or episode
 
-    info = _episode_info_from_episode(target_episode)
+    info = _episode_runtime_info_from_episode(target_episode)
     existing_status = info.get(SCENE_AI_SHOTS_BATCH_STATUS_KEY)
     merged_status = dict(status_payload or {})
     has_incoming_force_flag = "force_stopped" in merged_status
@@ -8966,6 +8973,8 @@ def start_scene_ai_shots_batch(
         "running": True,
         "project_id": episode.project_id,
         "episode_id": episode_id,
+        "started_by_user_id": int(current_user.id),
+        "started_by_username": str(current_user.username or ""),
         "scene_ids": scene_ids,
         "total": len(scene_ids),
         "completed": 0,
@@ -17386,44 +17395,50 @@ def get_generation_job_pool(
             for episode in episodes:
                 owner_id = project_owner_by_id.get(int(episode.project_id))
                 owner_name = project_owner_name_by_id.get(int(episode.project_id))
-                info = _episode_info_from_episode(episode)
+                info = _episode_runtime_info_from_episode(episode)
 
                 if safe_kind in {"all", "episode-scenes"}:
                     payload = info.get(EPISODE_SCENE_GEN_STATUS_KEY)
                     if isinstance(payload, dict):
+                        actor_user_id = payload.get("started_by_user_id") or owner_id
+                        actor_username = payload.get("started_by_username") or owner_name
                         items.append(
                             _build_batch_job_item(
                                 kind="episode-scenes",
                                 job_id=f"episode-scenes:{int(episode.id)}",
                                 payload=dict(payload),
-                                user_id=owner_id,
-                                username=owner_name,
+                                user_id=actor_user_id,
+                                username=actor_username,
                             )
                         )
 
                 if safe_kind in {"all", "scene-ai-shots-batch"}:
                     payload = info.get(SCENE_AI_SHOTS_BATCH_STATUS_KEY)
                     if isinstance(payload, dict):
+                        actor_user_id = payload.get("started_by_user_id") or owner_id
+                        actor_username = payload.get("started_by_username") or owner_name
                         items.append(
                             _build_batch_job_item(
                                 kind="scene-ai-shots-batch",
                                 job_id=f"scene-ai-shots-batch:{int(episode.id)}",
                                 payload=dict(payload),
-                                user_id=owner_id,
-                                username=owner_name,
+                                user_id=actor_user_id,
+                                username=actor_username,
                             )
                         )
 
                 if safe_kind in {"all", "shot-media-batch"}:
                     payload = info.get(SHOT_MEDIA_BATCH_STATUS_KEY)
                     if isinstance(payload, dict):
+                        actor_user_id = payload.get("started_by_user_id") or owner_id
+                        actor_username = payload.get("started_by_username") or owner_name
                         items.append(
                             _build_batch_job_item(
                                 kind="shot-media-batch",
                                 job_id=f"shot-media-batch:{int(episode.id)}",
                                 payload=dict(payload),
-                                user_id=owner_id,
-                                username=owner_name,
+                                user_id=actor_user_id,
+                                username=actor_username,
                             )
                         )
 
@@ -17555,7 +17570,7 @@ def repair_generation_job_history(
             if not _can_touch_project(int(episode.project_id)):
                 return
 
-            info = _episode_info_from_episode(episode)
+            info = _episode_runtime_info_from_episode(episode)
             payload = info.get(status_key)
             if not isinstance(payload, dict):
                 return
@@ -17691,7 +17706,7 @@ def stop_generation_job(
         else:
             status_key = SHOT_MEDIA_BATCH_STATUS_KEY
 
-        info = _episode_info_from_episode(episode)
+        info = _episode_runtime_info_from_episode(episode)
         payload = info.get(status_key)
         if not isinstance(payload, dict):
             payload = {
@@ -17901,7 +17916,7 @@ def stop_all_generation_jobs(
                 continue
             if not _can_access_project(int(episode.project_id)):
                 continue
-            info = _episode_info_from_episode(episode)
+            info = _episode_runtime_info_from_episode(episode)
             key_pairs = []
             if safe_kind in {"all", "episode-scenes"}:
                 key_pairs.append((EPISODE_SCENE_GEN_STATUS_KEY, "episode-scenes"))
@@ -17953,7 +17968,7 @@ SHOT_MEDIA_BATCH_STATUS_KEY = "shot_media_batch_status"
 
 def _read_shot_media_batch_status(episode: Episode) -> Dict[str, Any]:
     try:
-        info = _episode_info_from_episode(episode)
+        info = _episode_runtime_info_from_episode(episode)
         payload = info.get(SHOT_MEDIA_BATCH_STATUS_KEY)
         if isinstance(payload, dict):
             return dict(payload)
@@ -17981,7 +17996,7 @@ def _persist_shot_media_batch_status(db: Session, episode: Episode, status_paylo
     )
     target_episode = latest_episode or episode
 
-    info = _episode_info_from_episode(target_episode)
+    info = _episode_runtime_info_from_episode(target_episode)
     existing_status = info.get(SHOT_MEDIA_BATCH_STATUS_KEY)
     merged_status = dict(status_payload or {})
     has_incoming_force_flag = "force_stopped" in merged_status
@@ -18830,6 +18845,8 @@ def start_shot_media_batch_job(
         "mode": mode,
         "episode_id": episode_id,
         "project_id": episode.project_id,
+        "started_by_user_id": int(current_user.id),
+        "started_by_username": str(current_user.username or ""),
         "shot_ids": shot_ids,
         "overwrite_existing": bool(req.overwrite_existing),
         "total": len(shot_ids),
