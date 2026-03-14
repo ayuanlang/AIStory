@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 from sqlalchemy import cast, String, func, inspect, or_, and_, text
 import logging
 import csv
@@ -1766,7 +1766,30 @@ def _find_system_setting_by_normalized_triplet(db: Session, provider: str, categ
     provider_norm = str(provider or "").strip().lower()
     category_norm = str(category or "").strip().lower()
     model_norm = str(model or "").strip().lower()
-    return db.query(SystemAPISetting).filter(
+
+    query = db.query(SystemAPISetting)
+    try:
+        existing_cols = {
+            str(col.get("name") or "").strip()
+            for col in inspect(db.bind).get_columns("system_api_settings")
+            if isinstance(col, dict)
+        }
+        mapper = inspect(SystemAPISetting)
+        attrs = []
+        for attr in mapper.column_attrs:
+            cols = getattr(attr, "columns", None) or []
+            if not cols:
+                continue
+            col_name = str(getattr(cols[0], "name", "") or "").strip()
+            if col_name and col_name in existing_cols:
+                attrs.append(getattr(SystemAPISetting, attr.key))
+        if attrs:
+            query = query.options(load_only(*attrs))
+    except Exception:
+        # Fallback to default ORM behavior if reflection fails.
+        pass
+
+    return query.filter(
         func.lower(func.trim(func.coalesce(SystemAPISetting.provider, ""))) == provider_norm,
         func.lower(func.trim(func.coalesce(SystemAPISetting.category, ""))) == category_norm,
         func.lower(func.trim(func.coalesce(SystemAPISetting.model, ""))) == model_norm,
@@ -8040,7 +8063,28 @@ def _import_provider_bundle_no_commit(db: Session, providers: List[Any], replace
                     _refresh_has_granular_billing_rules_flag(db, target.id)
                 created += 1
 
-        provider_rows = db.query(SystemAPISetting).filter(
+        provider_query = db.query(SystemAPISetting)
+        try:
+            existing_cols = {
+                str(col.get("name") or "").strip()
+                for col in inspect(db.bind).get_columns("system_api_settings")
+                if isinstance(col, dict)
+            }
+            mapper = inspect(SystemAPISetting)
+            attrs = []
+            for attr in mapper.column_attrs:
+                cols = getattr(attr, "columns", None) or []
+                if not cols:
+                    continue
+                col_name = str(getattr(cols[0], "name", "") or "").strip()
+                if col_name and col_name in existing_cols:
+                    attrs.append(getattr(SystemAPISetting, attr.key))
+            if attrs:
+                provider_query = provider_query.options(load_only(*attrs))
+        except Exception:
+            pass
+
+        provider_rows = provider_query.filter(
             SystemAPISetting.provider == provider_name,
             ~SystemAPISetting.category.like("System_%"),
         ).all()
