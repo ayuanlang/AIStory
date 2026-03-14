@@ -51,10 +51,20 @@ AI Story is an intelligent tool for film production, simplifying the process fro
 ## KIE Data Import
 
 KIE standard dictionary and mapping data are not loaded during deployment startup.
+They are also excluded from system config sync import/export APIs.
 
 Run the import manually when needed:
 
 ```bash
 cd backend
 python apply_kie_system_data_standard_seed.py
+```
+
+If configuration CSV files are uploaded first, load from uploaded file paths:
+
+```bash
+cd backend
+python apply_kie_system_data_standard_seed.py \
+   --dict-csv uploads/kie/_kie_system_data_standard_dictionary.csv \
+   --map-csv uploads/kie/_kie_system_to_model_enum_mapping.csv
 ```

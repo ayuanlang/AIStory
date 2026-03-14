@@ -7190,7 +7190,6 @@ def export_system_config_sync_bundle_for_manage(
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
     provider_bundle = export_system_provider_bundle_for_manage(db=db, current_user=current_user)
-    _ensure_kie_standard_tables_for_admin(db)
 
     system_rows = db.query(SystemAPISetting).filter(
         ~SystemAPISetting.category.like("System_%"),
@@ -7308,59 +7307,6 @@ def export_system_config_sync_bundle_for_manage(
                 "updated_at": None,
             })
 
-    kie_standard_values_rows = db.execute(text("""
-        SELECT id, standard_dimension, standard_value, value_type, definition, alias_values,
-               is_active, created_at, updated_at
-        FROM kie_system_data_standard_values
-        ORDER BY standard_dimension ASC, standard_value ASC, id ASC
-    """)).mappings().all()
-    kie_standard_values_payload = [
-        {
-            "standard_dimension": str(row.get("standard_dimension") or "").strip(),
-            "standard_value": str(row.get("standard_value") or "").strip(),
-            "value_type": str(row.get("value_type") or "text").strip() or "text",
-            "definition": row.get("definition"),
-            "alias_values": row.get("alias_values"),
-            "is_active": bool(_to_bool(row.get("is_active"))),
-            "created_at": row.get("created_at"),
-            "updated_at": row.get("updated_at"),
-        }
-        for row in kie_standard_values_rows
-        if str(row.get("standard_dimension") or "").strip() and str(row.get("standard_value") or "").strip()
-    ]
-
-    kie_standard_mappings_rows = db.execute(text("""
-        SELECT id, provider, model_key_inferred, model_title, model_url,
-               source_field, source_enum_value, standard_dimension, standard_value,
-               confidence, note, is_active, is_billing_related, created_at, updated_at
-        FROM kie_system_data_standard_mappings
-        ORDER BY provider ASC, standard_dimension ASC, model_key_inferred ASC,
-                 source_field ASC, source_enum_value ASC, id ASC
-    """)).mappings().all()
-    kie_standard_mappings_payload = [
-        {
-            "provider": str(row.get("provider") or "kie").strip() or "kie",
-            "model_key_inferred": str(row.get("model_key_inferred") or "").strip() or None,
-            "model_title": row.get("model_title"),
-            "model_url": row.get("model_url"),
-            "source_field": str(row.get("source_field") or "").strip(),
-            "source_enum_value": str(row.get("source_enum_value") or "").strip(),
-            "standard_dimension": str(row.get("standard_dimension") or "").strip().upper(),
-            "standard_value": str(row.get("standard_value") or "").strip(),
-            "confidence": row.get("confidence"),
-            "note": row.get("note"),
-            "is_active": bool(_to_bool(row.get("is_active"))),
-            "is_billing_related": bool(_to_bool(row.get("is_billing_related"))),
-            "created_at": row.get("created_at"),
-            "updated_at": row.get("updated_at"),
-        }
-        for row in kie_standard_mappings_rows
-        if str(row.get("source_field") or "").strip()
-        and str(row.get("source_enum_value") or "").strip()
-        and str(row.get("standard_dimension") or "").strip()
-        and str(row.get("standard_value") or "").strip()
-    ]
-
     data = {
         "providers": provider_bundle.get("providers", []),
         "billing_rules": billing_rules_payload,
@@ -7368,8 +7314,6 @@ def export_system_config_sync_bundle_for_manage(
         "smtp_configs": smtp_payload,
         "wechat_pay_configs": wechat_payload,
         "task_default_apis": task_default_payload,
-        "kie_standard_values": kie_standard_values_payload,
-        "kie_standard_mappings": kie_standard_mappings_payload,
     }
 
     return {
@@ -7383,8 +7327,6 @@ def export_system_config_sync_bundle_for_manage(
             "smtp_configs": len(data["smtp_configs"]),
             "wechat_pay_configs": len(data["wechat_pay_configs"]),
             "task_default_apis": len(data["task_default_apis"]),
-            "kie_standard_values": len(data["kie_standard_values"]),
-            "kie_standard_mappings": len(data["kie_standard_mappings"]),
         },
         "data": data,
     }
@@ -7406,8 +7348,8 @@ def import_system_config_sync_bundle_for_manage(
     smtp_configs = data.get("smtp_configs") if isinstance(data.get("smtp_configs"), list) else []
     wechat_pay_configs = data.get("wechat_pay_configs") if isinstance(data.get("wechat_pay_configs"), list) else []
     task_default_apis = data.get("task_default_apis") if isinstance(data.get("task_default_apis"), list) else []
-    kie_standard_values = data.get("kie_standard_values") if isinstance(data.get("kie_standard_values"), list) else []
-    kie_standard_mappings = data.get("kie_standard_mappings") if isinstance(data.get("kie_standard_mappings"), list) else []
+    kie_standard_values_ignored = len(data.get("kie_standard_values") or []) if isinstance(data.get("kie_standard_values"), list) else 0
+    kie_standard_mappings_ignored = len(data.get("kie_standard_mappings") or []) if isinstance(data.get("kie_standard_mappings"), list) else 0
 
     replace_all = bool(payload.replace_all)
     if replace_all and not bool(getattr(payload, "confirm_clear_existing", False)):
@@ -7419,7 +7361,6 @@ def import_system_config_sync_bundle_for_manage(
     try:
         tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
         with tx_ctx:
-            _ensure_kie_standard_tables_for_admin(db)
             provider_items = []
             for raw in providers:
                 if not isinstance(raw, dict):
@@ -7458,12 +7399,6 @@ def import_system_config_sync_bundle_for_manage(
             billing_skipped = 0
             default_created = 0
             default_skipped = 0
-            kie_standard_values_created = 0
-            kie_standard_values_updated = 0
-            kie_standard_values_skipped = 0
-            kie_standard_mappings_created = 0
-            kie_standard_mappings_updated = 0
-            kie_standard_mappings_skipped = 0
             now_iso = now_bj_iso()
             for raw_rule in billing_rules:
                 if not isinstance(raw_rule, dict):
@@ -7492,176 +7427,8 @@ def import_system_config_sync_bundle_for_manage(
                 db.add(new_rule)
                 billing_created += 1
 
-            if replace_all:
-                db.execute(text("DELETE FROM kie_system_data_standard_mappings"))
-                db.execute(text("DELETE FROM kie_system_data_standard_values"))
-
-            for raw_value in kie_standard_values:
-                if not isinstance(raw_value, dict):
-                    kie_standard_values_skipped += 1
-                    continue
-                standard_dimension = str(raw_value.get("standard_dimension") or "").strip().upper()
-                standard_value = str(raw_value.get("standard_value") or "").strip()
-                if not standard_dimension or not standard_value:
-                    kie_standard_values_skipped += 1
-                    continue
-                value_type = str(raw_value.get("value_type") or "text").strip() or "text"
-                definition = raw_value.get("definition")
-                alias_values = raw_value.get("alias_values")
-                is_active = 1 if _to_bool(raw_value.get("is_active", True)) else 0
-                created_at = str(raw_value.get("created_at") or now_iso)
-                updated_at = str(raw_value.get("updated_at") or now_iso)
-
-                exists = db.execute(text("""
-                    SELECT id
-                    FROM kie_system_data_standard_values
-                    WHERE standard_dimension = :standard_dimension
-                      AND standard_value = :standard_value
-                    LIMIT 1
-                """), {
-                    "standard_dimension": standard_dimension,
-                    "standard_value": standard_value,
-                }).mappings().first()
-
-                if exists:
-                    db.execute(text("""
-                        UPDATE kie_system_data_standard_values
-                        SET value_type = :value_type,
-                            definition = :definition,
-                            alias_values = :alias_values,
-                            is_active = :is_active,
-                            updated_at = :updated_at
-                        WHERE id = :id
-                    """), {
-                        "id": int(exists.get("id") or 0),
-                        "value_type": value_type,
-                        "definition": definition,
-                        "alias_values": alias_values,
-                        "is_active": is_active,
-                        "updated_at": updated_at,
-                    })
-                    kie_standard_values_updated += 1
-                else:
-                    db.execute(text("""
-                        INSERT INTO kie_system_data_standard_values (
-                            standard_dimension, standard_value, value_type,
-                            definition, alias_values, is_active, created_at, updated_at
-                        ) VALUES (
-                            :standard_dimension, :standard_value, :value_type,
-                            :definition, :alias_values, :is_active, :created_at, :updated_at
-                        )
-                    """), {
-                        "standard_dimension": standard_dimension,
-                        "standard_value": standard_value,
-                        "value_type": value_type,
-                        "definition": definition,
-                        "alias_values": alias_values,
-                        "is_active": is_active,
-                        "created_at": created_at,
-                        "updated_at": updated_at,
-                    })
-                    kie_standard_values_created += 1
-
-            for raw_mapping in kie_standard_mappings:
-                if not isinstance(raw_mapping, dict):
-                    kie_standard_mappings_skipped += 1
-                    continue
-
-                provider_name = str(raw_mapping.get("provider") or "kie").strip() or "kie"
-                model_key_inferred = str(raw_mapping.get("model_key_inferred") or "").strip() or None
-                source_field = str(raw_mapping.get("source_field") or "").strip()
-                source_enum_value = str(raw_mapping.get("source_enum_value") or "").strip()
-                standard_dimension = str(raw_mapping.get("standard_dimension") or "").strip().upper()
-                standard_value = str(raw_mapping.get("standard_value") or "").strip()
-                if not source_field or not source_enum_value or not standard_dimension or not standard_value:
-                    kie_standard_mappings_skipped += 1
-                    continue
-
-                _validate_kie_mapping_source_enum_allowed(
-                    provider=provider_name,
-                    model_key_inferred=model_key_inferred,
-                    source_field=source_field,
-                    source_enum_value=source_enum_value,
-                )
-
-                model_title = raw_mapping.get("model_title")
-                model_url = raw_mapping.get("model_url")
-                confidence = raw_mapping.get("confidence")
-                note = raw_mapping.get("note")
-                is_active = 1 if _to_bool(raw_mapping.get("is_active", True)) else 0
-                is_billing_related = 1 if _to_bool(raw_mapping.get("is_billing_related", False)) else 0
-                created_at = str(raw_mapping.get("created_at") or now_iso)
-                updated_at = str(raw_mapping.get("updated_at") or now_iso)
-
-                exists = db.execute(text("""
-                    SELECT id
-                    FROM kie_system_data_standard_mappings
-                    WHERE provider = :provider
-                      AND coalesce(model_key_inferred, '') = coalesce(:model_key_inferred, '')
-                      AND source_field = :source_field
-                      AND source_enum_value = :source_enum_value
-                      AND standard_dimension = :standard_dimension
-                      AND standard_value = :standard_value
-                    LIMIT 1
-                """), {
-                    "provider": provider_name,
-                    "model_key_inferred": model_key_inferred,
-                    "source_field": source_field,
-                    "source_enum_value": source_enum_value,
-                    "standard_dimension": standard_dimension,
-                    "standard_value": standard_value,
-                }).mappings().first()
-
-                if exists:
-                    db.execute(text("""
-                        UPDATE kie_system_data_standard_mappings
-                        SET model_title = :model_title,
-                            model_url = :model_url,
-                            confidence = :confidence,
-                            note = :note,
-                            is_active = :is_active,
-                            is_billing_related = :is_billing_related,
-                            updated_at = :updated_at
-                        WHERE id = :id
-                    """), {
-                        "id": int(exists.get("id") or 0),
-                        "model_title": model_title,
-                        "model_url": model_url,
-                        "confidence": confidence,
-                        "note": note,
-                        "is_active": is_active,
-                        "is_billing_related": is_billing_related,
-                        "updated_at": updated_at,
-                    })
-                    kie_standard_mappings_updated += 1
-                else:
-                    db.execute(text("""
-                        INSERT INTO kie_system_data_standard_mappings (
-                            provider, model_key_inferred, model_title, model_url,
-                            source_field, source_enum_value, standard_dimension, standard_value,
-                            confidence, note, is_active, is_billing_related, created_at, updated_at
-                        ) VALUES (
-                            :provider, :model_key_inferred, :model_title, :model_url,
-                            :source_field, :source_enum_value, :standard_dimension, :standard_value,
-                            :confidence, :note, :is_active, :is_billing_related, :created_at, :updated_at
-                        )
-                    """), {
-                        "provider": provider_name,
-                        "model_key_inferred": model_key_inferred,
-                        "model_title": model_title,
-                        "model_url": model_url,
-                        "source_field": source_field,
-                        "source_enum_value": source_enum_value,
-                        "standard_dimension": standard_dimension,
-                        "standard_value": standard_value,
-                        "confidence": confidence,
-                        "note": note,
-                        "is_active": is_active,
-                        "is_billing_related": is_billing_related,
-                        "created_at": created_at,
-                        "updated_at": updated_at,
-                    })
-                    kie_standard_mappings_created += 1
+            # KIE standard data is intentionally excluded from sync bundle import.
+            # Use CLI loader instead (backend/apply_kie_system_data_standard_seed.py).
 
             provider_pool_created = 0
             provider_pool_updated = 0
@@ -7825,15 +7592,11 @@ def import_system_config_sync_bundle_for_manage(
                 "created_or_updated": default_created,
                 "skipped": default_skipped,
             },
-            "kie_standard_values": {
-                "created": kie_standard_values_created,
-                "updated": kie_standard_values_updated,
-                "skipped": kie_standard_values_skipped,
-            },
-            "kie_standard_mappings": {
-                "created": kie_standard_mappings_created,
-                "updated": kie_standard_mappings_updated,
-                "skipped": kie_standard_mappings_skipped,
+            "kie_standard_data": {
+                "imported": 0,
+                "ignored_values": kie_standard_values_ignored,
+                "ignored_mappings": kie_standard_mappings_ignored,
+                "note": "KIE standard data import via sync bundle is disabled; use CLI loader",
             },
         }
     except HTTPException:

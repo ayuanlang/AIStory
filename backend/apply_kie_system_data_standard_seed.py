@@ -1,4 +1,5 @@
 import csv
+import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List
@@ -8,8 +9,8 @@ from sqlalchemy import Boolean, Column, DateTime, Integer, MetaData, String, Tab
 from app.core.config import settings
 
 ROOT = Path(__file__).resolve().parents[1]
-DICT_CSV = ROOT / "_kie_system_data_standard_dictionary.csv"
-MAP_CSV = ROOT / "_kie_system_to_model_enum_mapping.csv"
+DEFAULT_DICT_CSV = ROOT / "_kie_system_data_standard_dictionary.csv"
+DEFAULT_MAP_CSV = ROOT / "_kie_system_to_model_enum_mapping.csv"
 
 EXCLUDED_STANDARD_DIMENSIONS = {"MODEL_ID", "VOICE_ID"}
 
@@ -42,6 +43,16 @@ def _read_csv_rows(path: Path) -> Iterable[Dict[str, str]]:
         reader = csv.DictReader(f)
         for row in reader:
             yield {k: _clean(v) for k, v in (row or {}).items()}
+
+
+def _resolve_input_path(raw: str, default_path: Path) -> Path:
+    candidate = _clean(raw)
+    if not candidate:
+        return default_path
+    p = Path(candidate)
+    if not p.is_absolute():
+        p = (ROOT / p).resolve()
+    return p
 
 
 def _ensure_tables(metadata: MetaData):
@@ -199,12 +210,20 @@ def _upsert_rule(conn, rules, rule_code: str, now_dt: datetime):
 
 
 def main() -> None:
-    if not DICT_CSV.exists() or not MAP_CSV.exists():
+    parser = argparse.ArgumentParser(description="Load KIE standard dictionary/mapping config into DB")
+    parser.add_argument("--dict-csv", dest="dict_csv", default=str(DEFAULT_DICT_CSV), help="Path to standard dictionary CSV")
+    parser.add_argument("--map-csv", dest="map_csv", default=str(DEFAULT_MAP_CSV), help="Path to system mapping CSV")
+    args = parser.parse_args()
+
+    dict_csv = _resolve_input_path(args.dict_csv, DEFAULT_DICT_CSV)
+    map_csv = _resolve_input_path(args.map_csv, DEFAULT_MAP_CSV)
+
+    if not dict_csv.exists() or not map_csv.exists():
         missing: List[str] = []
-        if not DICT_CSV.exists():
-            missing.append(DICT_CSV.name)
-        if not MAP_CSV.exists():
-            missing.append(MAP_CSV.name)
+        if not dict_csv.exists():
+            missing.append(str(dict_csv))
+        if not map_csv.exists():
+            missing.append(str(map_csv))
         raise FileNotFoundError(f"Missing required files: {', '.join(missing)}")
 
     engine = create_engine(settings.DATABASE_URL)
@@ -221,11 +240,11 @@ def main() -> None:
         conn.execute(values.delete().where(values.c.standard_dimension.in_(sorted(EXCLUDED_STANDARD_DIMENSIONS))))
         conn.execute(mappings.delete().where(mappings.c.standard_dimension.in_(sorted(EXCLUDED_STANDARD_DIMENSIONS))))
 
-        for row in _read_csv_rows(DICT_CSV):
+        for row in _read_csv_rows(dict_csv):
             if _upsert_value(conn, values, row, now_dt):
                 values_count += 1
 
-        for row in _read_csv_rows(MAP_CSV):
+        for row in _read_csv_rows(map_csv):
             ok, rule_code = _upsert_mapping(conn, mappings, row, now_dt)
             if ok:
                 mappings_count += 1
@@ -236,6 +255,8 @@ def main() -> None:
             _upsert_rule(conn, rules, rc, now_dt)
 
     print("[kie-standard-seed] completed")
+    print(f"[kie-standard-seed] dict_csv={dict_csv}")
+    print(f"[kie-standard-seed] map_csv={map_csv}")
     print(f"[kie-standard-seed] values_rows={values_count} mappings_rows={mappings_count} rules_rows={len(rule_codes)}")
 
 
