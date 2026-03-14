@@ -4169,7 +4169,12 @@ def select_system_setting(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    system_setting = db.query(SystemAPISetting).filter(
+    system_setting = db.query(
+        SystemAPISetting.id,
+        SystemAPISetting.category,
+        SystemAPISetting.config,
+        SystemAPISetting.deprecated,
+    ).filter(
         SystemAPISetting.id == selection.setting_id,
     ).first()
     if not system_setting:
