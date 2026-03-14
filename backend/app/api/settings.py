@@ -7359,6 +7359,11 @@ def import_system_config_sync_bundle_for_manage(
         )
 
     try:
+        has_provider_key_pool_table = _db_has_table(db, "provider_key_pool")
+        has_smtp_table = _db_has_table(db, "smtp_system_configs")
+        has_wechat_table = _db_has_table(db, "wechat_pay_configs")
+        has_task_default_table = HAS_TASK_DEFAULT_SYSTEM_API_MODEL and _db_has_table(db, "system_task_default_apis")
+
         tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
         with tx_ctx:
             provider_items = []
@@ -7384,16 +7389,18 @@ def import_system_config_sync_bundle_for_manage(
                         logger.warning("Skip matched_rule_id reset due to schema mismatch: %s", exc)
                 db.query(SystemAPIBillingRule).delete(synchronize_session=False)
 
-            system_rows = db.query(SystemAPISetting).filter(
-                ~SystemAPISetting.category.like("System_%"),
-            ).all()
             system_index: Dict[Tuple[str, str, str], int] = {}
+            system_rows = db.execute(text("""
+                SELECT id, provider, category, model
+                FROM system_api_settings
+                WHERE category NOT LIKE 'System_%'
+            """)).mappings().all()
             for row in system_rows:
-                provider_name = _normalize_system_provider_name(row.provider)
-                category_name = str(row.category or "").strip()
-                model_name = str(row.model or "").strip()
+                provider_name = _normalize_system_provider_name(row.get("provider"))
+                category_name = str(row.get("category") or "").strip()
+                model_name = str(row.get("model") or "").strip()
                 if provider_name and category_name and model_name:
-                    system_index[(provider_name, category_name, model_name)] = int(row.id)
+                    system_index[(provider_name, category_name, model_name)] = int(row.get("id") or 0)
 
             billing_created = 0
             billing_skipped = 0
@@ -7432,102 +7439,111 @@ def import_system_config_sync_bundle_for_manage(
 
             provider_pool_created = 0
             provider_pool_updated = 0
-            if replace_all:
-                db.query(ProviderKeyPool).delete(synchronize_session=False)
+            if has_provider_key_pool_table:
+                if replace_all:
+                    db.query(ProviderKeyPool).delete(synchronize_session=False)
 
-            for raw_pool in provider_key_pools:
-                if not isinstance(raw_pool, dict):
-                    continue
-                provider_name = _normalize_system_provider_name(raw_pool.get("provider"))
-                if not provider_name:
-                    continue
-                keys = _normalize_api_keys(raw_pool.get("api_keys"))
-                strategy = _normalize_key_strategy(raw_pool.get("strategy"))
-                weights = _normalize_key_weights(raw_pool.get("weights"), keys)
-                provider_alias = str(raw_pool.get("provider_alias") or "").strip() or None
-                intro_url = _normalize_optional_http_url(raw_pool.get("intro_url"))
-                updated_at = str(raw_pool.get("updated_at") or now_bj_iso())
+                for raw_pool in provider_key_pools:
+                    if not isinstance(raw_pool, dict):
+                        continue
+                    provider_name = _normalize_system_provider_name(raw_pool.get("provider"))
+                    if not provider_name:
+                        continue
+                    keys = _normalize_api_keys(raw_pool.get("api_keys"))
+                    strategy = _normalize_key_strategy(raw_pool.get("strategy"))
+                    weights = _normalize_key_weights(raw_pool.get("weights"), keys)
+                    provider_alias = str(raw_pool.get("provider_alias") or "").strip() or None
+                    intro_url = _normalize_optional_http_url(raw_pool.get("intro_url"))
+                    updated_at = str(raw_pool.get("updated_at") or now_bj_iso())
 
-                # Use SQL-level update first to avoid stale ORM instance updates
-                # when replace_all bulk delete has occurred in the same session.
-                updated_rows = db.query(ProviderKeyPool).filter(
-                    ProviderKeyPool.provider == provider_name,
-                ).update(
-                    {
-                        "api_keys": keys,
-                        "strategy": strategy,
-                        "weights": weights,
-                        "provider_alias": provider_alias,
-                        "intro_url": intro_url,
-                        "updated_at": updated_at,
-                    },
-                    synchronize_session=False,
-                )
+                    # Use SQL-level update first to avoid stale ORM instance updates
+                    # when replace_all bulk delete has occurred in the same session.
+                    updated_rows = db.query(ProviderKeyPool).filter(
+                        ProviderKeyPool.provider == provider_name,
+                    ).update(
+                        {
+                            "api_keys": keys,
+                            "strategy": strategy,
+                            "weights": weights,
+                            "provider_alias": provider_alias,
+                            "intro_url": intro_url,
+                            "updated_at": updated_at,
+                        },
+                        synchronize_session=False,
+                    )
 
-                if int(updated_rows or 0) > 0:
-                    provider_pool_updated += 1
-                    continue
+                    if int(updated_rows or 0) > 0:
+                        provider_pool_updated += 1
+                        continue
 
-                created_at = str(raw_pool.get("created_at") or now_bj_iso())
-                db.add(ProviderKeyPool(
-                    provider=provider_name,
-                    provider_alias=provider_alias,
-                    api_keys=keys,
-                    strategy=strategy,
-                    weights=weights,
-                    intro_url=intro_url,
-                    created_at=created_at,
-                    updated_at=str(raw_pool.get("updated_at") or created_at),
-                ))
-                provider_pool_created += 1
+                    created_at = str(raw_pool.get("created_at") or now_bj_iso())
+                    db.add(ProviderKeyPool(
+                        provider=provider_name,
+                        provider_alias=provider_alias,
+                        api_keys=keys,
+                        strategy=strategy,
+                        weights=weights,
+                        intro_url=intro_url,
+                        created_at=created_at,
+                        updated_at=str(raw_pool.get("updated_at") or created_at),
+                    ))
+                    provider_pool_created += 1
+            elif provider_key_pools:
+                logger.warning("Skip provider key pool import: table provider_key_pool not found")
 
             smtp_created = 0
-            if replace_all:
-                db.query(SMTPSystemConfig).delete(synchronize_session=False)
-            for raw_smtp in smtp_configs:
-                if not isinstance(raw_smtp, dict):
-                    continue
-                created_at = str(raw_smtp.get("created_at") or now_bj_iso())
-                row = SMTPSystemConfig(
-                    host=str(raw_smtp.get("host") or "").strip(),
-                    port=int(raw_smtp.get("port") or 587),
-                    username=str(raw_smtp.get("username") or "").strip(),
-                    password=str(raw_smtp.get("password") or ""),
-                    use_ssl=bool(raw_smtp.get("use_ssl")),
-                    use_tls=bool(raw_smtp.get("use_tls", True)),
-                    from_email=str(raw_smtp.get("from_email") or "").strip(),
-                    frontend_base_url=str(raw_smtp.get("frontend_base_url") or "").strip(),
-                    is_active=bool(raw_smtp.get("is_active", True)),
-                    created_at=created_at,
-                    updated_at=str(raw_smtp.get("updated_at") or created_at),
-                )
-                db.add(row)
-                smtp_created += 1
+            if has_smtp_table:
+                if replace_all:
+                    db.query(SMTPSystemConfig).delete(synchronize_session=False)
+                for raw_smtp in smtp_configs:
+                    if not isinstance(raw_smtp, dict):
+                        continue
+                    created_at = str(raw_smtp.get("created_at") or now_bj_iso())
+                    row = SMTPSystemConfig(
+                        host=str(raw_smtp.get("host") or "").strip(),
+                        port=int(raw_smtp.get("port") or 587),
+                        username=str(raw_smtp.get("username") or "").strip(),
+                        password=str(raw_smtp.get("password") or ""),
+                        use_ssl=bool(raw_smtp.get("use_ssl")),
+                        use_tls=bool(raw_smtp.get("use_tls", True)),
+                        from_email=str(raw_smtp.get("from_email") or "").strip(),
+                        frontend_base_url=str(raw_smtp.get("frontend_base_url") or "").strip(),
+                        is_active=bool(raw_smtp.get("is_active", True)),
+                        created_at=created_at,
+                        updated_at=str(raw_smtp.get("updated_at") or created_at),
+                    )
+                    db.add(row)
+                    smtp_created += 1
+            elif smtp_configs:
+                logger.warning("Skip SMTP import: table smtp_system_configs not found")
 
             wechat_created = 0
-            if replace_all:
-                db.query(WechatPayConfig).delete(synchronize_session=False)
-            for raw_wechat in wechat_pay_configs:
-                if not isinstance(raw_wechat, dict):
-                    continue
-                created_at = str(raw_wechat.get("created_at") or now_bj_iso())
-                row = WechatPayConfig(
-                    mchid=str(raw_wechat.get("mchid") or "").strip(),
-                    appid=str(raw_wechat.get("appid") or "").strip(),
-                    api_v3_key=str(raw_wechat.get("api_v3_key") or "").strip(),
-                    cert_serial_no=str(raw_wechat.get("cert_serial_no") or "").strip(),
-                    private_key=str(raw_wechat.get("private_key") or ""),
-                    notify_url=str(raw_wechat.get("notify_url") or "").strip(),
-                    use_mock=bool(raw_wechat.get("use_mock", True)),
-                    is_active=bool(raw_wechat.get("is_active", True)),
-                    created_at=created_at,
-                    updated_at=str(raw_wechat.get("updated_at") or created_at),
-                )
-                db.add(row)
-                wechat_created += 1
+            if has_wechat_table:
+                if replace_all:
+                    db.query(WechatPayConfig).delete(synchronize_session=False)
+                for raw_wechat in wechat_pay_configs:
+                    if not isinstance(raw_wechat, dict):
+                        continue
+                    created_at = str(raw_wechat.get("created_at") or now_bj_iso())
+                    row = WechatPayConfig(
+                        mchid=str(raw_wechat.get("mchid") or "").strip(),
+                        appid=str(raw_wechat.get("appid") or "").strip(),
+                        api_v3_key=str(raw_wechat.get("api_v3_key") or "").strip(),
+                        cert_serial_no=str(raw_wechat.get("cert_serial_no") or "").strip(),
+                        private_key=str(raw_wechat.get("private_key") or ""),
+                        notify_url=str(raw_wechat.get("notify_url") or "").strip(),
+                        use_mock=bool(raw_wechat.get("use_mock", True)),
+                        is_active=bool(raw_wechat.get("is_active", True)),
+                        created_at=created_at,
+                        updated_at=str(raw_wechat.get("updated_at") or created_at),
+                    )
+                    db.add(row)
+                    wechat_created += 1
+            elif wechat_pay_configs:
+                logger.warning("Skip WeChat pay import: table wechat_pay_configs not found")
 
             if replace_all:
-                if HAS_TASK_DEFAULT_SYSTEM_API_MODEL:
+                if has_task_default_table:
                     db.query(TaskDefaultSystemAPI).delete(synchronize_session=False)
                 else:
                     db.query(SystemAPISetting).filter(~SystemAPISetting.category.like("System_%")).update(
@@ -7581,16 +7597,23 @@ def import_system_config_sync_bundle_for_manage(
             "provider_key_pools": {
                 "created": provider_pool_created,
                 "updated": provider_pool_updated,
+                "skipped": 0 if has_provider_key_pool_table else len(provider_key_pools),
+                "skipped_reason": None if has_provider_key_pool_table else "missing table provider_key_pool",
             },
             "smtp_configs": {
                 "created": smtp_created,
+                "skipped": 0 if has_smtp_table else len(smtp_configs),
+                "skipped_reason": None if has_smtp_table else "missing table smtp_system_configs",
             },
             "wechat_pay_configs": {
                 "created": wechat_created,
+                "skipped": 0 if has_wechat_table else len(wechat_pay_configs),
+                "skipped_reason": None if has_wechat_table else "missing table wechat_pay_configs",
             },
             "task_default_apis": {
                 "created_or_updated": default_created,
                 "skipped": default_skipped,
+                "storage": "system_task_default_apis" if has_task_default_table else "system_api_settings.is_active",
             },
             "kie_standard_data": {
                 "imported": 0,
