@@ -4107,6 +4107,7 @@ def list_kie_standard_mappings_manage(
 
 
 @router.get("/settings/system/manage/kie-standard-mappings/export", response_model=KIEDataStandardMappingExportResponse)
+@router.get("/kie/data-dictionary/mappings/export", response_model=KIEDataStandardMappingExportResponse)
 def export_kie_standard_mappings_manage(
     provider: Optional[str] = Query(default="kie"),
     standard_dimension: Optional[str] = Query(default=None),
@@ -4190,6 +4191,7 @@ def export_kie_standard_mappings_manage(
 
 
 @router.post("/settings/system/manage/kie-standard-mappings/import", response_model=KIEDataStandardMappingImportResponse)
+@router.post("/kie/data-dictionary/mappings/import", response_model=KIEDataStandardMappingImportResponse)
 def import_kie_standard_mappings_manage(
     payload: KIEDataStandardMappingImportRequest,
     db: Session = Depends(get_db),
