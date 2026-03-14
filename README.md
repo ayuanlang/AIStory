@@ -47,3 +47,14 @@ AI Story is an intelligent tool for film production, simplifying the process fro
    npm run dev
    ```
    The application will be available at `http://localhost:5173`.
+
+## KIE Data Import
+
+KIE standard dictionary and mapping data are not loaded during deployment startup.
+
+Run the import manually when needed:
+
+```bash
+cd backend
+python apply_kie_system_data_standard_seed.py
+```

@@ -15,12 +15,7 @@ services:
       python add_scene_ai_shots_result_column.py || echo "[WARN] add_scene_ai_shots_result_column.py failed, continuing"
       python add_users_email_verification_columns.py || echo "[WARN] add_users_email_verification_columns.py failed, continuing"
       python backfill_user_verification_for_active.py || echo "[WARN] backfill_user_verification_for_active.py failed, continuing"
-      if [ "${RUN_KIE_SEED_ON_BOOT:-0}" = "1" ]; then
-        echo "[boot] RUN_KIE_SEED_ON_BOOT=1, applying KIE standard seed"
-        python apply_kie_system_data_standard_seed.py || echo "[WARN] apply_kie_system_data_standard_seed.py failed, continuing"
-      else
-        echo "[boot] RUN_KIE_SEED_ON_BOOT!=1, skip KIE standard seed"
-      fi
+      echo "[boot] KIE data import is disabled during deploy"
       export RUN_DB_BOOTSTRAP_ON_START=0
       echo "[boot] RUN_DB_BOOTSTRAP_ON_START=0 for fast health readiness"
       echo "[boot] starting gunicorn on PORT=${PORT}"
