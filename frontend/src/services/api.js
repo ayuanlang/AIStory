@@ -2045,6 +2045,46 @@ export const importKieDataDictionaryMappings = async (payload) => {
     return response.data;
 }
 
+export const exportKieDataDictionaryValues = async (params = {}) => {
+    const response = await api.get('/kie/data-dictionary/values/export', {
+        params: {
+            include_csv: true,
+            ...params,
+            _ts: Date.now(),
+        },
+        headers: {
+            'Cache-Control': 'no-cache',
+            Pragma: 'no-cache',
+        },
+    });
+    return response.data;
+}
+
+export const importKieDataDictionaryValues = async (payload) => {
+    const response = await api.post('/kie/data-dictionary/values/import', payload || {});
+    return response.data;
+}
+
+export const exportKieDataDictionaryBundle = async (params = {}) => {
+    const response = await api.get('/kie/data-dictionary/bundle/export', {
+        params: {
+            include_csv: true,
+            ...params,
+            _ts: Date.now(),
+        },
+        headers: {
+            'Cache-Control': 'no-cache',
+            Pragma: 'no-cache',
+        },
+    });
+    return response.data;
+}
+
+export const importKieDataDictionaryBundle = async (payload) => {
+    const response = await api.post('/kie/data-dictionary/bundle/import', payload || {});
+    return response.data;
+}
+
 export const exportSystemSettingsManage = async () => {
     const response = await api.get('/settings/system/manage/export');
     return response.data;

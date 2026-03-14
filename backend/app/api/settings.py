@@ -101,6 +101,10 @@ from app.schemas.settings import (
     SystemAPIBillingRuleMultiplierResetRequest,
     SystemAPIBillingRuleMultiplierResetResponse,
     KIEDataStandardValueOut,
+    KIEDataStandardValueCreate,
+    KIEDataStandardValueExportResponse,
+    KIEDataStandardValueImportRequest,
+    KIEDataStandardValueImportResponse,
     KIEDataStandardMappingCreate,
     KIEDataStandardMappingUpdate,
     KIEDataStandardMappingOut,
@@ -108,6 +112,9 @@ from app.schemas.settings import (
     KIEDataStandardMappingExportResponse,
     KIEDataStandardMappingImportRequest,
     KIEDataStandardMappingImportResponse,
+    KIEDataDictionaryBundleExportResponse,
+    KIEDataDictionaryBundleImportRequest,
+    KIEDataDictionaryBundleImportResponse,
     KIEDataStandardValueMappingImportRequest,
 )
 from app.api.deps import get_current_user
@@ -3995,6 +4002,158 @@ def list_kie_standard_values_manage(
     return [_row_to_kie_standard_value_out(dict(row)) for row in rows]
 
 
+@router.get("/settings/system/manage/kie-standard-values/export", response_model=KIEDataStandardValueExportResponse)
+@router.get("/kie/data-dictionary/values/export", response_model=KIEDataStandardValueExportResponse)
+def export_kie_standard_values_manage(
+    standard_dimension: Optional[str] = Query(default=None),
+    active_only: bool = Query(default=False),
+    include_csv: bool = Query(default=True),
+    limit: int = Query(default=10000, ge=1, le=50000),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+
+    _ensure_kie_standard_tables_for_admin(db)
+
+    where = ["1=1"]
+    params: Dict[str, Any] = {"limit": int(limit)}
+    if standard_dimension:
+        where.append("upper(standard_dimension) = upper(:standard_dimension)")
+        params["standard_dimension"] = str(standard_dimension).strip()
+    if active_only:
+        where.append("coalesce(is_active, 1) = 1")
+
+    rows = db.execute(text(f"""
+        SELECT id, standard_dimension, standard_value, value_type, definition, alias_values, is_active, created_at, updated_at
+        FROM kie_system_data_standard_values
+        WHERE {' AND '.join(where)}
+        ORDER BY standard_dimension ASC, standard_value ASC, id ASC
+        LIMIT :limit
+    """), params).mappings().all()
+
+    items = [_row_to_kie_standard_value_out(dict(row)) for row in rows]
+    csv_text: Optional[str] = None
+    if include_csv:
+        csv_headers = [
+            "id", "standard_dimension", "standard_value", "value_type", "definition", "alias_values", "is_active", "created_at", "updated_at",
+        ]
+        sio = io.StringIO()
+        writer = csv.DictWriter(sio, fieldnames=csv_headers)
+        writer.writeheader()
+        for item in items:
+            payload = item.model_dump() if hasattr(item, "model_dump") else item.dict()
+            writer.writerow({k: payload.get(k) for k in csv_headers})
+        csv_text = sio.getvalue()
+
+    return KIEDataStandardValueExportResponse(
+        total=len(items),
+        items=items,
+        csv=csv_text,
+    )
+
+
+@router.post("/settings/system/manage/kie-standard-values/import", response_model=KIEDataStandardValueImportResponse)
+@router.post("/kie/data-dictionary/values/import", response_model=KIEDataStandardValueImportResponse)
+def import_kie_standard_values_manage(
+    payload: KIEDataStandardValueImportRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+
+    _ensure_kie_standard_tables_for_admin(db)
+
+    items = payload.items or []
+    received = len(items)
+    created = 0
+    updated = 0
+    skipped = 0
+
+    # Dictionary import is clear-import mode by design.
+    clear_import = True
+    if clear_import:
+        db.execute(text("DELETE FROM kie_system_data_standard_values"))
+
+    for item in items:
+        values = item.model_dump() if hasattr(item, "model_dump") else item.dict()
+        standard_dimension_value = str(values.get("standard_dimension") or "").strip().upper()
+        standard_value_value = str(values.get("standard_value") or "").strip()
+        if not standard_dimension_value or not standard_value_value:
+            skipped += 1
+            continue
+
+        value_type_value = str(values.get("value_type") or "enum").strip() or "enum"
+        definition_value = str(values.get("definition") or "").strip() or None
+        alias_values_value = str(values.get("alias_values") or "").strip() or None
+        is_active_value = 1 if _to_bool(values.get("is_active")) else 0
+        now_iso = now_bj_iso()
+
+        if payload.upsert_by_natural_key:
+            existing = db.execute(text("""
+                SELECT id
+                FROM kie_system_data_standard_values
+                WHERE standard_dimension = :standard_dimension
+                  AND standard_value = :standard_value
+                ORDER BY id DESC
+                LIMIT 1
+            """), {
+                "standard_dimension": standard_dimension_value,
+                "standard_value": standard_value_value,
+            }).mappings().first()
+
+            if existing:
+                db.execute(text("""
+                    UPDATE kie_system_data_standard_values
+                    SET value_type = :value_type,
+                        definition = :definition,
+                        alias_values = :alias_values,
+                        is_active = :is_active,
+                        updated_at = :updated_at
+                    WHERE id = :id
+                """), {
+                    "id": int(existing.get("id") or 0),
+                    "value_type": value_type_value,
+                    "definition": definition_value,
+                    "alias_values": alias_values_value,
+                    "is_active": is_active_value,
+                    "updated_at": now_iso,
+                })
+                updated += 1
+                continue
+
+        db.execute(text("""
+            INSERT INTO kie_system_data_standard_values (
+                standard_dimension, standard_value, value_type, definition,
+                alias_values, is_active, created_at, updated_at
+            ) VALUES (
+                :standard_dimension, :standard_value, :value_type, :definition,
+                :alias_values, :is_active, :created_at, :updated_at
+            )
+        """), {
+            "standard_dimension": standard_dimension_value,
+            "standard_value": standard_value_value,
+            "value_type": value_type_value,
+            "definition": definition_value,
+            "alias_values": alias_values_value,
+            "is_active": is_active_value,
+            "created_at": now_iso,
+            "updated_at": now_iso,
+        })
+        created += 1
+
+    db.commit()
+    return KIEDataStandardValueImportResponse(
+        ok=True,
+        received=received,
+        created=created,
+        updated=updated,
+        skipped=skipped,
+    )
+
+
 @router.get("/settings/system/kie-standard-values/options", response_model=Dict[str, List[str]])
 def get_kie_standard_value_options(
     dimensions: Optional[str] = Query(default="type,language,base_positioning,aspect_ratio,image_size"),
@@ -4323,6 +4482,195 @@ def import_kie_standard_mappings_manage(
         created=created,
         updated=updated,
         skipped=skipped,
+    )
+
+
+@router.get("/settings/system/manage/kie-data-dictionary/export", response_model=KIEDataDictionaryBundleExportResponse)
+@router.get("/kie/data-dictionary/bundle/export", response_model=KIEDataDictionaryBundleExportResponse)
+def export_kie_data_dictionary_bundle_manage(
+    include_csv: bool = Query(default=True),
+    values_limit: int = Query(default=10000, ge=1, le=50000),
+    mappings_limit: int = Query(default=10000, ge=1, le=50000),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+
+    _ensure_kie_standard_tables_for_admin(db)
+
+    value_rows = db.execute(text("""
+        SELECT id, standard_dimension, standard_value, value_type, definition, alias_values, is_active, created_at, updated_at
+        FROM kie_system_data_standard_values
+        ORDER BY standard_dimension ASC, standard_value ASC, id ASC
+        LIMIT :limit
+    """), {"limit": int(values_limit)}).mappings().all()
+    mapping_rows = db.execute(text("""
+        SELECT id, provider, model_key_inferred, model_title, model_url,
+               source_field, source_enum_value, standard_dimension, standard_value,
+               confidence, note, is_active, is_billing_related, created_at, updated_at
+        FROM kie_system_data_standard_mappings
+        ORDER BY standard_dimension ASC, model_key_inferred ASC, source_field ASC, source_enum_value ASC, id ASC
+        LIMIT :limit
+    """), {"limit": int(mappings_limit)}).mappings().all()
+
+    values = [_row_to_kie_standard_value_out(dict(row)) for row in value_rows]
+    mappings = [_row_to_kie_mapping_out(dict(row)) for row in mapping_rows]
+
+    values_csv: Optional[str] = None
+    mappings_csv: Optional[str] = None
+    if include_csv:
+        value_headers = ["id", "standard_dimension", "standard_value", "value_type", "definition", "alias_values", "is_active", "created_at", "updated_at"]
+        sio_values = io.StringIO()
+        writer_values = csv.DictWriter(sio_values, fieldnames=value_headers)
+        writer_values.writeheader()
+        for item in values:
+            payload = item.model_dump() if hasattr(item, "model_dump") else item.dict()
+            writer_values.writerow({k: payload.get(k) for k in value_headers})
+        values_csv = sio_values.getvalue()
+
+        mapping_headers = [
+            "id", "provider", "model_key_inferred", "model_title", "model_url",
+            "source_field", "source_enum_value", "standard_dimension", "standard_value",
+            "confidence", "note", "is_active", "is_billing_related", "created_at", "updated_at",
+        ]
+        sio_mappings = io.StringIO()
+        writer_mappings = csv.DictWriter(sio_mappings, fieldnames=mapping_headers)
+        writer_mappings.writeheader()
+        for item in mappings:
+            payload = item.model_dump() if hasattr(item, "model_dump") else item.dict()
+            writer_mappings.writerow({k: payload.get(k) for k in mapping_headers})
+        mappings_csv = sio_mappings.getvalue()
+
+    return KIEDataDictionaryBundleExportResponse(
+        total_values=len(values),
+        total_mappings=len(mappings),
+        values=values,
+        mappings=mappings,
+        values_csv=values_csv,
+        mappings_csv=mappings_csv,
+    )
+
+
+@router.post("/settings/system/manage/kie-data-dictionary/import", response_model=KIEDataDictionaryBundleImportResponse)
+@router.post("/kie/data-dictionary/bundle/import", response_model=KIEDataDictionaryBundleImportResponse)
+def import_kie_data_dictionary_bundle_manage(
+    payload: KIEDataDictionaryBundleImportRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+
+    _ensure_kie_standard_tables_for_admin(db)
+
+    values = payload.values or []
+    mappings = payload.mappings or []
+    received_values = len(values)
+    received_mappings = len(mappings)
+    created_values = 0
+    skipped_values = 0
+    created_mappings = 0
+    skipped_mappings = 0
+
+    # Bundle import is always clear-import mode to keep dictionary and mapping fully aligned.
+    clear_import = True
+    if clear_import:
+        db.execute(text("DELETE FROM kie_system_data_standard_mappings"))
+        db.execute(text("DELETE FROM kie_system_data_standard_values"))
+
+    for item in values:
+        row = item.model_dump() if hasattr(item, "model_dump") else item.dict()
+        standard_dimension = str(row.get("standard_dimension") or "").strip().upper()
+        standard_value = str(row.get("standard_value") or "").strip()
+        if not standard_dimension or not standard_value:
+            skipped_values += 1
+            continue
+        now_iso = now_bj_iso()
+        db.execute(text("""
+            INSERT INTO kie_system_data_standard_values (
+                standard_dimension, standard_value, value_type, definition,
+                alias_values, is_active, created_at, updated_at
+            ) VALUES (
+                :standard_dimension, :standard_value, :value_type, :definition,
+                :alias_values, :is_active, :created_at, :updated_at
+            )
+        """), {
+            "standard_dimension": standard_dimension,
+            "standard_value": standard_value,
+            "value_type": str(row.get("value_type") or "enum").strip() or "enum",
+            "definition": str(row.get("definition") or "").strip() or None,
+            "alias_values": str(row.get("alias_values") or "").strip() or None,
+            "is_active": 1 if _to_bool(row.get("is_active")) else 0,
+            "created_at": now_iso,
+            "updated_at": now_iso,
+        })
+        created_values += 1
+
+    for item in mappings:
+        row = item.model_dump() if hasattr(item, "model_dump") else item.dict()
+        provider_value = str(row.get("provider") or "kie").strip() or "kie"
+        model_key_value = str(row.get("model_key_inferred") or "").strip() or None
+        source_field_value = str(row.get("source_field") or "").strip()
+        source_enum_value_value = str(row.get("source_enum_value") or "").strip()
+        standard_dimension_value = str(row.get("standard_dimension") or "").strip().upper()
+        standard_value_value = str(row.get("standard_value") or "").strip()
+
+        if not source_field_value or not source_enum_value_value or not standard_dimension_value or not standard_value_value:
+            skipped_mappings += 1
+            continue
+
+        try:
+            _validate_kie_mapping_source_enum_allowed(
+                provider=provider_value,
+                model_key_inferred=model_key_value,
+                source_field=source_field_value,
+                source_enum_value=source_enum_value_value,
+            )
+        except HTTPException:
+            if payload.strict_mapping_validation:
+                raise
+            skipped_mappings += 1
+            continue
+
+        now_iso = now_bj_iso()
+        db.execute(text("""
+            INSERT INTO kie_system_data_standard_mappings (
+                provider, model_key_inferred, model_title, model_url,
+                source_field, source_enum_value, standard_dimension, standard_value,
+                confidence, note, is_active, is_billing_related, created_at, updated_at
+            ) VALUES (
+                :provider, :model_key_inferred, :model_title, :model_url,
+                :source_field, :source_enum_value, :standard_dimension, :standard_value,
+                :confidence, :note, :is_active, :is_billing_related, :created_at, :updated_at
+            )
+        """), {
+            "provider": provider_value,
+            "model_key_inferred": model_key_value,
+            "model_title": str(row.get("model_title") or "").strip() or None,
+            "model_url": str(row.get("model_url") or "").strip() or None,
+            "source_field": source_field_value,
+            "source_enum_value": source_enum_value_value,
+            "standard_dimension": standard_dimension_value,
+            "standard_value": standard_value_value,
+            "confidence": str(row.get("confidence") or "").strip() or None,
+            "note": str(row.get("note") or "").strip() or None,
+            "is_active": 1 if _to_bool(row.get("is_active")) else 0,
+            "is_billing_related": 1 if _to_bool(row.get("is_billing_related")) else 0,
+            "created_at": now_iso,
+            "updated_at": now_iso,
+        })
+        created_mappings += 1
+
+    db.commit()
+    return KIEDataDictionaryBundleImportResponse(
+        ok=True,
+        received_values=received_values,
+        created_values=created_values,
+        skipped_values=skipped_values,
+        received_mappings=received_mappings,
+        created_mappings=created_mappings,
+        skipped_mappings=skipped_mappings,
     )
 
 

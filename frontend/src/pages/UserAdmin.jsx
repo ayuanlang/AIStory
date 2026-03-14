@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, listKieStandardValuesManage, listKieStandardMappingsManage, createKieStandardMappingManage, updateKieStandardMappingManage, deleteKieStandardMappingManage, inferKieStandardMappingBillingRelatedManage, exportKieDataDictionaryMappings, importKieDataDictionaryMappings, getAdminLlmLogFiles, getAdminLlmLogView, getAdminRuntimeLogFiles, getAdminRuntimeLogView, getAdminStorageUsage, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, generateKiePricingRulesManage, applyKiePricingRulesManage, getAdminUsersPage, aiAssistantAnalyzeSupplierFeatures, aiAssistantApplySupplierFeatures } from '../services/api';
+import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, listKieStandardValuesManage, listKieStandardMappingsManage, createKieStandardMappingManage, updateKieStandardMappingManage, deleteKieStandardMappingManage, inferKieStandardMappingBillingRelatedManage, exportKieDataDictionaryMappings, importKieDataDictionaryMappings, exportKieDataDictionaryValues, importKieDataDictionaryValues, exportKieDataDictionaryBundle, importKieDataDictionaryBundle, getAdminLlmLogFiles, getAdminLlmLogView, getAdminRuntimeLogFiles, getAdminRuntimeLogView, getAdminStorageUsage, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, generateKiePricingRulesManage, applyKiePricingRulesManage, getAdminUsersPage, aiAssistantAnalyzeSupplierFeatures, aiAssistantApplySupplierFeatures } from '../services/api';
 import Footer from '../components/Footer';
 import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive, Database } from 'lucide-react';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
@@ -199,6 +199,10 @@ const UserAdmin = () => {
     const [isKieBillingInferLoading, setIsKieBillingInferLoading] = useState(false);
     const [isKieMappingExporting, setIsKieMappingExporting] = useState(false);
     const [isKieMappingImporting, setIsKieMappingImporting] = useState(false);
+    const [isKieValueExporting, setIsKieValueExporting] = useState(false);
+    const [isKieValueImporting, setIsKieValueImporting] = useState(false);
+    const [isKieBundleExporting, setIsKieBundleExporting] = useState(false);
+    const [isKieBundleImporting, setIsKieBundleImporting] = useState(false);
     const [selectedKieStandardMappingId, setSelectedKieStandardMappingId] = useState('');
     const [kieStandardSearchText, setKieStandardSearchText] = useState('');
     const [kieStandardDimensionFilter, setKieStandardDimensionFilter] = useState('all');
@@ -266,6 +270,8 @@ const UserAdmin = () => {
     const systemProviderBundleImportInputRef = React.useRef(null);
     const systemConfigSyncImportInputRef = React.useRef(null);
     const kieMappingImportInputRef = React.useRef(null);
+    const kieValueImportInputRef = React.useRef(null);
+    const kieBundleImportInputRef = React.useRef(null);
     const [llmLogFiles, setLlmLogFiles] = useState([]);
     const [selectedLlmLogFile, setSelectedLlmLogFile] = useState('llm_calls.log');
     const [llmLogTailLines, setLlmLogTailLines] = useState(300);
@@ -2830,6 +2836,109 @@ const UserAdmin = () => {
         };
     };
 
+    const normalizeKieValueItem = (raw) => {
+        const standardDimension = String(raw?.standard_dimension || raw?.dimension || '').trim().toUpperCase();
+        const standardValue = String(raw?.standard_value || raw?.value || '').trim();
+        if (!standardDimension || !standardValue) {
+            return null;
+        }
+
+        return {
+            standard_dimension: standardDimension,
+            standard_value: standardValue,
+            value_type: String(raw?.value_type || 'enum').trim() || 'enum',
+            definition: String(raw?.definition || '').trim() || null,
+            alias_values: String(raw?.alias_values || '').trim() || null,
+            is_active: parseBooleanLike(raw?.is_active, true),
+        };
+    };
+
+    const handleExportKieDictionaryValues = async () => {
+        setIsKieValueExporting(true);
+        try {
+            const payload = await exportKieDataDictionaryValues({
+                active_only: false,
+                include_csv: true,
+                limit: 50000,
+            });
+            const ts = new Date().toISOString().replace(/[:.]/g, '-');
+            const csvText = String(payload?.csv || '').trim();
+            if (csvText) {
+                downloadTextFile(csvText, `kie_data_dictionary_values_${ts}.csv`, 'text/csv;charset=utf-8');
+            } else {
+                downloadTextFile(JSON.stringify(payload || {}, null, 2), `kie_data_dictionary_values_${ts}.json`, 'application/json;charset=utf-8');
+            }
+            alert(t('KIE 数据字典导出完成', 'KIE dictionary values exported'));
+        } catch (e) {
+            alert(e?.response?.data?.detail || e?.message || t('导出 KIE 数据字典失败', 'Failed to export KIE dictionary values'));
+        } finally {
+            setIsKieValueExporting(false);
+        }
+    };
+
+    const handleOpenImportKieDictionaryValues = () => {
+        if (!kieValueImportInputRef.current) return;
+        kieValueImportInputRef.current.value = '';
+        kieValueImportInputRef.current.click();
+    };
+
+    const handleImportKieDictionaryValuesFile = async (event) => {
+        const file = event?.target?.files?.[0];
+        if (!file) return;
+
+        try {
+            const rawText = await file.text();
+            const lowerName = String(file?.name || '').toLowerCase();
+            let rows = [];
+
+            if (lowerName.endsWith('.json')) {
+                const parsed = JSON.parse(rawText);
+                if (Array.isArray(parsed)) {
+                    rows = parsed;
+                } else if (Array.isArray(parsed?.items)) {
+                    rows = parsed.items;
+                }
+            } else {
+                rows = parseCsvText(rawText);
+            }
+
+            const items = (Array.isArray(rows) ? rows : [])
+                .map((row) => normalizeKieValueItem(row))
+                .filter(Boolean);
+
+            if (!items.length) {
+                alert(t('导入文件中没有可用数据字典行', 'No valid dictionary rows found in import file'));
+                return;
+            }
+
+            const confirmReplace = await confirmUiMessage(
+                t('将使用清空式导入覆盖 KIE 数据字典，是否继续？', 'This will run clear-import and replace KIE dictionary values. Continue?'),
+                {
+                    title: t('确认字典导入', 'Confirm Dictionary Import'),
+                    confirmText: t('确认导入', 'Import'),
+                    cancelText: t('取消', 'Cancel'),
+                }
+            );
+            if (!confirmReplace) return;
+
+            setIsKieValueImporting(true);
+            const result = await importKieDataDictionaryValues({
+                items,
+                replace_all: true,
+                upsert_by_natural_key: false,
+            });
+            await fetchKieStandardMappingsAndValues();
+            alert(t(
+                `KIE 字典导入完成：接收 ${Number(result?.received || 0)}，新建 ${Number(result?.created || 0)}，更新 ${Number(result?.updated || 0)}，跳过 ${Number(result?.skipped || 0)}`,
+                `KIE dictionary import finished: received ${Number(result?.received || 0)}, created ${Number(result?.created || 0)}, updated ${Number(result?.updated || 0)}, skipped ${Number(result?.skipped || 0)}`
+            ));
+        } catch (e) {
+            alert(e?.response?.data?.detail || e?.message || t('导入 KIE 数据字典失败', 'Failed to import KIE dictionary values'));
+        } finally {
+            setIsKieValueImporting(false);
+        }
+    };
+
     const handleExportKieDictionaryMappings = async () => {
         setIsKieMappingExporting(true);
         try {
@@ -2914,6 +3023,88 @@ const UserAdmin = () => {
             alert(e?.response?.data?.detail || e?.message || t('导入 KIE 数据字典映射失败', 'Failed to import KIE dictionary mappings'));
         } finally {
             setIsKieMappingImporting(false);
+        }
+    };
+
+    const handleExportKieDictionaryBundle = async () => {
+        setIsKieBundleExporting(true);
+        try {
+            const payload = await exportKieDataDictionaryBundle({
+                include_csv: true,
+                values_limit: 50000,
+                mappings_limit: 50000,
+            });
+            const ts = new Date().toISOString().replace(/[:.]/g, '-');
+            downloadTextFile(
+                JSON.stringify(payload || {}, null, 2),
+                `kie_data_dictionary_bundle_${ts}.json`,
+                'application/json;charset=utf-8'
+            );
+            alert(t('KIE 数据字典包导出完成', 'KIE dictionary bundle exported'));
+        } catch (e) {
+            alert(e?.response?.data?.detail || e?.message || t('导出 KIE 数据字典包失败', 'Failed to export KIE dictionary bundle'));
+        } finally {
+            setIsKieBundleExporting(false);
+        }
+    };
+
+    const handleOpenImportKieDictionaryBundle = () => {
+        if (!kieBundleImportInputRef.current) return;
+        kieBundleImportInputRef.current.value = '';
+        kieBundleImportInputRef.current.click();
+    };
+
+    const handleImportKieDictionaryBundleFile = async (event) => {
+        const file = event?.target?.files?.[0];
+        if (!file) return;
+
+        try {
+            const rawText = await file.text();
+            const parsed = JSON.parse(rawText || '{}');
+
+            const valuesRaw = Array.isArray(parsed?.values)
+                ? parsed.values
+                : Array.isArray(parsed?.items)
+                    ? parsed.items
+                    : [];
+            const mappingsRaw = Array.isArray(parsed?.mappings)
+                ? parsed.mappings
+                : [];
+
+            const values = valuesRaw.map((row) => normalizeKieValueItem(row)).filter(Boolean);
+            const mappings = mappingsRaw.map((row) => normalizeKieImportItem(row)).filter(Boolean);
+
+            if (!values.length && !mappings.length) {
+                alert(t('字典包中没有可导入数据（values/mappings）', 'No importable values/mappings found in bundle'));
+                return;
+            }
+
+            const confirmReplace = await confirmUiMessage(
+                t('将清空并重建 KIE 数据字典值与映射，是否继续？', 'This will clear and rebuild KIE dictionary values and mappings. Continue?'),
+                {
+                    title: t('确认导入字典包', 'Confirm Dictionary Bundle Import'),
+                    confirmText: t('确认导入', 'Import'),
+                    cancelText: t('取消', 'Cancel'),
+                }
+            );
+            if (!confirmReplace) return;
+
+            setIsKieBundleImporting(true);
+            const result = await importKieDataDictionaryBundle({
+                values,
+                mappings,
+                replace_all: true,
+                strict_mapping_validation: false,
+            });
+            await fetchKieStandardMappingsAndValues();
+            alert(t(
+                `字典包导入完成：值 ${Number(result?.created_values || 0)}/${Number(result?.received_values || 0)}，映射 ${Number(result?.created_mappings || 0)}/${Number(result?.received_mappings || 0)}。`,
+                `Bundle import done: values ${Number(result?.created_values || 0)}/${Number(result?.received_values || 0)}, mappings ${Number(result?.created_mappings || 0)}/${Number(result?.received_mappings || 0)}.`
+            ));
+        } catch (e) {
+            alert(e?.response?.data?.detail || e?.message || t('导入 KIE 数据字典包失败', 'Failed to import KIE dictionary bundle'));
+        } finally {
+            setIsKieBundleImporting(false);
         }
     };
 
@@ -5311,30 +5502,30 @@ const UserAdmin = () => {
 
                                     <div className="border border-fuchsia-500/30 rounded-lg p-4 bg-fuchsia-500/5 space-y-3">
                                         <input
-                                            ref={kieMappingImportInputRef}
+                                            ref={kieBundleImportInputRef}
                                             type="file"
-                                            accept=".csv,application/json,.json,text/csv"
+                                            accept="application/json,.json"
                                             className="hidden"
-                                            onChange={handleImportKieDictionaryMappingsFile}
+                                            onChange={handleImportKieDictionaryBundleFile}
                                         />
                                         <div className="flex items-center justify-between gap-2">
-                                            <h4 className="text-sm font-bold text-fuchsia-200">{t('KIE 数据字典映射 CRUD', 'KIE Dictionary Mapping CRUD')}</h4>
+                                            <h4 className="text-sm font-bold text-fuchsia-200">{t('KIE 数据字典（值+映射）CRUD', 'KIE Dictionary (Values + Mappings) CRUD')}</h4>
                                             <div className="flex items-center gap-2">
                                                 <button
-                                                    onClick={handleOpenImportKieDictionaryMappings}
-                                                    disabled={isKieMappingImporting || isKieStandardLoading}
+                                                    onClick={handleOpenImportKieDictionaryBundle}
+                                                    disabled={isKieBundleImporting || isKieStandardLoading}
                                                     className="text-xs bg-fuchsia-700 hover:bg-fuchsia-600 text-white px-2 py-1 rounded disabled:opacity-50 flex items-center gap-1"
-                                                    title={t('导入 KIE 数据字典映射（CSV/JSON）', 'Import KIE dictionary mappings (CSV/JSON)')}
+                                                    title={t('导入 KIE 数据字典包（包含标准值与映射）', 'Import KIE dictionary bundle (values + mappings)')}
                                                 >
-                                                    <Upload size={12} /> {isKieMappingImporting ? t('导入中...', 'Importing...') : t('导入映射', 'Import Mappings')}
+                                                    <Upload size={12} /> {isKieBundleImporting ? t('导入中...', 'Importing...') : t('导入字典包', 'Import Dictionary Bundle')}
                                                 </button>
                                                 <button
-                                                    onClick={handleExportKieDictionaryMappings}
-                                                    disabled={isKieMappingExporting || isKieStandardLoading}
+                                                    onClick={handleExportKieDictionaryBundle}
+                                                    disabled={isKieBundleExporting || isKieStandardLoading}
                                                     className="text-xs bg-purple-700 hover:bg-purple-600 text-white px-2 py-1 rounded disabled:opacity-50 flex items-center gap-1"
-                                                    title={t('导出 KIE 数据字典映射（CSV）', 'Export KIE dictionary mappings (CSV)')}
+                                                    title={t('导出 KIE 数据字典包（包含标准值与映射）', 'Export KIE dictionary bundle (values + mappings)')}
                                                 >
-                                                    <Download size={12} /> {isKieMappingExporting ? t('导出中...', 'Exporting...') : t('导出映射', 'Export Mappings')}
+                                                    <Download size={12} /> {isKieBundleExporting ? t('导出中...', 'Exporting...') : t('导出字典包', 'Export Dictionary Bundle')}
                                                 </button>
                                                 <button
                                                     onClick={handleInferKieBillingRelated}

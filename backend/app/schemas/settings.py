@@ -365,6 +365,35 @@ class KIEDataStandardValueOut(BaseModel):
     updated_at: Optional[str] = None
 
 
+class KIEDataStandardValueCreate(BaseModel):
+    standard_dimension: str
+    standard_value: str
+    value_type: str = "enum"
+    definition: Optional[str] = None
+    alias_values: Optional[str] = None
+    is_active: bool = True
+
+
+class KIEDataStandardValueExportResponse(BaseModel):
+    total: int = 0
+    items: List[KIEDataStandardValueOut] = Field(default_factory=list)
+    csv: Optional[str] = None
+
+
+class KIEDataStandardValueImportRequest(BaseModel):
+    items: List[KIEDataStandardValueCreate] = Field(default_factory=list)
+    replace_all: bool = True
+    upsert_by_natural_key: bool = True
+
+
+class KIEDataStandardValueImportResponse(BaseModel):
+    ok: bool = True
+    received: int = 0
+    created: int = 0
+    updated: int = 0
+    skipped: int = 0
+
+
 class KIEDataStandardMappingBase(BaseModel):
     provider: str = "kie"
     model_key_inferred: Optional[str] = None
@@ -432,6 +461,32 @@ class KIEDataStandardMappingImportResponse(BaseModel):
     created: int = 0
     updated: int = 0
     skipped: int = 0
+
+
+class KIEDataDictionaryBundleExportResponse(BaseModel):
+    total_values: int = 0
+    total_mappings: int = 0
+    values: List[KIEDataStandardValueOut] = Field(default_factory=list)
+    mappings: List[KIEDataStandardMappingOut] = Field(default_factory=list)
+    values_csv: Optional[str] = None
+    mappings_csv: Optional[str] = None
+
+
+class KIEDataDictionaryBundleImportRequest(BaseModel):
+    values: List[KIEDataStandardValueCreate] = Field(default_factory=list)
+    mappings: List[KIEDataStandardMappingCreate] = Field(default_factory=list)
+    replace_all: bool = True
+    strict_mapping_validation: bool = False
+
+
+class KIEDataDictionaryBundleImportResponse(BaseModel):
+    ok: bool = True
+    received_values: int = 0
+    created_values: int = 0
+    skipped_values: int = 0
+    received_mappings: int = 0
+    created_mappings: int = 0
+    skipped_mappings: int = 0
 
 
 class KIEDataStandardValueMappingImportItem(BaseModel):
