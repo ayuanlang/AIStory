@@ -7080,12 +7080,15 @@ def _clear_non_system_settings_for_replace_all(db: Session) -> None:
 
     clear_task_defaults_for_system_api_ids(db, target_ids)
 
-    rule_ids = [
-        int(rule_id)
-        for rule_id, in db.query(SystemAPIBillingRule.id).filter(
-            SystemAPIBillingRule.system_api_id.in_(target_ids),
-        ).all()
-    ]
+    has_billing_rules_table = _db_has_table(db, "system_api_billing_rules")
+    rule_ids: List[int] = []
+    if has_billing_rules_table:
+        rule_ids = [
+            int(rule_id)
+            for rule_id, in db.query(SystemAPIBillingRule.id).filter(
+                SystemAPIBillingRule.system_api_id.in_(target_ids),
+            ).all()
+        ]
 
     _safe_clear_transaction_action_rule_links(
         db,
@@ -7093,9 +7096,10 @@ def _clear_non_system_settings_for_replace_all(db: Session) -> None:
         clear_rule_ids=rule_ids,
     )
 
-    db.query(SystemAPIBillingRule).filter(
-        SystemAPIBillingRule.system_api_id.in_(target_ids),
-    ).delete(synchronize_session=False)
+    if has_billing_rules_table:
+        db.query(SystemAPIBillingRule).filter(
+            SystemAPIBillingRule.system_api_id.in_(target_ids),
+        ).delete(synchronize_session=False)
 
     db.query(SystemAPISetting).filter(
         SystemAPISetting.id.in_(target_ids),
@@ -7385,6 +7389,13 @@ def import_system_config_sync_bundle_for_manage(
         )
 
     try:
+        def _safe_int(raw_value: Any, default_value: int) -> int:
+            try:
+                return int(float(raw_value))
+            except Exception:
+                return int(default_value)
+
+        has_billing_rules_table = _db_has_table(db, "system_api_billing_rules")
         has_provider_key_pool_table = _db_has_table(db, "provider_key_pool")
         has_smtp_table = _db_has_table(db, "smtp_system_configs")
         has_wechat_table = _db_has_table(db, "wechat_pay_configs")
@@ -7428,7 +7439,10 @@ def import_system_config_sync_bundle_for_manage(
                         ).update({"matched_rule_id": None}, synchronize_session=False)
                     except Exception as exc:
                         logger.warning("Skip matched_rule_id reset due to schema mismatch: %s", exc)
-                db.query(SystemAPIBillingRule).delete(synchronize_session=False)
+                if has_billing_rules_table:
+                    db.query(SystemAPIBillingRule).delete(synchronize_session=False)
+                elif billing_rules:
+                    logger.warning("Skip billing rules replace_all cleanup: table system_api_billing_rules not found")
 
             system_index: Dict[Tuple[str, str, str], int] = {}
             system_rows = db.execute(text("""
@@ -7448,32 +7462,37 @@ def import_system_config_sync_bundle_for_manage(
             default_created = 0
             default_skipped = 0
             now_iso = now_bj_iso()
-            for raw_rule in billing_rules:
-                if not isinstance(raw_rule, dict):
-                    billing_skipped += 1
-                    continue
+            if has_billing_rules_table:
+                for raw_rule in billing_rules:
+                    if not isinstance(raw_rule, dict):
+                        billing_skipped += 1
+                        continue
 
-                ref = raw_rule.get("system_api_ref") if isinstance(raw_rule.get("system_api_ref"), dict) else {}
-                provider_name = _normalize_system_provider_name(ref.get("provider"))
-                category_name = str(ref.get("category") or "").strip()
-                model_name = str(ref.get("model") or "").strip()
+                    ref = raw_rule.get("system_api_ref") if isinstance(raw_rule.get("system_api_ref"), dict) else {}
+                    provider_name = _normalize_system_provider_name(ref.get("provider"))
+                    category_name = str(ref.get("category") or "").strip()
+                    model_name = str(ref.get("model") or "").strip()
 
-                target_api_id = None
-                if provider_name and category_name and model_name:
-                    target_api_id = system_index.get((provider_name, category_name, model_name))
+                    target_api_id = None
+                    if provider_name and category_name and model_name:
+                        target_api_id = system_index.get((provider_name, category_name, model_name))
 
-                if not target_api_id:
-                    billing_skipped += 1
-                    continue
+                    if not target_api_id:
+                        billing_skipped += 1
+                        continue
 
-                new_rule = SystemAPIBillingRule(system_api_id=int(target_api_id))
-                for field_name in _SYNC_BILLING_RULE_FIELDS:
-                    if field_name in raw_rule:
-                        setattr(new_rule, field_name, _normalize_sync_billing_rule_field(field_name, raw_rule.get(field_name)))
-                new_rule.created_at = str(raw_rule.get("created_at") or now_iso)
-                new_rule.updated_at = str(raw_rule.get("updated_at") or now_iso)
-                db.add(new_rule)
-                billing_created += 1
+                    new_rule = SystemAPIBillingRule(system_api_id=int(target_api_id))
+                    for field_name in _SYNC_BILLING_RULE_FIELDS:
+                        if field_name in raw_rule:
+                            setattr(new_rule, field_name, _normalize_sync_billing_rule_field(field_name, raw_rule.get(field_name)))
+                    new_rule.created_at = str(raw_rule.get("created_at") or now_iso)
+                    new_rule.updated_at = str(raw_rule.get("updated_at") or now_iso)
+                    db.add(new_rule)
+                    billing_created += 1
+            else:
+                billing_skipped += len(billing_rules)
+                if billing_rules:
+                    logger.warning("Skip billing rules import: table system_api_billing_rules not found")
 
             # KIE standard data is intentionally excluded from sync bundle import.
             # Use CLI loader instead (backend/apply_kie_system_data_standard_seed.py).
@@ -7542,7 +7561,7 @@ def import_system_config_sync_bundle_for_manage(
                     created_at = str(raw_smtp.get("created_at") or now_bj_iso())
                     row = SMTPSystemConfig(
                         host=str(raw_smtp.get("host") or "").strip(),
-                        port=int(raw_smtp.get("port") or 587),
+                        port=_safe_int(raw_smtp.get("port"), 587),
                         username=str(raw_smtp.get("username") or "").strip(),
                         password=str(raw_smtp.get("password") or ""),
                         use_ssl=bool(raw_smtp.get("use_ssl")),
@@ -7634,6 +7653,7 @@ def import_system_config_sync_bundle_for_manage(
             "billing_rules": {
                 "created": billing_created,
                 "skipped": billing_skipped,
+                "skipped_reason": None if has_billing_rules_table else "missing table system_api_billing_rules",
             },
             "provider_key_pools": {
                 "created": provider_pool_created,
