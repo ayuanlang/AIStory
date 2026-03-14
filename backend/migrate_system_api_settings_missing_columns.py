@@ -1,3 +1,4 @@
+import argparse
 import os
 import sys
 from typing import List, Tuple
@@ -47,10 +48,12 @@ REQUIRED_COLUMNS: List[Tuple[str, str]] = [
 ]
 
 
-def migrate() -> None:
-    db_url = settings.DATABASE_URL
-    if len(sys.argv) > 1 and str(sys.argv[1]).strip():
-        db_url = str(sys.argv[1]).strip()
+def migrate(db_url: str | None = None) -> None:
+    if db_url is None:
+        db_url = settings.DATABASE_URL
+    db_url = str(db_url or "").strip()
+    if not db_url:
+        raise ValueError("DATABASE_URL is empty")
 
     print(f"[migrate] connecting: {db_url}")
     engine = create_engine(db_url)
@@ -86,4 +89,7 @@ def migrate() -> None:
 
 
 if __name__ == "__main__":
-    migrate()
+    parser = argparse.ArgumentParser(description="Patch missing columns on system_api_settings")
+    parser.add_argument("--db-url", dest="db_url", default=None, help="Optional SQLAlchemy database URL override")
+    args = parser.parse_args()
+    migrate(db_url=args.db_url)

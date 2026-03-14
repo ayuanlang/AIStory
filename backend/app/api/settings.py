@@ -6999,12 +6999,18 @@ def _is_system_api_settings_missing_column_error(exc: Exception) -> bool:
     return False
 
 
-def _try_patch_system_api_settings_missing_columns() -> bool:
+def _try_patch_system_api_settings_missing_columns(db: Session) -> bool:
     try:
         # Keep patch implementation in one place and reuse deployment script.
         from migrate_system_api_settings_missing_columns import migrate as migrate_missing_columns
 
-        migrate_missing_columns()
+        try:
+            bind = db.get_bind()
+            db_url = str(getattr(bind, "url", "") or "").strip() or None
+        except Exception:
+            db_url = None
+
+        migrate_missing_columns(db_url=db_url)
         return True
     except Exception as patch_exc:
         logger.warning("Auto patch for system_api_settings missing columns failed: %s", patch_exc)
@@ -7423,7 +7429,7 @@ def import_system_config_sync_bundle_for_manage(
                         "Provider import hit missing column on system_api_settings, attempting auto patch then retry: %s",
                         provider_exc,
                     )
-                    patched = _try_patch_system_api_settings_missing_columns()
+                    patched = _try_patch_system_api_settings_missing_columns(db)
                     if patched:
                         provider_result = _import_provider_bundle_no_commit(db, provider_import_items, replace_all)
                     else:
