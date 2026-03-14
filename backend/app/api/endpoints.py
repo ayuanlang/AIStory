@@ -1104,6 +1104,24 @@ def _safe_json_dict(value: Any) -> Dict[str, Any]:
     return {}
 
 
+def _episode_info_read_disabled() -> bool:
+    # episode_info is deprecated as a runtime context source.
+    # Keep this explicit so future code does not accidentally re-enable reads.
+    return True
+
+
+def _read_episode_info_payload(raw_value: Any) -> Dict[str, Any]:
+    if _episode_info_read_disabled():
+        return {}
+    return _safe_json_dict(raw_value)
+
+
+def _episode_info_from_episode(episode: Optional[Episode]) -> Dict[str, Any]:
+    if not episode:
+        return {}
+    return _read_episode_info_payload(getattr(episode, "episode_info", None))
+
+
 _ALLOWED_REASONING_EFFORT = {"low", "medium", "high"}
 
 
@@ -1377,6 +1395,7 @@ def _seed_default_system_settings_for_user(db: Session, user_id: int) -> None:
 
         if user_setting:
             user_setting.system_api_id = int(system_setting.id)
+            user_setting.api_strategy = str(getattr(user_setting, "api_strategy", None) or "smart_default").strip().lower() or "smart_default"
             user_setting.mode = None
             selected_setting_id = user_setting.id
         else:
@@ -1384,6 +1403,7 @@ def _seed_default_system_settings_for_user(db: Session, user_id: int) -> None:
                 user_id=user_id,
                 category=system_setting.category,
                 system_api_id=int(system_setting.id),
+                api_strategy="smart_default",
                 mode=None,
             )
             db.add(new_setting)
@@ -3590,23 +3610,29 @@ def _ensure_project_generation_defaults(global_info: Any) -> Dict[str, Any]:
 
     defaults_raw = gi.get("project_generation_defaults")
     defaults = dict(defaults_raw) if isinstance(defaults_raw, dict) else {}
-    for key in _PROJECT_LEVEL_GENERATION_DEFAULT_KEYS:
-        defaults.setdefault(key, None)
-    if defaults.get("sound") is None:
-        defaults["sound"] = True
-
-    # Keep compatibility with existing visual-standard readers.
+    # Read-only normalization: unify alias keys but do NOT infer or inject business defaults.
     tech_params = gi.get("tech_params") if isinstance(gi.get("tech_params"), dict) else {}
     visual_standard = tech_params.get("visual_standard") if isinstance(tech_params.get("visual_standard"), dict) else {}
 
-    aspect_ratio = str(gi.get("aspectRatio") or defaults.get("aspect_ratio") or "").strip()
+    # Precedence: project_generation_defaults / visual_standard > top-level legacy keys.
+    aspect_ratio = str(
+        defaults.get("aspect_ratio")
+        or defaults.get("aspectRatio")
+        or visual_standard.get("aspect_ratio")
+        or visual_standard.get("aspectRatio")
+        or gi.get("aspect_ratio")
+        or gi.get("aspectRatio")
+        or ""
+    ).strip()
     if aspect_ratio:
         defaults["aspect_ratio"] = aspect_ratio
         visual_standard.setdefault("aspect_ratio", aspect_ratio)
 
     image_size = _normalize_project_image_size(
         defaults.get("image_size")
+        or defaults.get("imageSize")
         or defaults.get("image_resolution")
+        or defaults.get("imageResolution")
         or visual_standard.get("image_size")
         or visual_standard.get("imageSize")
         or gi.get("image_size")
@@ -3614,26 +3640,30 @@ def _ensure_project_generation_defaults(global_info: Any) -> Dict[str, Any]:
     )
     if image_size:
         defaults["image_size"] = image_size
-        defaults.setdefault("image_resolution", image_size)
         visual_standard.setdefault("image_size", image_size)
 
     current_w = (
-        _to_positive_int_or_none(visual_standard.get("horizontal_resolution"))
+        _to_positive_int_or_none(defaults.get("horizontal_resolution"))
+        or _to_positive_int_or_none(defaults.get("horizontalResolution"))
+        or _to_positive_int_or_none(visual_standard.get("horizontal_resolution"))
+        or _to_positive_int_or_none(visual_standard.get("horizontalResolution"))
         or _to_positive_int_or_none(visual_standard.get("h_resolution"))
         or _to_positive_int_or_none(visual_standard.get("width"))
-        or _to_positive_int_or_none(defaults.get("horizontal_resolution"))
+        or _to_positive_int_or_none(gi.get("horizontal_resolution"))
+        or _to_positive_int_or_none(gi.get("horizontalResolution"))
+        or _to_positive_int_or_none(gi.get("width"))
     )
     current_h = (
-        _to_positive_int_or_none(visual_standard.get("vertical_resolution"))
+        _to_positive_int_or_none(defaults.get("vertical_resolution"))
+        or _to_positive_int_or_none(defaults.get("verticalResolution"))
+        or _to_positive_int_or_none(visual_standard.get("vertical_resolution"))
+        or _to_positive_int_or_none(visual_standard.get("verticalResolution"))
         or _to_positive_int_or_none(visual_standard.get("v_resolution"))
         or _to_positive_int_or_none(visual_standard.get("height"))
-        or _to_positive_int_or_none(defaults.get("vertical_resolution"))
+        or _to_positive_int_or_none(gi.get("vertical_resolution"))
+        or _to_positive_int_or_none(gi.get("verticalResolution"))
+        or _to_positive_int_or_none(gi.get("height"))
     )
-
-    if (not current_w or not current_h) and aspect_ratio and image_size:
-        inferred = _infer_project_resolution(aspect_ratio, image_size)
-        if inferred:
-            current_w, current_h = inferred
 
     if current_w and current_h:
         defaults["horizontal_resolution"] = int(current_w)
@@ -3641,8 +3671,14 @@ def _ensure_project_generation_defaults(global_info: Any) -> Dict[str, Any]:
         visual_standard.setdefault("horizontal_resolution", int(current_w))
         visual_standard.setdefault("vertical_resolution", int(current_h))
 
-    quality = str(defaults.get("quality") or "").strip()
+    quality = str(
+        defaults.get("quality")
+        or visual_standard.get("quality")
+        or gi.get("quality")
+        or ""
+    ).strip()
     if quality:
+        defaults.setdefault("quality", quality)
         visual_standard.setdefault("quality", quality)
 
     tech_params["visual_standard"] = visual_standard
@@ -5382,7 +5418,7 @@ def create_episode(
         project_id=project_id, 
         title=episode.title, 
         script_content=episode.script_content,
-        episode_info=episode.episode_info,
+        episode_info={},
         ai_scene_analysis_result=episode.ai_scene_analysis_result,
         character_profiles=episode.character_profiles or []
     )
@@ -5409,8 +5445,7 @@ def update_episode(
         episode.title = episode_in.title
     if episode_in.script_content is not None:
         episode.script_content = episode_in.script_content
-    if episode_in.episode_info is not None:
-        episode.episode_info = episode_in.episode_info
+    # episode_info is deprecated and intentionally ignored.
     if episode_in.ai_scene_analysis_result is not None:
         episode.ai_scene_analysis_result = episode_in.ai_scene_analysis_result
     if episode_in.character_profiles is not None:
@@ -5803,7 +5838,7 @@ EPISODE_SCENE_GEN_STATUS_KEY = "episode_scene_generation_status"
 
 def _read_episode_scene_generation_status(episode: Episode) -> Dict[str, Any]:
     try:
-        info = dict(episode.episode_info or {})
+        info = _episode_info_from_episode(episode)
         payload = info.get(EPISODE_SCENE_GEN_STATUS_KEY)
         if isinstance(payload, dict):
             return dict(payload)
@@ -5827,7 +5862,7 @@ def _persist_episode_scene_generation_status(db: Session, episode: Episode, stat
     )
     target_episode = latest_episode or episode
 
-    info = dict(target_episode.episode_info or {})
+    info = _episode_info_from_episode(target_episode)
     existing_status = info.get(EPISODE_SCENE_GEN_STATUS_KEY)
     merged_status = dict(status_payload or {})
     has_incoming_force_flag = "force_stopped" in merged_status
@@ -6331,7 +6366,7 @@ async def generate_episode_story_dna(
         project.global_info = gi
         db.add(project)
     else:
-        ei = dict(episode.episode_info or {})
+        ei = _episode_info_from_episode(episode)
         ei["story_generator_episode_input"] = story_input
         ei["story_generator_episode_input_updated_at"] = now_iso
         ei["story_dna_episode_md"] = generated_md
@@ -6385,7 +6420,7 @@ def save_episode_story_generator_input(
         project.global_info = gi
         db.add(project)
     else:
-        ei = dict(episode.episode_info or {})
+        ei = _episode_info_from_episode(episode)
         ei["story_generator_episode_input"] = story_input
         ei["story_generator_episode_input_updated_at"] = now_iso
         episode.episode_info = ei
@@ -6426,7 +6461,7 @@ async def generate_episode_scenes_from_story(
         global_md = ""
     episode_md = ""
     try:
-        episode_md = (episode.episode_info or {}).get("story_dna_episode_md") or ""
+        episode_md = _episode_info_from_episode(episode).get("story_dna_episode_md") or ""
     except Exception:
         episode_md = ""
 
@@ -7241,7 +7276,7 @@ async def generate_project_episode_scripts_from_global_framework(
                 billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, billing_details)
 
             ep.script_content = content
-            ei = dict(ep.episode_info or {})
+            ei = _episode_info_from_episode(ep)
             ei["episode_script_generated_at"] = now_bj_iso()
             if prompt_filename == "promo_generator_episode_script.txt":
                 ei["episode_script_source"] = "promo_global_framework_plus_project_character_canon"
@@ -8286,19 +8321,6 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
         except: project_info = {}
         
     episode_info = {}
-    scene_episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
-    
-    if scene_episode and scene_episode.episode_info:
-        temp = scene_episode.episode_info
-        if isinstance(temp, str):
-            try: temp = json.loads(temp)
-            except: temp = {}
-        if isinstance(temp, dict):
-             # Check for nested structure "e_global_info" as per user data
-             if "e_global_info" in temp and isinstance(temp["e_global_info"], dict):
-                 episode_info = temp["e_global_info"]
-             else:
-                 episode_info = temp
     
     # 3. Robust Data Normalization (Handle case/space sensitivity)
     def normalize_dict_keys(d):
@@ -8570,7 +8592,7 @@ SCENE_AI_SHOTS_BATCH_PER_SCENE_TIMEOUT_SEC = 300
 
 def _read_scene_ai_shots_batch_status(episode: Episode) -> Dict[str, Any]:
     try:
-        info = dict(episode.episode_info or {})
+        info = _episode_info_from_episode(episode)
         payload = info.get(SCENE_AI_SHOTS_BATCH_STATUS_KEY)
         if isinstance(payload, dict):
             return dict(payload)
@@ -8598,7 +8620,7 @@ def _persist_scene_ai_shots_batch_status(db: Session, episode: Episode, status_p
     )
     target_episode = latest_episode or episode
 
-    info = dict(target_episode.episode_info or {})
+    info = _episode_info_from_episode(target_episode)
     existing_status = info.get(SCENE_AI_SHOTS_BATCH_STATUS_KEY)
     merged_status = dict(status_payload or {})
     has_incoming_force_flag = "force_stopped" in merged_status
@@ -13151,6 +13173,40 @@ def _resolve_project_id_for_generation(req: Any, db: Session) -> Optional[int]:
     return None
 
 
+def _should_hit_visual_breakpoint(kind: str, resolved_project_id: Optional[int]) -> bool:
+    """Opt-in runtime breakpoint for project visual param debugging.
+
+    Env controls:
+    - GENERATION_VISUAL_BREAKPOINT=1
+    - GENERATION_VISUAL_BREAKPOINT_KIND=image|video|all (default: all)
+    - GENERATION_VISUAL_BREAKPOINT_PROJECT_ID=<int> (optional filter)
+    """
+    enabled = str(os.getenv("GENERATION_VISUAL_BREAKPOINT", "")).strip().lower() in {"1", "true", "yes", "on"}
+    if not enabled:
+        return False
+
+    kind_filter = str(os.getenv("GENERATION_VISUAL_BREAKPOINT_KIND", "all") or "all").strip().lower()
+    if kind_filter not in {"all", "image", "video"}:
+        kind_filter = "all"
+    if kind_filter != "all" and kind_filter != str(kind or "").strip().lower():
+        return False
+
+    pid_filter_raw = str(os.getenv("GENERATION_VISUAL_BREAKPOINT_PROJECT_ID", "")).strip()
+    if pid_filter_raw:
+        try:
+            pid_filter = int(pid_filter_raw)
+        except Exception:
+            return False
+        try:
+            stable_project_id = int(resolved_project_id) if resolved_project_id is not None else None
+        except Exception:
+            stable_project_id = None
+        if stable_project_id != pid_filter:
+            return False
+
+    return True
+
+
 def _ensure_project_generation_seed(db: Session, project_id: Optional[int], current_user: Optional[User] = None) -> Optional[int]:
     stable_project_id = _normalize_seed_value(project_id)
     if not stable_project_id:
@@ -14531,7 +14587,7 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
     )
 
     try:
-        resolved_project_id = _resolve_project_id_for_generation(req, db)
+        resolved_project_id = _normalize_seed_value(getattr(req, "project_id", None))
         project_seed = _ensure_project_generation_seed(db, resolved_project_id, current_user)
 
         # 1. Resolve Context for Resolution/Ratio
@@ -14556,10 +14612,11 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
             vis = tech.get("visual_standard") if isinstance(tech.get("visual_standard"), dict) else {}
 
             out: Dict[str, Any] = {
-                "aspect_ratio": vis.get("aspect_ratio") or vis.get("aspectRatio") or defaults.get("aspect_ratio") or info.get("aspect_ratio") or info.get("aspectRatio"),
-                "width": vis.get("horizontal_resolution") or vis.get("h_resolution") or vis.get("width") or defaults.get("horizontal_resolution") or info.get("horizontal_resolution") or info.get("h_resolution") or info.get("width"),
-                "height": vis.get("vertical_resolution") or vis.get("v_resolution") or vis.get("height") or defaults.get("vertical_resolution") or info.get("vertical_resolution") or info.get("v_resolution") or info.get("height"),
-                "image_size": vis.get("image_size") or vis.get("imageSize") or defaults.get("image_size") or defaults.get("image_resolution") or info.get("image_size") or info.get("imageSize"),
+                "aspect_ratio": vis.get("aspect_ratio") or vis.get("aspectRatio") or defaults.get("aspect_ratio") or defaults.get("aspectRatio") or info.get("aspect_ratio") or info.get("aspectRatio"),
+                "width": vis.get("horizontal_resolution") or vis.get("horizontalResolution") or vis.get("h_resolution") or vis.get("width") or defaults.get("horizontal_resolution") or defaults.get("horizontalResolution") or info.get("horizontal_resolution") or info.get("horizontalResolution") or info.get("h_resolution") or info.get("width"),
+                "height": vis.get("vertical_resolution") or vis.get("verticalResolution") or vis.get("v_resolution") or vis.get("height") or defaults.get("vertical_resolution") or defaults.get("verticalResolution") or info.get("vertical_resolution") or info.get("verticalResolution") or info.get("v_resolution") or info.get("height"),
+                "image_size": vis.get("image_size") or vis.get("imageSize") or defaults.get("image_size") or defaults.get("imageSize") or defaults.get("image_resolution") or defaults.get("imageResolution") or info.get("image_size") or info.get("imageSize"),
+                "resolution": vis.get("resolution") or defaults.get("resolution") or defaults.get("image_resolution") or info.get("resolution"),
             }
 
             nested = info.get("e_global_info") if isinstance(info.get("e_global_info"), dict) else None
@@ -14571,92 +14628,37 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
 
             return out
 
+        def _parse_resolution_dims(value: Any) -> Tuple[Optional[int], Optional[int]]:
+            text = str(value or "").strip().lower().replace(" ", "")
+            if not text:
+                return (None, None)
+            match = re.match(r"^(\d{2,5})[x\*](\d{2,5})$", text)
+            if not match:
+                return (None, None)
+            try:
+                w = int(match.group(1))
+                h = int(match.group(2))
+            except Exception:
+                return (None, None)
+            if w <= 0 or h <= 0:
+                return (None, None)
+            return (w, h)
+
         aspect_ratio = None
         width = None
         height = None
-        image_size = str(req.image_size or "").strip().upper()
-        if image_size not in {"1K", "2K", "4K"}:
+        image_size = _normalize_project_image_size(req.image_size)
+        if not image_size:
             image_size = None
-        episode_info = {}
         project_global_info: Dict[str, Any] = {}
 
-        # Prefer explicit episode_id when provided
-        if req.episode_id:
-            ep = db.query(Episode).filter(Episode.id == req.episode_id).first()
-            if ep and ep.episode_info:
-                temp = ep.episode_info
-                if isinstance(temp, str):
-                    try:
-                        temp = json.loads(temp)
-                    except Exception:
-                        temp = {}
-                if isinstance(temp, dict):
-                    if "e_global_info" in temp and isinstance(temp["e_global_info"], dict):
-                        episode_info = temp["e_global_info"]
-                    else:
-                        episode_info = temp
-
-        # Try to find episode info via Shot -> Scene -> Episode
-        if req.shot_id and not episode_info:
-             shot = db.query(Shot).filter(Shot.id == req.shot_id).first()
-             if shot:
-                 scene = db.query(Scene).filter(Scene.id == shot.scene_id).first()
-                 if scene and scene.episode_id:
-                     ep = db.query(Episode).filter(Episode.id == scene.episode_id).first()
-                     if ep and ep.episode_info:
-                         temp = ep.episode_info
-                         if isinstance(temp, str):
-                             try: temp = json.loads(temp)
-                             except: temp = {}
-                         if isinstance(temp, dict):
-                              # Support nested under e_global_info or direct
-                              if "e_global_info" in temp and isinstance(temp["e_global_info"], dict):
-                                   episode_info = temp["e_global_info"]
-                              else:
-                                   episode_info = temp
-
-        # Project-level fallback for entity generation without episode/shot context.
+        # Only read project-level realtime config for visual params.
         if resolved_project_id:
             project = db.query(Project).filter(Project.id == resolved_project_id).first()
             if project:
                 project_global_info = _ensure_project_generation_defaults(_safe_json_dict(project.global_info))
 
-        episode_visual = _pick_visual_from_info(episode_info)
         project_visual = _pick_visual_from_info(project_global_info)
-
-        # Check tech_params -> visual_standard
-        tech = episode_info.get("tech_params", {})
-        if isinstance(tech, dict):
-            vis = tech.get("visual_standard", {})
-            if isinstance(vis, dict):
-                aspect_ratio = vis.get("aspect_ratio") or vis.get("aspectRatio")
-                width = vis.get("horizontal_resolution") or vis.get("h_resolution") or vis.get("width")
-                height = vis.get("vertical_resolution") or vis.get("v_resolution") or vis.get("height")
-                if not image_size:
-                    raw_size = str(vis.get("image_size") or vis.get("imageSize") or "").strip().upper()
-                    if raw_size in {"1K", "2K", "4K"}:
-                        image_size = raw_size
-
-        if not aspect_ratio and episode_visual.get("aspect_ratio"):
-            aspect_ratio = episode_visual.get("aspect_ratio")
-        if not width and episode_visual.get("width"):
-            width = episode_visual.get("width")
-        if not height and episode_visual.get("height"):
-            height = episode_visual.get("height")
-        if not image_size:
-            raw_size = str(episode_visual.get("image_size") or "").strip().upper()
-            if raw_size in {"1K", "2K", "4K"}:
-                image_size = raw_size
-        
-        # Fallback top-level checks
-        if not aspect_ratio:
-            aspect_ratio = episode_info.get("aspect_ratio") or episode_info.get("aspectRatio")
-        if not width: width = episode_info.get("horizontal_resolution") or episode_info.get("h_resolution") or episode_info.get("width")
-        if not height: height = episode_info.get("vertical_resolution") or episode_info.get("v_resolution") or episode_info.get("height")
-        if not image_size:
-            raw_size = str(episode_info.get("image_size") or episode_info.get("imageSize") or "").strip().upper()
-            if raw_size in {"1K", "2K", "4K"}:
-                image_size = raw_size
 
         # Fill remaining blanks with project-level defaults.
         if not aspect_ratio and project_visual.get("aspect_ratio"):
@@ -14666,9 +14668,35 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
         if not height and project_visual.get("height"):
             height = project_visual.get("height")
         if not image_size:
-            raw_size = str(project_visual.get("image_size") or "").strip().upper()
-            if raw_size in {"1K", "2K", "4K"}:
+            raw_size = _normalize_project_image_size(project_visual.get("image_size"))
+            if raw_size:
                 image_size = raw_size
+
+        # Compatibility: support resolution strings like "1920x1080" from project/episode defaults.
+        if not width or not height:
+            resolution_candidates = [
+                project_visual.get("resolution"),
+                project_global_info.get("resolution"),
+                project_global_info.get("image_resolution"),
+            ]
+            for candidate in resolution_candidates:
+                parsed_w, parsed_h = _parse_resolution_dims(candidate)
+                if parsed_w and parsed_h:
+                    if not width:
+                        width = parsed_w
+                    if not height:
+                        height = parsed_h
+                    if not image_size:
+                        long_side = max(parsed_w, parsed_h)
+                        if long_side >= 3200:
+                            image_size = "4K"
+                        elif long_side >= 2200:
+                            image_size = "2K"
+                        elif long_side >= 1200:
+                            image_size = "1K"
+                        else:
+                            image_size = "0.5K"
+                    break
 
         # Cast to int for safety
         try: width = int(width) if width else 720 
@@ -14680,12 +14708,37 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
             max_side = max(width or 0, height or 0)
             if max_side >= 3200:
                 image_size = "4K"
-            elif max_side >= 1900:
+            elif max_side >= 2200:
                 image_size = "2K"
-            else:
+            elif max_side >= 1200:
                 image_size = "1K"
+            else:
+                image_size = "0.5K"
 
         logger.info(f"[GenerateImage] Context Params - AR: {aspect_ratio}, W: {width}, H: {height}, image_size: {image_size}, project_id: {resolved_project_id}")
+        logger.info(
+            "[GenerateImage] Project Visual Extract | project_id=%s project_keys=%s picked=%s",
+            resolved_project_id,
+            sorted(list(project_global_info.keys()))[:30] if isinstance(project_global_info, dict) else [],
+            {
+                "aspect_ratio": aspect_ratio,
+                "width": width,
+                "height": height,
+                "image_size": image_size,
+                "raw_project_visual": project_visual,
+            },
+        )
+
+        if _should_hit_visual_breakpoint("image", resolved_project_id):
+            logger.warning(
+                "[GenerateImage] BREAKPOINT hit | project_id=%s aspect_ratio=%s width=%s height=%s image_size=%s raw_project_visual=%s",
+                resolved_project_id,
+                aspect_ratio,
+                width,
+                height,
+                image_size,
+                project_visual,
+            )
         _log_shot_submit_debug(
             "image_submit",
             req,
@@ -16188,38 +16241,65 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
                 return _pick_ratio_from_info(nested)
             return None
 
+        def _pick_visual_from_info(info: Dict[str, Any]) -> Dict[str, Any]:
+            if not isinstance(info, dict):
+                return {}
+
+            defaults = info.get("project_generation_defaults") if isinstance(info.get("project_generation_defaults"), dict) else {}
+            tech = info.get("tech_params") if isinstance(info.get("tech_params"), dict) else {}
+            vis = tech.get("visual_standard") if isinstance(tech.get("visual_standard"), dict) else {}
+
+            out: Dict[str, Any] = {
+                "aspect_ratio": vis.get("aspect_ratio") or vis.get("aspectRatio") or defaults.get("aspect_ratio") or defaults.get("aspectRatio") or info.get("aspect_ratio") or info.get("aspectRatio"),
+                "width": vis.get("horizontal_resolution") or vis.get("horizontalResolution") or vis.get("h_resolution") or vis.get("width") or defaults.get("horizontal_resolution") or defaults.get("horizontalResolution") or info.get("horizontal_resolution") or info.get("horizontalResolution") or info.get("h_resolution") or info.get("width"),
+                "height": vis.get("vertical_resolution") or vis.get("verticalResolution") or vis.get("v_resolution") or vis.get("height") or defaults.get("vertical_resolution") or defaults.get("verticalResolution") or info.get("vertical_resolution") or info.get("verticalResolution") or info.get("v_resolution") or info.get("height"),
+                "resolution": vis.get("resolution") or defaults.get("resolution") or defaults.get("image_resolution") or info.get("resolution"),
+                "image_size": vis.get("image_size") or vis.get("imageSize") or defaults.get("image_size") or defaults.get("imageSize") or defaults.get("image_resolution") or defaults.get("imageResolution") or info.get("image_size") or info.get("imageSize"),
+            }
+
+            nested = info.get("e_global_info") if isinstance(info.get("e_global_info"), dict) else None
+            if nested:
+                nested_values = _pick_visual_from_info(nested)
+                for key in ("aspect_ratio", "width", "height", "resolution", "image_size"):
+                    if not out.get(key) and nested_values.get(key):
+                        out[key] = nested_values.get(key)
+
+            return out
+
+        def _parse_resolution_dims(value: Any) -> Tuple[Optional[int], Optional[int]]:
+            text = str(value or "").strip().lower().replace(" ", "")
+            if not text:
+                return (None, None)
+            match = re.match(r"^(\d{2,5})[x\*](\d{2,5})$", text)
+            if not match:
+                return (None, None)
+            try:
+                w = int(match.group(1))
+                h = int(match.group(2))
+            except Exception:
+                return (None, None)
+            if w <= 0 or h <= 0:
+                return (None, None)
+            return (w, h)
+
         aspect_ratio = None
         aspect_ratio_source = "fallback"
-        episode_info: Dict[str, Any] = {}
         project_global_info: Dict[str, Any] = {}
         resolved_project_id = req.project_id
 
-        # Try to find episode info via Shot -> Scene -> Episode
-        if req.shot_id:
-            shot = db.query(Shot).filter(Shot.id == req.shot_id).first()
-            if shot:
-                scene = db.query(Scene).filter(Scene.id == shot.scene_id).first()
-                if scene and scene.episode_id:
-                    ep = db.query(Episode).filter(Episode.id == scene.episode_id).first()
-                    if ep:
-                        if not resolved_project_id and ep.project_id:
-                            resolved_project_id = ep.project_id
-                        if ep.episode_info:
-                            temp = _safe_json_dict(ep.episode_info)
-                            if isinstance(temp.get("e_global_info"), dict):
-                                episode_info = temp.get("e_global_info") or {}
-                            else:
-                                episode_info = temp
-
-        # Project-level fallback: global_info.tech_params.visual_standard.aspect_ratio / global_info.aspectRatio
+        # Only read project-level realtime config for visual params.
         if resolved_project_id:
             project = db.query(Project).filter(Project.id == resolved_project_id).first()
             if project:
                 project_global_info = _safe_json_dict(project.global_info)
 
         req_ratio = str(req.aspect_ratio or "").strip() or None
-        episode_ratio = _pick_ratio_from_info(episode_info)
         project_ratio = _pick_ratio_from_info(project_global_info)
+        project_visual = _pick_visual_from_info(project_global_info)
+        resolved_video_width: Optional[int] = None
+        resolved_video_height: Optional[int] = None
+        resolved_video_resolution: Optional[str] = None
+        resolved_video_image_size: Optional[str] = None
 
         resolved_sound: Optional[bool] = None
         sound_source = "request"
@@ -16261,25 +16341,99 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
         if req_ratio:
             aspect_ratio = req_ratio
             aspect_ratio_source = "request"
-        elif episode_ratio:
-            aspect_ratio = episode_ratio
-            aspect_ratio_source = "episode_info"
         elif project_ratio:
             aspect_ratio = project_ratio
             aspect_ratio_source = "project_global_info"
+
+        # Inject project visual size defaults for video providers that support/need them.
+        width_candidates = [
+            project_visual.get("width"),
+        ]
+        height_candidates = [
+            project_visual.get("height"),
+        ]
+        for candidate in width_candidates:
+            parsed = _to_positive_int_or_none(candidate)
+            if parsed:
+                resolved_video_width = int(parsed)
+                break
+        for candidate in height_candidates:
+            parsed = _to_positive_int_or_none(candidate)
+            if parsed:
+                resolved_video_height = int(parsed)
+                break
+
+        if not resolved_video_width or not resolved_video_height:
+            resolution_candidates = [
+                project_visual.get("resolution"),
+                project_global_info.get("resolution"),
+                project_global_info.get("image_resolution"),
+            ]
+            for candidate in resolution_candidates:
+                parsed_w, parsed_h = _parse_resolution_dims(candidate)
+                if parsed_w and parsed_h:
+                    if not resolved_video_width:
+                        resolved_video_width = int(parsed_w)
+                    if not resolved_video_height:
+                        resolved_video_height = int(parsed_h)
+                    break
+
+        if resolved_video_width and resolved_video_height:
+            resolved_video_resolution = f"{int(resolved_video_width)}x{int(resolved_video_height)}"
+
+        image_size_candidates = [
+            project_visual.get("image_size"),
+            project_global_info.get("image_size"),
+            project_global_info.get("imageSize"),
+        ]
+        for candidate in image_size_candidates:
+            normalized = _normalize_project_image_size(candidate)
+            if normalized:
+                resolved_video_image_size = normalized
+                break
 
         project_seed = _ensure_project_generation_seed(db, resolved_project_id, current_user)
         explicit_seed = _normalize_seed_value(getattr(req, "seed", None))
 
         logger.info(
-            "[GenerateVideo] Resolved aspect ratio=%s source=%s sound=%s sound_source=%s project_id=%s shot_id=%s",
+            "[GenerateVideo] Resolved aspect ratio=%s source=%s sound=%s sound_source=%s project_id=%s shot_id=%s width=%s height=%s resolution=%s image_size=%s",
             aspect_ratio,
             aspect_ratio_source,
             resolved_sound,
             sound_source,
             resolved_project_id,
             req.shot_id,
+            resolved_video_width,
+            resolved_video_height,
+            resolved_video_resolution,
+            resolved_video_image_size,
         )
+        logger.info(
+            "[GenerateVideo] Project Visual Extract | project_id=%s project_keys=%s picked=%s",
+            resolved_project_id,
+            sorted(list(project_global_info.keys()))[:30] if isinstance(project_global_info, dict) else [],
+            {
+                "aspect_ratio": aspect_ratio,
+                "width": resolved_video_width,
+                "height": resolved_video_height,
+                "resolution": resolved_video_resolution,
+                "image_size": resolved_video_image_size,
+                "raw_project_visual": project_visual,
+            },
+        )
+
+        if _should_hit_visual_breakpoint("video", resolved_project_id):
+            logger.warning(
+                "[GenerateVideo] BREAKPOINT hit | project_id=%s aspect_ratio=%s width=%s height=%s resolution=%s image_size=%s raw_project_visual=%s",
+                resolved_project_id,
+                aspect_ratio,
+                resolved_video_width,
+                resolved_video_height,
+                resolved_video_resolution,
+                resolved_video_image_size,
+                project_visual,
+            )
+            breakpoint()
         _log_shot_submit_debug(
             "video_submit",
             req,
@@ -16291,6 +16445,10 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
                 "aspect_ratio_source": aspect_ratio_source,
                 "sound": resolved_sound,
                 "sound_source": sound_source,
+                "width": resolved_video_width,
+                "height": resolved_video_height,
+                "resolution": resolved_video_resolution,
+                "image_size": resolved_video_image_size,
                 "resolved_project_id": resolved_project_id,
                 "project_seed": explicit_seed or project_seed,
                 "keyframes_count": len(req.keyframes or []),
@@ -16387,6 +16545,15 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
             pass
 
         video_provider_options = _build_video_provider_options(req)
+        if aspect_ratio and "aspect_ratio" not in video_provider_options:
+            video_provider_options["aspect_ratio"] = str(aspect_ratio).strip()
+        if resolved_video_width and resolved_video_height:
+            video_provider_options["width"] = int(resolved_video_width)
+            video_provider_options["height"] = int(resolved_video_height)
+        if resolved_video_resolution:
+            video_provider_options["resolution"] = resolved_video_resolution
+        if resolved_video_image_size:
+            video_provider_options["image_size"] = resolved_video_image_size
         if "sound" not in video_provider_options and resolved_sound is not None:
             video_provider_options["sound"] = bool(resolved_sound)
         if explicit_seed:
@@ -17075,7 +17242,7 @@ def get_generation_job_pool(
             for episode in episodes:
                 owner_id = project_owner_by_id.get(int(episode.project_id))
                 owner_name = project_owner_name_by_id.get(int(episode.project_id))
-                info = dict(episode.episode_info or {})
+                info = _episode_info_from_episode(episode)
 
                 if safe_kind in {"all", "episode-scenes"}:
                     payload = info.get(EPISODE_SCENE_GEN_STATUS_KEY)
@@ -17244,7 +17411,7 @@ def repair_generation_job_history(
             if not _can_touch_project(int(episode.project_id)):
                 return
 
-            info = dict(episode.episode_info or {})
+            info = _episode_info_from_episode(episode)
             payload = info.get(status_key)
             if not isinstance(payload, dict):
                 return
@@ -17380,7 +17547,7 @@ def stop_generation_job(
         else:
             status_key = SHOT_MEDIA_BATCH_STATUS_KEY
 
-        info = dict(episode.episode_info or {})
+        info = _episode_info_from_episode(episode)
         payload = info.get(status_key)
         if not isinstance(payload, dict):
             payload = {
@@ -17590,7 +17757,7 @@ def stop_all_generation_jobs(
                 continue
             if not _can_access_project(int(episode.project_id)):
                 continue
-            info = dict(episode.episode_info or {})
+            info = _episode_info_from_episode(episode)
             key_pairs = []
             if safe_kind in {"all", "episode-scenes"}:
                 key_pairs.append((EPISODE_SCENE_GEN_STATUS_KEY, "episode-scenes"))
@@ -17642,7 +17809,7 @@ SHOT_MEDIA_BATCH_STATUS_KEY = "shot_media_batch_status"
 
 def _read_shot_media_batch_status(episode: Episode) -> Dict[str, Any]:
     try:
-        info = dict(episode.episode_info or {})
+        info = _episode_info_from_episode(episode)
         payload = info.get(SHOT_MEDIA_BATCH_STATUS_KEY)
         if isinstance(payload, dict):
             return dict(payload)
@@ -17670,7 +17837,7 @@ def _persist_shot_media_batch_status(db: Session, episode: Episode, status_paylo
     )
     target_episode = latest_episode or episode
 
-    info = dict(target_episode.episode_info or {})
+    info = _episode_info_from_episode(target_episode)
     existing_status = info.get(SHOT_MEDIA_BATCH_STATUS_KEY)
     merged_status = dict(status_payload or {})
     has_incoming_force_flag = "force_stopped" in merged_status
@@ -17974,7 +18141,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
         project_id = int(episode.project_id)
         job_id = f"shot-media-batch:{int(episode_id)}"
 
-        episode_info = episode.episode_info if isinstance(episode.episode_info, dict) else {}
+        episode_info = _episode_info_from_episode(episode)
         e_global_info = episode_info.get("e_global_info", {}) if isinstance(episode_info, dict) else {}
         global_style = str((e_global_info or {}).get("Global_Style") or "").strip()
         entity_lookup = _build_project_entity_lookup(db, int(episode.project_id))

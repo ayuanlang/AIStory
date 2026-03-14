@@ -245,6 +245,18 @@ def check_and_migrate_tables():
                 ("base_model", "VARCHAR"),
                 ("tags", "JSON"),
                 ("supplier_info", "JSON"),
+                ("price_avg_cost", "INTEGER"),
+                ("price_source", "VARCHAR"),
+                ("price_min_cost", "INTEGER"),
+                ("price_max_cost", "INTEGER"),
+                ("price_sample_prices", "JSON"),
+                ("price_updated_at", "VARCHAR"),
+                ("provider_price_avg_cost", "INTEGER"),
+                ("provider_price_source", "VARCHAR"),
+                ("provider_price_min_cost", "INTEGER"),
+                ("provider_price_max_cost", "INTEGER"),
+                ("provider_price_sample_prices", "JSON"),
+                ("provider_price_updated_at", "VARCHAR"),
             ]
             # Only add modality column if it doesn't exist yet (new installs)
             if 'modality' not in existing_system_cols:
@@ -354,6 +366,11 @@ def check_and_migrate_tables():
                             conn.execute(text("ALTER TABLE api_settings ADD COLUMN IF NOT EXISTS mode VARCHAR"))
                         else:
                             conn.execute(text("ALTER TABLE api_settings ADD COLUMN mode VARCHAR"))
+                    if "api_strategy" not in existing_api_cols:
+                        if is_postgres:
+                            conn.execute(text("ALTER TABLE api_settings ADD COLUMN IF NOT EXISTS api_strategy VARCHAR"))
+                        else:
+                            conn.execute(text("ALTER TABLE api_settings ADD COLUMN api_strategy VARCHAR"))
 
                 with SessionLocal() as session:
                     rows = session.query(APISetting).order_by(APISetting.id.desc()).all()
@@ -371,6 +388,13 @@ def check_and_migrate_tables():
                         normalized_mode = row_mode or None
                         if normalized_mode != getattr(row, "mode", None):
                             row.mode = normalized_mode
+                            changed += 1
+
+                        row_strategy = str(getattr(row, "api_strategy", "") or "").strip().lower()
+                        if row_strategy not in {"fixed", "smart_default", "low_price_replace"}:
+                            row_strategy = "smart_default"
+                        if row_strategy != str(getattr(row, "api_strategy", "") or ""):
+                            row.api_strategy = row_strategy
                             changed += 1
 
                         system_api_id = int(getattr(row, "system_api_id", 0) or 0)

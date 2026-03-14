@@ -244,6 +244,7 @@ class APISetting(Base):
 
     category = Column(String, index=True) # LLM, Image, Video, Voice
     system_api_id = Column(Integer, ForeignKey("system_api_settings.id"), index=True, nullable=True)
+    api_strategy = Column(String, nullable=True)
     mode = Column(String, nullable=True)
 
     user = relationship("User", back_populates="api_settings")
@@ -299,6 +300,21 @@ class SystemAPISetting(Base):
     supplier_info = Column(JSON, nullable=True) # 原供应商API定价信息(审计对照�?
     deprecated = Column(Boolean, default=False) # 是否弃用
     config = Column(JSON, default={})           # 额外配置(webhook_url�?
+
+    # Precomputed pricing summary (persisted on table for fast reads)
+    price_avg_cost = Column(Integer, nullable=True)
+    price_source = Column(String, nullable=True)
+    price_min_cost = Column(Integer, nullable=True)
+    price_max_cost = Column(Integer, nullable=True)
+    price_sample_prices = Column(JSON, nullable=True)
+    price_updated_at = Column(String, nullable=True)
+
+    provider_price_avg_cost = Column(Integer, nullable=True)
+    provider_price_source = Column(String, nullable=True)
+    provider_price_min_cost = Column(Integer, nullable=True)
+    provider_price_max_cost = Column(Integer, nullable=True)
+    provider_price_sample_prices = Column(JSON, nullable=True)
+    provider_price_updated_at = Column(String, nullable=True)
 
     is_active = Column(Boolean, default=False)  # 是否为该类别默认 API
 

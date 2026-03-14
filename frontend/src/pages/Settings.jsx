@@ -123,35 +123,60 @@ const Settings = () => {
         return undefined;
     };
     const buildPriceDisplay = (row) => {
+        const source = String(
+            pickFirst(row, ['avg_price_source', 'avgPriceSource', 'provider_price_source', 'providerPriceSource']) || ''
+        ).trim().toLowerCase();
+        const isMultiplierScore = source.includes('charge_multiplier_x100');
         const avg = normalizePositiveNumber(
-            pickFirst(row, ['avg_price_estimate', 'avgPriceEstimate'])
+            pickFirst(row, ['avg_price_estimate', 'avgPriceEstimate', 'provider_avg_price_estimate', 'providerAvgPriceEstimate'])
         );
-        const rawSamples = pickFirst(row, ['sample_prices', 'samplePrices']);
+        const rawSamples = pickFirst(row, ['sample_prices', 'samplePrices', 'provider_sample_prices', 'providerSamplePrices']);
         const samples = (Array.isArray(rawSamples) ? rawSamples : [])
             .map((v) => normalizePositiveNumber(v))
             .filter((v) => v > 0);
         const rangeMin = normalizePositiveNumber(
-            pickFirst(row, ['price_range_min', 'priceRangeMin'])
+            pickFirst(row, ['price_range_min', 'priceRangeMin', 'provider_price_range_min', 'providerPriceRangeMin'])
         );
         const rangeMax = normalizePositiveNumber(
-            pickFirst(row, ['price_range_max', 'priceRangeMax'])
+            pickFirst(row, ['price_range_max', 'priceRangeMax', 'provider_price_range_max', 'providerPriceRangeMax'])
         );
         const hasRange = rangeMin > 0 || rangeMax > 0;
         const rangeLabelMin = rangeMin > 0 ? rangeMin : '-';
         const rangeLabelMax = rangeMax > 0 ? rangeMax : '-';
         const avgLabel = avg > 0 ? avg : '-';
+        const pretty = (value) => {
+            const num = Number(value || 0);
+            if (!Number.isFinite(num) || num <= 0) return '-';
+            if (!isMultiplierScore) return num;
+            const scaled = num / 100;
+            return Number.isInteger(scaled) ? String(scaled) : scaled.toFixed(2).replace(/\.00$/, '');
+        };
 
         return {
             avg,
-            avgLabel,
+            avgLabel: pretty(avgLabel),
             rangeMin,
             rangeMax,
             hasRange,
-            rangeLabelMin,
-            rangeLabelMax,
+            rangeLabelMin: pretty(rangeLabelMin),
+            rangeLabelMax: pretty(rangeLabelMax),
             samples,
             hasAny: avg > 0 || hasRange || samples.length > 0,
+            isMultiplierScore,
         };
+    };
+    const formatBillingUnitType = (value) => {
+        const unit = String(value || '').trim().toLowerCase();
+        if (!unit) return '-';
+        const unitLabelMap = {
+            per_call: t('按次', 'Per Call'),
+            per_second: t('按秒', 'Per Second'),
+            per_minute: t('按分钟', 'Per Minute'),
+            per_token: t('按 Token', 'Per Token'),
+            per_1k_tokens: t('每 1K Token', 'Per 1K Tokens'),
+            per_million_tokens: t('每百万 Token', 'Per Million Tokens'),
+        };
+        return unitLabelMap[unit] || unit;
     };
     const aliasifyProviderInDetails = (payload, fallbackAlias = '') => {
         const fallback = String(fallbackAlias || '').trim();
@@ -660,21 +685,23 @@ const Settings = () => {
     };
 
     const categorizedSystemSettings = useMemo(() => {
-        // Keep category taxonomy consistent with General page.
+        // User default activation page only exposes runtime generation categories.
         const categoryLabelMap = {
             LLM: 'LLM',
             Image: 'Image',
             Video: 'Video',
             Vision: 'Vision',
-            Tools: 'Tools',
         };
-        const preferredOrder = ['LLM', 'Image', 'Video', 'Vision', 'Tools'];
+        const preferredOrder = ['LLM', 'Image', 'Video', 'Vision'];
+        const visibleCategorySet = new Set(preferredOrder);
 
         const grouped = (systemSettings || []).reduce((acc, item) => {
-            const rawCategory = item?.category || 'Tools';
-            const category = preferredOrder.includes(rawCategory) ? rawCategory : 'Tools';
-            if (!acc[category]) acc[category] = [];
-            acc[category].push({ ...item, category });
+            const rawCategory = String(item?.category || '').trim();
+            if (!visibleCategorySet.has(rawCategory)) {
+                return acc;
+            }
+            if (!acc[rawCategory]) acc[rawCategory] = [];
+            acc[rawCategory].push({ ...item, category: rawCategory });
             return acc;
         }, {});
 
@@ -2144,7 +2171,9 @@ const Settings = () => {
                                             </div>
 
                                             <div className="space-y-3">
-                                                {categoryBlock.groups.map((group, groupIndex) => (
+                                                {categoryBlock.groups.map((group, groupIndex) => {
+                                                    const providerPricing = buildPriceDisplay(group);
+                                                    return (
                                                     <div key={`${group.category}-${group.provider}-${group.provider_alias || ''}-${groupIndex}`} className="border border-white/10 rounded-lg p-4 bg-white/5 space-y-3">
                                                         <div className="flex flex-wrap items-center gap-2">
                                                             <span className="text-sm font-semibold">{group.provider_alias || group.provider}</span>
@@ -2158,6 +2187,12 @@ const Settings = () => {
                                                             ) : (
                                                                 <span className="text-[10px] px-2 py-0.5 rounded border border-yellow-500/30 text-yellow-300 bg-yellow-500/10">{t('无共享密钥', 'No Shared Key')}</span>
                                                             )}
+                                                            <span className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-400/30 bg-emerald-500/10 text-emerald-200">
+                                                                {t('提供方均价', 'Provider Avg')}: {providerPricing.avgLabel}
+                                                            </span>
+                                                            <span className="text-[10px] px-1.5 py-0.5 rounded border border-sky-400/30 bg-sky-500/10 text-sky-200">
+                                                                {t('提供方区间', 'Provider Range')}: {providerPricing.rangeLabelMin} ~ {providerPricing.rangeLabelMax}
+                                                            </span>
                                                         </div>
 
                                                         <div className="space-y-2">
@@ -2184,11 +2219,11 @@ const Settings = () => {
                                                                             <span className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-400/30 bg-emerald-500/10 text-emerald-200">
                                                                                 {t('平均价格', 'Avg Price')}: {pricing.avgLabel}
                                                                             </span>
+                                                                            <span className="text-[10px] px-1.5 py-0.5 rounded border border-amber-400/30 bg-amber-500/10 text-amber-200">
+                                                                                {t('计费类型', 'Billing Type')}: {formatBillingUnitType(row.billing_unit_type)}
+                                                                            </span>
                                                                             <span className="text-[10px] px-1.5 py-0.5 rounded border border-sky-400/30 bg-sky-500/10 text-sky-200">
                                                                                 {t('价格区间', 'Price Range')}: {pricing.rangeLabelMin} ~ {pricing.rangeLabelMax}
-                                                                            </span>
-                                                                            <span className="text-[10px] px-1.5 py-0.5 rounded border border-slate-400/30 bg-slate-500/10 text-slate-200">
-                                                                                {t('样本价格', 'Sample Prices')}: {formatSamplePrices(pricing.samples)}
                                                                             </span>
                                                                         </div>
                                                                     </div>
@@ -2239,7 +2274,8 @@ const Settings = () => {
                                                             ))}
                                                         </div>
                                                     </div>
-                                                ))}
+                                                    );
+                                                })}
                                             </div>
                                         </div>
                                     ))}

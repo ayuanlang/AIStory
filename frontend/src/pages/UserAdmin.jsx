@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, listKieStandardValuesManage, listKieStandardMappingsManage, createKieStandardMappingManage, updateKieStandardMappingManage, deleteKieStandardMappingManage, inferKieStandardMappingBillingRelatedManage, exportKieDataDictionaryMappings, importKieDataDictionaryMappings, exportKieDataDictionaryValues, importKieDataDictionaryValues, exportKieDataDictionaryBundle, importKieDataDictionaryBundle, getAdminLlmLogFiles, getAdminLlmLogView, getAdminRuntimeLogFiles, getAdminRuntimeLogView, getAdminStorageUsage, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, generateKiePricingRulesManage, applyKiePricingRulesManage, getAdminUsersPage, aiAssistantAnalyzeSupplierFeatures, aiAssistantApplySupplierFeatures } from '../services/api';
+import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, recomputeSystemApiPriceCacheManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, listKieStandardValuesManage, listKieStandardMappingsManage, createKieStandardMappingManage, updateKieStandardMappingManage, deleteKieStandardMappingManage, inferKieStandardMappingBillingRelatedManage, exportKieDataDictionaryMappings, importKieDataDictionaryMappings, exportKieDataDictionaryValues, importKieDataDictionaryValues, exportKieDataDictionaryBundle, importKieDataDictionaryBundle, getAdminLlmLogFiles, getAdminLlmLogView, getAdminRuntimeLogFiles, getAdminRuntimeLogView, getAdminStorageUsage, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, generateKiePricingRulesManage, applyKiePricingRulesManage, getAdminUsersPage, aiAssistantAnalyzeSupplierFeatures, aiAssistantApplySupplierFeatures } from '../services/api';
 import Footer from '../components/Footer';
 import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive, Database } from 'lucide-react';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
@@ -86,6 +86,7 @@ const UserAdmin = () => {
     const [isMissingBillingRuleCheckLoading, setIsMissingBillingRuleCheckLoading] = useState(false);
     const [isBillingRuleLoading, setIsBillingRuleLoading] = useState(false);
     const [isBatchResetMultiplierLoading, setIsBatchResetMultiplierLoading] = useState(false);
+    const [isPriceCacheRecomputeLoading, setIsPriceCacheRecomputeLoading] = useState(false);
     const [batchResetMinMultiplier, setBatchResetMinMultiplier] = useState('1.1');
     const [batchResetMaxMultiplier, setBatchResetMaxMultiplier] = useState('2.0');
     const [batchResetDefaultMultiplier, setBatchResetDefaultMultiplier] = useState('2.0');
@@ -101,6 +102,9 @@ const UserAdmin = () => {
     const [billingRuleFilterStatus, setBillingRuleFilterStatus] = useState('all');
     const [billingRuleFilterTarget, setBillingRuleFilterTarget] = useState('all');
     const [billingRuleFilterUnitType, setBillingRuleFilterUnitType] = useState('all');
+    const [billingRuleFilterApiCategory, setBillingRuleFilterApiCategory] = useState('all');
+    const [billingRuleFilterApiProvider, setBillingRuleFilterApiProvider] = useState('all');
+    const [billingRuleFilterApiBaseModel, setBillingRuleFilterApiBaseModel] = useState('all');
     const [kiePricingUrl, setKiePricingUrl] = useState('https://kie.ai/zh-CN/pricing');
     const [kiePricingProviderFilter, setKiePricingProviderFilter] = useState('kie');
     const [kiePricingManualText, setKiePricingManualText] = useState('');
@@ -1096,6 +1100,15 @@ const UserAdmin = () => {
         return null;
     };
 
+    const toRuleActiveBool = (value, fallback = true) => {
+        if (value === true || value === false) return value;
+        const text = String(value ?? '').trim().toLowerCase();
+        if (!text) return Boolean(fallback);
+        if (['active', 'true', '1', 'yes', 'on'].includes(text)) return true;
+        if (['inactive', 'false', '0', 'no', 'off'].includes(text)) return false;
+        return Boolean(fallback);
+    };
+
     const parseRuleExtraConditions = (text) => {
         const trimmed = String(text || '').trim();
         if (!trimmed) return {};
@@ -1151,7 +1164,7 @@ const UserAdmin = () => {
     const buildBillingRulePayloadFromForm = (form) => ({
         name: String(form?.name || 'Rule').trim() || 'Rule',
         description: toNullableText(form?.description),
-        is_active: !!form?.is_active,
+        is_active: toRuleActiveBool(form?.is_active, true),
         priority: toNullableInt(form?.priority) ?? 0,
         applies_to_text: !!form?.applies_to_text,
         applies_to_image: !!form?.applies_to_image,
@@ -1277,15 +1290,47 @@ const UserAdmin = () => {
         setBillingRuleForm(ruleRowToForm(row));
     }, [selectedBillingRuleId, billingRuleRows]);
 
+    const billingRuleSystemApiMetaMap = React.useMemo(() => {
+        const map = new Map();
+        (systemApiRows || []).forEach((row) => {
+            const id = Number(row?.id || 0);
+            if (id > 0) map.set(id, row);
+        });
+        return map;
+    }, [systemApiRows]);
+
+    const billingRuleApiCategoryOptions = React.useMemo(
+        () => Array.from(new Set((systemApiRows || []).map((row) => String(row?.category || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+        [systemApiRows]
+    );
+
+    const billingRuleApiProviderOptions = React.useMemo(
+        () => Array.from(new Set((systemApiRows || []).map((row) => String(row?.provider || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+        [systemApiRows]
+    );
+
+    const billingRuleApiBaseModelOptions = React.useMemo(
+        () => Array.from(new Set((systemApiRows || []).map((row) => String(row?.base_model || row?.model || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+        [systemApiRows]
+    );
+
     const filteredBillingRuleRows = React.useMemo(() => {
         const keyword = String(billingRuleFilterKeyword || '').trim().toLowerCase();
         return (billingRuleRows || []).filter((row) => {
+            const apiRow = billingRuleSystemApiMetaMap.get(Number(row?.system_api_id || 0));
+            const apiCategory = String(apiRow?.category || '').trim();
+            const apiProvider = String(apiRow?.provider || '').trim();
+            const apiBaseModel = String(apiRow?.base_model || apiRow?.model || '').trim();
+
             if (billingRuleFilterStatus === 'active' && !row?.is_active) return false;
             if (billingRuleFilterStatus === 'inactive' && !!row?.is_active) return false;
             if (billingRuleFilterTarget === 'text' && !row?.applies_to_text) return false;
             if (billingRuleFilterTarget === 'image' && !row?.applies_to_image) return false;
             if (billingRuleFilterTarget === 'video' && !row?.applies_to_video) return false;
             if (billingRuleFilterUnitType !== 'all' && String(row?.billing_unit_type || '') !== billingRuleFilterUnitType) return false;
+            if (billingRuleFilterApiCategory !== 'all' && apiCategory !== billingRuleFilterApiCategory) return false;
+            if (billingRuleFilterApiProvider !== 'all' && apiProvider !== billingRuleFilterApiProvider) return false;
+            if (billingRuleFilterApiBaseModel !== 'all' && apiBaseModel !== billingRuleFilterApiBaseModel) return false;
             if (!keyword) return true;
 
             const haystack = [
@@ -1295,10 +1340,24 @@ const UserAdmin = () => {
                 row?.input_format,
                 row?.output_format,
                 row?.billing_unit_type,
+                apiCategory,
+                apiProvider,
+                apiBaseModel,
+                apiRow?.model,
             ].map((v) => String(v || '').toLowerCase()).join(' ');
             return haystack.includes(keyword);
         });
-    }, [billingRuleRows, billingRuleFilterKeyword, billingRuleFilterStatus, billingRuleFilterTarget, billingRuleFilterUnitType]);
+    }, [
+        billingRuleRows,
+        billingRuleFilterKeyword,
+        billingRuleFilterStatus,
+        billingRuleFilterTarget,
+        billingRuleFilterUnitType,
+        billingRuleFilterApiCategory,
+        billingRuleFilterApiProvider,
+        billingRuleFilterApiBaseModel,
+        billingRuleSystemApiMetaMap,
+    ]);
 
     useEffect(() => {
         if (!filteredBillingRuleRows.length) {
@@ -1482,6 +1541,37 @@ const UserAdmin = () => {
             alert(e?.response?.data?.detail || e?.message || t('批量重置倍率失败', 'Failed to reset charge multipliers'));
         } finally {
             setIsBatchResetMultiplierLoading(false);
+        }
+    };
+
+    const handleRecomputePriceCache = async () => {
+        const selectedApiId = Number(selectedSystemApiId || 0);
+        const scopeHint = selectedApiId > 0
+            ? t('当前选中的 System API', 'current selected System API')
+            : t('全部 System API', 'all System APIs');
+        const ok = await confirmUiMessage(
+            t(
+                `确认对${scopeHint}执行“价格区间/样本均价”预计算吗？`,
+                `Recompute precomputed price range/sample-average for ${scopeHint}?`
+            )
+        );
+        if (!ok) return;
+
+        setIsPriceCacheRecomputeLoading(true);
+        try {
+            const result = await recomputeSystemApiPriceCacheManage(selectedApiId > 0 ? [selectedApiId] : []);
+            await fetchSystemApiManageRows();
+            await fetchBillingRulesForSystemApi(selectedSystemApiId);
+            alert(
+                t(
+                    `预计算完成：目标 ${Number(result?.target_count || 0)} 个 API，模型级更新 ${Number(result?.changed_model || 0)} 条，提供方级更新 ${Number(result?.changed_provider || 0)} 条。`,
+                    `Precompute completed: target ${Number(result?.target_count || 0)} APIs, model-level updated ${Number(result?.changed_model || 0)}, provider-level updated ${Number(result?.changed_provider || 0)}.`
+                )
+            );
+        } catch (e) {
+            alert(e?.response?.data?.detail || e?.message || t('预计算失败', 'Precompute failed'));
+        } finally {
+            setIsPriceCacheRecomputeLoading(false);
         }
     };
 
@@ -6581,6 +6671,14 @@ const UserAdmin = () => {
                                         className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded flex items-center gap-2 disabled:opacity-50"
                                     >
                                         <RefreshCw size={16} /> {t('刷新规则', 'Refresh Rules')}
+                                    </button>
+                                    <button
+                                        onClick={handleRecomputePriceCache}
+                                        disabled={isPriceCacheRecomputeLoading}
+                                        className="bg-blue-700 hover:bg-blue-600 text-white px-3 py-1 rounded flex items-center gap-2 disabled:opacity-50"
+                                        title={t('重算并持久化价格区间与样本均价（写入 system_api_settings）', 'Recompute and persist price range/sample-average into system_api_settings')}
+                                    >
+                                        <Database size={16} /> {isPriceCacheRecomputeLoading ? t('预计算中...', 'Precomputing...') : t('预计算价格缓存', 'Precompute Price Cache')}
                                     </button>
                                     <button
                                         onClick={handleBatchResetBillingRuleChargeMultiplier}

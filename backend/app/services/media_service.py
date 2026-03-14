@@ -2634,6 +2634,13 @@ class MediaGenerationService:
         elif gen_type == "video":
             raw_endpoint = tool_conf.get("endpoint") or "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks"
             endpoint = self._normalize_doubao_video_tasks_endpoint(raw_endpoint)
+            callback_url = str(
+                tool_conf.get("callback_url")
+                or tool_conf.get("callbackUrl")
+                or tool_conf.get("callBackUrl")
+                or tool_conf.get("webHook")
+                or ""
+            ).strip()
             
             # Auto-correct model if user passed an Image model for a Video task
             if model and "seedream" in model:
@@ -2729,6 +2736,8 @@ class MediaGenerationService:
                 "logo_info": {"add_logo": False},
                 "watermark": False
             }
+            if callback_url and callback_url != "-1":
+                payload["callback_url"] = callback_url
 
             # Apply Draft Mode (Sample Mode) if configured and supported (seedance models)
             if model and ("1-5-pro" in model or "seedance" in model):
@@ -2740,7 +2749,9 @@ class MediaGenerationService:
             if not start_img_url and not last_frame_url:
                 payload["ratio"] = final_ratio
                 _debug_log(f"[DoubaoVideo] ratio_in={aspect_ratio}, ratio_final={final_ratio}, mode={'t2v' if (not start_img_url and not last_frame_url) else 'i2v'}")
-            _debug_log(f"[DoubaoVideo] payload_has_ratio={'ratio' in payload}, payload_ratio={payload.get('ratio')}, mode={'t2v' if (not start_img_url and not last_frame_url) else 'i2v'}")
+            _debug_log(
+                f"[DoubaoVideo] payload_has_ratio={'ratio' in payload}, payload_ratio={payload.get('ratio')}, mode={'t2v' if (not start_img_url and not last_frame_url) else 'i2v'}, callback_enabled={bool(payload.get('callback_url'))}"
+            )
 
 
             # Enable generate_audio for 1.5 Pro models which support it.

@@ -671,20 +671,33 @@ export const importProjectStoryGlobalPackage = async (projectId, payload) => {
     return response.data;
 }
 
+const sanitizeEpisodePayload = (episode) => {
+    if (!episode || typeof episode !== 'object') return episode;
+    return {
+        ...episode,
+        episode_info: {},
+    };
+};
+
 // Episodes
 export const fetchEpisodes = async (projectId) => {
     const response = await api.get(`/projects/${projectId}/episodes`);
-    return response.data;
+    const rows = Array.isArray(response.data) ? response.data : [];
+    return rows.map(sanitizeEpisodePayload);
 }
 
 export const createEpisode = async (projectId, data) => {
-    const response = await api.post(`/projects/${projectId}/episodes`, data);
-    return response.data;
+    const payload = { ...(data || {}) };
+    delete payload.episode_info;
+    const response = await api.post(`/projects/${projectId}/episodes`, payload);
+    return sanitizeEpisodePayload(response.data);
 }
 
 export const updateEpisode = async (episodeId, data) => {
-    const response = await api.put(`/episodes/${episodeId}`, data);
-    return response.data;
+    const payload = { ...(data || {}) };
+    delete payload.episode_info;
+    const response = await api.put(`/episodes/${episodeId}`, payload);
+    return sanitizeEpisodePayload(response.data);
 }
 
 export const updateEpisodeSegments = async (episodeId, segments) => {
@@ -1939,6 +1952,18 @@ export const deleteSystemApiBillingRulesBatchManage = async (ruleIds = []) => {
 
 export const resetSystemApiBillingRuleChargeMultipliersManage = async (payload = {}) => {
     const response = await api.post('/settings/system/manage/billing-rules/reset-charge-multiplier', payload || {});
+    return response.data;
+}
+
+export const recomputeSystemApiPriceCacheManage = async (systemApiIds = []) => {
+    const ids = (Array.isArray(systemApiIds) ? systemApiIds : [])
+        .map((id) => Number(id || 0))
+        .filter((id) => Number.isFinite(id) && id > 0);
+    const response = await api.post('/settings/system/manage/price-cache/recompute', null, {
+        params: {
+            ...(ids.length ? { system_api_ids: ids.join(',') } : {}),
+        },
+    });
     return response.data;
 }
 

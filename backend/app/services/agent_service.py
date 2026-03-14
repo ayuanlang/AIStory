@@ -4617,12 +4617,14 @@ Output ONLY the JSON object now."""
 
                     if user_setting:
                         user_setting.system_api_id = int(system_setting.id)
+                        user_setting.api_strategy = str(getattr(user_setting, "api_strategy", None) or "smart_default").strip().lower() or "smart_default"
                         user_setting.mode = None
                     else:
                         user_setting = APISetting(
                             user_id=user_id,
                             category=system_setting.category,
                             system_api_id=int(system_setting.id),
+                            api_strategy="smart_default",
                             mode=None,
                         )
                         session.add(user_setting)

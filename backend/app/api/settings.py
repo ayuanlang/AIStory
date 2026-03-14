@@ -1291,6 +1291,13 @@ def _ensure_api_settings_binding_columns(db: Session) -> None:
                 db.execute(text("ALTER TABLE api_settings ADD COLUMN mode VARCHAR"))
             added_cols.append("mode")
 
+        if "api_strategy" not in existing_cols:
+            if dialect_name == "postgresql":
+                db.execute(text("ALTER TABLE api_settings ADD COLUMN IF NOT EXISTS api_strategy VARCHAR"))
+            else:
+                db.execute(text("ALTER TABLE api_settings ADD COLUMN api_strategy VARCHAR"))
+            added_cols.append("api_strategy")
+
         if added_cols:
             logger.warning("api_settings runtime migration applied: added columns %s", ",".join(added_cols))
 
@@ -1616,6 +1623,7 @@ def _ensure_default_system_selection_for_user(db: Session, user_id: int) -> None
             user_id=user_id,
             category=system_setting.category,
             system_api_id=int(system_setting.id),
+            api_strategy=_normalize_user_api_strategy(None),
             mode=None,
         ))
 
@@ -1641,8 +1649,9 @@ def _normalize_user_active_settings(db: Session, user_id: int) -> None:
 
         def _score(item: APISetting):
             has_system_setting_id = 1 if _safe_int(getattr(item, "system_api_id", None), None) else 0
+            has_strategy = 1 if str(getattr(item, "api_strategy", "") or "").strip() else 0
             has_mode = 1 if str(getattr(item, "mode", "") or "").strip() else 0
-            return (has_system_setting_id, has_mode, int(item.id or 0))
+            return (has_system_setting_id, has_strategy, has_mode, int(item.id or 0))
 
         winner = max(items, key=_score)
         dropped_ids: List[int] = [item.id for item in items if item.id != winner.id]
@@ -1714,6 +1723,11 @@ def _cleanup_user_api_settings_records(db: Session, user_id: int) -> None:
         normalized_mode = _normalize_user_mode(getattr(row, "mode", None))
         if normalized_mode != getattr(row, "mode", None):
             row.mode = normalized_mode
+            changed = True
+
+        normalized_strategy = _normalize_user_api_strategy(getattr(row, "api_strategy", None))
+        if normalized_strategy != getattr(row, "api_strategy", None):
+            row.api_strategy = normalized_strategy
             changed = True
 
     if changed:
@@ -2657,6 +2671,13 @@ def _rule_cost_score(rule: SystemAPIBillingRule) -> int:
     return int(max(cost, cost_input, cost_output))
 
 
+def _rule_multiplier_score_x100(rule: SystemAPIBillingRule) -> int:
+    multiplier = _safe_non_negative_float(getattr(rule, "charge_multiplier", None))
+    if multiplier <= 0:
+        multiplier = 2.0
+    return int(round(multiplier * 100.0))
+
+
 def _system_api_pricing_from_rules_and_audit(
     db: Session,
     system_api_id: int,
@@ -2678,66 +2699,25 @@ def _system_api_pricing_from_rules_and_audit(
 
     rule_rows = db.query(SystemAPIBillingRule).filter(
         SystemAPIBillingRule.system_api_id == sid,
+        or_(SystemAPIBillingRule.is_active == True, SystemAPIBillingRule.is_active.is_(None)),
     ).all()
-    rule_costs: List[int] = []
+    rule_scores: List[int] = []
     for row in rule_rows:
-        c = _rule_cost_score(row)
+        c = _rule_multiplier_score_x100(row)
         if c > 0:
-            rule_costs.append(int(c))
+            rule_scores.append(int(c))
 
-    range_min = int(min(rule_costs)) if rule_costs else 0
-    range_max = int(max(rule_costs)) if rule_costs else 0
+    range_min = int(min(rule_scores)) if rule_scores else 0
+    range_max = int(max(rule_scores)) if rule_scores else 0
 
     rule_ids = [int(getattr(row, "id", 0) or 0) for row in rule_rows if int(getattr(row, "id", 0) or 0) > 0]
 
-    if rule_ids:
-        audit_rows = db.query(TransactionAction).filter(
-            or_(
-                TransactionAction.system_api_id == sid,
-                and_(
-                    TransactionAction.system_api_id.is_(None),
-                    TransactionAction.matched_rule_id.in_(rule_ids),
-                ),
-            )
-        ).order_by(TransactionAction.id.desc()).limit(500).all()
-    else:
-        audit_rows = db.query(TransactionAction).filter(
-            TransactionAction.system_api_id == sid,
-        ).order_by(TransactionAction.id.desc()).limit(500).all()
-
-    audit_costs: List[int] = []
-    for row in audit_rows or []:
-        # Prefer actual_cost; fallback to reserved_cost for older audit rows.
-        c = _safe_int(getattr(row, "actual_cost", 0), 0)
-        if c <= 0:
-            c = _safe_int(getattr(row, "reserved_cost", 0), 0)
-        if c > 0:
-            audit_costs.append(int(c))
-
-    # Fallback audit source: transaction_history entries linked by system_api_id in details.
-    if not audit_costs:
-        tx_rows = db.query(TransactionHistory).order_by(TransactionHistory.id.desc()).limit(2000).all()
-        for tx in tx_rows or []:
-            amount = _safe_int(getattr(tx, "amount", 0), 0)
-            if amount >= 0:
-                # Keep charge rows only; skip refill/refund/zero.
-                continue
-            details = _safe_json_dict(getattr(tx, "details", {}))
-            bb = details.get("billing_breakdown") if isinstance(details.get("billing_breakdown"), dict) else {}
-            tx_sid = _safe_int(
-                bb.get("system_api_id") if bb.get("system_api_id") is not None else details.get("system_api_id"),
-                0,
-            )
-            if tx_sid != sid:
-                continue
-            audit_costs.append(abs(int(amount)))
-
-    avg_cost = int(round(sum(audit_costs) / float(len(audit_costs)))) if audit_costs else 0
-    sample_prices = sorted(set(audit_costs))[:5] if audit_costs else []
+    avg_cost = int(round(sum(rule_scores) / float(len(rule_scores)))) if rule_scores else 0
+    sample_prices: List[int] = []
 
     return {
         "average_cost": max(0, int(avg_cost)),
-        "source": "rules_and_audit_only",
+        "source": "charge_multiplier_x100",
         "min_cost": max(0, int(range_min)),
         "max_cost": max(0, int(range_max)),
         "sample_prices": sample_prices,
@@ -2756,7 +2736,7 @@ def _batch_system_api_pricing_from_rules_and_audit(
     id_set = set(normalized_ids)
     default_value = {
         "average_cost": 0,
-        "source": "rules_and_audit_only",
+        "source": "charge_multiplier_x100",
         "min_cost": 0,
         "max_cost": 0,
         "sample_prices": [],
@@ -2770,7 +2750,8 @@ def _batch_system_api_pricing_from_rules_and_audit(
         SystemAPIBillingRule.billing_cost_input,
         SystemAPIBillingRule.billing_cost_output,
     ).filter(
-        SystemAPIBillingRule.system_api_id.in_(normalized_ids)
+        SystemAPIBillingRule.system_api_id.in_(normalized_ids),
+        or_(SystemAPIBillingRule.is_active == True, SystemAPIBillingRule.is_active.is_(None)),
     ).all()
 
     rule_ids: List[int] = []
@@ -2784,11 +2765,7 @@ def _batch_system_api_pricing_from_rules_and_audit(
         if rid > 0:
             rule_ids.append(rid)
             rule_id_to_sid[rid] = sid
-        c = max(
-            _non_negative_int(getattr(row, "billing_cost", 0), 0),
-            _non_negative_int(getattr(row, "billing_cost_input", 0), 0),
-            _non_negative_int(getattr(row, "billing_cost_output", 0), 0),
-        )
+        c = int(round(max(0.0, _safe_non_negative_float(getattr(row, "charge_multiplier", None) or 2.0)) * 100.0))
         if c > 0:
             rule_costs_by_sid[sid].append(int(c))
 
@@ -2804,80 +2781,55 @@ def _batch_system_api_pricing_from_rules_and_audit(
             costs = rule_costs_by_sid.get(sid) or []
             if costs:
                 result[sid]["average_cost"] = int(round(sum(costs) / float(len(costs))))
-                result[sid]["sample_prices"] = sorted(set(int(v) for v in costs if int(v) > 0))[:5]
-            result[sid]["source"] = "rules_only_fast"
+                result[sid]["sample_prices"] = []
+            result[sid]["source"] = "charge_multiplier_x100"
         return result
 
-    action_filter = [TransactionAction.system_api_id.in_(normalized_ids)]
-    if rule_ids:
-        action_filter.append(
-            and_(
-                TransactionAction.system_api_id.is_(None),
-                TransactionAction.matched_rule_id.in_(rule_ids),
-            )
-        )
-
-    action_limit = max(1000, min(10000, len(normalized_ids) * 200))
-    action_rows = db.query(
-        TransactionAction.id,
-        TransactionAction.system_api_id,
-        TransactionAction.matched_rule_id,
-        TransactionAction.actual_cost,
-        TransactionAction.reserved_cost,
-    ).filter(
-        or_(*action_filter)
-    ).order_by(TransactionAction.id.desc()).limit(action_limit).all()
-
-    audit_costs_by_sid: Dict[int, List[int]] = defaultdict(list)
-    for row in action_rows:
-        sid = _safe_int(getattr(row, "system_api_id", 0), 0)
-        if sid <= 0:
-            rid = _safe_int(getattr(row, "matched_rule_id", 0), 0)
-            sid = _safe_int(rule_id_to_sid.get(rid), 0)
-        if sid <= 0 or sid not in id_set:
-            continue
-        c = _safe_int(getattr(row, "actual_cost", 0), 0)
-        if c <= 0:
-            c = _safe_int(getattr(row, "reserved_cost", 0), 0)
-        if c > 0:
-            audit_costs_by_sid[sid].append(int(c))
-
-    missing_ids = [sid for sid in normalized_ids if not audit_costs_by_sid.get(sid)]
-    # TransactionHistory scan is expensive on hot /settings/system reads; keep it bounded.
-    use_tx_fallback = bool(missing_ids) and len(missing_ids) <= 20 and len(normalized_ids) <= 120
-    if use_tx_fallback:
-        tx_limit = max(400, min(1200, len(missing_ids) * 40))
-        tx_rows = db.query(
-            TransactionHistory.id,
-            TransactionHistory.amount,
-            TransactionHistory.details,
-        ).order_by(TransactionHistory.id.desc()).limit(tx_limit).all()
-        for tx in tx_rows or []:
-            amount = _safe_int(getattr(tx, "amount", 0), 0)
-            if amount >= 0:
-                continue
-            details = _safe_json_dict(getattr(tx, "details", {}))
-            bb = details.get("billing_breakdown") if isinstance(details.get("billing_breakdown"), dict) else {}
-            tx_sid = _safe_int(
-                bb.get("system_api_id") if bb.get("system_api_id") is not None else details.get("system_api_id"),
-                0,
-            )
-            if tx_sid <= 0 or tx_sid not in id_set:
-                continue
-            if audit_costs_by_sid.get(tx_sid):
-                continue
-            audit_costs_by_sid[tx_sid].append(abs(int(amount)))
-
     for sid in normalized_ids:
-        costs = audit_costs_by_sid.get(sid) or []
+        costs = rule_costs_by_sid.get(sid) or []
         avg_cost = int(round(sum(costs) / float(len(costs)))) if costs else 0
         result[sid]["average_cost"] = max(0, int(avg_cost))
-        result[sid]["sample_prices"] = sorted(set(int(v) for v in costs if int(v) > 0))[:5] if costs else []
+        result[sid]["sample_prices"] = []
+        result[sid]["source"] = "charge_multiplier_x100"
+
+    return result
+
+
+def _batch_system_api_primary_billing_unit_type(
+    db: Session,
+    system_api_ids: List[int],
+) -> Dict[int, str]:
+    normalized_ids = sorted({_safe_int(sid, 0) for sid in (system_api_ids or []) if _safe_int(sid, 0) > 0})
+    if not normalized_ids:
+        return {}
+
+    rows = db.query(
+        SystemAPIBillingRule.system_api_id,
+        SystemAPIBillingRule.billing_unit_type,
+        SystemAPIBillingRule.priority,
+        SystemAPIBillingRule.id,
+    ).filter(
+        SystemAPIBillingRule.system_api_id.in_(normalized_ids),
+        or_(SystemAPIBillingRule.is_active == True, SystemAPIBillingRule.is_active.is_(None)),
+    ).order_by(
+        SystemAPIBillingRule.system_api_id.asc(),
+        SystemAPIBillingRule.priority.desc(),
+        SystemAPIBillingRule.id.desc(),
+    ).all()
+
+    result: Dict[int, str] = {}
+    for row in rows or []:
+        sid = _safe_int(getattr(row, "system_api_id", 0), 0)
+        if sid <= 0 or sid in result:
+            continue
+        unit = _normalize_billing_unit_type(getattr(row, "billing_unit_type", None))
+        result[sid] = unit
 
     return result
 
 
 _SETTINGS_PRICE_CACHE_KEY = "settings_price_summary"
+_SETTINGS_PROVIDER_PRICE_CACHE_KEY = "settings_provider_price_summary"
 
 
 def _read_settings_price_cache(config_value: Any) -> Dict[str, Any]:
@@ -2894,6 +2846,97 @@ def _read_settings_price_cache(config_value: Any) -> Dict[str, Any]:
             if _safe_int(v, 0) > 0
         ],
     }
+
+
+def _read_settings_provider_price_cache(config_value: Any) -> Dict[str, Any]:
+    cfg = _safe_json_dict(config_value)
+    raw = cfg.get(_SETTINGS_PROVIDER_PRICE_CACHE_KEY) if isinstance(cfg.get(_SETTINGS_PROVIDER_PRICE_CACHE_KEY), dict) else {}
+    return {
+        "average_cost": _safe_int(raw.get("average_cost"), 0),
+        "source": str(raw.get("source") or "") or None,
+        "min_cost": _safe_int(raw.get("min_cost"), 0),
+        "max_cost": _safe_int(raw.get("max_cost"), 0),
+        "sample_prices": [
+            int(v)
+            for v in (raw.get("sample_prices") or [])
+            if _safe_int(v, 0) > 0
+        ],
+        "updated_at": str(raw.get("updated_at") or "").strip() or None,
+    }
+
+
+def _read_settings_price_cache_from_row(row: Any) -> Dict[str, Any]:
+    if row is None:
+        return {
+            "average_cost": 0,
+            "source": None,
+            "min_cost": 0,
+            "max_cost": 0,
+            "sample_prices": [],
+            "updated_at": None,
+        }
+
+    col_avg = _safe_int(getattr(row, "price_avg_cost", None), 0)
+    col_min = _safe_int(getattr(row, "price_min_cost", None), 0)
+    col_max = _safe_int(getattr(row, "price_max_cost", None), 0)
+    col_source = str(getattr(row, "price_source", "") or "").strip() or None
+    col_updated = str(getattr(row, "price_updated_at", "") or "").strip() or None
+    raw_samples = getattr(row, "price_sample_prices", None)
+    col_samples = [
+        int(v)
+        for v in (raw_samples if isinstance(raw_samples, list) else [])
+        if _safe_int(v, 0) > 0
+    ]
+
+    has_col_payload = bool(col_avg or col_min or col_max or col_source or col_samples or col_updated)
+    if has_col_payload:
+        return {
+            "average_cost": col_avg,
+            "source": col_source,
+            "min_cost": col_min,
+            "max_cost": col_max,
+            "sample_prices": col_samples,
+            "updated_at": col_updated,
+        }
+
+    return _read_settings_price_cache(getattr(row, "config", None))
+
+
+def _read_settings_provider_price_cache_from_row(row: Any) -> Dict[str, Any]:
+    if row is None:
+        return {
+            "average_cost": 0,
+            "source": None,
+            "min_cost": 0,
+            "max_cost": 0,
+            "sample_prices": [],
+            "updated_at": None,
+        }
+
+    col_avg = _safe_int(getattr(row, "provider_price_avg_cost", None), 0)
+    col_min = _safe_int(getattr(row, "provider_price_min_cost", None), 0)
+    col_max = _safe_int(getattr(row, "provider_price_max_cost", None), 0)
+    col_source = str(getattr(row, "provider_price_source", "") or "").strip() or None
+    col_updated = str(getattr(row, "provider_price_updated_at", "") or "").strip() or None
+    raw_samples = getattr(row, "provider_price_sample_prices", None)
+    col_samples = [
+        int(v)
+        for v in (raw_samples if isinstance(raw_samples, list) else [])
+        if _safe_int(v, 0) > 0
+    ]
+
+    has_col_payload = bool(col_avg or col_min or col_max or col_source or col_samples or col_updated)
+    if has_col_payload:
+        return {
+            "average_cost": col_avg,
+            "source": col_source,
+            "min_cost": col_min,
+            "max_cost": col_max,
+            "sample_prices": col_samples,
+            "updated_at": col_updated,
+        }
+
+    return _read_settings_provider_price_cache(getattr(row, "config", None))
 
 
 def _extract_webhook_and_price_cache(config_value: Any) -> Tuple[Optional[str], Dict[str, Any]]:
@@ -2932,7 +2975,7 @@ def _refresh_settings_price_cache_for_system_apis(db: Session, system_api_ids: L
     if not ids:
         return 0
 
-    pricing_map = _batch_system_api_pricing_from_rules_and_audit(db, ids, include_audit=False)
+    pricing_map = _batch_system_api_pricing_from_rules_and_audit(db, ids, include_audit=True)
     rows = db.query(SystemAPISetting).filter(SystemAPISetting.id.in_(ids)).all()
     changed = 0
     now_iso = now_bj_iso()
@@ -2941,20 +2984,28 @@ def _refresh_settings_price_cache_for_system_apis(db: Session, system_api_ids: L
         sid = int(getattr(row, "id", 0) or 0)
         next_price = pricing_map.get(sid, {
             "average_cost": 0,
-            "source": "rules_only_fast",
+            "source": "range_from_rules_sample_from_audit",
             "min_cost": 0,
             "max_cost": 0,
             "sample_prices": [],
         })
 
         cfg = _safe_json_dict(getattr(row, "config", {}))
-        current = _read_settings_price_cache(cfg)
-        current_cmp = {
-            "average_cost": int(current.get("average_cost") or 0),
-            "source": str(current.get("source") or "") or None,
-            "min_cost": int(current.get("min_cost") or 0),
-            "max_cost": int(current.get("max_cost") or 0),
-            "sample_prices": [int(v) for v in (current.get("sample_prices") or []) if int(v or 0) > 0],
+        current_cfg = _read_settings_price_cache(cfg)
+        current_cfg_cmp = {
+            "average_cost": int(current_cfg.get("average_cost") or 0),
+            "source": str(current_cfg.get("source") or "") or None,
+            "min_cost": int(current_cfg.get("min_cost") or 0),
+            "max_cost": int(current_cfg.get("max_cost") or 0),
+            "sample_prices": [int(v) for v in (current_cfg.get("sample_prices") or []) if int(v or 0) > 0],
+        }
+        current_col = _read_settings_price_cache_from_row(row)
+        current_col_cmp = {
+            "average_cost": int(current_col.get("average_cost") or 0),
+            "source": str(current_col.get("source") or "") or None,
+            "min_cost": int(current_col.get("min_cost") or 0),
+            "max_cost": int(current_col.get("max_cost") or 0),
+            "sample_prices": [int(v) for v in (current_col.get("sample_prices") or []) if int(v or 0) > 0],
         }
         next_cmp = {
             "average_cost": int(next_price.get("average_cost") or 0),
@@ -2963,15 +3014,162 @@ def _refresh_settings_price_cache_for_system_apis(db: Session, system_api_ids: L
             "max_cost": int(next_price.get("max_cost") or 0),
             "sample_prices": [int(v) for v in (next_price.get("sample_prices") or []) if int(v or 0) > 0],
         }
-        if current_cmp == next_cmp:
+
+        config_needs_update = current_cfg_cmp != next_cmp
+        columns_need_update = current_col_cmp != next_cmp or not str(getattr(row, "price_updated_at", "") or "").strip()
+
+        if not config_needs_update and not columns_need_update:
             continue
 
-        cfg[_SETTINGS_PRICE_CACHE_KEY] = {
-            **next_cmp,
-            "updated_at": now_iso,
-        }
-        row.config = cfg
+        if config_needs_update:
+            cfg[_SETTINGS_PRICE_CACHE_KEY] = {
+                **next_cmp,
+                "updated_at": now_iso,
+            }
+            row.config = cfg
+
+        row.price_avg_cost = int(next_cmp["average_cost"])
+        row.price_source = str(next_cmp["source"] or "") or None
+        row.price_min_cost = int(next_cmp["min_cost"])
+        row.price_max_cost = int(next_cmp["max_cost"])
+        row.price_sample_prices = [int(v) for v in (next_cmp["sample_prices"] or []) if int(v) > 0]
+        row.price_updated_at = now_iso
         changed += 1
+
+    if changed:
+        db.flush()
+    return changed
+
+
+def _refresh_settings_provider_price_cache_for_system_apis(db: Session, system_api_ids: List[int]) -> int:
+    ids = sorted({_safe_int(sid, 0) for sid in (system_api_ids or []) if _safe_int(sid, 0) > 0})
+    if not ids:
+        return 0
+
+    touched_rows = db.query(
+        SystemAPISetting.id,
+        SystemAPISetting.provider,
+        SystemAPISetting.category,
+    ).filter(SystemAPISetting.id.in_(ids)).all()
+
+    touched_keys: set = set()
+    for row in touched_rows:
+        provider_key = str(getattr(row, "provider", "") or "").strip().lower()
+        category_key = str(getattr(row, "category", "") or "").strip().lower()
+        if provider_key and category_key:
+            touched_keys.add((provider_key, category_key))
+
+    if not touched_keys:
+        return 0
+
+    candidate_rows = db.query(SystemAPISetting).filter(
+        ~SystemAPISetting.category.like("System_%"),
+    ).all()
+
+    grouped_rows: Dict[Tuple[str, str], List[SystemAPISetting]] = {}
+    for row in candidate_rows:
+        provider_key = str(getattr(row, "provider", "") or "").strip().lower()
+        category_key = str(getattr(row, "category", "") or "").strip().lower()
+        if not provider_key or not category_key:
+            continue
+        key = (provider_key, category_key)
+        if key not in touched_keys:
+            continue
+        grouped_rows.setdefault(key, []).append(row)
+
+    if not grouped_rows:
+        return 0
+
+    all_group_ids: List[int] = []
+    for rows in grouped_rows.values():
+        for row in rows:
+            sid = _safe_int(getattr(row, "id", None), 0)
+            if sid > 0:
+                all_group_ids.append(sid)
+
+    pricing_map = _batch_system_api_pricing_from_rules_and_audit(db, all_group_ids, include_audit=True)
+    changed = 0
+    now_iso = now_bj_iso()
+
+    for _, rows in grouped_rows.items():
+        active_rows = [
+            row
+            for row in rows
+            if not _is_setting_deprecated(getattr(row, "config", {}), getattr(row, "deprecated", None))
+        ]
+
+        min_candidates: List[int] = []
+        max_candidates: List[int] = []
+        sample_candidates: List[int] = []
+
+        for row in active_rows:
+            sid = _safe_int(getattr(row, "id", None), 0)
+            if sid <= 0:
+                continue
+            p = pricing_map.get(sid) or {}
+            min_cost = _safe_int(p.get("min_cost"), 0)
+            max_cost = _safe_int(p.get("max_cost"), 0)
+            avg_cost = _safe_int(p.get("average_cost"), 0)
+            if min_cost > 0:
+                min_candidates.append(min_cost)
+            if max_cost > 0:
+                max_candidates.append(max_cost)
+            for v in (p.get("sample_prices") or []):
+                iv = _safe_int(v, 0)
+                if iv > 0:
+                    sample_candidates.append(iv)
+
+        sample_prices = sorted(set(sample_candidates))[:5] if sample_candidates else []
+        avg_cost = int(round(sum(sample_candidates) / float(len(sample_candidates)))) if sample_candidates else 0
+        min_cost = int(min(min_candidates)) if min_candidates else 0
+        max_cost = int(max(max_candidates)) if max_candidates else 0
+
+        next_cmp = {
+            "average_cost": max(0, int(avg_cost)),
+            "source": "provider_range_from_rules_sample_from_audit",
+            "min_cost": max(0, int(min_cost)),
+            "max_cost": max(0, int(max_cost)),
+            "sample_prices": [int(v) for v in sample_prices if int(v) > 0],
+        }
+
+        for row in rows:
+            cfg = _safe_json_dict(getattr(row, "config", {}))
+            current_cfg = _read_settings_provider_price_cache(cfg)
+            current_cfg_cmp = {
+                "average_cost": int(current_cfg.get("average_cost") or 0),
+                "source": str(current_cfg.get("source") or "") or None,
+                "min_cost": int(current_cfg.get("min_cost") or 0),
+                "max_cost": int(current_cfg.get("max_cost") or 0),
+                "sample_prices": [int(v) for v in (current_cfg.get("sample_prices") or []) if int(v or 0) > 0],
+            }
+            current_col = _read_settings_provider_price_cache_from_row(row)
+            current_col_cmp = {
+                "average_cost": int(current_col.get("average_cost") or 0),
+                "source": str(current_col.get("source") or "") or None,
+                "min_cost": int(current_col.get("min_cost") or 0),
+                "max_cost": int(current_col.get("max_cost") or 0),
+                "sample_prices": [int(v) for v in (current_col.get("sample_prices") or []) if int(v or 0) > 0],
+            }
+
+            config_needs_update = current_cfg_cmp != next_cmp
+            columns_need_update = current_col_cmp != next_cmp or not str(getattr(row, "provider_price_updated_at", "") or "").strip()
+            if not config_needs_update and not columns_need_update:
+                continue
+
+            if config_needs_update:
+                cfg[_SETTINGS_PROVIDER_PRICE_CACHE_KEY] = {
+                    **next_cmp,
+                    "updated_at": now_iso,
+                }
+                row.config = cfg
+
+            row.provider_price_avg_cost = int(next_cmp["average_cost"])
+            row.provider_price_source = str(next_cmp["source"] or "") or None
+            row.provider_price_min_cost = int(next_cmp["min_cost"])
+            row.provider_price_max_cost = int(next_cmp["max_cost"])
+            row.provider_price_sample_prices = [int(v) for v in (next_cmp["sample_prices"] or []) if int(v) > 0]
+            row.provider_price_updated_at = now_iso
+            changed += 1
 
     if changed:
         db.flush()
@@ -3525,12 +3723,15 @@ def get_settings(
         rows = db.query(APISetting).filter(APISetting.user_id == current_user.id).all()
         result: List[APISettingOut] = []
         for row in rows:
+            normalized_strategy = _normalize_user_api_strategy(getattr(row, "api_strategy", None))
             result.append(APISettingOut(
                 id=row.id,
                 user_id=row.user_id,
                 category=row.category,
                 system_api_id=_safe_int(getattr(row, "system_api_id", None), None),
+                api_strategy=normalized_strategy,
                 mode=_normalize_user_mode(getattr(row, "mode", None)),
+                config={"api_strategy": normalized_strategy},
             ))
         return result
     except Exception as exc:
@@ -3629,6 +3830,8 @@ def update_setting(
         db_setting.category = category
         if hasattr(setting_in, "mode") and setting_in.mode is not None:
             db_setting.mode = _normalize_user_mode(setting_in.mode)
+        if hasattr(setting_in, "api_strategy") and setting_in.api_strategy is not None:
+            db_setting.api_strategy = _normalize_user_api_strategy(setting_in.api_strategy)
         if hasattr(setting_in, "system_api_id"):
             db_setting.system_api_id = _safe_int(setting_in.system_api_id, None)
 
@@ -3640,6 +3843,7 @@ def update_setting(
         ).order_by(APISetting.id.desc()).first()
         if conflict_row:
             conflict_row.system_api_id = db_setting.system_api_id
+            conflict_row.api_strategy = _normalize_user_api_strategy(getattr(db_setting, "api_strategy", None))
             conflict_row.mode = _normalize_user_mode(db_setting.mode)
             db.delete(db_setting)
             db_setting = conflict_row
@@ -3653,6 +3857,7 @@ def update_setting(
 
         if existing_by_category:
             existing_by_category.system_api_id = _safe_int(getattr(setting_in, "system_api_id", None), None) if setting_in.system_api_id is not None else existing_by_category.system_api_id
+            existing_by_category.api_strategy = _normalize_user_api_strategy(getattr(setting_in, "api_strategy", None), _normalize_user_api_strategy(getattr(existing_by_category, "api_strategy", None))) if setting_in.api_strategy is not None else _normalize_user_api_strategy(getattr(existing_by_category, "api_strategy", None))
             existing_by_category.mode = _normalize_user_mode(getattr(setting_in, "mode", None)) if setting_in.mode is not None else _normalize_user_mode(existing_by_category.mode)
             db_setting = existing_by_category
         else:
@@ -3660,6 +3865,7 @@ def update_setting(
                 user_id=current_user.id,
                 category=category,
                 system_api_id=_safe_int(getattr(setting_in, "system_api_id", None), None),
+                api_strategy=_normalize_user_api_strategy(getattr(setting_in, "api_strategy", None)),
                 mode=_normalize_user_mode(getattr(setting_in, "mode", None)),
             )
             db.add(new_setting)
@@ -3693,22 +3899,57 @@ def get_system_settings(
         _ensure_settings_system_indexes(db)
         t0 = time.perf_counter()
         t_prev = t0
-        system_settings = db.query(
-            SystemAPISetting.id,
-            SystemAPISetting.name,
-            SystemAPISetting.provider,
-            SystemAPISetting.category,
-            SystemAPISetting.model,
-            SystemAPISetting.base_url,
-            SystemAPISetting.api_key,
-            SystemAPISetting.deprecated.label("deprecated_flag"),
-            SystemAPISetting.tags,
-            SystemAPISetting.config,
-        ).filter(
-            ~SystemAPISetting.category.like("System_%"),
-            or_(SystemAPISetting.deprecated.is_(False), SystemAPISetting.deprecated.is_(None)),
-        ).all()
+        visible_categories = ("LLM", "Image", "Video", "Vision")
+        def _query_system_settings_rows():
+            return db.query(
+                SystemAPISetting.id,
+                SystemAPISetting.name,
+                SystemAPISetting.provider,
+                SystemAPISetting.category,
+                SystemAPISetting.model,
+                SystemAPISetting.base_url,
+                SystemAPISetting.api_key,
+                SystemAPISetting.deprecated.label("deprecated_flag"),
+                SystemAPISetting.tags,
+                SystemAPISetting.config,
+                SystemAPISetting.price_avg_cost,
+                SystemAPISetting.price_source,
+                SystemAPISetting.price_min_cost,
+                SystemAPISetting.price_max_cost,
+                SystemAPISetting.price_sample_prices,
+                SystemAPISetting.price_updated_at,
+                SystemAPISetting.provider_price_avg_cost,
+                SystemAPISetting.provider_price_source,
+                SystemAPISetting.provider_price_min_cost,
+                SystemAPISetting.provider_price_max_cost,
+                SystemAPISetting.provider_price_sample_prices,
+                SystemAPISetting.provider_price_updated_at,
+            ).filter(
+                ~SystemAPISetting.category.like("System_%"),
+                SystemAPISetting.category.in_(visible_categories),
+                or_(SystemAPISetting.deprecated.is_(False), SystemAPISetting.deprecated.is_(None)),
+            ).all()
+
+        system_settings = _query_system_settings_rows()
+
+        preload_ids = [int(getattr(item, "id", 0) or 0) for item in system_settings if int(getattr(item, "id", 0) or 0) > 0]
+        needs_precompute = any(
+            not str(getattr(item, "price_updated_at", "") or "").strip()
+            or not str(getattr(item, "provider_price_updated_at", "") or "").strip()
+            for item in system_settings
+        )
+        if preload_ids and needs_precompute:
+            changed_model = _refresh_settings_price_cache_for_system_apis(db, preload_ids)
+            changed_provider = _refresh_settings_provider_price_cache_for_system_apis(db, preload_ids)
+            if changed_model or changed_provider:
+                db.commit()
+                system_settings = _query_system_settings_rows()
         t_query_system_settings_ms = int((time.perf_counter() - t_prev) * 1000)
+        t_prev = time.perf_counter()
+
+        system_api_ids_for_units = [int(getattr(item, "id", 0) or 0) for item in system_settings if int(getattr(item, "id", 0) or 0) > 0]
+        billing_unit_type_by_system_api_id = _batch_system_api_primary_billing_unit_type(db, system_api_ids_for_units)
+        t_query_billing_unit_ms = int((time.perf_counter() - t_prev) * 1000)
         t_prev = time.perf_counter()
 
         user_active_by_category: Dict[str, Dict] = {}
@@ -3741,14 +3982,25 @@ def get_system_settings(
         for item in system_settings:
             provider = item.provider or "unknown"
             category = item.category or "LLM"
-            webhook_url, avg_pricing = _extract_webhook_and_price_cache(getattr(item, "config", None))
+            webhook_url, _avg_pricing_from_cfg = _extract_webhook_and_price_cache(getattr(item, "config", None))
+            avg_pricing = _read_settings_price_cache_from_row(item)
             key = (provider, category)
             if key not in grouped:
+                provider_pricing = _read_settings_provider_price_cache_from_row(item)
                 grouped[key] = {
                     "provider": provider,
                     "provider_alias": provider_alias_map.get(str(provider or "").strip().lower()),
                     "category": category,
                     "shared_key_configured": False,
+                    "provider_avg_price_estimate": int(provider_pricing.get("average_cost") or 0),
+                    "provider_price_source": str(provider_pricing.get("source") or "") or None,
+                    "provider_price_range_min": int(provider_pricing.get("min_cost") or 0),
+                    "provider_price_range_max": int(provider_pricing.get("max_cost") or 0),
+                    "provider_sample_prices": [
+                        int(v)
+                        for v in (provider_pricing.get("sample_prices") or [])
+                        if int(v or 0) > 0
+                    ],
                     "models_map": {},
                 }
 
@@ -3790,6 +4042,7 @@ def get_system_settings(
                 for v in (avg_pricing.get("sample_prices") or [])
                 if int(v or 0) > 0
             ]
+            option.billing_unit_type = billing_unit_type_by_system_api_id.get(int(item.id or 0))
 
             if option.deprecated:
                 continue
@@ -3812,10 +4065,11 @@ def get_system_settings(
         t_result_build_ms = int((time.perf_counter() - t_prev) * 1000)
         total_ms = int((time.perf_counter() - t0) * 1000)
         logger.info(
-            "settings.system.timing user_id=%s total_ms=%s query_system_ms=%s query_user_active_ms=%s query_provider_pool_ms=%s group_build_ms=%s result_build_ms=%s system_rows=%s user_rows=%s provider_rows=%s provider_groups=%s result_groups=%s",
+            "settings.system.timing user_id=%s total_ms=%s query_system_ms=%s query_billing_unit_ms=%s query_user_active_ms=%s query_provider_pool_ms=%s group_build_ms=%s result_build_ms=%s system_rows=%s user_rows=%s provider_rows=%s provider_groups=%s result_groups=%s",
             getattr(current_user, "id", None),
             total_ms,
             t_query_system_settings_ms,
+            t_query_billing_unit_ms,
             t_query_user_active_ms,
             t_query_provider_pool_ms,
             t_group_build_ms,
@@ -3827,10 +4081,11 @@ def get_system_settings(
             len(result),
         )
         api_logger.info(
-            "settings.system.timing user_id=%s total_ms=%s query_system_ms=%s query_user_active_ms=%s query_provider_pool_ms=%s group_build_ms=%s result_build_ms=%s system_rows=%s user_rows=%s provider_rows=%s provider_groups=%s result_groups=%s",
+            "settings.system.timing user_id=%s total_ms=%s query_system_ms=%s query_billing_unit_ms=%s query_user_active_ms=%s query_provider_pool_ms=%s group_build_ms=%s result_build_ms=%s system_rows=%s user_rows=%s provider_rows=%s provider_groups=%s result_groups=%s",
             getattr(current_user, "id", None),
             total_ms,
             t_query_system_settings_ms,
+            t_query_billing_unit_ms,
             t_query_user_active_ms,
             t_query_provider_pool_ms,
             t_group_build_ms,
@@ -3917,6 +4172,7 @@ def select_system_setting(
 
     if user_setting:
         user_setting.system_api_id = int(system_setting.id)
+        user_setting.api_strategy = _normalize_user_api_strategy(getattr(selection, "api_strategy", None), _normalize_user_api_strategy(getattr(user_setting, "api_strategy", None)))
         user_setting.mode = selection_mode
         selected = user_setting
     else:
@@ -3924,6 +4180,7 @@ def select_system_setting(
             user_id=current_user.id,
             category=system_setting.category,
             system_api_id=int(system_setting.id),
+            api_strategy=_normalize_user_api_strategy(getattr(selection, "api_strategy", None)),
             mode=selection_mode,
         )
         db.add(selected)
@@ -4047,8 +4304,9 @@ def list_system_api_billing_rules_batch(
 
     touched_ids = sorted(set(ids)) if ids else sorted({int(getattr(row, "system_api_id", 0) or 0) for row in rows if int(getattr(row, "system_api_id", 0) or 0) > 0})
     if touched_ids:
-        changed = _refresh_settings_price_cache_for_system_apis(db, touched_ids)
-        if changed:
+        changed_model = _refresh_settings_price_cache_for_system_apis(db, touched_ids)
+        changed_provider = _refresh_settings_provider_price_cache_for_system_apis(db, touched_ids)
+        if changed_model or changed_provider:
             db.commit()
 
     grouped: Dict[str, List[SystemAPIBillingRuleOut]] = {}
@@ -4061,6 +4319,61 @@ def list_system_api_billing_rules_batch(
             grouped.setdefault(str(sid), [])
 
     return grouped
+
+
+@router.post("/settings/system/manage/price-cache/recompute")
+def recompute_system_api_price_cache_manage(
+    system_api_ids: Optional[str] = Query(default=None, description="Comma-separated system_api_ids"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+
+    ids: List[int] = []
+    if system_api_ids:
+        for token in str(system_api_ids).split(","):
+            text_token = str(token or "").strip()
+            if not text_token:
+                continue
+            try:
+                parsed = int(text_token)
+            except Exception:
+                continue
+            if parsed > 0:
+                ids.append(parsed)
+
+    target_ids = sorted(set(ids))
+    if not target_ids:
+        target_ids = [
+            int(row_id)
+            for row_id, in db.query(SystemAPISetting.id).filter(
+                ~SystemAPISetting.category.like("System_%"),
+            ).all()
+            if int(row_id or 0) > 0
+        ]
+
+    if not target_ids:
+        return {
+            "ok": True,
+            "target_count": 0,
+            "changed_model": 0,
+            "changed_provider": 0,
+            "changed_total": 0,
+        }
+
+    changed_model = _refresh_settings_price_cache_for_system_apis(db, target_ids)
+    changed_provider = _refresh_settings_provider_price_cache_for_system_apis(db, target_ids)
+    if changed_model or changed_provider:
+        db.commit()
+
+    return {
+        "ok": True,
+        "target_count": len(target_ids),
+        "changed_model": int(changed_model or 0),
+        "changed_provider": int(changed_provider or 0),
+        "changed_total": int(changed_model or 0) + int(changed_provider or 0),
+    }
 
 
 @router.get("/settings/system/manage/kie-standard-values", response_model=List[KIEDataStandardValueOut])
@@ -5154,6 +5467,7 @@ def create_system_api_billing_rule(
     db.flush()
     _refresh_has_granular_billing_rules_flag(db, system_api_id)
     _refresh_settings_price_cache_for_system_apis(db, [system_api_id])
+    _refresh_settings_provider_price_cache_for_system_apis(db, [system_api_id])
     db.commit()
     db.refresh(rule)
     return _rule_to_out(rule)
@@ -5174,13 +5488,18 @@ def update_system_api_billing_rule(
         raise HTTPException(status_code=404, detail="Billing rule not found")
 
     update_data = payload.model_dump(exclude_unset=True) if hasattr(payload, "model_dump") else payload.dict(exclude_unset=True)
+    if "is_active" in update_data:
+        # Preserve explicit disable requests (false) and avoid accidental truthy coercion.
+        update_data["is_active"] = bool(update_data.get("is_active"))
     if "charge_multiplier" in update_data:
         update_data["charge_multiplier"] = _normalize_rule_charge_multiplier(update_data.get("charge_multiplier"), default=2.0)
     for key, value in update_data.items():
         setattr(rule, key, value)
     rule.updated_at = now_bj_iso()
+    db.flush()
     _refresh_has_granular_billing_rules_flag(db, int(rule.system_api_id))
     _refresh_settings_price_cache_for_system_apis(db, [int(rule.system_api_id)])
+    _refresh_settings_provider_price_cache_for_system_apis(db, [int(rule.system_api_id)])
     db.commit()
     db.refresh(rule)
     return _rule_to_out(rule)
@@ -5204,6 +5523,7 @@ def delete_system_api_billing_rule(
     db.flush()
     _refresh_has_granular_billing_rules_flag(db, system_api_id)
     _refresh_settings_price_cache_for_system_apis(db, [system_api_id])
+    _refresh_settings_provider_price_cache_for_system_apis(db, [system_api_id])
     db.commit()
     return {"ok": True, "deleted_id": rule_id}
 
@@ -5245,6 +5565,7 @@ def batch_delete_system_api_billing_rules(
     for system_api_id in touched_system_api_ids:
         _refresh_has_granular_billing_rules_flag(db, system_api_id)
     _refresh_settings_price_cache_for_system_apis(db, list(touched_system_api_ids))
+    _refresh_settings_provider_price_cache_for_system_apis(db, list(touched_system_api_ids))
     db.commit()
 
     return {
@@ -5413,6 +5734,7 @@ def reset_system_api_billing_rule_charge_multipliers(
     touched_system_api_ids = sorted({int(getattr(item.get("row"), "system_api_id", 0) or 0) for item in planned_rows if item.get("row") is not None})
     if touched_system_api_ids:
         _refresh_settings_price_cache_for_system_apis(db, touched_system_api_ids)
+        _refresh_settings_provider_price_cache_for_system_apis(db, touched_system_api_ids)
     db.commit()
 
     return SystemAPIBillingRuleMultiplierResetResponse(
@@ -7508,8 +7830,44 @@ def _is_system_api_settings_missing_column_error(exc: Exception) -> bool:
 
 
 def _patch_system_api_settings_missing_columns_via_conn(db: Session) -> int:
-    # Wide fields are intentionally removed from system_api_settings.
-    return 0
+    engine = db.get_bind()
+    inspector = inspect(engine)
+    if not inspector.has_table("system_api_settings"):
+        return 0
+
+    existing_cols = {c.get("name") for c in inspector.get_columns("system_api_settings")}
+    dialect = str(getattr(engine, "dialect", None).name if getattr(engine, "dialect", None) else "").lower()
+    is_postgres = "postgres" in dialect
+
+    columns_to_ensure = [
+        ("price_avg_cost", "INTEGER"),
+        ("price_source", "VARCHAR"),
+        ("price_min_cost", "INTEGER"),
+        ("price_max_cost", "INTEGER"),
+        ("price_sample_prices", "JSON"),
+        ("price_updated_at", "VARCHAR"),
+        ("provider_price_avg_cost", "INTEGER"),
+        ("provider_price_source", "VARCHAR"),
+        ("provider_price_min_cost", "INTEGER"),
+        ("provider_price_max_cost", "INTEGER"),
+        ("provider_price_sample_prices", "JSON"),
+        ("provider_price_updated_at", "VARCHAR"),
+    ]
+
+    added = 0
+    with engine.begin() as conn:
+        for col_name, col_type in columns_to_ensure:
+            if col_name in existing_cols:
+                continue
+            if is_postgres:
+                conn.execute(text(f"ALTER TABLE system_api_settings ADD COLUMN IF NOT EXISTS {col_name} {col_type}"))
+                added += 1
+                continue
+
+            conn.execute(text(f"ALTER TABLE system_api_settings ADD COLUMN {col_name} {col_type}"))
+            added += 1
+
+    return added
 
 
 def _try_patch_system_api_settings_missing_columns(db: Session) -> bool:

@@ -4,6 +4,7 @@ from typing import Optional, Dict, Any, List
 class APISettingBase(BaseModel):
     category: Optional[str] = "LLM"
     system_api_id: Optional[int] = None
+    api_strategy: Optional[str] = "smart_default"
     mode: Optional[str] = None
 
 class APISettingCreate(APISettingBase):
@@ -13,11 +14,13 @@ class APISettingUpdate(BaseModel):
     id: Optional[int] = None
     category: Optional[str] = None
     system_api_id: Optional[int] = None
+    api_strategy: Optional[str] = None
     mode: Optional[str] = None
 
 class APISettingOut(APISettingBase):
     id: int
     user_id: int # In a real app we might not expose this, but fine here
+    config: Optional[Dict[str, Any]] = None
     
     class Config:
         from_attributes = True
@@ -72,6 +75,7 @@ class SystemAPIModelOption(BaseModel):
     price_range_min: Optional[int] = None
     price_range_max: Optional[int] = None
     sample_prices: Optional[List[int]] = None
+    billing_unit_type: Optional[str] = None
 
 
 class SystemAPIProviderSettings(BaseModel):
@@ -79,11 +83,17 @@ class SystemAPIProviderSettings(BaseModel):
     provider_alias: Optional[str] = None
     category: str
     shared_key_configured: bool = False
+    provider_avg_price_estimate: Optional[int] = None
+    provider_price_source: Optional[str] = None
+    provider_price_range_min: Optional[int] = None
+    provider_price_range_max: Optional[int] = None
+    provider_sample_prices: Optional[List[int]] = None
     models: List[SystemAPIModelOption] = []
 
 
 class SystemAPISelectionRequest(BaseModel):
     setting_id: int
+    api_strategy: Optional[str] = None
     mode: Optional[str] = None
 
 
