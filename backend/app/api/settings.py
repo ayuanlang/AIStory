@@ -6985,6 +6985,32 @@ def _db_has_table(db: Session, table_name: str) -> bool:
         return False
 
 
+def _is_system_api_settings_missing_column_error(exc: Exception) -> bool:
+    err_text = str(exc or "").lower()
+    err_type = type(exc).__name__.lower()
+    if "system_api_settings" not in err_text:
+        return False
+    if "undefinedcolumn" in err_type or "undefinedcolumn" in err_text:
+        return True
+    if "no such column" in err_text:
+        return True
+    if "column" in err_text and "does not exist" in err_text:
+        return True
+    return False
+
+
+def _try_patch_system_api_settings_missing_columns() -> bool:
+    try:
+        # Keep patch implementation in one place and reuse deployment script.
+        from migrate_system_api_settings_missing_columns import migrate as migrate_missing_columns
+
+        migrate_missing_columns()
+        return True
+    except Exception as patch_exc:
+        logger.warning("Auto patch for system_api_settings missing columns failed: %s", patch_exc)
+        return False
+
+
 def _safe_clear_transaction_action_rule_links(db: Session, *, clear_system_api_ids: Optional[List[int]] = None, clear_rule_ids: Optional[List[int]] = None) -> None:
     # Older deployments may not have the transaction_action table or newer columns.
     if not _db_has_table(db, "transaction_action"):
@@ -7377,7 +7403,22 @@ def import_system_config_sync_bundle_for_manage(
                 provider_import_items = provider_req.providers or []
             except Exception as parse_exc:
                 logger.warning("Provider bundle parse warning, fallback to permissive import: %s", parse_exc)
-            provider_result = _import_provider_bundle_no_commit(db, provider_import_items, replace_all)
+            provider_result = None
+            try:
+                provider_result = _import_provider_bundle_no_commit(db, provider_import_items, replace_all)
+            except Exception as provider_exc:
+                if _is_system_api_settings_missing_column_error(provider_exc):
+                    logger.warning(
+                        "Provider import hit missing column on system_api_settings, attempting auto patch then retry: %s",
+                        provider_exc,
+                    )
+                    patched = _try_patch_system_api_settings_missing_columns()
+                    if patched:
+                        provider_result = _import_provider_bundle_no_commit(db, provider_import_items, replace_all)
+                    else:
+                        raise
+                else:
+                    raise
 
             if replace_all:
                 if _db_has_table(db, "transaction_action"):
