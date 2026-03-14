@@ -2163,6 +2163,7 @@ class MediaGenerationService:
                 if user_setting:
                     selected_system_setting_id = int(getattr(user_setting, "system_api_id", 0) or 0)
                     if selected_system_setting_id > 0:
+                        selected_binding_deprecated = False
                         selected_by_id = session.query(SystemAPISetting).filter(
                             SystemAPISetting.id == selected_system_setting_id,
                             SystemAPISetting.category == resolved_category,
@@ -2170,19 +2171,14 @@ class MediaGenerationService:
                         if selected_by_id:
                             if self._is_deprecated_system_config(selected_by_id.config, getattr(selected_by_id, "deprecated", None)):
                                 logger.warning(
-                                    "Blocked deprecated system api setting in media service | user_id=%s category=%s system_api_id=%s",
+                                    "Blocked deprecated system api setting in media service and continue fallback | user_id=%s category=%s system_api_id=%s",
                                     user_id,
                                     resolved_category,
                                     selected_system_setting_id,
                                 )
-                                return {
-                                    "provider": selected_by_id.provider,
-                                    "model": selected_by_id.model,
-                                    "__blocked": True,
-                                    "__blocked_reason": "该 System API 配置已弃用，禁止发起 API 调用。",
-                                }
+                                selected_binding_deprecated = True
                             selected_provider = self._normalize_provider_name(selected_by_id.provider, resolved_category)
-                            if self._is_supported_provider(resolved_category, selected_provider):
+                            if (not selected_binding_deprecated) and self._is_supported_provider(resolved_category, selected_provider):
                                 resolved_source = f"system_by_user_setting_id:{selected_system_setting_id}"
                                 _trace_default_vs_selected("direct_system_api_id", selected_by_id, resolved_source, "explicit_user_category_binding")
                                 return _build_runtime_from_system_row(
@@ -2190,13 +2186,14 @@ class MediaGenerationService:
                                     resolved_source,
                                     self.USER_API_STRATEGY_FIXED,
                                 )
-                        logger.warning(
-                            "Invalid user system_api_id binding in media service | user_id=%s category=%s user_setting_id=%s system_api_id=%s",
-                            user_id,
-                            resolved_category,
-                            getattr(user_setting, "id", None),
-                            selected_system_setting_id,
-                        )
+                        if not selected_binding_deprecated:
+                            logger.warning(
+                                "Invalid user system_api_id binding in media service | user_id=%s category=%s user_setting_id=%s system_api_id=%s",
+                                user_id,
+                                resolved_category,
+                                getattr(user_setting, "id", None),
+                                selected_system_setting_id,
+                            )
 
                 # Fallback 1: category task default system setting.
                 default_row = task_default_row
