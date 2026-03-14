@@ -247,17 +247,22 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - 单实体 `generation_prompt_en` 建议 1–4 句。
 
 ### 1) Environment Prompt Template
-- 模板已合并到本文件（Merged In-File, Authoritative）。
-- 以本文件中的 Environment/Character/Prop 模板段为唯一执行基线，不再依赖 `templates.py` 运行时注入。
+- 硬约束优先级（Mandatory）：本小节约束高于 Environment 示例中的历史写法；若冲突，以本小节最新硬约束为准。
+- 去叙事化硬规则（Mandatory）：Environment 的 `generation_prompt_cn/generation_prompt_en` 仅允许描述“抽象空间结构、几何关系、光照层次、材质质感、构图层级”，不得涉及角色、剧情事件、动作因果、对话语义。
+- 禁止角色信息（Hard Rule）：严禁出现任何角色名、角色代号、`CHAR:[@...]`、人称指代（如“他/她/他们”）及人物身份词（如警察、记者、保安、母亲等）。
+- 禁止剧情信息（Hard Rule）：严禁出现剧情推进语句（如“因为…所以…”、“进入/离开/追逐/躲藏/对峙”等事件描述）与时间线动作指令。
+- 抽象元素约束（Mandatory）：提示词中的“物体/主体”只能使用无具象非生命物体表达。
+- 禁止命名污染（Hard Rule）：严禁出现任何专有名词或人物姓名；环境名仅可出现在 `ENV:[...]` 引用位，不得扩展为剧情化命名。
 - 具体示例（仅示范写法，不可照抄值）：
-  - `generation_prompt_en` 示例：`Cinematic realistic drama style. Use ENV:[HarborOffice_Front_Mid_Night] as visual base; keep architecture and material anchors unchanged. Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint at corridor threshold, facing inward to the main desk area; Axis Side: left -> right; Background Set Change: Visible Set = [glass partition, desk lamp, wall clock], Excluded Set = [rear storage shelves as dominant backdrop]; Lighting Direction Change: key light from practical desk lamp at front-right, soft fill from corridor spill; Framing Change: medium-wide, primary subject is desk zone, secondary subject is window reflection line; Dynamic Parts State: PROP:[Door](Half-Open -> Open, reason: CHAR:[@Guard] pushes inward before entering)}. FG: door frame edge and entry mat. MG: desk cluster and task lamp as composition anchor. BG: city lights through rain-streaked glass. No humans in frame.`
-  - `generation_prompt_cn` 示例：`电影级写实剧情风格。以 ENV:[HarborOffice_Front_Mid_Night] 为视觉基底，保持建筑结构与材质锚点不变。环境增量：机位在走廊门槛处朝内看向主办公区；轴线由左侧切到右侧；可见背景包含玻璃隔断、台灯、挂钟，排除储物架成为主背景；主光来自前右侧台灯并辅以走廊溢出补光；构图为中广景，主主体为桌面工作区，次主体为窗面反射线；动态部件为 PROP:[Door] 从半开到全开（CHAR:[@Guard] 推门进入）。前景为门框与地垫，中景为桌组与台灯，后景为雨夜城市光斑。画面中不得出现人物。`
+  - `generation_prompt_en` 示例：`Cinematic abstract spatial study. Use ENV:[BaseEnv] as visual base; preserve structural proportions and material response. Environment Delta = {Viewpoint Anchor/Viewing Direction: anchor at lower-left frame origin facing central depth axis; Axis Side: left -> right; Background Set Change: Visible Set = [vertical plane cluster, tonal gradient band, reflective material block], Excluded Set = [high-frequency clutter textures]; Lighting Direction Change: key light from front-right with low-intensity cool fill; Framing Change: medium-wide, primary subject is the central plane convergence, secondary subject is the reflective gradient strip; Dynamic Parts State: None}. FG: dark matte edge band. MG: layered neutral geometry blocks. BG: soft atmospheric luminance field. No humans, no names, no narrative.`
+  - `generation_prompt_cn` 示例：`电影级抽象空间表达。以 ENV:[BaseEnv] 为视觉基底，保持结构比例与材质响应一致。环境增量：机位锚点位于画面左下起点并朝向中心纵深轴；轴线由左侧切到右侧；可见集合为垂直平面簇、明度渐变带、反射材质块；排除集合为高频杂乱纹理；光照方向为前右侧主光并辅以低强度冷色补光；构图为中广景，主主体为中心平面汇聚区，次主体为反射渐变条带；动态部件状态为 None。前景为深色哑光边带，中景为分层中性几何体块，后景为柔和氛围亮度场。禁止人物、姓名与剧情信息。`
 - 变体写作必须 Delta-only；可追溯 Base；Delta 顺序必须合法。
 - 缩写映射：`CPD/AS/BG/LD/FR/DP`。
 - `generation_prompt_en` 必须写清 FG/MG/BG 三层构图，并明确 `Primary Subject`（画面主体）与 `Secondary Subject`（支撑主体）。
 - 未给定风格时默认注入高审美回退语义。
 - 必须显式说明空间可达与调度可行性。
 - 风格映射必须动态，真人剧避免“游戏感”。
+- 环境提示词输出自检（Mandatory）：提交前必须逐条校验 `No character names`、`No role labels`、`No story events`、`Only abstract non-living object expression`；任一不满足即判无效并重写。
 
 ### 2) Character Prompt Template
 - 模板已合并到本文件（Merged In-File, Authoritative）。
@@ -304,6 +309,18 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - 未给定风格时注入默认道具审美回退语义。
 - 道具风格映射必须跟随剧本风格，真人剧强调真实材质与磨损。
 - 每个关键道具必须给可识别锚点。
+- 道具状态拆分强制（Mandatory）：同一道具只要出现“可识别状态差异”（如完好/破损、开/关、干净/污染、空/满、点亮/熄灭、上锁/解锁、封存/拆封），必须拆分为多个独立 `props` 条目并分别生成独立提示词，禁止在单一道具条目内混写多状态。
+- 道具状态依赖链强制（Mandatory）：状态拆分后的道具必须写明 `visual_dependencies` 与 `dependency_strategy`，形成可追溯状态演化链：
+  - 基准道具：`dependency_strategy.type=Original`，`visual_dependencies=[]`；
+  - 派生状态道具：`dependency_strategy.type=Type A/Type B`，`visual_dependencies` 指向基准或上一状态道具；
+  - `dependency_strategy.logic` 必须明确“继承不变锚点 + 仅变化状态项（破损程度/开合/液位/点亮状态等）”。
+- 道具状态拆分合规示例（Mandatory）：
+  - 不合规：仅一个 `PROP:[Letter]`，同时描述“未拆封+已拆封+沾血”。
+  - 合规：
+    - `PROP:[Letter_Sealed]` -> `Original`, `visual_dependencies=[]`；
+    - `PROP:[Letter_Open]` -> `Type A`, `visual_dependencies=["PROP:[Letter_Sealed]"]`；
+    - `PROP:[Letter_Open_BloodStained]` -> `Type B`, `visual_dependencies=["PROP:[Letter_Open]"]`；
+    - `dependency_strategy.logic` 写清：继承纸张尺寸、折痕结构、印章位置，仅改变封口状态与污渍状态。
 - 抽取前自检：无法回答“如何持续影响剧情并在后续发挥作用”的物体，不应进入 `props`。
 
 ---
