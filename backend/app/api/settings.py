@@ -1889,12 +1889,19 @@ def _ensure_kie_standard_tables_for_admin(db: Session) -> None:
             )
         """))
 
-    cols = {
-        str(col.get("name") or "").strip().lower()
-        for col in inspect(db.bind).get_columns("kie_system_data_standard_mappings")
-    }
-    if "is_billing_related" not in cols:
-        db.execute(text("ALTER TABLE kie_system_data_standard_mappings ADD COLUMN is_billing_related INTEGER NOT NULL DEFAULT 0"))
+    if dialect_name == "postgresql":
+        db.execute(text("""
+            ALTER TABLE kie_system_data_standard_mappings
+            ADD COLUMN IF NOT EXISTS is_billing_related INTEGER NOT NULL DEFAULT 0
+        """))
+    else:
+        # Reflect on the current transactional connection so newly created tables are visible.
+        cols = {
+            str(col.get("name") or "").strip().lower()
+            for col in inspect(db.connection()).get_columns("kie_system_data_standard_mappings")
+        }
+        if "is_billing_related" not in cols:
+            db.execute(text("ALTER TABLE kie_system_data_standard_mappings ADD COLUMN is_billing_related INTEGER NOT NULL DEFAULT 0"))
 
     db.execute(text("""
         CREATE INDEX IF NOT EXISTS ix_kie_std_values_dim
