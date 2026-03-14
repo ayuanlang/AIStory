@@ -10305,6 +10305,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
     });
     const [isStoppingBatchAiShots, setIsStoppingBatchAiShots] = useState(false);
     const batchAiShotsStatusTimerRef = useRef(null);
+    const batchAiShotsStartupGuardUntilRef = useRef(0);
     const aiShotsResumeInFlightRef = useRef(false);
     const [aiShotsStaging, setAiShotsStaging] = useState({
         loading: false,
@@ -12087,6 +12088,21 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
             const status = await getSceneAiShotsBatchStatus(activeEpisode.id);
             if (!status || typeof status !== 'object') return null;
 
+            const nowMs = Date.now();
+            const isTransientIdle = !Boolean(status.running) && Number(status.total || 0) <= 0;
+            const withinStartupGuard = nowMs < Number(batchAiShotsStartupGuardUntilRef.current || 0);
+            if (isTransientIdle && withinStartupGuard) {
+                return {
+                    ...status,
+                    running: true,
+                    total: Number(batchAiShotsProgress.total || 0),
+                    completed: Number(batchAiShotsProgress.completed || 0),
+                    success: Number(batchAiShotsProgress.success || 0),
+                    failed: Number(batchAiShotsProgress.failed || 0),
+                    message: status.message || batchAiShotsProgress.message || t('批量任务启动中...', 'Batch task is starting...'),
+                };
+            }
+
             setBatchAiShotsProgress(prev => ({
                 ...prev,
                 running: Boolean(status.running),
@@ -12112,7 +12128,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         } catch (e) {
             return null;
         }
-    }, [activeEpisode?.id, onSwitchToShots]);
+    }, [activeEpisode?.id, onSwitchToShots, batchAiShotsProgress.total, batchAiShotsProgress.completed, batchAiShotsProgress.success, batchAiShotsProgress.failed, batchAiShotsProgress.message, t]);
 
     useEffect(() => {
         if (!activeEpisode?.id) return;
@@ -12177,9 +12193,10 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
             const started = await startSceneAiShotsBatch(activeEpisode.id, {
                 scene_ids: targets.map((s) => s.id),
             });
+            batchAiShotsStartupGuardUntilRef.current = Date.now() + 12000;
             setBatchAiShotsProgress((prev) => ({
                 ...prev,
-                running: Boolean(started?.running),
+                running: true,
                 total: Number(started?.total || targets.length),
                 completed: Number(started?.completed || 0),
                 success: Number(started?.success || 0),
@@ -16065,6 +16082,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         currentAssetLabel: '',
     }); // Progress tracking
     const shotBatchStatusTimerRef = useRef(null);
+    const shotBatchStartupGuardUntilRef = useRef(0);
     const activeResumeVideoJobsRef = useRef(new Set());
     const pausedResumeVideoJobsRef = useRef({});
     const pendingImageJobsRef = useRef({});
@@ -19385,6 +19403,16 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             const status = await getShotMediaBatchStatus(activeEpisode.id);
             if (!status || typeof status !== 'object') return null;
 
+            const nowMs = Date.now();
+            const isTransientIdle = !Boolean(status.running) && Number(status.total || 0) <= 0;
+            const withinStartupGuard = nowMs < Number(shotBatchStartupGuardUntilRef.current || 0);
+            if (isTransientIdle && withinStartupGuard) {
+                status.running = true;
+                status.total = Number(batchProgress.total || 0);
+                status.completed = Number(batchProgress.current || 0);
+                status.message = status.message || batchProgress.status || t('批量任务启动中...', 'Batch task is starting...');
+            }
+
             const rawAssetType = String(status.current_asset_type || '').trim().toLowerCase();
             const currentAssetLabel = String(status.current_asset_label || '').trim() || (
                 rawAssetType === 'start_frame'
@@ -19417,7 +19445,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         } catch (e) {
             return null;
         }
-    }, [activeEpisode?.id, refreshShots]);
+    }, [activeEpisode?.id, refreshShots, batchProgress.total, batchProgress.current, batchProgress.status, t]);
 
     useEffect(() => {
         if (!activeEpisode?.id) return;
@@ -19503,6 +19531,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 shot_ids: targetShotIds,
                 overwrite_existing: false,
             });
+            shotBatchStartupGuardUntilRef.current = Date.now() + 12000;
 
             setIsBatchGenerating(true);
             setBatchProgress({

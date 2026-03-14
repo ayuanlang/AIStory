@@ -37,6 +37,13 @@
 - 环境实例需与剧本实体可映射：若剧本提及场景物体且不归入角色/道具，该物体必须作为 Environment 组成实例出现并可被追溯。
 - 环境构图必须显式按前景（FG）/中景（MG）/后景（BG）描述，三层均需给出可见元素与空间关系。
 - 每个环境必须明确当前画面主体（Primary Subject）与次级支撑主体（Secondary Subject），并与景别/机位保持一致。
+- 环境锚点禁人物（Mandatory）：Environment 的 `Primary Subject`/`Secondary Subject` 与 `Viewpoint Anchor` 必须使用固定显目物体或结构锚点（如门框、窗、舞台口、桌组、灯具、柱体、屏幕、墙面标识），禁止使用任何人物/人体部位作为锚点。
+- 环境描述去人物化（Mandatory）：Environment 的 `generation_prompt_cn/generation_prompt_en` 仅描述空间、材质、构图、光照与可变部件状态，禁止夹带人物外观、服装、姿态、表情、身份描述。
+- 环境锚点合规示例（Mandatory）：
+  - 不合规：`Primary Subject: CHAR:[@A] shoulder silhouette`、`Viewpoint Anchor: behind CHAR:[@B] head`。
+  - 合规：`Primary Subject: stage portal + desk lamp cluster`、`Viewpoint Anchor: doorway threshold facing stage portal`。
+  - 不合规：`environment prompt` 中出现 `a woman in red coat`、`man standing in foreground`。
+  - 合规：`environment prompt` 仅写 `door frame / desk / lamp / wall clock / light direction / framing`，并保持 `No humans in frame`。
 - 同地不同观察方向（如门内看外/门外看内、正打/反打背景差异大）必须拆分独立 Environment，并以 `visual_dependencies` 关联。
 - 触发拆分条件（任一满足）：
   1) 轴线反转（跨180°）；
@@ -49,6 +56,11 @@
   - 机位编号显式：在 `{Observer View}` 与 `{Beats}` 中标注 `Cam-01`（A over B）与 `Cam-02`（B over A）；
   - 轴线变化显式：在 `{Axis}` 中标注 `Axis Side`（如 `left -> right`）与是否跨线（`crossed/not crossed`）。
   - 若未满足以上三项，不允许同场 OTS，必须回退为新 Scene + 新 Environment。
+- OTS 锚点硬规则（Mandatory）：`..._OTS_A` 与 `..._OTS_B` 两个环境变体的锚点必须是“同一组可复现固定物”在不同观察方向下的重排（例如门框+舞台口+桌灯），不得以 `CHAR:[@...]`、`shoulder`、`back/head silhouette` 等人物语义作为环境主锚点或次锚点。
+- OTS 双变体合规示例（Mandatory）：
+  - `ENV:[Cafe_OTS_A]`: `Primary Subject=bar counter edge + window neon sign`，`Viewpoint Anchor=aisle end facing counter`。
+  - `ENV:[Cafe_OTS_B]`: `Primary Subject=window neon sign + door frame`，`Viewpoint Anchor=counter side facing entrance`。
+  - 两者共用同一固定物集合，仅方向与层级重排；禁止写成 `over A shoulder / over B shoulder` 作为环境锚点。
 - 同场地可多变体，命名建议：`{场地}_{方向/轴线标签}_{景别}`。
 - Environment Name 模板：`{Venue}_{DirectionTag}_{ShotScale}_{LightingTag可选}`。
   - `Venue` 优先遵循脚本主语言命名（中文脚本优先中文；英文脚本或剧本已给稳定英文名时可用英文）。
@@ -259,6 +271,18 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - 不合规判定：若角色提示词未明确“full body + shoes visible”，或输出画面描述存在脚部/鞋子被遮挡、出框、裁切，判定无效并必须重写。
 - 锚点只读硬规则（Mandatory）：`anchor_description` 与角色身份锚点是不可变更锚点（immutable anchors）；下游仅允许逐字符继承，不得重写、扩写、弱化、替换同义词或做风格化改写。
 - 锚点冲突处理：若“美化/风格化”与锚点冲突，必须以锚点优先；宁可降低风格化程度，也不得改变锚点。
+- 时期/状态/换装拆分强制（Mandatory）：同一人物只要出现“时期差异（年龄段/时间段）”、“状态差异（受伤/污染/湿身/妆发显著变化）”或“明确换装”，必须拆分为独立角色资产并生成独立提示词，禁止复用同一 `characters` 条目硬改字段。
+- 角色变体依赖链强制（Mandatory）：上述拆分出的角色必须写明 `visual_dependencies` 与 `dependency_strategy`，形成可追溯继承链：
+  - 基准角色：`dependency_strategy.type=Original`，`visual_dependencies=[]`；
+  - 派生时期/状态/换装角色：`dependency_strategy.type=Type A/Type B`，`visual_dependencies` 指向基准或上一阶段角色；
+  - `dependency_strategy.logic` 必须明确“继承不变锚点 + 允许变化项（时期/状态/服装）”。
+- 角色分期依赖合规示例（Mandatory）：
+  - 不合规：仅一个 `CHAR:[@Lin]`，同时描述“青年+中年+换装+受伤”。
+  - 合规：
+    - `CHAR:[@Lin_Young]` -> `Original`, `visual_dependencies=[]`；
+    - `CHAR:[@Lin_Adult_Formal]` -> `Type A`, `visual_dependencies=["CHAR:[@Lin_Young]"]`；
+    - `CHAR:[@Lin_Adult_Injured]` -> `Type B`, `visual_dependencies=["CHAR:[@Lin_Adult_Formal]"]`；
+    - `dependency_strategy.logic` 写清：继承脸型/体态/稳定锚点，仅改变年龄态、服装、伤痕状态。
 
 - 风格驱动映射强制：
   - 真人剧：35–85mm、真实皮肤微纹理、自然高光，禁塑料/CGI感。
@@ -382,6 +406,7 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - 使用规范：
   - `Original`：该实体作为源资产，`visual_dependencies` 应为空；
   - `Type A / Type B`：该实体为变体或派生，`visual_dependencies` 必须非空并可追溯到上游资产。
+- 角色阶段化依赖（Mandatory）：`characters` 中若同名角色存在“时期/状态/换装”变体，必须至少形成一条 `Original -> Type A/Type B` 依赖链；禁止多个变体都标记 `Original` 且互无依赖。
 - 依赖关系不得循环引用；同一实体不得同时声明互相冲突的多条继承逻辑。
 
 #### Part 2A — Characters

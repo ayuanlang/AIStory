@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session, load_only
 
 from app.models.all_models import SystemAPISetting, TaskDefaultSystemAPI
@@ -10,9 +10,14 @@ from app.core.time_utils import now_bj_iso
 
 
 def _task_defaults_table_exists(db: Session) -> bool:
+    # Use both inspector and a direct probe query; some legacy deployments can
+    # report stale table metadata around migrations/replaces.
     try:
         bind = db.get_bind()
-        return bool(inspect(bind).has_table("system_task_default_apis"))
+        if not bool(inspect(bind).has_table("system_task_default_apis")):
+            return False
+        db.execute(text("SELECT 1 FROM system_task_default_apis LIMIT 1"))
+        return True
     except Exception:
         return False
 
@@ -84,7 +89,15 @@ def clear_task_defaults_for_system_api_ids(db: Session, system_api_ids: List[int
     ids = [int(x) for x in (system_api_ids or []) if x is not None]
     if not ids:
         return
-    db.query(TaskDefaultSystemAPI).filter(TaskDefaultSystemAPI.system_api_id.in_(ids)).delete(synchronize_session=False)
+    try:
+        db.query(TaskDefaultSystemAPI).filter(TaskDefaultSystemAPI.system_api_id.in_(ids)).delete(synchronize_session=False)
+    except Exception as exc:
+        # Legacy production DB may still be missing this table when startup
+        # bootstrap is disabled; skip cleanup instead of failing sync import.
+        msg = str(exc or "").lower()
+        if "does not exist" in msg and "system_task_default_apis" in msg:
+            return
+        raise
 
 
 def list_task_default_system_setting_ids(db: Session) -> Dict[str, int]:
