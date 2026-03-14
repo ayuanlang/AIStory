@@ -943,6 +943,11 @@ export const deleteAllEntities = async (projectId) => {
     return response.data;
 }
 
+export const cloneEntityWithLLM = async (projectId, entityId, payload = {}) => {
+    const response = await api.post(`/projects/${projectId}/entities/${entityId}/clone_with_llm`, payload || {});
+    return response.data;
+}
+
 
 // Generation
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

@@ -1,6 +1,6 @@
 export const PROJECT_EP_TYPE_OPTIONS = [
     "实拍 / Live Action",
-    "实拍（写实/电影感8K） / Live Action (Realism/Cinematic 8K)",
+    "实拍（真人剧/电影感8K） / Live Action (Live-Action Drama/Cinematic 8K)",
     "二维动画 / 2D Animation",
     "三维动画 / 3D Animation",
     "定格动画 / Stop Motion",
@@ -114,7 +114,9 @@ export const PROJECT_EP_QUALITY_OPTIONS = [
 
 const PROJECT_EP_TYPE_LEGACY_MAP = {
     "Live Action": "实拍 / Live Action",
-    "Live Action (Realism/Cinematic 8K)": "实拍（写实/电影感8K） / Live Action (Realism/Cinematic 8K)",
+    "Live Action (Realism/Cinematic 8K)": "实拍（真人剧/电影感8K） / Live Action (Live-Action Drama/Cinematic 8K)",
+    "实拍（写实/电影感8K） / Live Action (Realism/Cinematic 8K)": "实拍（真人剧/电影感8K） / Live Action (Live-Action Drama/Cinematic 8K)",
+    "Live Action (Live-Action Drama/Cinematic 8K)": "实拍（真人剧/电影感8K） / Live Action (Live-Action Drama/Cinematic 8K)",
     "2D Animation": "二维动画 / 2D Animation",
     "3D Animation": "三维动画 / 3D Animation",
     "Stop Motion": "定格动画 / Stop Motion",

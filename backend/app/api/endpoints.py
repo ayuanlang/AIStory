@@ -10006,6 +10006,294 @@ def create_entity(
         db.refresh(db_entity)
         return db_entity
 
+
+class EntityCloneWithLLMRequest(BaseModel):
+    modification_instruction: str
+    new_name_hint: Optional[str] = None
+
+
+def _extract_first_json_payload(text: str):
+    decoder = json.JSONDecoder()
+    for idx, ch in enumerate(str(text or "")):
+        if ch not in "[{":
+            continue
+        try:
+            obj, _ = decoder.raw_decode(text[idx:])
+            if isinstance(obj, (dict, list)):
+                return obj
+        except Exception:
+            continue
+    return None
+
+
+def _build_unique_entity_name(db: Session, project_id: int, base_name: str, *, field: str = "name") -> str:
+    stable_base = str(base_name or "").strip() or "New Subject"
+    candidate = stable_base
+    idx = 2
+    while True:
+        query = db.query(Entity).filter(Entity.project_id == project_id)
+        if field == "name_en":
+            existing = query.filter(Entity.name_en == candidate).first()
+        else:
+            existing = query.filter(Entity.name == candidate).first()
+        if not existing:
+            return candidate
+        candidate = f"{stable_base}_{idx}"
+        idx += 1
+
+
+def _split_prompt_clauses(text: str) -> List[str]:
+    stable = str(text or "").strip()
+    if not stable:
+        return []
+    parts = re.split(r"[\n\r]+|(?<=[。！？.!?；;])", stable)
+    return [p.strip() for p in parts if str(p or "").strip()]
+
+
+def _extract_prompt_labels(text: str) -> List[str]:
+    stable = str(text or "")
+    labels: List[str] = []
+    for match in re.finditer(r"([A-Za-z][A-Za-z0-9 _/\-]{1,50})\s*:|([\u4e00-\u9fff]{1,24})\s*[：:]", stable):
+        token = (match.group(1) or match.group(2) or "").strip().lower()
+        token = re.sub(r"\s+", " ", token)
+        if token:
+            labels.append(token)
+    return labels
+
+
+def _prompt_structure_profile(text: str) -> Dict[str, Any]:
+    stable = str(text or "")
+    clauses = _split_prompt_clauses(stable)
+    labels = _extract_prompt_labels(stable)
+    return {
+        "clause_count": len(clauses),
+        "labels": labels,
+        "colon_count": stable.count(":") + stable.count("："),
+        "semicolon_count": stable.count(";") + stable.count("；"),
+        "brace_count": stable.count("{") + stable.count("}"),
+        "bracket_count": stable.count("[") + stable.count("]"),
+        "paren_count": stable.count("(") + stable.count(")"),
+    }
+
+
+def _validate_prompt_structure(source_prompt: str, candidate_prompt: str) -> Tuple[bool, str]:
+    src = _prompt_structure_profile(source_prompt)
+    cand = _prompt_structure_profile(candidate_prompt)
+
+    if src["clause_count"] > 0 and cand["clause_count"] != src["clause_count"]:
+        return False, f"clause_count mismatch: source={src['clause_count']} candidate={cand['clause_count']}"
+
+    if src["labels"]:
+        if cand["labels"] != src["labels"]:
+            return False, "label sequence mismatch"
+
+    for key in ("colon_count", "semicolon_count", "brace_count", "bracket_count", "paren_count"):
+        if src[key] != cand[key]:
+            return False, f"{key} mismatch: source={src[key]} candidate={cand[key]}"
+
+    return True, "ok"
+
+
+@router.post("/projects/{project_id}/entities/{entity_id}/clone_with_llm", response_model=EntityOut)
+async def clone_entity_with_llm(
+    project_id: int,
+    entity_id: int,
+    req: EntityCloneWithLLMRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_project_access(db, project_id, current_user)
+
+    source = db.query(Entity).filter(
+        Entity.id == entity_id,
+        Entity.project_id == project_id,
+    ).first()
+    if not source:
+        raise HTTPException(status_code=404, detail="Entity not found")
+
+    instruction = str(req.modification_instruction or "").strip()
+    if not instruction:
+        raise HTTPException(status_code=400, detail="modification_instruction is required")
+
+    cfg = agent_service.get_active_llm_config(current_user.id, category="LLM")
+    if not cfg or not cfg.get("api_key"):
+        raise HTTPException(status_code=400, detail="Active LLM Settings not found. Please configure and activate an LLM provider.")
+
+    llm_config = {
+        "api_key": cfg.get("api_key"),
+        "base_url": cfg.get("base_url"),
+        "model": cfg.get("model"),
+    }
+
+    source_payload = {
+        "name": source.name,
+        "name_en": source.name_en,
+        "type": source.type,
+        "description": source.description,
+        "anchor_description": source.anchor_description,
+        "generation_prompt_cn": source.generation_prompt_cn,
+        "generation_prompt_en": source.generation_prompt_en,
+        "appearance_cn": source.appearance_cn,
+        "clothing": source.clothing,
+        "action_characteristics": source.action_characteristics,
+        "role": source.role,
+        "archetype": source.archetype,
+        "gender": source.gender,
+        "atmosphere": source.atmosphere,
+        "visual_params": source.visual_params,
+        "narrative_description": source.narrative_description,
+        "visual_dependencies": source.visual_dependencies,
+        "dependency_strategy": source.dependency_strategy,
+    }
+
+    source_payload_json = json.dumps(source_payload, ensure_ascii=False)
+    name_hint = str(req.new_name_hint or "").strip()
+
+    system_prompt = (
+        "You are a senior subject prompt editor for film/storyboard assets. "
+        "Given a source subject object and a modification request, generate an updated subject draft. "
+        "Return STRICT JSON only with one top-level object key: \"entity\".\n\n"
+        "Hard constraints:\n"
+        "1) Keep the same subject type as source.\n"
+        "2) generation_prompt_en MUST preserve the original prompt's structure and clause order. "
+        "Use the source prompt as structural template, and only change content needed by the modification request.\n"
+        "3) generation_prompt_cn MUST also follow the same source structure and stay semantically aligned with generation_prompt_en.\n"
+        "4) Do not output explanations, markdown, code fences, or reasoning.\n"
+        "5) Only include these keys inside entity: "
+        "name, name_en, description, anchor_description, generation_prompt_cn, generation_prompt_en, "
+        "appearance_cn, clothing, action_characteristics, role, archetype, gender, atmosphere, visual_params, narrative_description, "
+        "visual_dependencies, dependency_strategy."
+    )
+
+    user_prompt = (
+        f"Source subject JSON:\n{source_payload_json}\n\n"
+        f"User modification request:\n{instruction}\n\n"
+        f"Preferred new name hint (optional): {name_hint or 'None'}\n\n"
+        "Now output strict JSON: {\"entity\": {...}}."
+    )
+
+    async def _request_generated_entity(extra_instruction: str = "") -> Dict[str, Any]:
+        req_user_prompt = user_prompt
+        if extra_instruction:
+            req_user_prompt = f"{user_prompt}\n\nAdditional hard-fix instruction:\n{extra_instruction}\n"
+
+        try:
+            llm_response = await llm_service.chat_completion_with_fallback(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": req_user_prompt},
+                ],
+                llm_config,
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"LLM clone failed: {str(e)}")
+
+        raw_content = str((llm_response or {}).get("content", "") or "")
+        cleaned = re.sub(r"<think>.*?</think>", "", raw_content, flags=re.DOTALL | re.IGNORECASE).strip()
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s*```$", "", cleaned, flags=re.IGNORECASE).strip()
+
+        data = _extract_first_json_payload(cleaned)
+        if data is None:
+            raise HTTPException(status_code=422, detail="LLM returned non-JSON content for entity clone")
+
+        if isinstance(data, list):
+            data = data[0] if data else {}
+        if not isinstance(data, dict):
+            raise HTTPException(status_code=422, detail="LLM clone payload must be a JSON object")
+
+        generated_obj = data.get("entity") if isinstance(data.get("entity"), dict) else data
+        if not isinstance(generated_obj, dict):
+            raise HTTPException(status_code=422, detail="LLM clone payload missing entity object")
+        return generated_obj
+
+    generated = await _request_generated_entity()
+
+    def _pick_text(*values, fallback=""):
+        for value in values:
+            text = str(value or "").strip()
+            if text:
+                return text
+        return str(fallback or "")
+
+    candidate_prompt_en = _pick_text(generated.get("generation_prompt_en"), source.generation_prompt_en)
+    candidate_prompt_cn = _pick_text(generated.get("generation_prompt_cn"), source.generation_prompt_cn)
+
+    en_ok, en_reason = _validate_prompt_structure(source.generation_prompt_en or "", candidate_prompt_en)
+    cn_ok, cn_reason = _validate_prompt_structure(source.generation_prompt_cn or "", candidate_prompt_cn)
+
+    if not (en_ok and cn_ok):
+        repair_instruction = (
+            "Your previous result failed structural validation. Regenerate entity now and strictly preserve source prompt structure. "
+            f"EN check: {en_reason}. CN check: {cn_reason}. "
+            "Use exact same structural layout, same label ordering, and same punctuation skeleton as source prompts; only replace content details."
+        )
+        generated = await _request_generated_entity(repair_instruction)
+        candidate_prompt_en = _pick_text(generated.get("generation_prompt_en"), source.generation_prompt_en)
+        candidate_prompt_cn = _pick_text(generated.get("generation_prompt_cn"), source.generation_prompt_cn)
+
+        en_ok, en_reason = _validate_prompt_structure(source.generation_prompt_en or "", candidate_prompt_en)
+        cn_ok, cn_reason = _validate_prompt_structure(source.generation_prompt_cn or "", candidate_prompt_cn)
+        if not (en_ok and cn_ok):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "LLM clone failed structure-preservation validation: "
+                    f"EN={en_reason}; CN={cn_reason}"
+                ),
+            )
+
+    cloned_name_base = _pick_text(name_hint, generated.get("name"), f"{source.name}_copy")
+    cloned_name = _build_unique_entity_name(db, project_id, cloned_name_base, field="name")
+
+    generated_name_en = _pick_text(generated.get("name_en"), source.name_en, source.name)
+    cloned_name_en = _build_unique_entity_name(db, project_id, generated_name_en, field="name_en")
+
+    raw_custom_attrs = source.custom_attributes or {}
+    if isinstance(raw_custom_attrs, str):
+        try:
+            raw_custom_attrs = json.loads(raw_custom_attrs)
+        except Exception:
+            raw_custom_attrs = {}
+    if not isinstance(raw_custom_attrs, dict):
+        raw_custom_attrs = {}
+
+    custom_attrs = dict(raw_custom_attrs)
+    custom_attrs["cloned_from_entity_id"] = source.id
+    custom_attrs["cloned_with_llm"] = {
+        "timestamp": now_bj_iso(),
+        "instruction": instruction,
+    }
+
+    db_entity = Entity(
+        project_id=project_id,
+        name=cloned_name,
+        name_en=cloned_name_en,
+        type=source.type,
+        description=_pick_text(generated.get("description"), source.description),
+        image_url=source.image_url,
+        generation_prompt_en=candidate_prompt_en,
+        generation_prompt_cn=candidate_prompt_cn,
+        anchor_description=_pick_text(generated.get("anchor_description"), source.anchor_description),
+        gender=_pick_text(generated.get("gender"), source.gender),
+        role=_pick_text(generated.get("role"), source.role),
+        archetype=_pick_text(generated.get("archetype"), source.archetype),
+        appearance_cn=_pick_text(generated.get("appearance_cn"), source.appearance_cn),
+        clothing=_pick_text(generated.get("clothing"), source.clothing),
+        action_characteristics=_pick_text(generated.get("action_characteristics"), source.action_characteristics),
+        atmosphere=_pick_text(generated.get("atmosphere"), source.atmosphere),
+        visual_params=_pick_text(generated.get("visual_params"), source.visual_params),
+        narrative_description=_pick_text(generated.get("narrative_description"), source.narrative_description),
+        visual_dependencies=generated.get("visual_dependencies") if isinstance(generated.get("visual_dependencies"), list) else (source.visual_dependencies or []),
+        dependency_strategy=generated.get("dependency_strategy") if isinstance(generated.get("dependency_strategy"), dict) else (source.dependency_strategy or {}),
+        custom_attributes=custom_attrs,
+    )
+
+    db.add(db_entity)
+    db.commit()
+    db.refresh(db_entity)
+    return db_entity
+
 class EntityUpdate(BaseModel):
     name: Optional[str] = None
     type: Optional[str] = None

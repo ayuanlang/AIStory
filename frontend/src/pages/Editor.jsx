@@ -420,6 +420,7 @@ import {
     deleteShot,
     fetchEntities, 
     createEntity,
+    cloneEntityWithLLM,
     updateEntity,
     deleteEntity,
     deleteAllEntities,
@@ -700,7 +701,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
         script_title: "",
         series_episode: "",
         base_positioning: "现代职场 / Modern Workplace",
-        type: "实拍（写实/电影感8K） / Live Action (Realism/Cinematic 8K)",
+        type: "实拍（真人剧/电影感8K） / Live Action (Live-Action Drama/Cinematic 8K)",
         Global_Style: "",
         tech_params: {
             visual_standard: {
@@ -13757,6 +13758,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
 
     // Create Entity
     const [isAnalyzingEntity, setIsAnalyzingEntity] = useState(false);
+    const [isCopyingEntity, setIsCopyingEntity] = useState(false);
 
     const handleAnalyzeEntity = async (entity) => {
         if (!entity || !entity.id || !entity.image_url) {
@@ -14254,6 +14256,59 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         } catch (e) {
             console.error(e);
             alert("Failed to create subject: " + e.message);
+        }
+    };
+
+    const handleCopyEntityWithLLM = async (entity) => {
+        if (!entity || !entity.id || !projectId) return;
+
+        const instruction = await promptUiMessage(
+            t('描述你希望如何基于当前主体生成一个新主体（将保留原提示词结构，仅改写内容差异）', 'Describe how to generate a new subject from this one (the original prompt structure will be preserved, only content deltas will be rewritten).'),
+            {
+                title: t('复制并 AI 生成主体', 'Copy + AI Generate Subject'),
+                confirmText: t('开始生成', 'Generate'),
+                cancelText: t('取消', 'Cancel'),
+                placeholder: t('例如：保留服装结构与镜头结构，改为雨夜、疲惫神态、手持破损公文包', 'Example: Keep wardrobe and camera structure, change to rainy night, exhausted expression, holding a damaged briefcase'),
+            }
+        );
+
+        const stableInstruction = String(instruction || '').trim();
+        if (!stableInstruction) return;
+
+        const newNameHintInput = await promptUiMessage(
+            t('可选：输入新主体名称（留空则由系统自动命名）', 'Optional: Enter a new subject name (leave empty for auto naming).'),
+            {
+                title: t('新主体名称（可选）', 'New Subject Name (Optional)'),
+                confirmText: t('继续', 'Continue'),
+                cancelText: t('取消', 'Cancel'),
+                placeholder: t('例如：林月_雨夜版', 'Example: LinYue_RainyNight'),
+            }
+        );
+
+        if (newNameHintInput === null) return;
+        const newNameHint = String(newNameHintInput || '').trim();
+
+        setIsCopyingEntity(true);
+        if (onLog) onLog(t(`主体复制生成中：${entity.name || entity.name_en || entity.id}`, `Copying subject with AI: ${entity.name || entity.name_en || entity.id}`), 'process');
+        try {
+            const created = await cloneEntityWithLLM(projectId, entity.id, {
+                modification_instruction: stableInstruction,
+                new_name_hint: newNameHint || null,
+            });
+
+            setAllEntities(prev => [...prev, created]);
+            if (String(created?.type || '') === String(subTab || '')) {
+                setEntities(prev => [...prev, created]);
+            }
+            setViewingEntity(created);
+
+            if (onLog) onLog(t(`主体复制生成成功：${created?.name || created?.id}`, `Subject cloned successfully: ${created?.name || created?.id}`), 'success');
+        } catch (e) {
+            console.error(e);
+            alert(t('主体复制生成失败：', 'Subject clone failed: ') + (e?.response?.data?.detail || e?.message || 'Unknown error'));
+            if (onLog) onLog(t('主体复制生成失败', 'Subject clone failed'), 'error');
+        } finally {
+            setIsCopyingEntity(false);
         }
     };
 
@@ -14995,6 +15050,14 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                             >
                                 {isReconstructingEntity ? <RefreshCw className="animate-spin" size={16} /> : <Sparkles size={16} />}
                             </button>
+                            <button
+                                onClick={(e) => { e.stopPropagation(); handleCopyEntityWithLLM(entity); }}
+                                disabled={isCopyingEntity}
+                                className="p-2 bg-emerald-500/80 hover:bg-emerald-500 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
+                                title={t('复制并 AI 生成新主体（参考原提示词结构）', 'Copy and AI-generate a new subject (preserve original prompt structure)')}
+                            >
+                                {isCopyingEntity ? <RefreshCw className="animate-spin" size={16} /> : <Copy size={16} />}
+                            </button>
                             <button 
                                 onClick={(e) => handleDeleteEntity(e, entity)}
                                 className="p-2 bg-red-500/80 hover:bg-red-600 rounded-full text-white backdrop-blur-md"
@@ -15445,6 +15508,13 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                 </div>
                                 
                                 <div className="p-4 border-t border-white/10 bg-black/20 flex justify-end gap-3">
+                                    <button
+                                        onClick={() => handleCopyEntityWithLLM(viewingEntity)}
+                                        disabled={isCopyingEntity || viewingEntity?.id === 'new'}
+                                        className="px-4 py-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 rounded-md text-sm font-bold transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        {isCopyingEntity ? <RefreshCw className="animate-spin" size={16} /> : <Copy size={16} />} {t('复制并AI生成', 'Copy + AI Generate')}
+                                    </button>
                                     <button 
                                         onClick={(e) => handleDeleteEntity(e, viewingEntity)}
                                         className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded-md text-sm font-bold transition-colors flex items-center gap-2"
