@@ -267,6 +267,7 @@ VIDEO_JOB_MAX_RUNNING_SECONDS = max(120, int(os.getenv("VIDEO_JOB_MAX_RUNNING_SE
 GENERATION_CALLBACK_STORE: Dict[str, Dict[str, Any]] = {}
 GENERATION_CALLBACK_LOCK = threading.Lock()
 GENERATION_CALLBACK_TTL_SECONDS = max(300, int(os.getenv("GENERATION_CALLBACK_TTL_SECONDS", "1800")))
+GENERATION_CALLBACK_FILE_DIR = os.path.join(settings.UPLOAD_DIR, "_generation_callbacks")
 WEBHOOK_REPLAY_STORE: Dict[str, float] = {}
 WEBHOOK_REPLAY_LOCK = threading.Lock()
 
@@ -322,14 +323,48 @@ def _set_generation_callback_payload(ticket: str, payload: Dict[str, Any]) -> No
     if not stable_ticket:
         return
 
+    callback_record = {
+        "ticket": stable_ticket,
+        "received_ts": time.time(),
+        "received_at": now_bj_iso(),
+        "payload": payload if isinstance(payload, dict) else {},
+    }
+
     with GENERATION_CALLBACK_LOCK:
         _prune_generation_callback_locked()
-        GENERATION_CALLBACK_STORE[stable_ticket] = {
-            "ticket": stable_ticket,
-            "received_ts": time.time(),
-            "received_at": now_bj_iso(),
-            "payload": payload if isinstance(payload, dict) else {},
-        }
+        GENERATION_CALLBACK_STORE[stable_ticket] = dict(callback_record)
+
+    _write_generation_callback_file(stable_ticket, callback_record)
+
+
+def _generation_callback_file_path(ticket: str) -> str:
+    safe_ticket = re.sub(r"[^a-zA-Z0-9_-]", "", str(ticket or "").strip())
+    return os.path.join(GENERATION_CALLBACK_FILE_DIR, f"{safe_ticket}.json")
+
+
+def _write_generation_callback_file(ticket: str, payload: Dict[str, Any]) -> None:
+    try:
+        os.makedirs(GENERATION_CALLBACK_FILE_DIR, exist_ok=True)
+        path = _generation_callback_file_path(ticket)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+    except Exception as e:
+        logger.warning("failed to persist generation callback file ticket=%s err=%s", ticket, e)
+
+
+def _read_generation_callback_file(ticket: str) -> Optional[Dict[str, Any]]:
+    try:
+        path = _generation_callback_file_path(ticket)
+        if not os.path.exists(path):
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            data["ticket"] = data.get("ticket") or str(ticket)
+            return data
+    except Exception as e:
+        logger.warning("failed to read generation callback file ticket=%s err=%s", ticket, e)
+    return None
 
 
 def _extract_callback_task_id(payload: Dict[str, Any]) -> str:
@@ -16588,6 +16623,14 @@ def get_generation_callback_result(ticket: str):
     with GENERATION_CALLBACK_LOCK:
         _prune_generation_callback_locked()
         payload = dict(GENERATION_CALLBACK_STORE.get(stable_ticket) or {})
+
+    if not payload:
+        file_payload = _read_generation_callback_file(stable_ticket)
+        if file_payload:
+            payload = dict(file_payload)
+            with GENERATION_CALLBACK_LOCK:
+                _prune_generation_callback_locked()
+                GENERATION_CALLBACK_STORE[stable_ticket] = dict(file_payload)
 
     if not payload:
         return {
