@@ -8015,7 +8015,8 @@ def _clear_non_system_settings_for_replace_all(db: Session) -> None:
     if not target_ids:
         return
 
-    clear_task_defaults_for_system_api_ids(db, target_ids)
+    if _db_has_table(db, "system_task_default_apis"):
+        clear_task_defaults_for_system_api_ids(db, target_ids)
 
     has_billing_rules_table = _db_has_table(db, "system_api_billing_rules")
     rule_ids: List[int] = []

@@ -13963,12 +13963,24 @@ def _build_generation_filename_base(req: Any, db: Session) -> str:
     if asset_type:
         parts.append(asset_type)
 
-    shot_label = getattr(req, "shot_name", None) or getattr(req, "shot_number", None)
-    if not shot_label and getattr(req, "shot_id", None):
+    # Keep shot number in filename for stable traceability across generations.
+    shot_number_label = getattr(req, "shot_number", None)
+    shot_name_label = getattr(req, "shot_name", None)
+    if (not shot_number_label or not shot_name_label) and getattr(req, "shot_id", None):
         shot_obj = db.query(Shot).filter(Shot.id == req.shot_id).first()
         if shot_obj:
-            shot_label = shot_obj.shot_name or shot_obj.shot_id
-    shot_part = _sanitize_filename_part(shot_label)
+            if not shot_number_label:
+                shot_number_label = shot_obj.shot_id
+            if not shot_name_label:
+                shot_name_label = shot_obj.shot_name
+
+    shot_number_part = _sanitize_filename_part(shot_number_label)
+    shot_name_part = _sanitize_filename_part(shot_name_label)
+    if shot_number_part and shot_name_part and shot_name_part != shot_number_part:
+        shot_part = f"{shot_number_part}_{shot_name_part}"
+    else:
+        shot_part = shot_number_part or shot_name_part
+
     if shot_part:
         parts.append(f"shot_{shot_part}")
 

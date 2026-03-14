@@ -2,10 +2,19 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
+from sqlalchemy import inspect
 from sqlalchemy.orm import Session, load_only
 
 from app.models.all_models import SystemAPISetting, TaskDefaultSystemAPI
 from app.core.time_utils import now_bj_iso
+
+
+def _task_defaults_table_exists(db: Session) -> bool:
+    try:
+        bind = db.get_bind()
+        return bool(inspect(bind).has_table("system_task_default_apis"))
+    except Exception:
+        return False
 
 
 def normalize_task_category(value: Optional[str]) -> str:
@@ -45,6 +54,8 @@ def _candidate_system_categories(task_category: str) -> List[str]:
 
 
 def upsert_task_default_system_setting(db: Session, task_category: str, system_api_id: int) -> None:
+    if not _task_defaults_table_exists(db):
+        return
     normalized = normalize_task_category(task_category)
     record = db.query(TaskDefaultSystemAPI).filter(TaskDefaultSystemAPI.task_category == normalized).first()
     now = now_bj_iso()
@@ -61,11 +72,15 @@ def upsert_task_default_system_setting(db: Session, task_category: str, system_a
 
 
 def clear_task_default_for_category(db: Session, task_category: str) -> None:
+    if not _task_defaults_table_exists(db):
+        return
     normalized = normalize_task_category(task_category)
     db.query(TaskDefaultSystemAPI).filter(TaskDefaultSystemAPI.task_category == normalized).delete(synchronize_session=False)
 
 
 def clear_task_defaults_for_system_api_ids(db: Session, system_api_ids: List[int]) -> None:
+    if not _task_defaults_table_exists(db):
+        return
     ids = [int(x) for x in (system_api_ids or []) if x is not None]
     if not ids:
         return
@@ -73,6 +88,8 @@ def clear_task_defaults_for_system_api_ids(db: Session, system_api_ids: List[int
 
 
 def list_task_default_system_setting_ids(db: Session) -> Dict[str, int]:
+    if not _task_defaults_table_exists(db):
+        return {}
     rows = db.query(TaskDefaultSystemAPI).all()
     out: Dict[str, int] = {}
     for row in rows:
@@ -105,6 +122,8 @@ def _system_setting_query(db: Session):
 
 
 def is_task_default_system_setting(db: Session, system_api_id: int, category: Optional[str] = None) -> bool:
+    if not _task_defaults_table_exists(db):
+        return False
     sid = int(system_api_id or 0)
     if sid <= 0:
         return False
@@ -122,6 +141,8 @@ def is_task_default_system_setting(db: Session, system_api_id: int, category: Op
 
 
 def get_task_default_system_setting(db: Session, task_category: str) -> Optional[SystemAPISetting]:
+    if not _task_defaults_table_exists(db):
+        return None
     normalized = normalize_task_category(task_category)
     record = db.query(TaskDefaultSystemAPI).filter(TaskDefaultSystemAPI.task_category == normalized).first()
     if record:
@@ -132,6 +153,8 @@ def get_task_default_system_setting(db: Session, task_category: str) -> Optional
 
 
 def list_task_default_system_settings(db: Session) -> Dict[str, SystemAPISetting]:
+    if not _task_defaults_table_exists(db):
+        return {}
     out: Dict[str, SystemAPISetting] = {}
     id_map = list_task_default_system_setting_ids(db)
     if id_map:
