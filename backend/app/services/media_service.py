@@ -6397,10 +6397,29 @@ class MediaGenerationService:
         if not api_key:
             return None
 
+        # KIE file-url upload is sensitive to non-ASCII/unsafe URL characters.
+        # Normalize URL path and query encoding so remote fetchers can resolve it reliably.
+        try:
+            from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
+
+            parsed = urlparse(raw_url)
+            encoded_path = quote(parsed.path or "", safe="/%._-~")
+            encoded_query = urlencode(parse_qsl(parsed.query or "", keep_blank_values=True), doseq=True)
+            normalized_url = urlunparse((
+                parsed.scheme,
+                parsed.netloc,
+                encoded_path,
+                parsed.params,
+                encoded_query,
+                parsed.fragment,
+            ))
+        except Exception:
+            normalized_url = raw_url
+
         base_url = str(os.getenv("KIE_FILE_UPLOAD_BASE_URL", "https://kieai.redpandaai.co")).strip().rstrip("/")
         endpoint = f"{base_url}/api/file-url-upload"
         payload: Dict[str, Any] = {
-            "fileUrl": raw_url,
+            "fileUrl": normalized_url,
             "uploadPath": upload_path,
         }
         if file_name:
@@ -6452,6 +6471,20 @@ class MediaGenerationService:
             )
             if hosted:
                 return hosted
+
+            # Fallback: if KIE cannot pull the public URL directly, download and upload as base64.
+            fallback_data_uri = self._get_image_base64_for_api(ref_text, force_data_uri=True)
+            fallback_data_uri = str(fallback_data_uri or "").strip()
+            if fallback_data_uri.startswith("data:"):
+                fallback_hosted = self._upload_kie_data_uri(
+                    fallback_data_uri,
+                    api_key=api_key,
+                    file_name=f"{file_name_prefix}-{uuid.uuid4().hex[:10]}{safe_ext or '.jpg'}",
+                    upload_path=upload_path,
+                )
+                if fallback_hosted:
+                    logger.info("KIE reference upload fallback succeeded | mode=base64 file_name_prefix=%s", file_name_prefix)
+                    return fallback_hosted
             return None
 
         data_uri = ref_text
