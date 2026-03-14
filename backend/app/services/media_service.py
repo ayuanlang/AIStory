@@ -25,6 +25,7 @@ from app.core.config import settings
 from app.services.billing_service import BillingService
 from app.services.system_default_api_service import get_task_default_system_setting
 from sqlalchemy import cast, String, func, text
+from sqlalchemy.orm import load_only
 
 # Suppress InsecureRequestWarning from urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -290,9 +291,11 @@ class MediaGenerationService:
         if not cfg["auto_use_sora_mention"] and not cfg["auto_upload_character"]:
             try:
                 with SessionLocal() as session:
-                    row = session.query(SystemAPISetting).filter(
-                        SystemAPISetting.category == self._AGENT_POLICY_CATEGORY,
-                        SystemAPISetting.provider == self._AGENT_POLICY_PROVIDER,
+                    row = self._system_setting_query(
+                        session,
+                        provider=self._AGENT_POLICY_PROVIDER,
+                        category=self._AGENT_POLICY_CATEGORY,
+                    ).filter(
                         SystemAPISetting.model == self._AGENT_POLICY_MODEL,
                     ).order_by(SystemAPISetting.id.desc()).first()
                     row_cfg = self._safe_json_dict(getattr(row, "config", {}) if row else {})
@@ -685,7 +688,7 @@ class MediaGenerationService:
             return {}
 
         with SessionLocal() as session:
-            row = session.query(SystemAPISetting).filter(SystemAPISetting.id == sid).first()
+            row = self._system_setting_query(session).filter(SystemAPISetting.id == sid).first()
             if not row:
                 return {}
 
@@ -1194,12 +1197,29 @@ class MediaGenerationService:
             )
             session.commit()
 
-    def _system_setting_query(self, session, provider: str, category: str = None):
-        query = session.query(SystemAPISetting).filter(
-            self._provider_ci_filter(provider),
+    def _system_setting_query(self, session, provider: Optional[str] = None, category: Optional[str] = None):
+        query = session.query(SystemAPISetting).options(
+            load_only(
+                SystemAPISetting.id,
+                SystemAPISetting.name,
+                SystemAPISetting.category,
+                SystemAPISetting.provider,
+                SystemAPISetting.api_key,
+                SystemAPISetting.base_url,
+                SystemAPISetting.model,
+                SystemAPISetting.base_model,
+                SystemAPISetting.modality,
+                SystemAPISetting.tags,
+                SystemAPISetting.supplier_info,
+                SystemAPISetting.deprecated,
+                SystemAPISetting.config,
+                SystemAPISetting.is_active,
+            )
         )
         if category:
             query = query.filter(SystemAPISetting.category == category)
+        if provider:
+            query = query.filter(self._provider_ci_filter(provider))
         return query
 
     def _setting_to_config(self, setting: Any, provider: str, defaults: Dict[str, Dict[str, str]]) -> Dict[str, Any]:
@@ -1318,10 +1338,8 @@ class MediaGenerationService:
                     "warning",
                 )
 
-        query = session.query(SystemAPISetting).filter(SystemAPISetting.category == category)
         normalized_provider = self._normalize_provider_name(provider, category) if provider else ""
-        if normalized_provider:
-            query = query.filter(self._provider_ci_filter(normalized_provider))
+        query = self._system_setting_query(session, provider=normalized_provider or None, category=category)
 
         rows = query.order_by(SystemAPISetting.id.desc()).all()
         for row in rows:
@@ -1376,9 +1394,7 @@ class MediaGenerationService:
             "vidu": {"base_url": "https://api.vidu.studio/open/v1/creation/video", "model": "vidu2.0"},
         }
 
-        rows = session.query(SystemAPISetting).filter(
-            SystemAPISetting.category == category,
-        ).order_by(SystemAPISetting.id.asc()).all()
+        rows = self._system_setting_query(session, category=category).order_by(SystemAPISetting.id.asc()).all()
 
         candidates: List[Dict[str, Any]] = []
         provider_bundle_cache: Dict[str, Dict[str, Any]] = {}
@@ -2131,9 +2147,10 @@ class MediaGenerationService:
                         )
                         return {}
 
-                    strict_query = session.query(SystemAPISetting).filter(
-                        SystemAPISetting.category == resolved_category,
-                        self._provider_ci_filter(requested_provider),
+                    strict_query = self._system_setting_query(
+                        session,
+                        provider=requested_provider,
+                        category=resolved_category,
                     )
                     if requested_model_value:
                         strict_query = strict_query.filter(SystemAPISetting.model == requested_model_value)
@@ -2164,9 +2181,8 @@ class MediaGenerationService:
                     selected_system_setting_id = int(getattr(user_setting, "system_api_id", 0) or 0)
                     if selected_system_setting_id > 0:
                         selected_binding_deprecated = False
-                        selected_by_id = session.query(SystemAPISetting).filter(
+                        selected_by_id = self._system_setting_query(session, category=resolved_category).filter(
                             SystemAPISetting.id == selected_system_setting_id,
-                            SystemAPISetting.category == resolved_category,
                         ).first()
                         if selected_by_id:
                             if self._is_deprecated_system_config(selected_by_id.config, getattr(selected_by_id, "deprecated", None)):
