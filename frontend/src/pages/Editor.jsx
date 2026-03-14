@@ -13198,6 +13198,8 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
 };
 
 const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
+    const SUBJECT_BATCH_RUNTIME_STORAGE_KEY = 'aistory.subjectBatchRuntime.v1';
+    const SUBJECT_BATCH_RUNTIME_TTL_MS = 1000 * 60 * 60 * 6;
     const createSubjectBatchTaskState = () => ({
         running: false,
         progress: null,
@@ -13205,10 +13207,73 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         updatedAt: 0,
     });
 
+    const normalizeSubjectBatchTask = (rawTask) => {
+        const now = Date.now();
+        if (!rawTask || typeof rawTask !== 'object') {
+            return createSubjectBatchTaskState();
+        }
+
+        const updatedAt = Number(rawTask.updatedAt || 0) || 0;
+        if (updatedAt > 0 && (now - updatedAt) > SUBJECT_BATCH_RUNTIME_TTL_MS) {
+            return createSubjectBatchTaskState();
+        }
+
+        return {
+            running: Boolean(rawTask.running),
+            progress: rawTask.progress && typeof rawTask.progress === 'object' ? rawTask.progress : null,
+            scopeKey: String(rawTask.scopeKey || ''),
+            updatedAt,
+        };
+    };
+
+    const readSubjectBatchRuntimeStorage = () => {
+        try {
+            const raw = localStorage.getItem(SUBJECT_BATCH_RUNTIME_STORAGE_KEY);
+            if (!raw) return null;
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== 'object') return null;
+            return {
+                generate: normalizeSubjectBatchTask(parsed.generate),
+                analyze: normalizeSubjectBatchTask(parsed.analyze),
+                reconstruct: normalizeSubjectBatchTask(parsed.reconstruct),
+            };
+        } catch {
+            return null;
+        }
+    };
+
+    const writeSubjectBatchRuntimeStorage = (runtime) => {
+        try {
+            if (!runtime || typeof runtime !== 'object') {
+                localStorage.removeItem(SUBJECT_BATCH_RUNTIME_STORAGE_KEY);
+                return;
+            }
+
+            const payload = {
+                generate: normalizeSubjectBatchTask(runtime.generate),
+                analyze: normalizeSubjectBatchTask(runtime.analyze),
+                reconstruct: normalizeSubjectBatchTask(runtime.reconstruct),
+            };
+
+            const hasRunning = Boolean(payload.generate.running || payload.analyze.running || payload.reconstruct.running);
+            if (!hasRunning) {
+                localStorage.removeItem(SUBJECT_BATCH_RUNTIME_STORAGE_KEY);
+                return;
+            }
+
+            localStorage.setItem(SUBJECT_BATCH_RUNTIME_STORAGE_KEY, JSON.stringify(payload));
+        } catch {
+            // ignore storage failures
+        }
+    };
+
+    const persistedRuntime = readSubjectBatchRuntimeStorage();
+
     if (!window.__AISTORY_SUBJECT_BATCH_RUNTIME__) {
         window.__AISTORY_SUBJECT_BATCH_RUNTIME__ = {
-            generate: createSubjectBatchTaskState(),
-            analyze: createSubjectBatchTaskState(),
+            generate: persistedRuntime?.generate || createSubjectBatchTaskState(),
+            analyze: persistedRuntime?.analyze || createSubjectBatchTaskState(),
+            reconstruct: persistedRuntime?.reconstruct || createSubjectBatchTaskState(),
             listeners: new Set(),
         };
     }
@@ -13217,8 +13282,10 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     const getSubjectBatchSnapshot = () => ({
         generate: { ...subjectBatchRuntime.generate },
         analyze: { ...subjectBatchRuntime.analyze },
+        reconstruct: { ...subjectBatchRuntime.reconstruct },
     });
     const emitSubjectBatchRuntime = () => {
+        writeSubjectBatchRuntimeStorage(subjectBatchRuntime);
         const snapshot = getSubjectBatchSnapshot();
         subjectBatchRuntime.listeners.forEach((listener) => {
             try {
@@ -13411,6 +13478,12 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         setBatchAnalyzeProgress(progress || null);
     }, []);
 
+    const applyReconstructBatchState = useCallback((running, progress) => {
+        if (!isMountedRef.current) return;
+        setIsBatchReconstructingEntities(Boolean(running));
+        setBatchReconstructProgress(progress || null);
+    }, []);
+
     const updateGenerateBatchRuntimeState = useCallback((running, progress) => {
         updateSubjectBatchTask('generate', {
             running: Boolean(running),
@@ -13428,6 +13501,15 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         });
         applyAnalyzeBatchState(running, progress);
     }, [applyAnalyzeBatchState, subjectBatchScopeKey]);
+
+    const updateReconstructBatchRuntimeState = useCallback((running, progress) => {
+        updateSubjectBatchTask('reconstruct', {
+            running: Boolean(running),
+            progress: progress || null,
+            scopeKey: subjectBatchScopeKey,
+        });
+        applyReconstructBatchState(running, progress);
+    }, [applyReconstructBatchState, subjectBatchScopeKey]);
 
     useEffect(() => {
         isMountedRef.current = true;
@@ -13554,6 +13636,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         const applySnapshot = (snapshot) => {
             const generateTask = snapshot?.generate || createSubjectBatchTaskState();
             const analyzeTask = snapshot?.analyze || createSubjectBatchTaskState();
+            const reconstructTask = snapshot?.reconstruct || createSubjectBatchTaskState();
 
             if (generateTask.scopeKey === subjectBatchScopeKey && generateTask.running) {
                 applyGenerateBatchState(true, generateTask.progress || null);
@@ -13566,11 +13649,17 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
             } else {
                 applyAnalyzeBatchState(false, null);
             }
+
+            if (reconstructTask.scopeKey === subjectBatchScopeKey && reconstructTask.running) {
+                applyReconstructBatchState(true, reconstructTask.progress || null);
+            } else {
+                applyReconstructBatchState(false, null);
+            }
         };
 
         applySnapshot(getSubjectBatchSnapshot());
         return subscribeSubjectBatchRuntime(applySnapshot);
-    }, [applyAnalyzeBatchState, applyGenerateBatchState, subjectBatchScopeKey]);
+    }, [applyAnalyzeBatchState, applyGenerateBatchState, applyReconstructBatchState, subjectBatchScopeKey]);
 
     const openMediaPicker = (callback, context = {}) => {
         setPickerConfig({ isOpen: true, callback, context });
@@ -13714,6 +13803,11 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         const runtimeSnapshot = getSubjectBatchSnapshot();
         if (runtimeSnapshot?.analyze?.running && runtimeSnapshot?.analyze?.scopeKey === subjectBatchScopeKey) {
             alert(t('批量分析任务正在运行中，请稍候。', 'Batch analyze task is already running.'));
+            return;
+        }
+
+        if (runtimeSnapshot?.reconstruct?.running && runtimeSnapshot?.reconstruct?.scopeKey === subjectBatchScopeKey) {
+            alert(t('批量分析并重生图任务正在运行中，请稍候。', 'Batch analyze + regenerate task is already running.'));
             return;
         }
 
@@ -13877,7 +13971,15 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     }, [allEntities, currentEpisode?.episode_info, currentEpisode?.id, getEntityPromptByLang, projectId, resolvedPromptSubmitLang, t]);
 
     const handleBatchAnalyzeAndReconstructSubjects = async () => {
-        if (isBatchGeneratingEntities || isBatchAnalyzingEntities || isReconstructingEntity) {
+        const runtimeSnapshot = getSubjectBatchSnapshot();
+        if (
+            (runtimeSnapshot?.generate?.running && runtimeSnapshot?.generate?.scopeKey === subjectBatchScopeKey) ||
+            (runtimeSnapshot?.analyze?.running && runtimeSnapshot?.analyze?.scopeKey === subjectBatchScopeKey) ||
+            (runtimeSnapshot?.reconstruct?.running && runtimeSnapshot?.reconstruct?.scopeKey === subjectBatchScopeKey) ||
+            isBatchGeneratingEntities ||
+            isBatchAnalyzingEntities ||
+            isReconstructingEntity
+        ) {
             alert(t('有其他批量任务正在运行，请稍后。', 'Another batch task is running. Please wait.'));
             return;
         }
@@ -13905,8 +14007,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         ));
         if (!confirmed) return;
 
-        setIsBatchReconstructingEntities(true);
-        setBatchReconstructProgress({ current: 0, total: targets.length, status: t('准备开始...', 'Preparing...') });
+        updateReconstructBatchRuntimeState(true, { current: 0, total: targets.length, status: t('准备开始...', 'Preparing...') });
 
         let successCount = 0;
         let failedCount = 0;
@@ -13915,7 +14016,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
             for (let idx = 0; idx < targets.length; idx += 1) {
                 const entity = targets[idx];
                 const current = idx + 1;
-                setBatchReconstructProgress({
+                updateReconstructBatchRuntimeState(true, {
                     current,
                     total: targets.length,
                     status: t(
@@ -13949,8 +14050,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
             if (onLog) onLog(summary, failedCount > 0 ? 'warning' : 'success');
             alert(summary);
         } finally {
-            setIsBatchReconstructingEntities(false);
-            setBatchReconstructProgress(null);
+            updateReconstructBatchRuntimeState(false, null);
         }
     };
 
