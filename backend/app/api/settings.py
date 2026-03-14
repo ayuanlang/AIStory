@@ -3947,7 +3947,7 @@ def get_system_settings(
         t_prev = t0
         visible_categories = ("LLM", "Image", "Video", "Vision")
         def _query_system_settings_rows():
-            query = db.query(
+            return db.query(
                 SystemAPISetting.id,
                 SystemAPISetting.name,
                 SystemAPISetting.provider,
@@ -3958,43 +3958,13 @@ def get_system_settings(
                 SystemAPISetting.deprecated.label("deprecated_flag"),
                 SystemAPISetting.tags,
                 SystemAPISetting.config,
-            )
-            if can_view_pricing:
-                query = query.add_columns(
-                    SystemAPISetting.price_avg_cost,
-                    SystemAPISetting.price_source,
-                    SystemAPISetting.price_min_cost,
-                    SystemAPISetting.price_max_cost,
-                    SystemAPISetting.price_sample_prices,
-                    SystemAPISetting.price_updated_at,
-                    SystemAPISetting.provider_price_avg_cost,
-                    SystemAPISetting.provider_price_source,
-                    SystemAPISetting.provider_price_min_cost,
-                    SystemAPISetting.provider_price_max_cost,
-                    SystemAPISetting.provider_price_sample_prices,
-                    SystemAPISetting.provider_price_updated_at,
-                )
-            return query.filter(
+            ).filter(
                 ~SystemAPISetting.category.like("System_%"),
                 SystemAPISetting.category.in_(visible_categories),
                 or_(SystemAPISetting.deprecated.is_(False), SystemAPISetting.deprecated.is_(None)),
             ).all()
 
         system_settings = _query_system_settings_rows()
-
-        if can_view_pricing:
-            preload_ids = [int(getattr(item, "id", 0) or 0) for item in system_settings if int(getattr(item, "id", 0) or 0) > 0]
-            needs_precompute = any(
-                not str(getattr(item, "price_updated_at", "") or "").strip()
-                or not str(getattr(item, "provider_price_updated_at", "") or "").strip()
-                for item in system_settings
-            )
-            if preload_ids and needs_precompute:
-                changed_model = _refresh_settings_price_cache_for_system_apis(db, preload_ids)
-                changed_provider = _refresh_settings_provider_price_cache_for_system_apis(db, preload_ids)
-                if changed_model or changed_provider:
-                    db.commit()
-                    system_settings = _query_system_settings_rows()
         t_query_system_settings_ms = int((time.perf_counter() - t_prev) * 1000)
         t_prev = time.perf_counter()
 
