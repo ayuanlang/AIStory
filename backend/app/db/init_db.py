@@ -245,18 +245,6 @@ def check_and_migrate_tables():
                 ("base_model", "VARCHAR"),
                 ("tags", "JSON"),
                 ("supplier_info", "JSON"),
-                ("price_avg_cost", "INTEGER"),
-                ("price_source", "VARCHAR"),
-                ("price_min_cost", "INTEGER"),
-                ("price_max_cost", "INTEGER"),
-                ("price_sample_prices", "JSON"),
-                ("price_updated_at", "VARCHAR"),
-                ("provider_price_avg_cost", "INTEGER"),
-                ("provider_price_source", "VARCHAR"),
-                ("provider_price_min_cost", "INTEGER"),
-                ("provider_price_max_cost", "INTEGER"),
-                ("provider_price_sample_prices", "JSON"),
-                ("provider_price_updated_at", "VARCHAR"),
             ]
             # Only add modality column if it doesn't exist yet (new installs)
             if 'modality' not in existing_system_cols:

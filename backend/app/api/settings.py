@@ -7825,78 +7825,6 @@ def _db_has_table(db: Session, table_name: str) -> bool:
         return False
 
 
-def _is_system_api_settings_missing_column_error(exc: Exception) -> bool:
-    err_text = str(exc or "").lower()
-    err_type = type(exc).__name__.lower()
-    if "system_api_settings" not in err_text:
-        return False
-    if "undefinedcolumn" in err_type or "undefinedcolumn" in err_text:
-        return True
-    if "no such column" in err_text:
-        return True
-    if "column" in err_text and "does not exist" in err_text:
-        return True
-    return False
-
-
-def _patch_system_api_settings_missing_columns_via_conn(db: Session) -> int:
-    engine = db.get_bind()
-    inspector = inspect(engine)
-    if not inspector.has_table("system_api_settings"):
-        return 0
-
-    existing_cols = {c.get("name") for c in inspector.get_columns("system_api_settings")}
-    dialect = str(getattr(engine, "dialect", None).name if getattr(engine, "dialect", None) else "").lower()
-    is_postgres = "postgres" in dialect
-
-    columns_to_ensure = [
-        ("price_avg_cost", "INTEGER"),
-        ("price_source", "VARCHAR"),
-        ("price_min_cost", "INTEGER"),
-        ("price_max_cost", "INTEGER"),
-        ("price_sample_prices", "JSON"),
-        ("price_updated_at", "VARCHAR"),
-        ("provider_price_avg_cost", "INTEGER"),
-        ("provider_price_source", "VARCHAR"),
-        ("provider_price_min_cost", "INTEGER"),
-        ("provider_price_max_cost", "INTEGER"),
-        ("provider_price_sample_prices", "JSON"),
-        ("provider_price_updated_at", "VARCHAR"),
-    ]
-
-    added = 0
-    with engine.begin() as conn:
-        for col_name, col_type in columns_to_ensure:
-            if col_name in existing_cols:
-                continue
-            if is_postgres:
-                conn.execute(text(f"ALTER TABLE system_api_settings ADD COLUMN IF NOT EXISTS {col_name} {col_type}"))
-                added += 1
-                continue
-
-            conn.execute(text(f"ALTER TABLE system_api_settings ADD COLUMN {col_name} {col_type}"))
-            added += 1
-
-    return added
-
-
-def _try_patch_system_api_settings_missing_columns(db: Session) -> bool:
-    try:
-        added = _patch_system_api_settings_missing_columns_via_conn(db)
-        if added > 0:
-            logger.warning("Applied inline system_api_settings column patch, added=%d", added)
-        # Flush DDL before retrying query paths in the same request.
-        try:
-            db.flush()
-        except Exception:
-            pass
-
-        return False
-    except Exception as patch_exc:
-        logger.warning("Auto patch for system_api_settings missing columns failed: %s", patch_exc)
-        return False
-
-
 def _safe_clear_transaction_action_rule_links(db: Session, *, clear_system_api_ids: Optional[List[int]] = None, clear_rule_ids: Optional[List[int]] = None) -> None:
     # Older deployments may not have the transaction_action table or newer columns.
     if not _db_has_table(db, "transaction_action"):
@@ -8305,19 +8233,8 @@ def import_system_config_sync_bundle_for_manage(
             provider_result = None
             try:
                 provider_result = _import_provider_bundle_no_commit(db, provider_import_items, replace_all)
-            except Exception as provider_exc:
-                if _is_system_api_settings_missing_column_error(provider_exc):
-                    logger.warning(
-                        "Provider import hit missing column on system_api_settings, attempting auto patch then retry: %s",
-                        provider_exc,
-                    )
-                    patched = _try_patch_system_api_settings_missing_columns(db)
-                    if patched:
-                        provider_result = _import_provider_bundle_no_commit(db, provider_import_items, replace_all)
-                    else:
-                        raise
-                else:
-                    raise
+            except Exception:
+                raise
 
             if replace_all:
                 if _db_has_table(db, "transaction_action"):
