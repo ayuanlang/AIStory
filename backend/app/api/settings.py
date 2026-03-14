@@ -2147,19 +2147,27 @@ def _collect_kie_system_rule_hints(db: Session, system_rows: List[SystemAPISetti
     if not ids:
         return {}
 
-    rules = db.query(SystemAPIBillingRule).filter(
-        SystemAPIBillingRule.system_api_id.in_(ids),
-        SystemAPIBillingRule.is_active == True,
-    ).order_by(
-        SystemAPIBillingRule.system_api_id.asc(),
-        SystemAPIBillingRule.priority.desc(),
-        SystemAPIBillingRule.id.desc(),
-    ).all()
-
     hints: Dict[int, Dict[str, Any]] = {int(sid): {
         "has_granular_rules": False,
         "granular_rule_templates": [],
     } for sid in ids}
+
+    if not _db_has_table(db, "system_api_billing_rules"):
+        logger.warning("[_collect_kie_system_rule_hints] table missing: system_api_billing_rules")
+        return hints
+
+    try:
+        rules = db.query(SystemAPIBillingRule).filter(
+            SystemAPIBillingRule.system_api_id.in_(ids),
+            SystemAPIBillingRule.is_active == True,
+        ).order_by(
+            SystemAPIBillingRule.system_api_id.asc(),
+            SystemAPIBillingRule.priority.desc(),
+            SystemAPIBillingRule.id.desc(),
+        ).all()
+    except Exception as e:
+        logger.warning("[_collect_kie_system_rule_hints] failed to query billing rules: %s", e)
+        return hints
 
     for rule in rules:
         sid = int(getattr(rule, "system_api_id", 0) or 0)
@@ -6685,6 +6693,7 @@ async def generate_kie_pricing_rules(
     applied_system_api_ids: List[int] = []
     apply_receipts: List[KIEPricingApplyReceipt] = []
     applied_id_set: set = set()
+    has_billing_rules_table = _db_has_table(db, "system_api_billing_rules")
 
     for item in raw_matches:
         if not isinstance(item, dict):
@@ -6742,6 +6751,8 @@ async def generate_kie_pricing_rules(
             not selected_apply_ids or system_api_id in selected_apply_ids
         )
         if should_apply:
+            if not has_billing_rules_table:
+                continue
             if system_api_id in applied_id_set:
                 continue
             existed_before = _get_base_billing_rule(db, system_api_id, include_inactive=True) is not None
@@ -6769,6 +6780,8 @@ async def generate_kie_pricing_rules(
         ]
 
     warnings = parsed.get("warnings") if isinstance(parsed.get("warnings"), list) else []
+    if payload.apply_base_rules and not has_billing_rules_table:
+        warnings.append("system_api_billing_rules table missing; skipped apply_base_rules")
     unmatched_source_models = parsed.get("unmatched_source_models") if isinstance(parsed.get("unmatched_source_models"), list) else []
 
     apply_requested = bool(payload.apply_base_rules)
@@ -6820,6 +6833,18 @@ def apply_kie_pricing_rules(
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
     provider_filter = str(payload.provider_filter or "kie").strip() or "kie"
+    has_billing_rules_table = _db_has_table(db, "system_api_billing_rules")
+    if not has_billing_rules_table:
+        return KIEPricingApplyResponse(
+            provider_filter=provider_filter,
+            requested_count=len(payload.matches or []),
+            applied_count=0,
+            apply_status="table_missing",
+            apply_message="system_api_billing_rules table missing; apply skipped.",
+            applied_system_api_ids=[],
+            apply_receipts=[],
+        )
+
     selected_apply_ids = {
         int(x) for x in (payload.selected_system_api_ids or [])
         if _safe_non_negative_int(x) > 0

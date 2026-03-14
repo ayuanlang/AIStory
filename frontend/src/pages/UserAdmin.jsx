@@ -105,6 +105,9 @@ const UserAdmin = () => {
     const [billingRuleFilterApiCategory, setBillingRuleFilterApiCategory] = useState('all');
     const [billingRuleFilterApiProvider, setBillingRuleFilterApiProvider] = useState('all');
     const [billingRuleFilterApiBaseModel, setBillingRuleFilterApiBaseModel] = useState('all');
+    const [billingRuleApiPickerCategory, setBillingRuleApiPickerCategory] = useState('all');
+    const [billingRuleApiPickerProvider, setBillingRuleApiPickerProvider] = useState('all');
+    const [billingRuleApiPickerBaseModel, setBillingRuleApiPickerBaseModel] = useState('all');
     const [kiePricingUrl, setKiePricingUrl] = useState('https://kie.ai/zh-CN/pricing');
     const [kiePricingProviderFilter, setKiePricingProviderFilter] = useState('kie');
     const [kiePricingManualText, setKiePricingManualText] = useState('');
@@ -1315,6 +1318,62 @@ const UserAdmin = () => {
         () => Array.from(new Set((systemApiRows || []).map((row) => String(row?.base_model || row?.model || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
         [systemApiRows]
     );
+
+    const billingRuleApiPickerCategoryOptions = React.useMemo(
+        () => Array.from(new Set((systemApiRows || []).map((row) => String(row?.category || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+        [systemApiRows]
+    );
+
+    const billingRuleApiPickerProviderOptions = React.useMemo(() => {
+        return Array.from(
+            new Set(
+                (systemApiRows || [])
+                    .filter((row) => {
+                        const category = String(row?.category || '').trim();
+                        const baseModel = String(row?.base_model || row?.model || '').trim();
+                        if (billingRuleApiPickerCategory !== 'all' && category !== billingRuleApiPickerCategory) return false;
+                        if (billingRuleApiPickerBaseModel !== 'all' && baseModel !== billingRuleApiPickerBaseModel) return false;
+                        return true;
+                    })
+                    .map((row) => String(row?.provider || '').trim())
+                    .filter(Boolean)
+            )
+        ).sort((a, b) => a.localeCompare(b));
+    }, [systemApiRows, billingRuleApiPickerCategory, billingRuleApiPickerBaseModel]);
+
+    const billingRuleApiPickerBaseModelOptions = React.useMemo(() => {
+        return Array.from(
+            new Set(
+                (systemApiRows || [])
+                    .filter((row) => {
+                        const category = String(row?.category || '').trim();
+                        const provider = String(row?.provider || '').trim();
+                        if (billingRuleApiPickerCategory !== 'all' && category !== billingRuleApiPickerCategory) return false;
+                        if (billingRuleApiPickerProvider !== 'all' && provider !== billingRuleApiPickerProvider) return false;
+                        return true;
+                    })
+                    .map((row) => String(row?.base_model || row?.model || '').trim())
+                    .filter(Boolean)
+            )
+        ).sort((a, b) => a.localeCompare(b));
+    }, [systemApiRows, billingRuleApiPickerCategory, billingRuleApiPickerProvider]);
+
+    const filteredBillingRuleApiPickerRows = React.useMemo(() => {
+        return (systemApiRows || []).filter((row) => {
+            const category = String(row?.category || '').trim();
+            const provider = String(row?.provider || '').trim();
+            const baseModel = String(row?.base_model || row?.model || '').trim();
+            if (billingRuleApiPickerCategory !== 'all' && category !== billingRuleApiPickerCategory) return false;
+            if (billingRuleApiPickerProvider !== 'all' && provider !== billingRuleApiPickerProvider) return false;
+            if (billingRuleApiPickerBaseModel !== 'all' && baseModel !== billingRuleApiPickerBaseModel) return false;
+            return true;
+        });
+    }, [
+        systemApiRows,
+        billingRuleApiPickerCategory,
+        billingRuleApiPickerProvider,
+        billingRuleApiPickerBaseModel,
+    ]);
 
     const filteredBillingRuleRows = React.useMemo(() => {
         const keyword = String(billingRuleFilterKeyword || '').trim().toLowerCase();
@@ -6722,6 +6781,41 @@ const UserAdmin = () => {
 
                             <div className="border border-white/10 rounded-lg p-4 bg-black/20 space-y-3">
                                 <label className="text-xs uppercase text-gray-400">{t('筛选 System API 模型', 'Filter by System API Model')}</label>
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                                    <select
+                                        value={billingRuleApiPickerProvider}
+                                        onChange={(e) => setBillingRuleApiPickerProvider(e.target.value)}
+                                        className="bg-black/40 border border-gray-700 rounded p-2 text-xs"
+                                    >
+                                        <option value="all">{t('全部服务商', 'All Providers')}</option>
+                                        {billingRuleApiPickerProviderOptions.map((value) => (
+                                            <option key={`billing-rule-api-picker-provider-${value}`} value={value}>{value}</option>
+                                        ))}
+                                    </select>
+                                    <select
+                                        value={billingRuleApiPickerCategory}
+                                        onChange={(e) => setBillingRuleApiPickerCategory(e.target.value)}
+                                        className="bg-black/40 border border-gray-700 rounded p-2 text-xs"
+                                    >
+                                        <option value="all">{t('全部类型', 'All Categories')}</option>
+                                        {billingRuleApiPickerCategoryOptions.map((value) => (
+                                            <option key={`billing-rule-api-picker-category-${value}`} value={value}>{value}</option>
+                                        ))}
+                                    </select>
+                                    <select
+                                        value={billingRuleApiPickerBaseModel}
+                                        onChange={(e) => setBillingRuleApiPickerBaseModel(e.target.value)}
+                                        className="bg-black/40 border border-gray-700 rounded p-2 text-xs"
+                                    >
+                                        <option value="all">{t('全部基础模型', 'All Base Models')}</option>
+                                        {billingRuleApiPickerBaseModelOptions.map((value) => (
+                                            <option key={`billing-rule-api-picker-base-model-${value}`} value={value}>{value}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div className="text-[11px] text-gray-400">
+                                    {t('API 候选：', 'API candidates:')} {filteredBillingRuleApiPickerRows.length}
+                                </div>
                                 <select
                                     value={selectedSystemApiId}
                                     onChange={(e) => {
@@ -6731,7 +6825,7 @@ const UserAdmin = () => {
                                     className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
                                 >
                                     <option value="">{t('全部 API（默认）', 'All APIs (Default)')}</option>
-                                    {systemApiRows.map((row) => (
+                                    {filteredBillingRuleApiPickerRows.map((row) => (
                                         <option key={row.id} value={row.id}>
                                             [{row.category}] {row.provider} / {row.model || '-'} (ID:{row.id})
                                         </option>

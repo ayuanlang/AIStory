@@ -16006,6 +16006,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const [shotIdFilter, setShotIdFilter] = useState('');
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [shots, setShots] = useState([]);
+    const [selectedShotIds, setSelectedShotIds] = useState([]);
     const [isImportOpen, setIsImportOpen] = useState(false);
     // const [editingShot, setEditingShot] = useState(null); // Lifted state
     const [entities, setEntities] = useState([]);
@@ -17456,12 +17457,35 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             await Promise.all(shots.map(s => deleteShot(s.id)));
             onLog?.(`Successfully deleted ${shots.length} shots.`, "success");
             setShots([]);
+            setSelectedShotIds([]);
         } catch (e) {
             console.error(e);
             onLog?.("Error deleting shots", "error");
             refreshShots();
         }
     };
+
+    const handleDeleteSelectedShots = useCallback(async () => {
+        const targetIds = (selectedShotIds || []).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0);
+        if (targetIds.length === 0) {
+            onLog?.(t('请先选择要删除的镜头。', 'Select shots to delete first.'), 'warning');
+            return;
+        }
+
+        if (!await confirmUiMessage(`Are you sure you want to delete ${targetIds.length} selected shots? This cannot be undone.`)) return;
+
+        onLog?.(`Deleting ${targetIds.length} selected shots...`, 'process');
+        try {
+            await Promise.all(targetIds.map((id) => deleteShot(id)));
+            setSelectedShotIds([]);
+            onLog?.(`Successfully deleted ${targetIds.length} selected shots.`, 'success');
+            await refreshShots();
+        } catch (e) {
+            console.error(e);
+            onLog?.(t('删除选中镜头失败', 'Failed to delete selected shots'), 'error');
+            await refreshShots();
+        }
+    }, [selectedShotIds, onLog, refreshShots, t]);
 
     const handleSyncScenes = async (onlyForSceneId = null) => {
         // Support pulling from scene_content OR shot_content
@@ -19556,6 +19580,36 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         return rows;
     }, [shots, shotSortMode, shotSortDirection, getShotUpdatedAtMs, getShotHierarchyKey]);
 
+    const selectedShotIdSet = useMemo(
+        () => new Set((selectedShotIds || []).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)),
+        [selectedShotIds]
+    );
+
+    useEffect(() => {
+        const visibleIdSet = new Set((shots || []).map((s) => Number(s?.id || 0)).filter((id) => Number.isFinite(id) && id > 0));
+        setSelectedShotIds((prev) => (prev || []).filter((id) => visibleIdSet.has(Number(id))));
+    }, [shots]);
+
+    const toggleShotSelection = useCallback((shotId, checked) => {
+        const id = Number(shotId || 0);
+        if (!Number.isFinite(id) || id <= 0) return;
+        setSelectedShotIds((prev) => {
+            const set = new Set((prev || []).map((x) => Number(x)).filter((x) => Number.isFinite(x) && x > 0));
+            if (checked) set.add(id);
+            else set.delete(id);
+            return Array.from(set);
+        });
+    }, []);
+
+    const toggleSelectAllVisibleShots = useCallback((checked) => {
+        if (!checked) {
+            setSelectedShotIds([]);
+            return;
+        }
+        const ids = (sortedShots || []).map((s) => Number(s?.id || 0)).filter((id) => Number.isFinite(id) && id > 0);
+        setSelectedShotIds(Array.from(new Set(ids)));
+    }, [sortedShots]);
+
     return (
         <div className="flex flex-col h-full w-full p-6 overflow-hidden">
              {/* Header / Toolbar */}
@@ -19589,6 +19643,28 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                             title={t('删除当前显示的全部镜头', 'Delete All Displayed Shots')}
                         >
                             <Trash2 className="w-3 h-3"/>
+                        </button>
+                        <button
+                            onClick={() => toggleSelectAllVisibleShots(true)}
+                            className="ml-2 px-2.5 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded text-xs border border-white/20"
+                            title={t('全选当前显示镜头', 'Select all visible shots')}
+                        >
+                            {t('全选', 'Select All')}
+                        </button>
+                        <button
+                            onClick={() => toggleSelectAllVisibleShots(false)}
+                            className="ml-1 px-2.5 py-1.5 bg-white/5 hover:bg-white/10 text-white/80 rounded text-xs border border-white/10"
+                            title={t('清空已选镜头', 'Clear selected shots')}
+                        >
+                            {t('清空', 'Clear')}
+                        </button>
+                        <button
+                            onClick={handleDeleteSelectedShots}
+                            disabled={(selectedShotIds || []).length === 0}
+                            className="ml-1 px-3 py-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded text-xs border border-red-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                            title={t('删除已选镜头', 'Delete selected shots')}
+                        >
+                            {t('删除选中', 'Delete Selected')} ({(selectedShotIds || []).length})
                         </button>
                         <div className="relative inline-flex items-center ml-2 border border-white/20 rounded overflow-hidden">
                              <button
@@ -19761,8 +19837,20 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                     <div className="absolute top-2 left-2 bg-black/60 px-2 py-1 rounded text-xs font-mono font-bold text-white border border-white/10 pointer-events-none">
                                         {shot.shot_id}
                                     </div>
+                                    <label
+                                        className="absolute top-2 right-2 z-20 flex items-center justify-center w-5 h-5 rounded bg-black/60 border border-white/30 shadow"
+                                        onClick={(e) => e.stopPropagation()}
+                                        title={t('选择镜头', 'Select shot')}
+                                    >
+                                        <input
+                                            type="checkbox"
+                                            checked={selectedShotIdSet.has(Number(shot.id))}
+                                            onChange={(e) => toggleShotSelection(shot.id, e.target.checked)}
+                                            className="accent-primary"
+                                        />
+                                    </label>
                                     {shot.video_url && (
-                                        <div className="absolute top-2 right-2 bg-black/60 p-1.5 rounded-full text-white border border-white/10 pointer-events-none">
+                                        <div className="absolute top-2 right-9 bg-black/60 p-1.5 rounded-full text-white border border-white/10 pointer-events-none">
                                             <Video className="w-3 h-3" />
                                         </div>
                                     )}
