@@ -134,6 +134,7 @@ _provider_pool_cache = {
     "alias_map": {},
 }
 _settings_system_indexes_ensured = False
+_api_settings_binding_columns_ensured = False
 
 _AGENT_POLICY_CATEGORY = "System_Payment"
 _AGENT_POLICY_PROVIDER = "agent_policy"
@@ -1261,6 +1262,43 @@ def _ensure_settings_system_indexes(db: Session) -> None:
         logger.warning("settings.system.index ensure skipped: %s", str(exc)[:300])
 
 
+def _ensure_api_settings_binding_columns(db: Session) -> None:
+    global _api_settings_binding_columns_ensured
+    if _api_settings_binding_columns_ensured:
+        return
+
+    try:
+        conn = db.connection()
+        inspector = inspect(conn)
+        if not inspector.has_table("api_settings"):
+            return
+
+        existing_cols = {str(c.get("name") or "").strip().lower() for c in inspector.get_columns("api_settings")}
+        dialect_name = str(conn.dialect.name or "").lower()
+        added_cols: List[str] = []
+
+        if "system_api_id" not in existing_cols:
+            if dialect_name == "postgresql":
+                db.execute(text("ALTER TABLE api_settings ADD COLUMN IF NOT EXISTS system_api_id INTEGER"))
+            else:
+                db.execute(text("ALTER TABLE api_settings ADD COLUMN system_api_id INTEGER"))
+            added_cols.append("system_api_id")
+
+        if "mode" not in existing_cols:
+            if dialect_name == "postgresql":
+                db.execute(text("ALTER TABLE api_settings ADD COLUMN IF NOT EXISTS mode VARCHAR"))
+            else:
+                db.execute(text("ALTER TABLE api_settings ADD COLUMN mode VARCHAR"))
+            added_cols.append("mode")
+
+        if added_cols:
+            logger.warning("api_settings runtime migration applied: added columns %s", ",".join(added_cols))
+
+        _api_settings_binding_columns_ensured = True
+    except Exception as exc:
+        logger.warning("api_settings runtime migration skipped: %s", str(exc)[:300])
+
+
 def _normalize_key_strategy(value: str) -> str:
     raw = str(value or "").strip().lower()
     if raw in {"round_robin", "weighted", "random"}:
@@ -1543,6 +1581,8 @@ def _can_manage_system_settings(user: User) -> bool:
 
 
 def _ensure_default_system_selection_for_user(db: Session, user_id: int) -> None:
+    _ensure_api_settings_binding_columns(db)
+
     # Get all categories the user has configured
     user_active_categories = db.query(APISetting.category).filter(
         APISetting.user_id == user_id,
@@ -1583,6 +1623,8 @@ def _ensure_default_system_selection_for_user(db: Session, user_id: int) -> None
 
 
 def _normalize_user_active_settings(db: Session, user_id: int) -> None:
+    _ensure_api_settings_binding_columns(db)
+
     rows = db.query(APISetting).filter(
         APISetting.user_id == user_id,
     ).order_by(APISetting.category.asc(), APISetting.id.desc()).all()
@@ -1656,6 +1698,8 @@ def _normalize_setting_category_name(category: Any) -> str:
 
 
 def _cleanup_user_api_settings_records(db: Session, user_id: int) -> None:
+    _ensure_api_settings_binding_columns(db)
+
     rows = db.query(APISetting).filter(APISetting.user_id == user_id).order_by(APISetting.id.desc()).all()
     if not rows:
         return
@@ -3645,6 +3689,7 @@ def get_system_settings(
         return []
 
     try:
+        _ensure_api_settings_binding_columns(db)
         _ensure_settings_system_indexes(db)
         t0 = time.perf_counter()
         t_prev = t0
@@ -3857,6 +3902,7 @@ def select_system_setting(
     if _is_setting_deprecated(system_setting.config, system_setting.deprecated):
         raise HTTPException(status_code=400, detail="This system API setting is deprecated and cannot be activated")
 
+    _ensure_api_settings_binding_columns(db)
     _cleanup_user_api_settings_records(db, current_user.id)
     _normalize_user_active_settings(db, current_user.id)
 
