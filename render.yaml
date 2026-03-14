@@ -14,6 +14,7 @@ services:
       python migrate_system_api_settings_drop_wide_columns.py || echo "[WARN] migrate_system_api_settings_drop_wide_columns.py failed, continuing"
       python migrate_api_settings_missing_columns.py || echo "[WARN] migrate_api_settings_missing_columns.py failed, continuing"
       python migrate_api_settings_user_category_binding.py || echo "[WARN] migrate_api_settings_user_category_binding.py failed, continuing"
+      python migrate_hailuo_billing_rules_x3.py || echo "[WARN] migrate_hailuo_billing_rules_x3.py failed, continuing"
       python add_users_credits_column.py || echo "[WARN] add_users_credits_column.py failed, continuing"
       python add_scene_ai_shots_result_column.py || echo "[WARN] add_scene_ai_shots_result_column.py failed, continuing"
       python add_users_email_verification_columns.py || echo "[WARN] add_users_email_verification_columns.py failed, continuing"

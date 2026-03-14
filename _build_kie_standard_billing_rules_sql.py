@@ -152,6 +152,13 @@ def build_name(model: str, idx: int) -> str:
     return f"KIE Auto Std {core} #{idx}"
 
 
+def apply_model_price_adjustment(model: str, price: int) -> int:
+    model_lower = str(model or "").strip().lower()
+    if "hailuo" in model_lower:
+        return int(price * 3)
+    return int(price)
+
+
 def main() -> None:
     if not INPUT_CSV.exists():
         raise FileNotFoundError(f"Missing input: {INPUT_CSV}")
@@ -202,6 +209,7 @@ def main() -> None:
         model = str(meta["model"])
 
         base_unit, base_cost = estimate_rule_price(category, {})
+        base_cost = apply_model_price_adjustment(model, base_cost)
         applies_text = 1 if category == "chat" else 0
         applies_image = 1 if category == "image" else 0
         applies_video = 1 if category == "video" else 0
@@ -221,6 +229,7 @@ def main() -> None:
         for key in sorted(combos_by_api.get(api_id, {}).keys()):
             std = dict(key)
             unit, price = estimate_rule_price(category, std)
+            price = apply_model_price_adjustment(model, price)
             priority = 80 + (len(std) * 10)
             name = build_name(model, idx)
             desc = f"Auto std rule for {model}: " + ", ".join([f"{k}={v}" for k, v in sorted(std.items())])
