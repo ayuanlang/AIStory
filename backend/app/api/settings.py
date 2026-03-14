@@ -2470,6 +2470,32 @@ def _setting_to_out(db: Session, row: SystemAPISetting) -> SystemAPISettingOut:
     )
 
 
+def _query_system_settings_manage_rows(db: Session):
+    return db.query(
+        SystemAPISetting.id,
+        SystemAPISetting.name,
+        SystemAPISetting.category,
+        SystemAPISetting.provider,
+        SystemAPISetting.api_key,
+        SystemAPISetting.base_url,
+        SystemAPISetting.model,
+        SystemAPISetting.base_model,
+        SystemAPISetting.modality,
+        SystemAPISetting.tags,
+        SystemAPISetting.supplier_info,
+        SystemAPISetting.deprecated,
+        SystemAPISetting.config,
+        SystemAPISetting.is_active,
+    ).filter(
+        ~SystemAPISetting.category.like("System_%"),
+    ).order_by(
+        SystemAPISetting.category.asc(),
+        SystemAPISetting.provider.asc(),
+        SystemAPISetting.model.asc(),
+        SystemAPISetting.id.asc(),
+    ).all()
+
+
 def _rule_to_out(rule: SystemAPIBillingRule) -> SystemAPIBillingRuleOut:
     if hasattr(SystemAPIBillingRuleOut, "model_validate"):
         return SystemAPIBillingRuleOut.model_validate(rule)
@@ -4225,9 +4251,7 @@ def list_system_settings_for_manage(
     if not _can_manage_system_settings(current_user):
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
-    rows = db.query(SystemAPISetting).filter(
-        ~SystemAPISetting.category.like("System_%"),
-    ).order_by(SystemAPISetting.category.asc(), SystemAPISetting.provider.asc(), SystemAPISetting.model.asc(), SystemAPISetting.id.asc()).all()
+    rows = _query_system_settings_manage_rows(db)
     return [_setting_to_out(db, row) for row in rows]
 
 
@@ -4239,14 +4263,7 @@ def list_system_settings_missing_billing_rules(
     if not _can_manage_system_settings(current_user):
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
-    api_rows = db.query(SystemAPISetting).filter(
-        ~SystemAPISetting.category.like("System_%"),
-    ).order_by(
-        SystemAPISetting.category.asc(),
-        SystemAPISetting.provider.asc(),
-        SystemAPISetting.model.asc(),
-        SystemAPISetting.id.asc(),
-    ).all()
+    api_rows = _query_system_settings_manage_rows(db)
 
     billed_api_ids = {
         int(api_id)
@@ -7428,9 +7445,7 @@ def export_system_settings_for_manage(
     if not _can_manage_system_settings(current_user):
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
-    rows = db.query(SystemAPISetting).filter(
-        ~SystemAPISetting.category.like("System_%"),
-    ).order_by(SystemAPISetting.category.asc(), SystemAPISetting.provider.asc(), SystemAPISetting.model.asc(), SystemAPISetting.id.asc()).all()
+    rows = _query_system_settings_manage_rows(db)
 
     items = []
     for row in rows:
