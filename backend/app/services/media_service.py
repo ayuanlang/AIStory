@@ -4218,6 +4218,8 @@ class MediaGenerationService:
         is_kling_3_video = bool(gen_type == "video" and ("kling-3.0" in model_lower or model_lower == "kling3"))
         is_kling_26_i2v_model = bool(gen_type == "video" and model_lower == "kling-2.6/image-to-video")
         is_seedance_video_model = bool(gen_type == "video" and model_lower.startswith("bytedance/seedance"))
+        # KIE market video endpoints require duration as string for compatibility across models.
+        duration_string_required_model = bool(gen_type == "video")
 
         base_url = (config.get("base_url") or tool_conf.get("base_url") or "https://api.kie.ai").strip().rstrip("/")
         if "/api/v1/jobs" in base_url:
@@ -4516,8 +4518,9 @@ class MediaGenerationService:
                     duration_value = min(int(duration_value), int(max_duration))
             except Exception:
                 pass
-            # Keep numeric type to match KIE market API contract.
-            payload_input["duration"] = int(max(1, duration_value))
+            # Seedance expects duration as string; keep others numeric as before.
+            duration_normalized = int(max(1, duration_value))
+            payload_input["duration"] = str(duration_normalized) if duration_string_required_model else duration_normalized
 
             # Propagate project/request-level sound setting to all video models.
             # Previously only kling 2.6 explicitly consumed this flag.
@@ -5436,7 +5439,8 @@ class MediaGenerationService:
                     max_duration = runtime_enum_catalog.get("max_duration")
                     if max_duration is not None:
                         current_duration_int = min(int(current_duration_int), int(max_duration))
-                    payload_input_obj["duration"] = int(max(1, int(current_duration_int)))
+                    normalized_duration_int = int(max(1, int(current_duration_int)))
+                    payload_input_obj["duration"] = str(normalized_duration_int) if duration_string_required_model else normalized_duration_int
                 except Exception:
                     pass
 

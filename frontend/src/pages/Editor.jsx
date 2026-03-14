@@ -12747,6 +12747,18 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                             <div className="text-[10px] text-muted-foreground">双击任意行可弹窗编辑并保存更新</div>
                                             <div className="flex items-center gap-2">
                                                 <button
+                                                    onClick={() => {
+                                                        if (!editingScene?.id) return;
+                                                        loadLatestAIShotsStaging(editingScene.id);
+                                                    }}
+                                                    disabled={!editingScene?.id || aiShotsStaging.loading || aiShotsStaging.saving || aiShotsStaging.applying}
+                                                    className="px-3 py-1.5 bg-sky-700/70 hover:bg-sky-600/80 rounded-md text-xs font-bold text-white disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+                                                    title={t('重新读取该场景最新的 AI 镜头 Markdown/暂存内容', 'Reload latest AI shots markdown/staging content for this scene')}
+                                                >
+                                                    {aiShotsStaging.loading ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                                                    {aiShotsStaging.loading ? t('刷新中…', 'Refreshing…') : t('刷新 Markdown', 'Refresh Markdown')}
+                                                </button>
+                                                <button
                                                     onClick={async () => {
                                                         if (!editingScene.id) return;
                                                         setAiShotsStaging(prev => ({ ...prev, saving: true }));
@@ -12981,14 +12993,27 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                             </div>
                                         )}
 
-                                        {editingScene.id && aiShotsStaging.rawText ? (
-                                            <div className="mt-3">
-                                                <label className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider mb-1 block">{t('原始 LLM 文本（只读）', 'Raw LLM Text (Read-only)')}</label>
-                                                <textarea
-                                                    readOnly
-                                                    className="w-full bg-black/40 border border-white/10 rounded p-3 text-white/80 text-xs focus:outline-none resize-y custom-scrollbar font-mono leading-relaxed min-h-[120px]"
-                                                    value={aiShotsStaging.rawText}
-                                                />
+                                        {editingScene.id ? (
+                                            <div className="mt-3 bg-black/30 border border-white/10 rounded-md p-3">
+                                                <div className="flex items-center justify-between gap-2 mb-2">
+                                                    <label className="text-[11px] text-muted-foreground uppercase font-bold tracking-wide">
+                                                        {t('原始 LLM Markdown（只读）', 'Raw LLM Markdown (Read-only)')}
+                                                    </label>
+                                                    <span className="text-[10px] text-muted-foreground">
+                                                        {t('用于核对模型原始返回，不参与此处直接编辑。', 'For auditing original model output; not edited here directly.')}
+                                                    </span>
+                                                </div>
+                                                {String(aiShotsStaging.rawText || '').trim() ? (
+                                                    <textarea
+                                                        readOnly
+                                                        className="w-full bg-black/40 border border-white/10 rounded p-3 text-white/85 text-xs focus:outline-none resize-y custom-scrollbar font-mono leading-relaxed min-h-[180px] max-h-[360px]"
+                                                        value={String(aiShotsStaging.rawText || '')}
+                                                    />
+                                                ) : (
+                                                    <div className="text-xs text-muted-foreground bg-white/5 border border-white/10 rounded p-3">
+                                                        {t('暂无原始 Markdown 内容。可点击“刷新 Markdown”重新读取。', 'No raw markdown found. Click "Refresh Markdown" to reload.')}
+                                                    </div>
+                                                )}
                                             </div>
                                         ) : null}
                                     </div>
