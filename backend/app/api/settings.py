@@ -2511,14 +2511,27 @@ def list_task_default_apis_for_manage(
 
     if HAS_TASK_DEFAULT_SYSTEM_API_MODEL:
         rows = db.query(TaskDefaultSystemAPI).order_by(TaskDefaultSystemAPI.task_category.asc()).all()
-        system_rows = db.query(SystemAPISetting).filter(
+        system_rows = db.query(
+            SystemAPISetting.id,
+            SystemAPISetting.category,
+            SystemAPISetting.provider,
+            SystemAPISetting.model,
+            SystemAPISetting.name,
+        ).filter(
             SystemAPISetting.id.in_([int(getattr(row, "system_api_id", 0) or 0) for row in rows])
         ).all() if rows else []
         by_id = {int(item.id): item for item in system_rows}
         return [_task_default_row_to_out(row, by_id.get(int(getattr(row, "system_api_id", 0) or 0))) for row in rows]
 
     # Legacy fallback: infer defaults from active rows when mapping table/model is unavailable.
-    active_rows = db.query(SystemAPISetting).filter(
+    active_rows = db.query(
+        SystemAPISetting.id,
+        SystemAPISetting.category,
+        SystemAPISetting.provider,
+        SystemAPISetting.model,
+        SystemAPISetting.name,
+        SystemAPISetting.is_active,
+    ).filter(
         SystemAPISetting.is_active == True,
         ~SystemAPISetting.category.like("System_%"),
     ).order_by(SystemAPISetting.id.desc()).all()
