@@ -2519,7 +2519,13 @@ def _assert_task_default_target_row(db: Session, system_api_id: int) -> SystemAP
     sid = _safe_non_negative_int(system_api_id)
     if sid <= 0:
         raise HTTPException(status_code=400, detail="system_api_id must be a positive integer")
-    row = db.query(SystemAPISetting).filter(SystemAPISetting.id == sid).first()
+    row = db.query(
+        SystemAPISetting.id,
+        SystemAPISetting.category,
+        SystemAPISetting.provider,
+        SystemAPISetting.model,
+        SystemAPISetting.name,
+    ).filter(SystemAPISetting.id == sid).first()
     if not row:
         raise HTTPException(status_code=404, detail="system_api_id not found")
     if _is_system_reserved_category(str(getattr(row, "category", "") or "")):
@@ -5469,7 +5475,7 @@ def list_system_api_billing_rules(
     if not _can_manage_system_settings(current_user):
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
-    target = db.query(SystemAPISetting).filter(SystemAPISetting.id == system_api_id).first()
+    target = db.query(SystemAPISetting.id).filter(SystemAPISetting.id == system_api_id).first()
     if not target:
         raise HTTPException(status_code=404, detail="System API setting not found")
 
@@ -5491,7 +5497,7 @@ def create_system_api_billing_rule(
     if int(payload.system_api_id) != int(system_api_id):
         raise HTTPException(status_code=400, detail="path system_api_id must match payload.system_api_id")
 
-    target = db.query(SystemAPISetting).filter(SystemAPISetting.id == system_api_id).first()
+    target = db.query(SystemAPISetting.id).filter(SystemAPISetting.id == system_api_id).first()
     if not target:
         raise HTTPException(status_code=404, detail="System API setting not found")
 
