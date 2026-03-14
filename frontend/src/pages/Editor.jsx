@@ -13006,7 +13006,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                                 {String(aiShotsStaging.rawText || '').trim() ? (
                                                     <textarea
                                                         readOnly
-                                                        className="w-full bg-black/40 border border-white/10 rounded p-3 text-white/85 text-xs focus:outline-none resize-y custom-scrollbar font-mono leading-relaxed min-h-[180px] max-h-[360px]"
+                                                        className="w-full bg-black/40 border border-white/10 rounded p-3 text-white/85 text-xs focus:outline-none resize-y custom-scrollbar font-mono leading-relaxed min-h-[260px] max-h-[72vh]"
                                                         value={String(aiShotsStaging.rawText || '')}
                                                     />
                                                 ) : (
@@ -23130,15 +23130,36 @@ const Editor = ({
                 let existingScenes = [];
                 try { existingScenes = await fetchScenes(activeEpisodeId); } catch(e) {}
                 let currentSceneDbId = null;
+                const deferredShots = [];
 
-                const normalizeSceneNoToken = (value) => String(value || '').trim().replace(/[\*\s]/g, '').toLowerCase();
+                const normalizeSceneNoToken = (value) => {
+                    const text = String(value || '')
+                        .replace(/<br\s*\/?>/gi, ' ')
+                        .trim()
+                        .toLowerCase();
+                    // Keep only alphanumerics so EP01_SC01 / EP01-SC01 / EP01 SC01 can match.
+                    return text.replace(/[^a-z0-9]/g, '');
+                };
                 const toSceneNumber = (value) => {
                     const text = String(value || '').trim();
                     if (!text) return null;
-                    const m = text.match(/(?:^|[_\-])sc(?:ene)?\s*0*([0-9]{1,4})(?:$|[_\-])/i) || text.match(/\b0*([0-9]{1,4})\b/);
+                    const scMatches = Array.from(text.matchAll(/sc(?:ene)?\s*0*([0-9]{1,4})/ig));
+                    if (scMatches.length > 0) {
+                        const n = Number.parseInt(scMatches[scMatches.length - 1][1], 10);
+                        return Number.isFinite(n) && n > 0 ? n : null;
+                    }
+
+                    const allNum = Array.from(text.matchAll(/0*([0-9]{1,4})/g));
+                    if (allNum.length > 0) {
+                        // Prefer the last numeric token so EP01_SC16 resolves to 16.
+                        const n = Number.parseInt(allNum[allNum.length - 1][1], 10);
+                        return Number.isFinite(n) && n > 0 ? n : null;
+                    }
+
+                    const m = text.match(/\b0*([0-9]{1,4})\b/);
                     if (m && m[1]) {
                         const n = Number.parseInt(m[1], 10);
-                        return Number.isFinite(n) ? n : null;
+                        return Number.isFinite(n) && n > 0 ? n : null;
                     }
                     return null;
                 };
@@ -23149,10 +23170,15 @@ const Editor = ({
 
                     out.push(text);
 
-                    // Match patterns like EP01_SC01, SC01, scene01 and map to 1
+                    // Match patterns like EP01_SC01, SC01, scene01 and map to 1.
                     const scMatch = text.match(/(?:^|[_\-])sc(?:ene)?\s*0*([0-9]{1,4})(?:$|[_\-])/i) || text.match(/^sc(?:ene)?\s*0*([0-9]{1,4})$/i);
                     if (scMatch && scMatch[1]) {
                         out.push(String(parseInt(scMatch[1], 10)));
+                    }
+
+                    const sceneNum = toSceneNumber(text);
+                    if (Number.isFinite(sceneNum) && sceneNum > 0) {
+                        out.push(String(sceneNum));
                     }
 
                     // Include all numeric tokens (EP01_SC01 => 1, 1).
@@ -23173,17 +23199,39 @@ const Editor = ({
                         .filter((v) => Number.isFinite(v));
                     if (candidates.length === 0 && candidateNums.length === 0) return null;
 
-                    return existingScenes.find((s) => {
+                    const directMatch = existingScenes.find((s) => {
                         const dbTokens = [s?.scene_no, s?.scene_id, s?.scene_code]
                             .map((v) => normalizeSceneNoToken(v))
                             .filter(Boolean);
                         if (dbTokens.some((token) => candidates.includes(token))) return true;
 
-                        const dbSceneNum = toSceneNumber(s?.scene_no);
-                        if (Number.isFinite(dbSceneNum) && candidateNums.includes(dbSceneNum)) return true;
+                        const dbSceneNums = [toSceneNumber(s?.scene_no), toSceneNumber(s?.scene_id), toSceneNumber(s?.scene_code)]
+                            .filter((v) => Number.isFinite(v));
+                        if (dbSceneNums.some((n) => candidateNums.includes(n))) return true;
 
                         return false;
                     }) || null;
+
+                    if (directMatch) return directMatch;
+
+                    // Fallback: if we can parse scene index N but DB scene_no values are irregular,
+                    // map to the Nth scene in current episode order.
+                    const fallbackNum = candidateNums.length > 0
+                        ? candidateNums[candidateNums.length - 1]
+                        : null;
+                    if (Number.isFinite(fallbackNum) && fallbackNum > 0) {
+                        const orderedScenes = [...existingScenes].sort((a, b) => {
+                            const aNum = toSceneNumber(a?.scene_no);
+                            const bNum = toSceneNumber(b?.scene_no);
+                            if (Number.isFinite(aNum) && Number.isFinite(bNum) && aNum !== bNum) return aNum - bNum;
+                            return Number(a?.id || 0) - Number(b?.id || 0);
+                        });
+                        if (orderedScenes.length >= fallbackNum) {
+                            return orderedScenes[fallbackNum - 1] || null;
+                        }
+                    }
+
+                    return null;
                 };
                 
                 // State flags
@@ -23369,6 +23417,39 @@ const Editor = ({
                                  }
                              }
 
+                             // Retry path: if unresolved, derive scene token from shot id and refetch scenes once.
+                             if (!resolvedSceneDbId) {
+                                 const shotSceneToken = String(rawShotId || '').match(/ep\s*\d+[_\- ]sc\s*\d+/i)
+                                     || String(rawShotId || '').match(/sc(?:ene)?\s*0*\d+/i);
+                                 const retrySceneCode = shotSceneToken && shotSceneToken[0]
+                                     ? String(shotSceneToken[0]).replace(/\s+/g, '_')
+                                     : '';
+
+                                 if (retrySceneCode) {
+                                     const retryMatch = resolveSceneByCode(retrySceneCode);
+                                     if (retryMatch?.id) {
+                                         resolvedSceneDbId = retryMatch.id;
+                                         currentSceneDbId = retryMatch.id;
+                                         if (!sceneCode) sceneCode = retrySceneCode;
+                                     }
+                                 }
+
+                                 if (!resolvedSceneDbId) {
+                                     try {
+                                         existingScenes = await fetchScenes(activeEpisodeId);
+                                     } catch (e) {}
+
+                                     const retryCode = sceneCode || retrySceneCode;
+                                     if (retryCode) {
+                                         const refreshedMatch = resolveSceneByCode(retryCode);
+                                         if (refreshedMatch?.id) {
+                                             resolvedSceneDbId = refreshedMatch.id;
+                                             currentSceneDbId = refreshedMatch.id;
+                                         }
+                                     }
+                                 }
+                             }
+
                              // Keep scene_code text from table/shot id for traceability.
                              if (!sceneCode && resolvedSceneDbId) {
                                  const sObj = existingScenes.find(s => s.id === resolvedSceneDbId);
@@ -23397,7 +23478,22 @@ const Editor = ({
                                       addLog(`Failed to create shot ${shotData.shot_id}: ${shotErr.message}`, "error");
                                  }
                              } else {
-                                 addLog(`Skipped Shot ${rawShotId}: No matching Scene found for code '${sceneCode}'`, "warning");
+                                 const shotData = {
+                                     shot_id: rawShotId,
+                                     shot_name: useMap ? getVal(['shotname', 'name', '镜头名称'], 1) : clean(cols[1]),
+                                     scene_code: sceneCode,
+                                     start_frame: useMap ? getVal(['startframe', 'start', '首帧'], 2) : clean(cols[colStart]),
+                                     end_frame: useMap ? getVal(['endframe', 'end', '尾帧'], 3) : clean(cols[colStart+1]),
+                                     video_content: useMap ? getVal(['videocontent', 'video', 'description', '视频内容'], 4) : clean(cols[colStart+2]),
+                                     duration: useMap ? getVal(['duration', 'durations', 'duration(s)', 'dur', '时长'], 5) : clean(cols[colStart+3]),
+                                     associated_entities: useMap ? getVal(['associatedentities', 'entities', 'associated', '实体'], 6) : clean(cols[colStart+4]),
+                                     shot_logic_cn: useMap ? getVal(['shotlogiccn', 'shotlogic', 'logic', 'logiccn', 'shotlogic(cn)', 'shot logic (cn)', 'logic(cn)'], 7) : ''
+                                 };
+                                 deferredShots.push({ rawShotId, sceneCode, shotData });
+                                 addLog(
+                                     `Deferred Shot ${rawShotId}: unresolved Scene code '${sceneCode || ''}'. Will retry after scene refresh.`,
+                                     "warning"
+                                 );
                              }
                          }
 
@@ -23405,6 +23501,39 @@ const Editor = ({
                          inSceneTable = false;
                     } else if (shotLines.length > 2 && inShotTable && !trimmed.startsWith('|') && trimmed !== '') {
                          inShotTable = false;
+                    }
+                }
+
+                // Retry unresolved shots after entire document pass. This covers cases where shot rows
+                // appear before scene rows or scene list was stale during first pass.
+                if (deferredShots.length > 0) {
+                    addLog(`Retrying ${deferredShots.length} deferred shots after scene refresh...`, 'process');
+                    try { existingScenes = await fetchScenes(activeEpisodeId); } catch (e) {}
+
+                    for (const deferred of deferredShots) {
+                        const retryCode = deferred.sceneCode || deferred.shotData?.scene_code || deferred.rawShotId;
+                        const sceneMatch = resolveSceneByCode(retryCode);
+                        if (sceneMatch?.id) {
+                            try {
+                                await createShot(sceneMatch.id, deferred.shotData);
+                                importStats.shotsCreated += 1;
+                                currentSceneDbId = sceneMatch.id;
+                            } catch (shotErr) {
+                                console.error('Deferred Shot DB Sync Error', shotErr);
+                                addLog(`Failed to create deferred shot ${deferred.rawShotId}: ${shotErr.message}`, 'error');
+                            }
+                        } else {
+                            const debugCandidates = extractSceneNoCandidates(retryCode).join(', ');
+                            const availableSceneNos = existingScenes
+                                .map((s) => String(s?.scene_no || s?.scene_id || s?.id || '').trim())
+                                .filter(Boolean)
+                                .slice(0, 12)
+                                .join(', ');
+                            addLog(
+                                `Skipped Shot ${deferred.rawShotId}: No matching Scene found for code '${deferred.sceneCode}' (candidates: ${debugCandidates || 'none'}, available: ${availableSceneNos || 'none'})`,
+                                'warning'
+                            );
+                        }
                     }
                 }
 

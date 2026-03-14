@@ -3993,10 +3993,20 @@ def parse_shots_markdown_table(markdown_text: str) -> Tuple[List[str], List[Dict
     header_idx = -1
     separator_idx = -1
 
+    def _looks_like_table_row(line: str) -> bool:
+        s = str(line or "").strip()
+        if not s:
+            return False
+        if s.startswith("|"):
+            return True
+        # Some providers emit markdown rows without leading/trailing pipes.
+        # Accept rows with at least two pipe separators as table rows.
+        return s.count("|") >= 2
+
     for i in range(len(lines) - 1):
         header_line = lines[i].strip()
         sep_line = lines[i + 1].strip()
-        if not header_line.startswith("|"):
+        if not _looks_like_table_row(header_line):
             continue
         header_cells_raw = _split_markdown_row_escaped(header_line)
         if len(header_cells_raw) < 2:
@@ -4039,7 +4049,7 @@ def parse_shots_markdown_table(markdown_text: str) -> Tuple[List[str], List[Dict
         if stripped.startswith("#"):
             break
 
-        if stripped.startswith("|"):
+        if _looks_like_table_row(stripped):
             if _is_markdown_table_separator(stripped):
                 continue
 
@@ -9184,6 +9194,9 @@ async def ai_generate_shots(
                 billing_service.cancel_reservation(db, reservation_tx.id, "empty llm response")
             raise HTTPException(status_code=502, detail="LLM returned empty response")
 
+        # Keep original model output for read-only auditing in UI.
+        raw_text_original = str(response_content_raw or "")
+
         if re.search(r"\bPROHIBITED_CONTENT\b", raw_str, flags=re.IGNORECASE):
             logger.warning(
                 f"[ai_generate_shots] prohibited_content_marker_detected scene_id={scene_id} user_id={current_user.id}"
@@ -9280,19 +9293,25 @@ async def ai_generate_shots(
         logger.info(
             f"[ai_generate_shots] parsed_result scene_id={scene_id} table_lines={table_line_count} parsed_shots={len(shots_data)}"
         )
+        if table_line_count >= 4 and len(shots_data) > 0 and (len(shots_data) * 2) <= table_line_count:
+            logger.warning(
+                f"[ai_generate_shots] suspicious_row_drop scene_id={scene_id} "
+                f"table_lines={table_line_count} parsed_shots={len(shots_data)}"
+            )
 
         # 6. Save to DB (Scheme A)
-        # scenes.ai_shots_result stores ONLY the raw LLM Markdown table (plain text)
+        # scenes.ai_shots_result stores the original LLM markdown response text
+        # for read-only auditing in the scene editor.
         from datetime import datetime
 
         result_wrapper = {
             "timestamp": now_bj_iso(),
-            "raw_text": response_content,
+            "raw_text": raw_text_original,
             "content": shots_data,
             "usage": usage,
         }
 
-        scene.ai_shots_result = response_content
+        scene.ai_shots_result = raw_text_original
         db.commit()
         
         logger.info(f"[ai_generate_shots] Saved raw markdown to scene.ai_shots_result; parsed_shots={len(shots_data)} scene_id={scene_id}")
@@ -9361,7 +9380,12 @@ def get_scene_latest_ai_result(
             pass
 
     # Parse markdown table into list-of-dicts for the staging editor
-    _, shots_data, _ = parse_shots_markdown_table(raw_value or "")
+    _, shots_data, table_line_count = parse_shots_markdown_table(raw_value or "")
+    if table_line_count >= 4 and len(shots_data) > 0 and (len(shots_data) * 2) <= table_line_count:
+        logger.warning(
+            f"[get_scene_latest_ai_result] suspicious_row_drop scene_id={scene_id} "
+            f"table_lines={table_line_count} parsed_shots={len(shots_data)}"
+        )
 
     return {
         "raw_text": raw_value,
@@ -18388,7 +18412,24 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                 if need_start:
                     start_prompt_raw = str(shot.start_frame or shot.video_content or "").strip()
                     if start_prompt_raw:
-                        if len(start_prompt_raw) < min_prompt_chars:
+                        is_sap_start_prompt = str(start_prompt_raw).strip().upper() == "SAP"
+                        prev_end = _find_previous_shot_end_frame_url(db, episode_id, int(shot.id))
+                        if is_sap_start_prompt and prev_end:
+                            tech = _parse_shot_tech(shot)
+                            shot.image_url = prev_end
+                            if str(tech.get("start_frame_url") or "").strip() != prev_end:
+                                tech["start_frame_url"] = prev_end
+                                shot.technical_notes = json.dumps(tech, ensure_ascii=False)
+                            db.add(shot)
+                            db.commit()
+                            db.refresh(shot)
+                            logger.info(
+                                "[shot_media_batch] SAP start_frame linked from previous end_frame | shot_id=%s shot_label=%s prev_end=%s",
+                                shot.id,
+                                shot_label,
+                                prev_end,
+                            )
+                        elif len(start_prompt_raw) < min_prompt_chars:
                             logger.info(
                                 "[shot_media_batch] skip start_frame due to short prompt | shot_id=%s shot_label=%s prompt_len=%s",
                                 shot.id,
@@ -18420,9 +18461,11 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                                 deleted_refs = {str(x).strip() for x in tech.get("deleted_ref_urls") or [] if str(x).strip()}
                                 new_auto = [url for url in auto_matches if url not in saved_refs and url not in deleted_refs]
                                 start_refs = saved_refs + new_auto
+                                if is_sap_start_prompt and prev_end and prev_end not in start_refs and prev_end not in deleted_refs:
+                                    # SAP means reusing previous shot end frame as current start reference.
+                                    start_refs.insert(0, prev_end)
                             else:
                                 start_refs = list(auto_matches)
-                                prev_end = _find_previous_shot_end_frame_url(db, episode_id, int(shot.id))
                                 if prev_end and prev_end not in start_refs:
                                     start_refs.insert(0, prev_end)
 

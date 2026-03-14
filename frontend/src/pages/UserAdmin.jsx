@@ -288,6 +288,8 @@ const UserAdmin = () => {
     const [runtimeLogContent, setRuntimeLogContent] = useState('');
     const [isRuntimeLogsLoading, setIsRuntimeLogsLoading] = useState(false);
     const [runtimeLogsError, setRuntimeLogsError] = useState('');
+    const runtimeLogPreRef = React.useRef(null);
+    const llmLogPreRef = React.useRef(null);
     const [storageUsage, setStorageUsage] = useState(null);
     const [isStorageUsageLoading, setIsStorageUsageLoading] = useState(false);
     const [storageUsageError, setStorageUsageError] = useState('');
@@ -3517,6 +3519,24 @@ const UserAdmin = () => {
             setIsStorageUsageLoading(false);
         }
     };
+
+    useEffect(() => {
+        if (activeTab !== 'runtime_logs' || isRuntimeLogsLoading) return;
+        requestAnimationFrame(() => {
+            const node = runtimeLogPreRef.current;
+            if (!node) return;
+            node.scrollTop = node.scrollHeight;
+        });
+    }, [activeTab, isRuntimeLogsLoading, runtimeLogContent]);
+
+    useEffect(() => {
+        if (activeTab !== 'llm_logs' || isLlmLogsLoading) return;
+        requestAnimationFrame(() => {
+            const node = llmLogPreRef.current;
+            if (!node) return;
+            node.scrollTop = node.scrollHeight;
+        });
+    }, [activeTab, isLlmLogsLoading, llmLogContent]);
 
     const fetchSmtpConfig = async () => {
         setIsSmtpConfigLoading(true);
@@ -7546,7 +7566,7 @@ const UserAdmin = () => {
                                 Showing last {Math.max(1, Number(runtimeLogTailLines) || 300)} lines from {selectedRuntimeLogFile}
                             </div>
 
-                            <pre className="w-full min-h-[420px] max-h-[620px] overflow-auto bg-black/40 border border-gray-700 rounded p-3 text-xs text-gray-100 whitespace-pre-wrap break-all font-mono">
+                            <pre ref={runtimeLogPreRef} className="w-full min-h-[420px] max-h-[620px] overflow-auto bg-black/40 border border-gray-700 rounded p-3 text-xs text-gray-100 whitespace-pre-wrap break-all font-mono">
                                 {isRuntimeLogsLoading ? 'Loading runtime logs...' : (runtimeLogContent || 'No content')}
                             </pre>
                         </div>
@@ -7602,7 +7622,7 @@ const UserAdmin = () => {
                                 Showing last {Math.max(1, Number(llmLogTailLines) || 300)} lines from {selectedLlmLogFile}
                             </div>
 
-                            <pre className="w-full min-h-[420px] max-h-[620px] overflow-auto bg-black/40 border border-gray-700 rounded p-3 text-xs text-gray-100 whitespace-pre-wrap break-all font-mono">
+                            <pre ref={llmLogPreRef} className="w-full min-h-[420px] max-h-[620px] overflow-auto bg-black/40 border border-gray-700 rounded p-3 text-xs text-gray-100 whitespace-pre-wrap break-all font-mono">
                                 {isLlmLogsLoading ? 'Loading LLM logs...' : (llmLogContent || 'No content')}
                             </pre>
                         </div>
