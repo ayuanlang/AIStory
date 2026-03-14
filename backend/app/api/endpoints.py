@@ -151,6 +151,7 @@ def _build_video_dedup_key(req: "VideoGenerationRequest", user_id: int) -> str:
         "duration": req.duration,
         "aspect_ratio": req.aspect_ratio,
         "mode": req.mode,
+        "ref_mode": req.ref_mode,
         "sound": req.sound,
         "multi_shots": req.multi_shots,
         "multi_prompt": req.multi_prompt,
@@ -13068,6 +13069,7 @@ class VideoGenerationRequest(BaseModel):
     duration: Optional[float] = 5.0
     aspect_ratio: Optional[str] = None
     mode: Optional[str] = None
+    ref_mode: Optional[str] = None
     sound: Optional[bool] = None
     multi_shots: Optional[bool] = None
     multi_prompt: Optional[List[Dict[str, Any]]] = None
@@ -16297,6 +16299,59 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
         )
 
         prompt_text = str(req.prompt or "")
+        normalized_ref_mode = _normalize_video_ref_mode(getattr(req, "ref_mode", None))
+        is_reference_image_mode = bool(normalized_ref_mode == "refs_video" or isinstance(req.ref_image_url, list))
+
+        auto_entity_refs: List[str] = []
+        if is_reference_image_mode and resolved_project_id:
+            entity_lookup = _build_project_entity_lookup(db, int(resolved_project_id))
+            prompt_candidates: List[str] = [prompt_text]
+            shot_for_ref: Optional[Shot] = None
+
+            if req.shot_id:
+                shot_for_ref = db.query(Shot).filter(Shot.id == int(req.shot_id)).first()
+            if shot_for_ref:
+                prompt_candidates.extend([
+                    str(shot_for_ref.start_frame or "").strip(),
+                    str(shot_for_ref.end_frame or "").strip(),
+                ])
+                shot_tech = _parse_shot_tech(shot_for_ref)
+                if isinstance(shot_tech, dict):
+                    prompt_candidates.extend([
+                        str(shot_tech.get("video_prompt_cn") or "").strip(),
+                        str(shot_tech.get("start_frame_cn") or "").strip(),
+                        str(shot_tech.get("end_frame_cn") or "").strip(),
+                    ])
+
+            for candidate_text in prompt_candidates:
+                if not str(candidate_text or "").strip():
+                    continue
+                auto_entity_refs.extend(_collect_prompt_entity_ref_images_relaxed(candidate_text, entity_lookup))
+
+            auto_entity_refs = [
+                x for x in dict.fromkeys([str(x).strip() for x in auto_entity_refs if str(x).strip()])
+                if x
+            ]
+            if auto_entity_refs:
+                existing_start_refs: List[str] = []
+                if isinstance(req.ref_image_url, list):
+                    existing_start_refs = [str(x).strip() for x in req.ref_image_url if str(x).strip()]
+                elif isinstance(req.ref_image_url, str) and req.ref_image_url.strip():
+                    existing_start_refs = [req.ref_image_url.strip()]
+
+                req.ref_image_url = [
+                    x for x in dict.fromkeys(existing_start_refs + auto_entity_refs)
+                    if str(x).strip()
+                ]
+
+            logger.info(
+                "[GenerateVideo] auto entity refs | shot_id=%s project_id=%s ref_mode=%s detected=%s",
+                req.shot_id,
+                resolved_project_id,
+                normalized_ref_mode or "list_ref",
+                len(auto_entity_refs),
+            )
+
         flat_refs: List[str] = []
         if isinstance(req.ref_image_url, list):
             flat_refs.extend([str(x).strip() for x in req.ref_image_url if str(x).strip()])
@@ -17737,6 +17792,52 @@ def _collect_prompt_entity_ref_images(prompt: str, entity_lookup: Dict[str, Dict
         if image_url:
             refs.append(image_url)
     return [x for x in dict.fromkeys(refs) if x]
+
+
+def _collect_prompt_entity_ref_images_relaxed(prompt: str, entity_lookup: Dict[str, Dict[str, Any]]) -> List[str]:
+    text = str(prompt or "").strip()
+    if not text:
+        return []
+
+    refs: List[str] = []
+    allowed_types = {"subject", "character", "char", "environment", "env", "prop", "props"}
+
+    refs.extend(_collect_prompt_entity_ref_images(text, entity_lookup))
+
+    normalized_text = _normalize_entity_anchor_token(text)
+    if not normalized_text:
+        return [x for x in dict.fromkeys(refs) if x]
+
+    for key, row in (entity_lookup or {}).items():
+        norm_key = str(key or "").strip()
+        if not norm_key:
+            continue
+
+        entity_type = str((row or {}).get("entity_type") or "").strip().lower()
+        if entity_type and entity_type not in allowed_types:
+            continue
+
+        image_url = str((row or {}).get("image_url") or "").strip()
+        if not image_url:
+            continue
+
+        has_ascii = bool(re.search(r"[a-z0-9]", norm_key, flags=re.IGNORECASE))
+        if has_ascii:
+            pattern = rf"(?<![a-z0-9]){re.escape(norm_key)}(?![a-z0-9])"
+            matched = re.search(pattern, normalized_text, flags=re.IGNORECASE) is not None
+        else:
+            matched = norm_key in normalized_text
+
+        if matched:
+            refs.append(image_url)
+
+    return [x for x in dict.fromkeys(refs) if x]
+
+
+def _normalize_video_ref_mode(value: Any) -> str:
+    mode = str(value or "").strip().lower()
+    aliases = {"refs_video", "refs-video", "reference", "reference_image", "reference_images"}
+    return "refs_video" if mode in aliases else ""
 
 
 def _compute_subject_ref_index_map(prompt: str, entity_lookup: Dict[str, Dict[str, Any]]) -> Dict[str, int]:

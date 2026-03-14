@@ -11451,16 +11451,16 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                 sceneId,
                 message: t('正在准备 AI Shots 请求...', 'Preparing AI Shots request...'),
             });
-            const data = await fetchSceneShotsPrompt(sceneId);
-            await executeGenerateShots({ sceneId, promptData: data });
+            onLog?.('SceneManager: Non-superuser mode: skip prompt preview and run main AI Shots flow directly.', 'info');
+            await executeGenerateShots({ sceneId, promptData: null });
         } catch (e) {
-            onLog?.(`SceneManager: Failed to prepare AI shots - ${e.message}`, 'error');
+            onLog?.(`SceneManager: Failed to start AI shots main flow - ${e.message}`, 'error');
             setAiShotsFlowStatus({
                 phase: 'failed',
                 sceneId,
                 message: t(`AI Shots 失败：${e.message}`, `AI Shots failed: ${e.message}`),
             });
-            alert(`Failed to prepare AI shots: ${e.message}`);
+            alert(`Failed to generate AI shots: ${e.message}`);
         }
     };
 
@@ -18610,6 +18610,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     shot_id: targetShotId,
                     shot_number: editingShot.shot_id,
                     shot_name: editingShot.shot_name,
+                    ref_mode: videoRefSubmitMode,
                     prompt_language: resolvedPromptSubmitLang,
                     asset_type: 'video',
                     negative_prompt: buildEntityNegativePrompt(rawPrompt, null, entities),
