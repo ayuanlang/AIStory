@@ -33,3 +33,6 @@ frontend/dist/
 *.db-wal
 *.db-shm
 *.db.bak*
+
+# Generated KIE dictionary bundle exports
+_kie_data_dictionary_bundle_export_*.json

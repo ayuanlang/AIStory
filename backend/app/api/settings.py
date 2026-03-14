@@ -1816,39 +1816,78 @@ def _extract_rule_match_signature(rule: SystemAPIBillingRule) -> Dict[str, Any]:
 
 
 def _ensure_kie_standard_tables_for_admin(db: Session) -> None:
-    db.execute(text("""
-        CREATE TABLE IF NOT EXISTS kie_system_data_standard_values (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            standard_dimension TEXT NOT NULL,
-            standard_value TEXT NOT NULL,
-            value_type TEXT NOT NULL,
-            definition TEXT,
-            alias_values TEXT,
-            is_active INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-            UNIQUE(standard_dimension, standard_value)
-        )
-    """))
-    db.execute(text("""
-        CREATE TABLE IF NOT EXISTS kie_system_data_standard_mappings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            provider TEXT NOT NULL,
-            model_key_inferred TEXT,
-            model_title TEXT,
-            model_url TEXT,
-            source_field TEXT NOT NULL,
-            source_enum_value TEXT NOT NULL,
-            standard_dimension TEXT NOT NULL,
-            standard_value TEXT NOT NULL,
-            confidence TEXT,
-            note TEXT,
-            is_active INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-            UNIQUE(provider, model_key_inferred, source_field, source_enum_value, standard_dimension, standard_value)
-        )
-    """))
+    dialect_name = str(getattr(getattr(db, "bind", None), "dialect", None).name if getattr(getattr(db, "bind", None), "dialect", None) else "").lower()
+
+    if dialect_name == "postgresql":
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS kie_system_data_standard_values (
+                id BIGSERIAL PRIMARY KEY,
+                standard_dimension TEXT NOT NULL,
+                standard_value TEXT NOT NULL,
+                value_type TEXT NOT NULL,
+                definition TEXT,
+                alias_values TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT (now()::text),
+                updated_at TEXT NOT NULL DEFAULT (now()::text),
+                UNIQUE(standard_dimension, standard_value)
+            )
+        """))
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS kie_system_data_standard_mappings (
+                id BIGSERIAL PRIMARY KEY,
+                provider TEXT NOT NULL,
+                model_key_inferred TEXT,
+                model_title TEXT,
+                model_url TEXT,
+                source_field TEXT NOT NULL,
+                source_enum_value TEXT NOT NULL,
+                standard_dimension TEXT NOT NULL,
+                standard_value TEXT NOT NULL,
+                confidence TEXT,
+                note TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                is_billing_related INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (now()::text),
+                updated_at TEXT NOT NULL DEFAULT (now()::text),
+                UNIQUE(provider, model_key_inferred, source_field, source_enum_value, standard_dimension, standard_value)
+            )
+        """))
+    else:
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS kie_system_data_standard_values (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                standard_dimension TEXT NOT NULL,
+                standard_value TEXT NOT NULL,
+                value_type TEXT NOT NULL,
+                definition TEXT,
+                alias_values TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(standard_dimension, standard_value)
+            )
+        """))
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS kie_system_data_standard_mappings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                provider TEXT NOT NULL,
+                model_key_inferred TEXT,
+                model_title TEXT,
+                model_url TEXT,
+                source_field TEXT NOT NULL,
+                source_enum_value TEXT NOT NULL,
+                standard_dimension TEXT NOT NULL,
+                standard_value TEXT NOT NULL,
+                confidence TEXT,
+                note TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                is_billing_related INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(provider, model_key_inferred, source_field, source_enum_value, standard_dimension, standard_value)
+            )
+        """))
 
     cols = {
         str(col.get("name") or "").strip().lower()
