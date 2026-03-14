@@ -2024,6 +2024,27 @@ export const inferKieStandardMappingBillingRelatedManage = async (provider = 'ki
     return response.data;
 }
 
+export const exportKieDataDictionaryMappings = async (params = {}) => {
+    const response = await api.get('/kie/data-dictionary/mappings/export', {
+        params: {
+            provider: 'kie',
+            include_csv: true,
+            ...params,
+            _ts: Date.now(),
+        },
+        headers: {
+            'Cache-Control': 'no-cache',
+            Pragma: 'no-cache',
+        },
+    });
+    return response.data;
+}
+
+export const importKieDataDictionaryMappings = async (payload) => {
+    const response = await api.post('/kie/data-dictionary/mappings/import', payload || {});
+    return response.data;
+}
+
 export const exportSystemSettingsManage = async () => {
     const response = await api.get('/settings/system/manage/export');
     return response.data;
