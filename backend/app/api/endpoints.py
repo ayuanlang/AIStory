@@ -4016,43 +4016,92 @@ def parse_shots_markdown_table(markdown_text: str) -> Tuple[List[str], List[Dict
         return [], [], 0
 
     rows: List[Dict[str, str]] = []
-    partial_cells: List[str] = []
     table_line_count = 0
+    row_cells: List[str] = []
+
+    def _flush_row() -> None:
+        nonlocal row_cells
+        if not row_cells:
+            return
+        if all(not str(c or "").strip() for c in row_cells):
+            row_cells = []
+            return
+        normalized = _normalize_markdown_table_cells(row_cells, header_count)
+        rows.append({headers[i]: normalized[i] for i in range(header_count)})
+        row_cells = []
 
     for line in lines[separator_idx + 1:]:
         stripped = line.strip()
-        if not stripped.startswith("|"):
-            continue
-        if _is_markdown_table_separator(stripped):
+        if not stripped:
             continue
 
-        table_line_count += 1
-        cells = _split_markdown_row_escaped(stripped)
-        if not cells or all(not c for c in cells):
+        # A new markdown heading usually means current table section ended.
+        if stripped.startswith("#"):
+            break
+
+        if stripped.startswith("|"):
+            if _is_markdown_table_separator(stripped):
+                continue
+
+            table_line_count += 1
+            cells = _split_markdown_row_escaped(stripped)
+            if not cells:
+                continue
+
+            if not row_cells:
+                row_cells = list(cells)
+            elif len(row_cells) >= header_count:
+                _flush_row()
+                row_cells = list(cells)
+            else:
+                row_cells.extend(cells)
+
+            if len(row_cells) >= header_count:
+                _flush_row()
             continue
 
-        if partial_cells and len(cells) == header_count:
-            padded = _normalize_markdown_table_cells(partial_cells, header_count)
-            rows.append({headers[i]: padded[i] for i in range(header_count)})
-            partial_cells = []
-            rows.append({headers[i]: cells[i] for i in range(header_count)})
-            continue
+        # Non-pipe line inside table area: append as continuation into last cell.
+        if row_cells:
+            row_cells[-1] = (str(row_cells[-1] or "") + "\n" + stripped).strip()
 
-        if not partial_cells:
-            partial_cells = list(cells)
-        else:
-            partial_cells.extend(cells)
-
-        if len(partial_cells) >= header_count:
-            normalized = _normalize_markdown_table_cells(partial_cells, header_count)
-            rows.append({headers[i]: normalized[i] for i in range(header_count)})
-            partial_cells = []
-
-    if partial_cells:
-        padded = _normalize_markdown_table_cells(partial_cells, header_count)
-        rows.append({headers[i]: padded[i] for i in range(header_count)})
+    _flush_row()
 
     return headers, rows, table_line_count
+
+
+# Whitelist mapping for extra shot markdown columns.
+# target=shot_field writes into Shot model columns;
+# target=tech_field writes into technical_notes JSON keys.
+SHOT_MARKDOWN_COLUMN_WHITELIST: Dict[str, Dict[str, str]] = {
+    # Camera grammar / cinematography
+    "cameraangle": {"target": "tech_field", "field": "camera_angle"},
+    "cameramovement": {"target": "tech_field", "field": "camera_movement"},
+    "cameralanguage": {"target": "tech_field", "field": "camera_language"},
+    "composition": {"target": "tech_field", "field": "composition"},
+    "lens": {"target": "tech_field", "field": "lens"},
+    "focallength": {"target": "tech_field", "field": "focal_length"},
+    "shottype": {"target": "tech_field", "field": "shot_type"},
+    "framing": {"target": "tech_field", "field": "framing"},
+    # Light / atmosphere / style
+    "lighting": {"target": "tech_field", "field": "lighting"},
+    "colortone": {"target": "tech_field", "field": "color_tone"},
+    "mood": {"target": "tech_field", "field": "mood"},
+    "style": {"target": "tech_field", "field": "style"},
+    # Audio / performance
+    "sounddesign": {"target": "tech_field", "field": "sound_design"},
+    "ambientsound": {"target": "tech_field", "field": "ambient_sound"},
+    "dialogue": {"target": "tech_field", "field": "dialogue"},
+    "voiceover": {"target": "tech_field", "field": "voiceover_text"},
+    # Production / edit notes
+    "vfxnotes": {"target": "tech_field", "field": "vfx_notes"},
+    "editnotes": {"target": "tech_field", "field": "edit_notes"},
+    "continuity": {"target": "tech_field", "field": "continuity"},
+    "transition": {"target": "tech_field", "field": "transition"},
+}
+
+
+def _normalize_shot_markdown_col_key(key: str) -> str:
+    return re.sub(r"[\s_\-./()（）:：]", "", str(key or "").strip().lower())
 
 
 def is_valid_markdown_output(text: str, require_h1: bool = True) -> bool:
@@ -9338,7 +9387,7 @@ def update_scene_latest_ai_result(
     _require_project_access(db, episode.project_id, current_user)
     
     # Scheme A: Save draft by converting edited content back to Markdown and overwriting ai_shots_result.
-    headers = [
+    default_headers = [
         "Shot ID",
         "Shot Name",
         "Scene ID",
@@ -9354,6 +9403,26 @@ def update_scene_latest_ai_result(
         "End Frame (CN)",
         "Associated Entities",
     ]
+
+    # Preserve newly added columns from markdown table instead of dropping them.
+    # Keep known headers first, then append unknown headers by first appearance order.
+    discovered_headers: List[str] = []
+    discovered_set = set()
+    for item in (data.content or []):
+        if not isinstance(item, dict):
+            continue
+        for key in item.keys():
+            k = str(key or "").strip()
+            if not k or k in discovered_set:
+                continue
+            discovered_set.add(k)
+            discovered_headers.append(k)
+
+    if discovered_headers:
+        headers: List[str] = [h for h in default_headers if h in discovered_set]
+        headers.extend([h for h in discovered_headers if h not in headers])
+    else:
+        headers = list(default_headers)
 
     def esc(val: str) -> str:
         if val is None:
@@ -9521,6 +9590,25 @@ def apply_scene_ai_result(
             end_cn = start_cn
         return start_cn, video_cn, keyframes_cn, end_cn
 
+    known_col_aliases = [
+        "Shot ID", "shot_id", "镜头ID",
+        "Shot Name", "shot_name", "镜头名称",
+        "Scene ID", "scene_id", "Scene Code", "scene_code", "场景ID", "场次号",
+        "Start Frame", "start_frame", "起始帧",
+        "End Frame", "end_frame", "结束帧",
+        "Video Content", "video_content", "视频内容",
+        "Duration (s)", "Duration", "duration", "时长", "时长(s)",
+        "Associated Entities", "associated_entities", "关联实体",
+        "Shot Logic (CN)", "shot_logic_cn", "镜头逻辑", "镜头逻辑（中文）",
+        "Keyframes", "keyframes", "关键帧",
+        "Prompt (CN)", "Prompts (CN)", "Prompt CN", "prompt_cn", "提示词（中文）", "中文提示词",
+        "Start Frame (CN)", "start_frame_cn", "起始帧（中文）",
+        "Video Content (CN)", "video_prompt_cn", "视频内容（中文）",
+        "Keyframes (CN)", "keyframes_cn", "关键帧（中文）", "关键帧中文",
+        "End Frame (CN)", "end_frame_cn", "结束帧（中文）",
+    ]
+    known_col_norm_set = {_normalize_shot_markdown_col_key(k) for k in known_col_aliases}
+
     for idx, s_data in enumerate(shots_data):
         # Dur parsing
         try:
@@ -9582,6 +9670,26 @@ def apply_scene_ai_result(
                 f"关键帧：{keyframes_cn_text or ''}",
                 f"收尾帧：{end_frame_cn_text or ''}",
             ])
+
+        # Persist newly added/unknown markdown columns for round-trip safety.
+        extra_columns: Dict[str, str] = {}
+        if isinstance(s_data, dict):
+            for raw_key, raw_val in s_data.items():
+                nk = _normalize_shot_markdown_col_key(raw_key)
+                if nk in known_col_norm_set:
+                    continue
+                val = str(raw_val or "").strip()
+                if not val:
+                    continue
+                rule = SHOT_MARKDOWN_COLUMN_WHITELIST.get(nk)
+                if rule and rule.get("target") == "tech_field":
+                    tech_key = str(rule.get("field") or "").strip()
+                    if tech_key:
+                        technical_notes_payload[tech_key] = val
+                        continue
+                extra_columns[str(raw_key)] = val
+        if extra_columns:
+            technical_notes_payload["shot_extra_columns"] = extra_columns
 
         shot = Shot(
             scene_id=scene_id,
@@ -18110,6 +18218,7 @@ def _find_previous_shot_end_frame_url(db: Session, episode_id: int, shot_id: int
 def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], user_id: int) -> None:
     db = SessionLocal()
     cancel_event = _get_shot_media_batch_cancel_event(int(episode_id), create=True)
+    min_prompt_chars = 5
 
     class _BatchStopRequested(Exception):
         pass
@@ -18279,52 +18388,60 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                 if need_start:
                     start_prompt_raw = str(shot.start_frame or shot.video_content or "").strip()
                     if start_prompt_raw:
-                        latest = _read_shot_media_batch_status(episode)
-                        latest["current_shot_id"] = shot.id
-                        latest["current_shot_label"] = shot_label
-                        latest["current_asset_type"] = "start_frame"
-                        latest["current_asset_label"] = "Start Frame"
-                        latest["message"] = f"Processing shot {shot_label} · Start Frame..."
-                        latest["updated_at"] = now_bj_iso()
-                        _persist_shot_media_batch_status(db, episode, latest)
-
-                        start_ref_index_map = _compute_subject_ref_index_map(start_prompt_raw, entity_lookup)
-                        logger.info(
-                            "[shot_media_batch] subject_ref_index_map asset=start_frame shot_id=%s shot_label=%s map=%s",
-                            shot.id,
-                            shot_label,
-                            start_ref_index_map,
-                        )
-                        start_prompt = _inject_shot_prompt_anchors(start_prompt_raw, entity_lookup, global_style, start_ref_index_map)
-                        auto_matches = _collect_prompt_entity_ref_images(start_prompt_raw, entity_lookup)
-                        start_refs: List[str] = []
-                        if isinstance(tech.get("ref_image_urls"), list):
-                            saved_refs = [str(x).strip() for x in tech.get("ref_image_urls") or [] if str(x).strip()]
-                            deleted_refs = {str(x).strip() for x in tech.get("deleted_ref_urls") or [] if str(x).strip()}
-                            new_auto = [url for url in auto_matches if url not in saved_refs and url not in deleted_refs]
-                            start_refs = saved_refs + new_auto
+                        if len(start_prompt_raw) < min_prompt_chars:
+                            logger.info(
+                                "[shot_media_batch] skip start_frame due to short prompt | shot_id=%s shot_label=%s prompt_len=%s",
+                                shot.id,
+                                shot_label,
+                                len(start_prompt_raw),
+                            )
                         else:
-                            start_refs = list(auto_matches)
-                            prev_end = _find_previous_shot_end_frame_url(db, episode_id, int(shot.id))
-                            if prev_end and prev_end not in start_refs:
-                                start_refs.insert(0, prev_end)
+                            latest = _read_shot_media_batch_status(episode)
+                            latest["current_shot_id"] = shot.id
+                            latest["current_shot_label"] = shot_label
+                            latest["current_asset_type"] = "start_frame"
+                            latest["current_asset_label"] = "Start Frame"
+                            latest["message"] = f"Processing shot {shot_label} · Start Frame..."
+                            latest["updated_at"] = now_bj_iso()
+                            _persist_shot_media_batch_status(db, episode, latest)
 
-                        start_refs = [x for x in dict.fromkeys([str(x).strip() for x in start_refs if str(x).strip()]) if x]
-                        start_req = GenerationRequest(
-                            prompt=start_prompt,
-                            ref_image_url=start_refs if start_refs else None,
-                            project_id=episode.project_id,
-                            shot_id=shot.id,
-                            shot_number=shot.shot_id,
-                            shot_name=shot.shot_name,
-                            asset_type="start_frame",
-                        )
-                        asyncio.run(_run_stage_with_retry(
-                            lambda: _run_generate_image(req=start_req, current_user=user, db=db),
-                            "start_frame",
-                            shot_label,
-                        ))
-                        shot = db.query(Shot).filter(Shot.id == shot.id).first() or shot
+                            start_ref_index_map = _compute_subject_ref_index_map(start_prompt_raw, entity_lookup)
+                            logger.info(
+                                "[shot_media_batch] subject_ref_index_map asset=start_frame shot_id=%s shot_label=%s map=%s",
+                                shot.id,
+                                shot_label,
+                                start_ref_index_map,
+                            )
+                            start_prompt = _inject_shot_prompt_anchors(start_prompt_raw, entity_lookup, global_style, start_ref_index_map)
+                            auto_matches = _collect_prompt_entity_ref_images(start_prompt_raw, entity_lookup)
+                            start_refs: List[str] = []
+                            if isinstance(tech.get("ref_image_urls"), list):
+                                saved_refs = [str(x).strip() for x in tech.get("ref_image_urls") or [] if str(x).strip()]
+                                deleted_refs = {str(x).strip() for x in tech.get("deleted_ref_urls") or [] if str(x).strip()}
+                                new_auto = [url for url in auto_matches if url not in saved_refs and url not in deleted_refs]
+                                start_refs = saved_refs + new_auto
+                            else:
+                                start_refs = list(auto_matches)
+                                prev_end = _find_previous_shot_end_frame_url(db, episode_id, int(shot.id))
+                                if prev_end and prev_end not in start_refs:
+                                    start_refs.insert(0, prev_end)
+
+                            start_refs = [x for x in dict.fromkeys([str(x).strip() for x in start_refs if str(x).strip()]) if x]
+                            start_req = GenerationRequest(
+                                prompt=start_prompt,
+                                ref_image_url=start_refs if start_refs else None,
+                                project_id=episode.project_id,
+                                shot_id=shot.id,
+                                shot_number=shot.shot_id,
+                                shot_name=shot.shot_name,
+                                asset_type="start_frame",
+                            )
+                            asyncio.run(_run_stage_with_retry(
+                                lambda: _run_generate_image(req=start_req, current_user=user, db=db),
+                                "start_frame",
+                                shot_label,
+                            ))
+                            shot = db.query(Shot).filter(Shot.id == shot.id).first() or shot
 
                 if _is_stop_requested():
                     _persist_stopped_status()
@@ -18333,52 +18450,60 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                 if need_end:
                     end_prompt_raw = str(shot.end_frame or "").strip()
                     if end_prompt_raw:
-                        latest = _read_shot_media_batch_status(episode)
-                        latest["current_shot_id"] = shot.id
-                        latest["current_shot_label"] = shot_label
-                        latest["current_asset_type"] = "end_frame"
-                        latest["current_asset_label"] = "End Frame"
-                        latest["message"] = f"Processing shot {shot_label} · End Frame..."
-                        latest["updated_at"] = now_bj_iso()
-                        _persist_shot_media_batch_status(db, episode, latest)
-
-                        end_ref_index_map = _compute_subject_ref_index_map(end_prompt_raw, entity_lookup)
-                        logger.info(
-                            "[shot_media_batch] subject_ref_index_map asset=end_frame shot_id=%s shot_label=%s map=%s",
-                            shot.id,
-                            shot_label,
-                            end_ref_index_map,
-                        )
-                        end_prompt = _inject_shot_prompt_anchors(end_prompt_raw, entity_lookup, global_style, end_ref_index_map)
-                        refs: List[str] = []
-                        if isinstance(tech.get("end_ref_image_urls"), list):
-                            refs.extend([str(x).strip() for x in tech.get("end_ref_image_urls") or [] if str(x).strip()])
+                        if len(end_prompt_raw) < min_prompt_chars:
+                            logger.info(
+                                "[shot_media_batch] skip end_frame due to short prompt | shot_id=%s shot_label=%s prompt_len=%s",
+                                shot.id,
+                                shot_label,
+                                len(end_prompt_raw),
+                            )
                         else:
-                            refs.extend(_collect_prompt_entity_ref_images(end_prompt_raw, entity_lookup))
+                            latest = _read_shot_media_batch_status(episode)
+                            latest["current_shot_id"] = shot.id
+                            latest["current_shot_label"] = shot_label
+                            latest["current_asset_type"] = "end_frame"
+                            latest["current_asset_label"] = "End Frame"
+                            latest["message"] = f"Processing shot {shot_label} · End Frame..."
+                            latest["updated_at"] = now_bj_iso()
+                            _persist_shot_media_batch_status(db, episode, latest)
 
-                        deleted_refs = {str(x).strip() for x in tech.get("deleted_ref_urls") or [] if str(x).strip()}
-                        start_image = str(shot.image_url or "").strip()
-                        if start_image and start_image not in refs and start_image not in deleted_refs:
-                            refs.insert(0, start_image)
+                            end_ref_index_map = _compute_subject_ref_index_map(end_prompt_raw, entity_lookup)
+                            logger.info(
+                                "[shot_media_batch] subject_ref_index_map asset=end_frame shot_id=%s shot_label=%s map=%s",
+                                shot.id,
+                                shot_label,
+                                end_ref_index_map,
+                            )
+                            end_prompt = _inject_shot_prompt_anchors(end_prompt_raw, entity_lookup, global_style, end_ref_index_map)
+                            refs: List[str] = []
+                            if isinstance(tech.get("end_ref_image_urls"), list):
+                                refs.extend([str(x).strip() for x in tech.get("end_ref_image_urls") or [] if str(x).strip()])
+                            else:
+                                refs.extend(_collect_prompt_entity_ref_images(end_prompt_raw, entity_lookup))
 
-                        refs = [x for x in dict.fromkeys([str(x).strip() for x in refs if str(x).strip()]) if x]
-                        end_req = GenerationRequest(
-                            prompt=end_prompt,
-                            ref_image_url=refs if refs else None,
-                            project_id=episode.project_id,
-                            shot_id=shot.id,
-                            shot_number=shot.shot_id,
-                            shot_name=shot.shot_name,
-                            asset_type="end_frame",
-                        )
-                        asyncio.run(_run_stage_with_retry(
-                            lambda: _run_generate_image(req=end_req, current_user=user, db=db),
-                            "end_frame",
-                            shot_label,
-                        ))
-                        shot = db.query(Shot).filter(Shot.id == shot.id).first() or shot
-                        tech = _parse_shot_tech(shot)
-                        end_frame_url = str(tech.get("end_frame_url") or "").strip()
+                            deleted_refs = {str(x).strip() for x in tech.get("deleted_ref_urls") or [] if str(x).strip()}
+                            start_image = str(shot.image_url or "").strip()
+                            if start_image and start_image not in refs and start_image not in deleted_refs:
+                                refs.insert(0, start_image)
+
+                            refs = [x for x in dict.fromkeys([str(x).strip() for x in refs if str(x).strip()]) if x]
+                            end_req = GenerationRequest(
+                                prompt=end_prompt,
+                                ref_image_url=refs if refs else None,
+                                project_id=episode.project_id,
+                                shot_id=shot.id,
+                                shot_number=shot.shot_id,
+                                shot_name=shot.shot_name,
+                                asset_type="end_frame",
+                            )
+                            asyncio.run(_run_stage_with_retry(
+                                lambda: _run_generate_image(req=end_req, current_user=user, db=db),
+                                "end_frame",
+                                shot_label,
+                            ))
+                            shot = db.query(Shot).filter(Shot.id == shot.id).first() or shot
+                            tech = _parse_shot_tech(shot)
+                            end_frame_url = str(tech.get("end_frame_url") or "").strip()
 
                 if _is_stop_requested():
                     _persist_stopped_status()

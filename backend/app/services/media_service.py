@@ -4217,6 +4217,7 @@ class MediaGenerationService:
         is_sora2_video_model = bool(gen_type == "video" and model_lower.startswith("sora-2"))
         is_kling_3_video = bool(gen_type == "video" and ("kling-3.0" in model_lower or model_lower == "kling3"))
         is_kling_26_i2v_model = bool(gen_type == "video" and model_lower == "kling-2.6/image-to-video")
+        is_seedance_video_model = bool(gen_type == "video" and model_lower.startswith("bytedance/seedance"))
 
         base_url = (config.get("base_url") or tool_conf.get("base_url") or "https://api.kie.ai").strip().rstrip("/")
         if "/api/v1/jobs" in base_url:
@@ -4501,13 +4502,22 @@ class MediaGenerationService:
                 mapped_duration = self._map_duration_nearest_lower(duration_value, allowed_durations)
                 if mapped_duration is not None:
                     duration_value = int(mapped_duration)
+
+            # KIE Seedance models often reject non-enum durations; if runtime enum is missing,
+            # apply a conservative fallback aligned with common Seedance options.
+            if is_seedance_video_model and (not isinstance(allowed_durations, list) or not allowed_durations):
+                mapped_duration = self._map_duration_nearest_lower(duration_value, [4, 8])
+                if mapped_duration is not None:
+                    duration_value = int(mapped_duration)
+
             max_duration = runtime_enum_catalog.get("max_duration")
             try:
                 if max_duration is not None:
                     duration_value = min(int(duration_value), int(max_duration))
             except Exception:
                 pass
-            payload_input["duration"] = str(max(1, duration_value))
+            # Keep numeric type to match KIE market API contract.
+            payload_input["duration"] = int(max(1, duration_value))
 
             # Propagate project/request-level sound setting to all video models.
             # Previously only kling 2.6 explicitly consumed this flag.
@@ -4760,6 +4770,37 @@ class MediaGenerationService:
                     "runtime_model": model,
                 }
             payload_input["last_frame_url"] = hosted_last_ref
+
+        if is_seedance_video_model:
+            seedance_refs: List[str] = []
+            if isinstance(payload_input.get("input_urls"), list):
+                seedance_refs.extend([str(x).strip() for x in payload_input.get("input_urls") or [] if str(x).strip()])
+            if isinstance(payload_input.get("image_urls"), list):
+                seedance_refs.extend([str(x).strip() for x in payload_input.get("image_urls") or [] if str(x).strip()])
+            single_ref = str(payload_input.get("image_url") or "").strip()
+            if single_ref:
+                seedance_refs.append(single_ref)
+            last_ref = str(payload_input.get("last_frame_url") or "").strip()
+            if last_ref:
+                seedance_refs.append(last_ref)
+
+            seedance_refs = [x for x in dict.fromkeys(seedance_refs) if x]
+            if seedance_refs:
+                payload_input["input_urls"] = seedance_refs
+
+            # Follow official Seedance shape and avoid ambiguous legacy aliases.
+            payload_input.pop("image_urls", None)
+            payload_input.pop("image_url", None)
+            payload_input.pop("last_frame_url", None)
+
+            # Prefer explicit Seedance flags when provided.
+            if "fixed_lens" in tool_conf:
+                payload_input["fixed_lens"] = bool(tool_conf.get("fixed_lens"))
+
+            if "generate_audio" in tool_conf:
+                payload_input["generate_audio"] = bool(tool_conf.get("generate_audio"))
+            elif "sound" in payload_input:
+                payload_input["generate_audio"] = bool(payload_input.get("sound"))
 
         if not use_veo_api and gen_type == "video":
             model_lower = str(model or "").strip().lower()
@@ -5388,10 +5429,14 @@ class MediaGenerationService:
                         mapped_duration = self._map_duration_nearest_lower(current_duration_int, allowed_durations)
                         if mapped_duration is not None:
                             current_duration_int = int(mapped_duration)
+                    elif is_seedance_video_model:
+                        mapped_duration = self._map_duration_nearest_lower(current_duration_int, [4, 8])
+                        if mapped_duration is not None:
+                            current_duration_int = int(mapped_duration)
                     max_duration = runtime_enum_catalog.get("max_duration")
                     if max_duration is not None:
                         current_duration_int = min(int(current_duration_int), int(max_duration))
-                    payload_input_obj["duration"] = str(max(1, int(current_duration_int)))
+                    payload_input_obj["duration"] = int(max(1, int(current_duration_int)))
                 except Exception:
                     pass
 

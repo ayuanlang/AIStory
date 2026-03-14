@@ -10513,6 +10513,112 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         return '';
     };
 
+    const DEFAULT_AI_SHOT_STAGING_COLUMNS = [
+        'Shot ID',
+        'Shot Name',
+        'Scene ID',
+        'Shot Logic (CN)',
+        'Start Frame',
+        'Video Content',
+        'Duration (s)',
+        'Keyframes',
+        'End Frame',
+        'Start Frame (CN)',
+        'Video Content (CN)',
+        'Keyframes (CN)',
+        'End Frame (CN)',
+        'Associated Entities',
+        'Prompt (CN)',
+    ];
+
+    const getAiShotColumnLabel = (columnKey) => {
+        const key = String(columnKey || '');
+        const map = {
+            shot_id: 'Shot ID',
+            shot_name: 'Shot Name',
+            scene_id: 'Scene ID',
+            shot_logic_cn: 'Shot Logic (CN)',
+            start_frame: 'Start Frame',
+            video_content: 'Video Content',
+            duration: 'Duration (s)',
+            keyframes: 'Keyframes',
+            end_frame: 'End Frame',
+            start_frame_cn: 'Start Frame (CN)',
+            video_content_cn: 'Video Content (CN)',
+            video_prompt_cn: 'Video Content (CN)',
+            keyframes_cn: 'Keyframes (CN)',
+            end_frame_cn: 'End Frame (CN)',
+            associated_entities: 'Associated Entities',
+            prompt_cn: 'Prompt (CN)',
+        };
+        return map[key] || key;
+    };
+
+    const isAiShotLongTextColumn = (columnKey) => {
+        const n = String(columnKey || '').toLowerCase();
+        return (
+            n.includes('start frame') ||
+            n.includes('end frame') ||
+            n.includes('video content') ||
+            n.includes('keyframe') ||
+            n.includes('prompt') ||
+            n.includes('logic') ||
+            n.includes('entities') ||
+            n.includes('start_frame') ||
+            n.includes('end_frame') ||
+            n.includes('video_content') ||
+            n.includes('shot_logic') ||
+            n.includes('associated_entities')
+        );
+    };
+
+    const getAiShotColumnValue = (shot, columnKey) => {
+        if (!shot) return '';
+        if (shot[columnKey] !== undefined && shot[columnKey] !== null) return String(shot[columnKey]);
+
+        const normalized = String(columnKey || '').toLowerCase();
+        if (normalized === 'shot id') return getStagingShotField(shot, 'shot_id');
+        if (normalized === 'shot name') return getStagingShotField(shot, 'shot_name');
+        if (normalized === 'scene id') return getStagingShotField(shot, 'scene_id');
+        if (normalized === 'shot logic (cn)') return getStagingShotField(shot, 'shot_logic_cn');
+        if (normalized === 'start frame') return getStagingShotField(shot, 'start_frame');
+        if (normalized === 'video content') return getStagingShotField(shot, 'video_content');
+        if (normalized === 'duration (s)') return getStagingShotField(shot, 'duration');
+        if (normalized === 'keyframes') return getStagingShotField(shot, 'keyframes');
+        if (normalized === 'end frame') return getStagingShotField(shot, 'end_frame');
+        if (normalized === 'start frame (cn)') return getStagingShotField(shot, 'start_frame_cn');
+        if (normalized === 'video content (cn)') return getStagingShotField(shot, 'video_content_cn');
+        if (normalized === 'keyframes (cn)') return getStagingShotField(shot, 'keyframes_cn');
+        if (normalized === 'end frame (cn)') return getStagingShotField(shot, 'end_frame_cn');
+        if (normalized === 'associated entities') return getStagingShotField(shot, 'associated_entities');
+        if (normalized === 'prompt (cn)') return String(shot['Prompt (CN)'] || shot.prompt_cn || '');
+        return '';
+    };
+
+    const aiShotsStagingColumns = useMemo(() => {
+        const rows = Array.isArray(aiShotsStaging?.content) ? aiShotsStaging.content : [];
+        const discovered = [];
+        const seen = new Set();
+
+        for (const row of rows) {
+            if (!row || typeof row !== 'object') continue;
+            for (const key of Object.keys(row)) {
+                const stableKey = String(key || '').trim();
+                if (!stableKey || seen.has(stableKey)) continue;
+                seen.add(stableKey);
+                discovered.push(stableKey);
+            }
+        }
+
+        if (discovered.length === 0) return [...DEFAULT_AI_SHOT_STAGING_COLUMNS];
+
+        const ordered = DEFAULT_AI_SHOT_STAGING_COLUMNS.filter((k) => seen.has(k));
+        for (const key of discovered) {
+            if (!ordered.includes(key)) ordered.push(key);
+        }
+        return ordered;
+    }, [aiShotsStaging?.content]);
+
     const openAiShotRowEditor = (shot, idx) => {
         setAiShotRowEditor({
             open: true,
@@ -12781,20 +12887,14 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                                     ))}
                                                 </div>
                                                 <div className="hidden md:block max-h-[320px] overflow-auto custom-scrollbar">
-                                                    <table className="w-full min-w-[1120px] text-xs text-left border-collapse">
+                                                    <table className="w-full min-w-[1360px] text-xs text-left border-collapse">
                                                         <thead className="sticky top-0 bg-[#252525] z-10 shadow-md">
                                                             <tr>
-                                                                <th className="p-2 border-b border-white/10 font-bold text-white/70">Shot ID</th>
-                                                                <th className="p-2 border-b border-white/10 font-bold text-white/70">Shot Name</th>
-                                                                <th className="hidden md:table-cell p-2 border-b border-white/10 font-bold text-white/70">Scene ID</th>
-                                                                <th className="p-2 border-b border-white/10 font-bold text-white/70">Shot Logic (CN)</th>
-                                                                <th className="hidden lg:table-cell p-2 border-b border-white/10 font-bold text-white/70">Start Frame</th>
-                                                                <th className="p-2 border-b border-white/10 font-bold text-white/70">Video Content</th>
-                                                                <th className="p-2 border-b border-white/10 font-bold text-white/70">Duration (s)</th>
-                                                                <th className="hidden lg:table-cell p-2 border-b border-white/10 font-bold text-white/70">Keyframes</th>
-                                                                <th className="hidden lg:table-cell p-2 border-b border-white/10 font-bold text-white/70">End Frame</th>
-                                                                <th className="hidden md:table-cell p-2 border-b border-white/10 font-bold text-white/70">Associated Entities</th>
-                                                                <th className="hidden lg:table-cell p-2 border-b border-white/10 font-bold text-white/70">Prompt (CN)</th>
+                                                                {aiShotsStagingColumns.map((columnKey) => (
+                                                                    <th key={`ai-shot-head-${columnKey}`} className="p-2 border-b border-white/10 font-bold text-white/70 whitespace-nowrap">
+                                                                        {getAiShotColumnLabel(columnKey)}
+                                                                    </th>
+                                                                ))}
                                                                 <th className="p-2 border-b border-white/10 w-10"></th>
                                                             </tr>
                                                         </thead>
@@ -12806,127 +12906,35 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                                                     onDoubleClick={() => openAiShotRowEditor(shot, idx)}
                                                                     title={t('双击可在弹窗中编辑该行', 'Double click to edit this row in popup')}
                                                                 >
-                                                                    <td className="p-1">
-                                                                        <input
-                                                                            className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded"
-                                                                            value={shot['Shot ID'] || shot.shot_id || ''}
-                                                                            onChange={e => {
-                                                                                const newData = [...(aiShotsStaging.content || [])];
-                                                                                newData[idx] = { ...shot, 'Shot ID': e.target.value };
-                                                                                setAiShotsStaging(prev => ({ ...prev, content: newData }));
-                                                                            }}
-                                                                        />
-                                                                    </td>
-                                                                    <td className="p-1">
-                                                                        <input
-                                                                            className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded"
-                                                                            value={shot['Shot Name'] || shot.shot_name || ''}
-                                                                            onChange={e => {
-                                                                                const newData = [...(aiShotsStaging.content || [])];
-                                                                                newData[idx] = { ...shot, 'Shot Name': e.target.value };
-                                                                                setAiShotsStaging(prev => ({ ...prev, content: newData }));
-                                                                            }}
-                                                                        />
-                                                                    </td>
-                                                                    <td className="hidden md:table-cell p-1">
-                                                                        <input
-                                                                            className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded"
-                                                                            value={shot['Scene ID'] || shot.scene_id || ''}
-                                                                            onChange={e => {
-                                                                                const newData = [...(aiShotsStaging.content || [])];
-                                                                                newData[idx] = { ...shot, 'Scene ID': e.target.value };
-                                                                                setAiShotsStaging(prev => ({ ...prev, content: newData }));
-                                                                            }}
-                                                                        />
-                                                                    </td>
-                                                                    <td className="p-1">
-                                                                        <input
-                                                                            className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded"
-                                                                            value={shot['Shot Logic (CN)'] || shot.shot_logic_cn || ''}
-                                                                            onChange={e => {
-                                                                                const newData = [...(aiShotsStaging.content || [])];
-                                                                                newData[idx] = { ...shot, 'Shot Logic (CN)': e.target.value };
-                                                                                setAiShotsStaging(prev => ({ ...prev, content: newData }));
-                                                                            }}
-                                                                        />
-                                                                    </td>
-                                                                    <td className="hidden lg:table-cell p-1">
-                                                                        <textarea
-                                                                            className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded resize-y min-h-[40px]"
-                                                                            value={shot['Start Frame'] || shot.start_frame || ''}
-                                                                            onChange={e => {
-                                                                                const newData = [...(aiShotsStaging.content || [])];
-                                                                                newData[idx] = { ...shot, 'Start Frame': e.target.value };
-                                                                                setAiShotsStaging(prev => ({ ...prev, content: newData }));
-                                                                            }}
-                                                                        />
-                                                                    </td>
-                                                                    <td className="hidden lg:table-cell p-1">
-                                                                        <textarea
-                                                                            className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded resize-y min-h-[40px]"
-                                                                            value={shot['Video Content'] || shot.video_content || ''}
-                                                                            onChange={e => {
-                                                                                const newData = [...(aiShotsStaging.content || [])];
-                                                                                newData[idx] = { ...shot, 'Video Content': e.target.value };
-                                                                                setAiShotsStaging(prev => ({ ...prev, content: newData }));
-                                                                            }}
-                                                                        />
-                                                                    </td>
-                                                                    <td className="p-1 w-20">
-                                                                        <input
-                                                                            className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded"
-                                                                            value={shot['Duration (s)'] || shot.duration || ''}
-                                                                            onChange={e => {
-                                                                                const newData = [...(aiShotsStaging.content || [])];
-                                                                                newData[idx] = { ...shot, 'Duration (s)': e.target.value };
-                                                                                setAiShotsStaging(prev => ({ ...prev, content: newData }));
-                                                                            }}
-                                                                        />
-                                                                    </td>
-                                                                    <td className="hidden lg:table-cell p-1">
-                                                                        <input
-                                                                            className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded"
-                                                                            value={shot['Keyframes'] || shot.keyframes || ''}
-                                                                            onChange={e => {
-                                                                                const newData = [...(aiShotsStaging.content || [])];
-                                                                                newData[idx] = { ...shot, 'Keyframes': e.target.value };
-                                                                                setAiShotsStaging(prev => ({ ...prev, content: newData }));
-                                                                            }}
-                                                                        />
-                                                                    </td>
-                                                                    <td className="hidden md:table-cell p-1">
-                                                                        <textarea
-                                                                            className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded resize-y min-h-[40px]"
-                                                                            value={shot['End Frame'] || shot.end_frame || ''}
-                                                                            onChange={e => {
-                                                                                const newData = [...(aiShotsStaging.content || [])];
-                                                                                newData[idx] = { ...shot, 'End Frame': e.target.value };
-                                                                                setAiShotsStaging(prev => ({ ...prev, content: newData }));
-                                                                            }}
-                                                                        />
-                                                                    </td>
-                                                                    <td className="p-1">
-                                                                        <input
-                                                                            className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded"
-                                                                            value={shot['Associated Entities'] || shot.associated_entities || ''}
-                                                                            onChange={e => {
-                                                                                const newData = [...(aiShotsStaging.content || [])];
-                                                                                newData[idx] = { ...shot, 'Associated Entities': e.target.value };
-                                                                                setAiShotsStaging(prev => ({ ...prev, content: newData }));
-                                                                            }}
-                                                                        />
-                                                                    </td>
-                                                                    <td className="hidden lg:table-cell p-1">
-                                                                        <textarea
-                                                                            className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded resize-y min-h-[40px]"
-                                                                            value={shot['Prompt (CN)'] || shot.prompt_cn || ''}
-                                                                            onChange={e => {
-                                                                                const newData = [...(aiShotsStaging.content || [])];
-                                                                                newData[idx] = { ...shot, 'Prompt (CN)': e.target.value };
-                                                                                setAiShotsStaging(prev => ({ ...prev, content: newData }));
-                                                                            }}
-                                                                        />
-                                                                    </td>
+                                                                    {aiShotsStagingColumns.map((columnKey) => {
+                                                                        const value = getAiShotColumnValue(shot, columnKey);
+                                                                        const useTextarea = isAiShotLongTextColumn(columnKey);
+                                                                        return (
+                                                                            <td key={`ai-shot-cell-${idx}-${columnKey}`} className="p-1 align-top">
+                                                                                {useTextarea ? (
+                                                                                    <textarea
+                                                                                        className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded resize-y min-h-[40px]"
+                                                                                        value={value}
+                                                                                        onChange={e => {
+                                                                                            const newData = [...(aiShotsStaging.content || [])];
+                                                                                            newData[idx] = { ...shot, [columnKey]: e.target.value };
+                                                                                            setAiShotsStaging(prev => ({ ...prev, content: newData }));
+                                                                                        }}
+                                                                                    />
+                                                                                ) : (
+                                                                                    <input
+                                                                                        className="bg-transparent w-full focus:outline-none focus:bg-white/5 p-1 rounded"
+                                                                                        value={value}
+                                                                                        onChange={e => {
+                                                                                            const newData = [...(aiShotsStaging.content || [])];
+                                                                                            newData[idx] = { ...shot, [columnKey]: e.target.value };
+                                                                                            setAiShotsStaging(prev => ({ ...prev, content: newData }));
+                                                                                        }}
+                                                                                    />
+                                                                                )}
+                                                                            </td>
+                                                                        );
+                                                                    })}
                                                                     <td className="p-1 text-center">
                                                                         <button
                                                                             onClick={() => {
@@ -12947,7 +12955,17 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                                 <div className="p-2 border-t border-white/10 flex flex-wrap items-center justify-between gap-2">
                                                     <button
                                                         onClick={() => {
-                                                            const newData = [...(aiShotsStaging.content || []), { 'Shot ID': (aiShotsStaging.content?.length || 0) + 1, 'Video Content': '', 'Prompt (CN)': '' }];
+                                                            const nextIndex = (aiShotsStaging.content?.length || 0) + 1;
+                                                            const newRow = {};
+                                                            aiShotsStagingColumns.forEach((columnKey) => {
+                                                                newRow[columnKey] = '';
+                                                            });
+                                                            if (Object.prototype.hasOwnProperty.call(newRow, 'Shot ID')) {
+                                                                newRow['Shot ID'] = String(nextIndex);
+                                                            } else {
+                                                                newRow.shot_id = String(nextIndex);
+                                                            }
+                                                            const newData = [...(aiShotsStaging.content || []), newRow];
                                                             setAiShotsStaging(prev => ({ ...prev, content: newData }));
                                                         }}
                                                         className="w-full md:w-auto px-3 py-2 bg-white/5 hover:bg-white/10 rounded flex items-center justify-center gap-2 text-xs font-semibold"
@@ -14565,6 +14583,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     };
 
     const handleBatchGenerateEntities = async () => {
+        const MIN_BATCH_IMAGE_PROMPT_CHARS = 5;
         const runtimeSnapshot = getSubjectBatchSnapshot();
         if (runtimeSnapshot?.generate?.running && runtimeSnapshot?.generate?.scopeKey === subjectBatchScopeKey) {
             alert(t('批量补图任务正在运行中，请稍候。', 'Batch fill-images task is already running.'));
@@ -14599,6 +14618,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
 
         let queue = [...toGenerate];
         let processedCount = 0;
+        let skippedPromptCount = 0;
         
         // Helper to check if entity is ready (all its deps have images)
         const isReady = (ent) => {
@@ -14651,7 +14671,20 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                         // We pass 'allEntities' so [Reference] replacement works
                         // Note: processPrompt uses allEntities to find values. 
                         // It reads entity.description usually.
-                        const finalPrompt = processPrompt(basePrompt, epInfo, allEntities);
+                        const finalPrompt = String(processPrompt(basePrompt, epInfo, allEntities) || '').trim();
+                        if (finalPrompt.length < MIN_BATCH_IMAGE_PROMPT_CHARS) {
+                            skippedPromptCount += 1;
+                            onLog?.(
+                                t(
+                                    `批量补图跳过：${entity?.name || entity?.name_en || entity?.id} 的提示词少于 ${MIN_BATCH_IMAGE_PROMPT_CHARS} 字符。`,
+                                    `Batch fill-images skipped: prompt for ${entity?.name || entity?.name_en || entity?.id} is shorter than ${MIN_BATCH_IMAGE_PROMPT_CHARS} chars.`
+                                ),
+                                'warning'
+                            );
+                            queue = queue.filter(q => q.id !== entity.id);
+                            processedCount++;
+                            continue;
+                        }
                         
                         // 2. Resolve Dependencies (Build Ref URLs FROM LATEST MAP)
                         const depUrls = [];
@@ -14731,7 +14764,11 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                     processedCount++;
                 }
             }
-            alert("Batch Generation Complete!");
+            if (skippedPromptCount > 0) {
+                alert(`Batch Generation Complete! Skipped ${skippedPromptCount} item(s) due to short prompt (<${MIN_BATCH_IMAGE_PROMPT_CHARS} chars).`);
+            } else {
+                alert("Batch Generation Complete!");
+            }
         } catch (e) {
             console.error(e);
             alert("Batch Generation Failed: " + e.message);
@@ -16674,6 +16711,51 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             const nextMap = { ...(techObj.keyframe_prompt_cn_map || {}) };
             nextMap[timeKey] = nextValue;
             techObj.keyframe_prompt_cn_map = nextMap;
+        });
+    };
+
+    const editingShotExtraColumns = useMemo(() => {
+        if (!editingShot) return {};
+        try {
+            const tech = JSON.parse(editingShot.technical_notes || '{}');
+            const raw = tech?.shot_extra_columns;
+            if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+            const out = {};
+            Object.entries(raw).forEach(([k, v]) => {
+                const key = String(k || '').trim();
+                if (!key) return;
+                out[key] = String(v ?? '');
+            });
+            return out;
+        } catch (e) {
+            return {};
+        }
+    }, [editingShot?.id, editingShot?.technical_notes]);
+
+    const setEditingShotExtraColumns = (nextColumns) => {
+        setEditingShot(prev => {
+            if (!prev) return prev;
+            let tech = {};
+            try {
+                tech = JSON.parse(prev.technical_notes || '{}');
+            } catch (e) {
+                tech = {};
+            }
+
+            const cleaned = {};
+            Object.entries(nextColumns || {}).forEach(([k, v]) => {
+                const key = String(k || '').trim();
+                if (!key) return;
+                cleaned[key] = String(v ?? '');
+            });
+
+            if (Object.keys(cleaned).length > 0) {
+                tech.shot_extra_columns = cleaned;
+            } else {
+                delete tech.shot_extra_columns;
+            }
+
+            return { ...prev, technical_notes: JSON.stringify(tech) };
         });
     };
 
@@ -20489,6 +20571,76 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                             </div>
 
                             {/* Metadata */}
+                            <div className="space-y-3 pt-4 border-t border-white/10">
+                                <div className="flex items-center justify-between gap-2">
+                                    <h4 className="text-sm font-bold text-primary flex items-center gap-2">
+                                        <Info className="w-4 h-4" />
+                                        {t('扩展列（导入入库）', 'Extra Columns (Imported)')}
+                                    </h4>
+                                    <button
+                                        onClick={() => {
+                                            const next = { ...(editingShotExtraColumns || {}) };
+                                            let seed = 1;
+                                            while (Object.prototype.hasOwnProperty.call(next, `extra_col_${seed}`)) seed += 1;
+                                            next[`extra_col_${seed}`] = '';
+                                            setEditingShotExtraColumns(next);
+                                        }}
+                                        className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-1 rounded flex items-center gap-1"
+                                    >
+                                        <Plus className="w-3 h-3" /> {t('新增列', 'Add Column')}
+                                    </button>
+                                </div>
+
+                                {Object.keys(editingShotExtraColumns || {}).length === 0 ? (
+                                    <div className="text-xs text-muted-foreground bg-black/20 border border-white/10 rounded p-3">
+                                        {t('暂无扩展列。若 markdown 中有新增列，导入后会出现在这里并可编辑。', 'No extra columns yet. If markdown contains new columns, they will appear here and be editable.')}
+                                    </div>
+                                ) : (
+                                    <div className="space-y-2">
+                                        {Object.entries(editingShotExtraColumns || {}).map(([k, v]) => (
+                                            <div key={`extra-col-${k}`} className="grid grid-cols-[minmax(180px,1fr)_minmax(320px,2fr)_auto] gap-2 items-start">
+                                                <input
+                                                    className="bg-black/20 border border-white/10 rounded p-2 text-xs"
+                                                    value={k}
+                                                    onChange={(e) => {
+                                                        const nextKey = String(e.target.value || '').trim();
+                                                        const current = { ...(editingShotExtraColumns || {}) };
+                                                        const curVal = current[k];
+                                                        delete current[k];
+                                                        if (nextKey) {
+                                                            current[nextKey] = curVal;
+                                                        }
+                                                        setEditingShotExtraColumns(current);
+                                                    }}
+                                                    placeholder={t('列名', 'Column Name')}
+                                                />
+                                                <textarea
+                                                    className="bg-black/20 border border-white/10 rounded p-2 text-xs min-h-[60px]"
+                                                    value={String(v ?? '')}
+                                                    onChange={(e) => {
+                                                        const current = { ...(editingShotExtraColumns || {}) };
+                                                        current[k] = e.target.value;
+                                                        setEditingShotExtraColumns(current);
+                                                    }}
+                                                    placeholder={t('列值', 'Column Value')}
+                                                />
+                                                <button
+                                                    onClick={() => {
+                                                        const current = { ...(editingShotExtraColumns || {}) };
+                                                        delete current[k];
+                                                        setEditingShotExtraColumns(current);
+                                                    }}
+                                                    className="p-2 hover:bg-red-500/20 text-muted-foreground hover:text-red-400 rounded"
+                                                    title={t('删除列', 'Delete Column')}
+                                                >
+                                                    <Trash2 className="w-4 h-4" />
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+
                             <div className="grid grid-cols-2 gap-4 pt-4 border-t border-white/10 text-xs text-muted-foreground">
                                 <InputGroup label="Shot Number" value={editingShot.shot_id} onChange={(v) => { setEditingShot({...editingShot, shot_id: v}) }} />
                                 <InputGroup label="Duration (s)" value={editingShot.duration} onChange={v => setEditingShot({...editingShot, duration: v})} />
@@ -22953,6 +23105,61 @@ const Editor = ({
                 let existingScenes = [];
                 try { existingScenes = await fetchScenes(activeEpisodeId); } catch(e) {}
                 let currentSceneDbId = null;
+
+                const normalizeSceneNoToken = (value) => String(value || '').trim().replace(/[\*\s]/g, '').toLowerCase();
+                const toSceneNumber = (value) => {
+                    const text = String(value || '').trim();
+                    if (!text) return null;
+                    const m = text.match(/(?:^|[_\-])sc(?:ene)?\s*0*([0-9]{1,4})(?:$|[_\-])/i) || text.match(/\b0*([0-9]{1,4})\b/);
+                    if (m && m[1]) {
+                        const n = Number.parseInt(m[1], 10);
+                        return Number.isFinite(n) ? n : null;
+                    }
+                    return null;
+                };
+                const extractSceneNoCandidates = (rawValue) => {
+                    const out = [];
+                    const text = String(rawValue || '').trim();
+                    if (!text) return out;
+
+                    out.push(text);
+
+                    // Match patterns like EP01_SC01, SC01, scene01 and map to 1
+                    const scMatch = text.match(/(?:^|[_\-])sc(?:ene)?\s*0*([0-9]{1,4})(?:$|[_\-])/i) || text.match(/^sc(?:ene)?\s*0*([0-9]{1,4})$/i);
+                    if (scMatch && scMatch[1]) {
+                        out.push(String(parseInt(scMatch[1], 10)));
+                    }
+
+                    // Include all numeric tokens (EP01_SC01 => 1, 1).
+                    const allNum = text.match(/\b0*([0-9]{1,4})\b/g) || [];
+                    for (const token of allNum) {
+                        const n = Number.parseInt(String(token).replace(/^0+/, '') || '0', 10);
+                        if (Number.isFinite(n) && n > 0) out.push(String(n));
+                    }
+
+                    return Array.from(new Set(out.map(v => String(v || '').trim()).filter(Boolean)));
+                };
+
+                const resolveSceneByCode = (sceneCodeRaw) => {
+                    const rawCandidates = extractSceneNoCandidates(sceneCodeRaw);
+                    const candidates = rawCandidates.map(v => normalizeSceneNoToken(v)).filter(Boolean);
+                    const candidateNums = rawCandidates
+                        .map((v) => toSceneNumber(v))
+                        .filter((v) => Number.isFinite(v));
+                    if (candidates.length === 0 && candidateNums.length === 0) return null;
+
+                    return existingScenes.find((s) => {
+                        const dbTokens = [s?.scene_no, s?.scene_id, s?.scene_code]
+                            .map((v) => normalizeSceneNoToken(v))
+                            .filter(Boolean);
+                        if (dbTokens.some((token) => candidates.includes(token))) return true;
+
+                        const dbSceneNum = toSceneNumber(s?.scene_no);
+                        if (Number.isFinite(dbSceneNum) && candidateNums.includes(dbSceneNum)) return true;
+
+                        return false;
+                    }) || null;
+                };
                 
                 // State flags
                 let inShotTable = false;
@@ -22979,7 +23186,7 @@ const Editor = ({
                     const isSceneKey = (isTableRow || line.includes('|')) && (line.includes('Scene No') || line.includes('场次序号') || (line.includes('Scene ID') && !line.includes('Shot ID')));
 
                     // Enter Shot Table Mode
-                    if (canShot && !inSceneTable && (isShotKey || (effectiveImportType === 'shot' && !inShotTable && isTableRow && cols.length > 2))) {
+                    if (canShot && (isShotKey || (effectiveImportType === 'shot' && !inShotTable && isTableRow && cols.length > 2))) {
                         inShotTable = true;
                         inSceneTable = false;
                         addLog("Found Shot Header (or Forced Type).", "info");
@@ -22998,7 +23205,7 @@ const Editor = ({
                         });
                         continue;
                     }
-                    else if (canScene && !inShotTable && (isSceneKey || (effectiveImportType === 'scene' && !inSceneTable && line.includes('|') && cols.length > 2))) {
+                    else if (canScene && (isSceneKey || (effectiveImportType === 'scene' && !inSceneTable && line.includes('|') && cols.length > 2))) {
                         inSceneTable = true;
                         inShotTable = false;
                         addLog("Found Scene Header (or Forced Type).", "info");
@@ -23115,43 +23322,35 @@ const Editor = ({
                                  continue; 
                              }
 
-                             // Infer Scene from Shot ID if needed (e.g. 1-1)
-                             if (!currentSceneDbId) {
-                                 // Try to find scene code column first
-                                let tempCode = useMap ? getVal(['sceneid', 'sceneno', 'scenecode', '场号'], -1) : legacySceneCode;
-                                if (!tempCode) {
-                                     // Check if shot ID has implicit scene number (e.g. 1-1A)
+                             // Resolve scene per-row to avoid stale scene mapping in mixed tables.
+                             let sceneCode = useMap ? getVal(['sceneid', 'sceneno', 'scenecode', '场号'], -1) : legacySceneCode;
+                             let resolvedSceneDbId = currentSceneDbId;
+                             if (!sceneCode) {
+                                 // Check shot id pattern like EP01_SC01_SH16 or 1-1A
+                                 const scFromShotId = String(rawShotId || '').match(/(?:^|[_\-])sc(?:ene)?\s*0*[0-9]{1,4}(?:$|[_\-])/i);
+                                 if (scFromShotId && scFromShotId[0]) {
+                                     sceneCode = scFromShotId[0];
+                                 } else {
                                      const parts = rawShotId.split(/[-_]/);
-                                     if (parts.length > 1) tempCode = parts[0];
-                                }
-                                
-                                if (tempCode) {
-                                     // Look up Scene ID by Scene No
-                                     const match = existingScenes.find(s => {
-                                         const dbNo = String(s.scene_no).replace(/[\*\s]/g, '');
-                                         const targetNo = String(tempCode).replace(/[\*\s]/g, '');
-                                         return dbNo === targetNo;
-                                     });
-                                     if (match) currentSceneDbId = match.id;
-                                     else {
-                                         // Auto-create scene if strict mode not enforced?
-                                         // User asked for "strict separation", implying we shouldn't guess wild things. 
-                                         // But if we can't find scene, we can't link.
-                                         // Maybe we should create proper scene if missing?
-                                         // For now, let's just log.
-                                     }
-                                }
+                                     if (parts.length > 1) sceneCode = parts[0];
+                                 }
                              }
 
-                             
-                             // !!! KEY FIX: Ensure scene_code is sent to creation !!!
-                             let sceneCode = useMap ? getVal(['sceneid', 'sceneno', 'scenecode', '场号'], -1) : legacySceneCode;
-                             if (!sceneCode && currentSceneDbId) {
-                                 const sObj = existingScenes.find(s => s.id === currentSceneDbId);
+                             if (sceneCode) {
+                                 const sceneMatch = resolveSceneByCode(sceneCode);
+                                 if (sceneMatch?.id) {
+                                     resolvedSceneDbId = sceneMatch.id;
+                                     currentSceneDbId = sceneMatch.id;
+                                 }
+                             }
+
+                             // Keep scene_code text from table/shot id for traceability.
+                             if (!sceneCode && resolvedSceneDbId) {
+                                 const sObj = existingScenes.find(s => s.id === resolvedSceneDbId);
                                  if (sObj) sceneCode = sObj.scene_no;
                              }
 
-                             if (currentSceneDbId) {
+                             if (resolvedSceneDbId) {
                                  const shotData = {
                                      shot_id: rawShotId,
                                      shot_name: useMap ? getVal(['shotname', 'name', '镜头名称'], 1) : clean(cols[1]),
@@ -23164,9 +23363,9 @@ const Editor = ({
                                      shot_logic_cn: useMap ? getVal(['shotlogiccn', 'shotlogic', 'logic', 'logiccn', 'shotlogic(cn)', 'shot logic (cn)', 'logic(cn)'], 7) : ''
                                  };
                                  
-                                 addLog(`Creating Shot ${shotData.shot_id} for Scene ID ${currentSceneDbId}...`, "info");
+                                 addLog(`Creating Shot ${shotData.shot_id} for Scene ID ${resolvedSceneDbId}...`, "info");
                                  try {
-                                     await createShot(currentSceneDbId, shotData);
+                                     await createShot(resolvedSceneDbId, shotData);
                                      importStats.shotsCreated += 1;
                                  } catch (shotErr) {
                                       console.error("Shot DB Sync Error", shotErr);
