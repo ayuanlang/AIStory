@@ -22,9 +22,53 @@ FIELD_PRIORITY = {
     "DURATION_SECONDS": ["paths.post.input.duration", "paths.post.input.n_frames"],
 }
 
+MODEL_SUFFIXES = [
+    "-text-to-video",
+    "-image-to-video",
+    "-video-to-video",
+    "-text-to-image",
+    "-image-to-image",
+    "-image-edit",
+    "-motion-control",
+]
+
+MODEL_SEGMENTS = {
+    "text-to-video",
+    "image-to-video",
+    "video-to-video",
+    "text-to-image",
+    "image-to-image",
+    "image-edit",
+    "motion-control",
+}
+
 
 def clean(v: Any) -> str:
     return str(v or "").strip()
+
+
+def to_base_model(model_key: Any) -> str:
+    key = clean(model_key).replace("\\", "/").strip("/")
+    if not key:
+        return ""
+
+    if "/" not in key:
+        return key
+
+    provider, rest = key.split("/", 1)
+    rest = rest.strip("/")
+    if not rest:
+        return provider
+
+    if rest in MODEL_SEGMENTS:
+        return provider
+
+    for suffix in MODEL_SUFFIXES:
+        if rest.endswith(suffix):
+            base_rest = rest[: -len(suffix)].strip("-/")
+            return f"{provider}/{base_rest}" if base_rest else provider
+
+    return f"{provider}/{rest}"
 
 
 def to_token(v: Any) -> str:
@@ -339,18 +383,24 @@ def load_api_enum_groups() -> Dict[Tuple[str, str, str, str], List[Dict[str, str
         rd = csv.DictReader(f)
         for row in rd:
             provider = clean(row.get("provider") or "kie")
-            model_key = clean(row.get("model_key_inferred"))
+            model_key_raw = clean(row.get("model_key_inferred"))
+            model_key = to_base_model(model_key_raw)
             model_title = clean(row.get("model_title"))
             field_path = clean(row.get("field_path"))
             enum_value = clean(row.get("enum_value"))
             if not field_path or not enum_value:
                 continue
-            key = (provider, model_key, model_title, field_path)
+            if not model_key:
+                continue
+            # Base-model granularity: variants under same base model share one mapping set.
+            key = (provider, model_key, model_key, field_path)
             groups[key].append(
                 {
                     "enum_value": enum_value,
                     "value_order": clean(row.get("value_order")),
                     "model_url": clean(row.get("model_url")),
+                    "model_title": model_title,
+                    "model_key_raw": model_key_raw,
                 }
             )
 
