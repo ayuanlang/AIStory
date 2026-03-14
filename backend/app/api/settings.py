@@ -3910,11 +3910,12 @@ def get_system_settings(
     try:
         _ensure_api_settings_binding_columns(db)
         _ensure_settings_system_indexes(db)
+        can_view_pricing = bool(getattr(current_user, "is_superuser", False))
         t0 = time.perf_counter()
         t_prev = t0
         visible_categories = ("LLM", "Image", "Video", "Vision")
         def _query_system_settings_rows():
-            return db.query(
+            query = db.query(
                 SystemAPISetting.id,
                 SystemAPISetting.name,
                 SystemAPISetting.provider,
@@ -3925,19 +3926,23 @@ def get_system_settings(
                 SystemAPISetting.deprecated.label("deprecated_flag"),
                 SystemAPISetting.tags,
                 SystemAPISetting.config,
-                SystemAPISetting.price_avg_cost,
-                SystemAPISetting.price_source,
-                SystemAPISetting.price_min_cost,
-                SystemAPISetting.price_max_cost,
-                SystemAPISetting.price_sample_prices,
-                SystemAPISetting.price_updated_at,
-                SystemAPISetting.provider_price_avg_cost,
-                SystemAPISetting.provider_price_source,
-                SystemAPISetting.provider_price_min_cost,
-                SystemAPISetting.provider_price_max_cost,
-                SystemAPISetting.provider_price_sample_prices,
-                SystemAPISetting.provider_price_updated_at,
-            ).filter(
+            )
+            if can_view_pricing:
+                query = query.add_columns(
+                    SystemAPISetting.price_avg_cost,
+                    SystemAPISetting.price_source,
+                    SystemAPISetting.price_min_cost,
+                    SystemAPISetting.price_max_cost,
+                    SystemAPISetting.price_sample_prices,
+                    SystemAPISetting.price_updated_at,
+                    SystemAPISetting.provider_price_avg_cost,
+                    SystemAPISetting.provider_price_source,
+                    SystemAPISetting.provider_price_min_cost,
+                    SystemAPISetting.provider_price_max_cost,
+                    SystemAPISetting.provider_price_sample_prices,
+                    SystemAPISetting.provider_price_updated_at,
+                )
+            return query.filter(
                 ~SystemAPISetting.category.like("System_%"),
                 SystemAPISetting.category.in_(visible_categories),
                 or_(SystemAPISetting.deprecated.is_(False), SystemAPISetting.deprecated.is_(None)),
@@ -3945,18 +3950,19 @@ def get_system_settings(
 
         system_settings = _query_system_settings_rows()
 
-        preload_ids = [int(getattr(item, "id", 0) or 0) for item in system_settings if int(getattr(item, "id", 0) or 0) > 0]
-        needs_precompute = any(
-            not str(getattr(item, "price_updated_at", "") or "").strip()
-            or not str(getattr(item, "provider_price_updated_at", "") or "").strip()
-            for item in system_settings
-        )
-        if preload_ids and needs_precompute:
-            changed_model = _refresh_settings_price_cache_for_system_apis(db, preload_ids)
-            changed_provider = _refresh_settings_provider_price_cache_for_system_apis(db, preload_ids)
-            if changed_model or changed_provider:
-                db.commit()
-                system_settings = _query_system_settings_rows()
+        if can_view_pricing:
+            preload_ids = [int(getattr(item, "id", 0) or 0) for item in system_settings if int(getattr(item, "id", 0) or 0) > 0]
+            needs_precompute = any(
+                not str(getattr(item, "price_updated_at", "") or "").strip()
+                or not str(getattr(item, "provider_price_updated_at", "") or "").strip()
+                for item in system_settings
+            )
+            if preload_ids and needs_precompute:
+                changed_model = _refresh_settings_price_cache_for_system_apis(db, preload_ids)
+                changed_provider = _refresh_settings_provider_price_cache_for_system_apis(db, preload_ids)
+                if changed_model or changed_provider:
+                    db.commit()
+                    system_settings = _query_system_settings_rows()
         t_query_system_settings_ms = int((time.perf_counter() - t_prev) * 1000)
         t_prev = time.perf_counter()
 
@@ -3996,24 +4002,24 @@ def get_system_settings(
             provider = item.provider or "unknown"
             category = item.category or "LLM"
             webhook_url, _avg_pricing_from_cfg = _extract_webhook_and_price_cache(getattr(item, "config", None))
-            avg_pricing = _read_settings_price_cache_from_row(item)
+            avg_pricing = _read_settings_price_cache_from_row(item) if can_view_pricing else {}
             key = (provider, category)
             if key not in grouped:
-                provider_pricing = _read_settings_provider_price_cache_from_row(item)
+                provider_pricing = _read_settings_provider_price_cache_from_row(item) if can_view_pricing else {}
                 grouped[key] = {
                     "provider": provider,
                     "provider_alias": provider_alias_map.get(str(provider or "").strip().lower()),
                     "category": category,
                     "shared_key_configured": False,
-                    "provider_avg_price_estimate": int(provider_pricing.get("average_cost") or 0),
-                    "provider_price_source": str(provider_pricing.get("source") or "") or None,
-                    "provider_price_range_min": int(provider_pricing.get("min_cost") or 0),
-                    "provider_price_range_max": int(provider_pricing.get("max_cost") or 0),
-                    "provider_sample_prices": [
+                    "provider_avg_price_estimate": (int(provider_pricing.get("average_cost") or 0) if can_view_pricing else None),
+                    "provider_price_source": (str(provider_pricing.get("source") or "") or None) if can_view_pricing else None,
+                    "provider_price_range_min": (int(provider_pricing.get("min_cost") or 0) if can_view_pricing else None),
+                    "provider_price_range_max": (int(provider_pricing.get("max_cost") or 0) if can_view_pricing else None),
+                    "provider_sample_prices": ([
                         int(v)
                         for v in (provider_pricing.get("sample_prices") or [])
                         if int(v or 0) > 0
-                    ],
+                    ] if can_view_pricing else None),
                     "models_map": {},
                 }
 
@@ -4046,15 +4052,15 @@ def get_system_settings(
                 api_key_masked=_mask_api_key(runtime_key) if has_key else "",
             )
 
-            option.avg_price_estimate = int(avg_pricing.get("average_cost") or 0)
-            option.avg_price_source = str(avg_pricing.get("source") or "") or None
-            option.price_range_min = int(avg_pricing.get("min_cost") or 0)
-            option.price_range_max = int(avg_pricing.get("max_cost") or 0)
+            option.avg_price_estimate = int(avg_pricing.get("average_cost") or 0) if can_view_pricing else None
+            option.avg_price_source = (str(avg_pricing.get("source") or "") or None) if can_view_pricing else None
+            option.price_range_min = int(avg_pricing.get("min_cost") or 0) if can_view_pricing else None
+            option.price_range_max = int(avg_pricing.get("max_cost") or 0) if can_view_pricing else None
             option.sample_prices = [
                 int(v)
                 for v in (avg_pricing.get("sample_prices") or [])
                 if int(v or 0) > 0
-            ]
+            ] if can_view_pricing else None
             option.billing_unit_type = billing_unit_type_by_system_api_id.get(int(item.id or 0))
 
             if option.deprecated:
