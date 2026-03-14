@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, load_only
-from sqlalchemy import cast, String, func, inspect, or_, and_, text
+from sqlalchemy import cast, String, func, inspect, or_, and_, text, Table, MetaData
 import logging
 import csv
 import io
@@ -1794,6 +1794,38 @@ def _find_system_setting_by_normalized_triplet(db: Session, provider: str, categ
         func.lower(func.trim(func.coalesce(SystemAPISetting.category, ""))) == category_norm,
         func.lower(func.trim(func.coalesce(SystemAPISetting.model, ""))) == model_norm,
     ).order_by(SystemAPISetting.id.desc()).first()
+
+
+def _insert_system_setting_schema_safe(
+    db: Session,
+    payload: Dict[str, Any],
+    *,
+    provider: str,
+    category: str,
+    model: str,
+) -> Optional[SystemAPISetting]:
+    """Insert system_api_settings row using only columns that exist in current DB schema."""
+    try:
+        table = Table("system_api_settings", MetaData(), autoload_with=db.bind)
+        existing_cols = set(table.columns.keys())
+    except Exception as e:
+        logger.warning("[_insert_system_setting_schema_safe] table reflection failed: %s", e)
+        return None
+
+    safe_payload = {
+        k: v
+        for k, v in (payload or {}).items()
+        if str(k or "").strip() in existing_cols
+    }
+
+    # Keep a safe default for legacy schemas.
+    if "is_active" in existing_cols and "is_active" not in safe_payload:
+        safe_payload["is_active"] = False
+
+    db.execute(table.insert().values(**safe_payload))
+    db.flush()
+
+    return _find_system_setting_by_normalized_triplet(db, provider, category, model)
 
 
 def _refresh_has_granular_billing_rules_flag(db: Session, system_api_id: int) -> None:
@@ -8039,25 +8071,35 @@ def _import_provider_bundle_no_commit(db: Session, providers: List[Any], replace
                     _refresh_has_granular_billing_rules_flag(db, target.id)
                 updated += 1
             else:
-                target = SystemAPISetting(
-                    name=(getattr(model_item, "name", None) or "System Setting").strip() or "System Setting",
-                    category=category,
+                insert_payload = {
+                    "name": (getattr(model_item, "name", None) or "System Setting").strip() or "System Setting",
+                    "category": category,
+                    "provider": provider_name,
+                    "api_key": "",
+                    "base_url": getattr(model_item, "base_url", None),
+                    "model": model,
+                    "base_model": _resolve_base_model(getattr(model_item, "base_model", None), model),
+                    "modality": _build_modality_payload_from_item(model_item),
+                    "tags": getattr(model_item, "tags", None),
+                    "supplier_info": getattr(model_item, "supplier_info", None),
+                    "deprecated": _is_setting_deprecated(clean_model_cfg, getattr(model_item, "deprecated", None)),
+                    "config": clean_model_cfg,
+                    "is_active": False,
+                }
+                target = _insert_system_setting_schema_safe(
+                    db,
+                    insert_payload,
                     provider=provider_name,
-                    api_key="",
-                    base_url=getattr(model_item, "base_url", None),
+                    category=category,
                     model=model,
-                    base_model=_resolve_base_model(getattr(model_item, "base_model", None), model),
-                    modality=_build_modality_payload_from_item(model_item),
-                    tags=getattr(model_item, "tags", None),
-                    supplier_info=getattr(model_item, "supplier_info", None),
-                    deprecated=_is_setting_deprecated(clean_model_cfg, getattr(model_item, "deprecated", None)),
-                    config=clean_model_cfg,
-                    is_active=False,
                 )
-                _assign_wide_modality_fields(target, model_item)
-                _clear_row_billing_columns(target)
-                db.add(target)
-                db.flush()
+                if not target:
+                    # Fallback to ORM path if schema-safe path could not produce row.
+                    target = SystemAPISetting(**insert_payload)
+                    _assign_wide_modality_fields(target, model_item)
+                    _clear_row_billing_columns(target)
+                    db.add(target)
+                    db.flush()
                 if _is_system_api_auto_billing_sync_enabled():
                     _upsert_base_billing_rule(db, target.id, target.category, model_billing, activate=True)
                     _refresh_has_granular_billing_rules_flag(db, target.id)

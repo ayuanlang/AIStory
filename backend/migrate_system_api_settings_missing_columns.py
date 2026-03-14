@@ -45,6 +45,18 @@ REQUIRED_COLUMNS: List[Tuple[str, str]] = [
     ("has_tiered_pricing", "BOOLEAN"),
     ("free_quota", "VARCHAR"),
     ("currency", "VARCHAR"),
+    ("price_avg_cost", "INTEGER"),
+    ("price_source", "VARCHAR"),
+    ("price_min_cost", "INTEGER"),
+    ("price_max_cost", "INTEGER"),
+    ("price_sample_prices", "JSON"),
+    ("price_updated_at", "VARCHAR"),
+    ("provider_price_avg_cost", "INTEGER"),
+    ("provider_price_source", "VARCHAR"),
+    ("provider_price_min_cost", "INTEGER"),
+    ("provider_price_max_cost", "INTEGER"),
+    ("provider_price_sample_prices", "JSON"),
+    ("provider_price_updated_at", "VARCHAR"),
 ]
 
 
