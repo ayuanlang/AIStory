@@ -271,15 +271,26 @@ def pick_numeric_nearest_lower(std_value: str, allowed_values: List[str], parser
 
 
 def pick_aspect_ratio(std_value: str, allowed_values: List[str]) -> Tuple[str, str]:
-    exact = {clean(v).lower(): v for v in allowed_values}
-    std_low = clean(std_value).lower()
-    if std_low in exact:
-        return exact[std_low], "exact"
+    std_norm = normalize_std_value("ASPECT_RATIO", std_value)
+    std_low = clean(std_norm).lower()
 
-    req_ratio = parse_ratio(std_value)
+    # Allow exact match against either raw enum text or normalized semantic text.
+    exact_raw = {clean(v).lower(): v for v in allowed_values}
+    if std_low in exact_raw:
+        return exact_raw[std_low], "exact"
+
+    exact_norm: Dict[str, str] = {}
+    for v in allowed_values:
+        v_norm = normalize_std_value("ASPECT_RATIO", v)
+        exact_norm[clean(v_norm).lower()] = v
+    if std_low in exact_norm:
+        return exact_norm[std_low], "semantic_exact"
+
+    req_ratio = parse_ratio(std_norm)
     candidates: List[Tuple[str, float]] = []
     for val in allowed_values:
-        ratio = parse_ratio(val)
+        val_norm = normalize_std_value("ASPECT_RATIO", val)
+        ratio = parse_ratio(val_norm)
         if ratio is None:
             continue
         candidates.append((val, ratio))
@@ -287,6 +298,13 @@ def pick_aspect_ratio(std_value: str, allowed_values: List[str]) -> Tuple[str, s
     if req_ratio is not None and candidates:
         best = min(candidates, key=lambda x: abs(x[1] - req_ratio))[0]
         return best, "nearest_ratio"
+
+    # Keep AUTO/ADAPTIVE stable when available.
+    if std_low in {"auto", "adaptive"}:
+        for val in allowed_values:
+            val_low = clean(val).lower()
+            if val_low in {"auto", "adaptive"}:
+                return val, "semantic_auto"
 
     return allowed_values[0], "fallback_baseline"
 
