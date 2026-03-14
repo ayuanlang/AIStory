@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from typing import Iterable, Tuple
 from datetime import datetime
 import os
+import json
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,7 +13,8 @@ from fastapi.responses import JSONResponse, Response
 from app.core.config import settings
 from app.api import endpoints, settings as settings_api
 from app.db.session import engine, SessionLocal
-from app.models.all_models import Base, SystemAPISetting, User
+from app.models.all_models import Base, User
+from sqlalchemy import text
 from app.core.logging import LoggingMiddleware, logger, configure_uvicorn_logging_noise_reduction
 from app.db.init_db import check_and_migrate_tables, create_default_superuser, init_initial_data
 from fastapi import Request
@@ -273,11 +275,29 @@ def _parse_iso_datetime_safe(value):
 def _read_maintenance_status_from_db():
     try:
         with SessionLocal() as db:
-            row = db.query(SystemAPISetting).filter(
-                SystemAPISetting.category == _MAINTENANCE_CATEGORY,
-                SystemAPISetting.provider == _MAINTENANCE_PROVIDER,
-            ).order_by(SystemAPISetting.id.desc()).first()
-            cfg = dict(row.config or {}) if row else {}
+            row = db.execute(text("""
+                SELECT config
+                FROM system_api_settings
+                WHERE category = :category
+                  AND provider = :provider
+                ORDER BY id DESC
+                LIMIT 1
+            """), {
+                "category": _MAINTENANCE_CATEGORY,
+                "provider": _MAINTENANCE_PROVIDER,
+            }).mappings().first()
+
+            cfg_raw = row.get("config") if row else None
+            if isinstance(cfg_raw, dict):
+                cfg = dict(cfg_raw)
+            elif isinstance(cfg_raw, str) and cfg_raw.strip():
+                try:
+                    parsed = json.loads(cfg_raw)
+                    cfg = dict(parsed) if isinstance(parsed, dict) else {}
+                except Exception:
+                    cfg = {}
+            else:
+                cfg = {}
 
             enabled = bool(cfg.get("enabled", False))
             ends_at = str(cfg.get("ends_at") or "").strip() or None
