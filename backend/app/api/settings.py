@@ -7651,6 +7651,8 @@ def export_system_provider_bundle_for_manage(
         for row in provider_rows:
             billing = _resolve_system_setting_billing(db, row)
             models.append({
+                "fixed_id": int(row.id),
+                "id": int(row.id),
                 "name": row.name,
                 "category": row.category,
                 "base_url": row.base_url,
@@ -7910,6 +7912,42 @@ def _db_has_table(db: Session, table_name: str) -> bool:
         return False
 
 
+def _rebuild_sync_config_tables_for_replace_all(db: Session) -> Dict[str, bool]:
+    """Drop and recreate sync-config tables to enforce strict schema/data consistency."""
+    rebuilt = {
+        "system_api_billing_rules": False,
+        "provider_key_pool": False,
+        "smtp_system_configs": False,
+        "wechat_pay_configs": False,
+        "system_task_default_apis": False,
+    }
+
+    table_specs = [
+        ("system_api_billing_rules", SystemAPIBillingRule),
+        ("provider_key_pool", ProviderKeyPool),
+        ("smtp_system_configs", SMTPSystemConfig),
+        ("wechat_pay_configs", WechatPayConfig),
+    ]
+    if HAS_TASK_DEFAULT_SYSTEM_API_MODEL:
+        table_specs.append(("system_task_default_apis", TaskDefaultSystemAPI))
+
+    bind = db.get_bind()
+    dialect_name = str(getattr(getattr(bind, "dialect", None), "name", "") or "").lower()
+    use_cascade = dialect_name == "postgresql"
+
+    for table_name, model_cls in table_specs:
+        try:
+            if _db_has_table(db, table_name):
+                drop_sql = f"DROP TABLE IF EXISTS {table_name} CASCADE" if use_cascade else f"DROP TABLE IF EXISTS {table_name}"
+                db.execute(text(drop_sql))
+            model_cls.__table__.create(bind=bind, checkfirst=True)
+            rebuilt[table_name] = True
+        except Exception as exc:
+            logger.warning("Failed to rebuild table %s during sync replace_all: %s", table_name, exc)
+
+    return rebuilt
+
+
 def _safe_clear_transaction_action_rule_links(db: Session, *, clear_system_api_ids: Optional[List[int]] = None, clear_rule_ids: Optional[List[int]] = None) -> None:
     # Older deployments may not have the transaction_action table or newer columns.
     if not _db_has_table(db, "transaction_action"):
@@ -8047,6 +8085,13 @@ def _import_provider_bundle_no_commit(db: Session, providers: List[Any], replace
                 skipped_models += 1
                 continue
 
+            fixed_id_raw = getattr(model_item, "fixed_id", None)
+            if fixed_id_raw in (None, ""):
+                fixed_id_raw = getattr(model_item, "id", None)
+            fixed_id = _safe_int(fixed_id_raw, None)
+            if isinstance(fixed_id, int) and fixed_id <= 0:
+                fixed_id = None
+
             target = _find_system_setting_by_normalized_triplet(db, provider_name, category, model)
 
             raw_model_cfg = getattr(model_item, "config", {}) if isinstance(getattr(model_item, "config", {}), dict) else {}
@@ -8086,6 +8131,8 @@ def _import_provider_bundle_no_commit(db: Session, providers: List[Any], replace
                     "config": clean_model_cfg,
                     "is_active": False,
                 }
+                if fixed_id is not None:
+                    insert_payload["id"] = int(fixed_id)
                 target = _insert_system_setting_schema_safe(
                     db,
                     insert_payload,
@@ -8332,9 +8379,18 @@ def import_system_config_sync_bundle_for_manage(
         has_smtp_table = _db_has_table(db, "smtp_system_configs")
         has_wechat_table = _db_has_table(db, "wechat_pay_configs")
         has_task_default_table = HAS_TASK_DEFAULT_SYSTEM_API_MODEL and _db_has_table(db, "system_task_default_apis")
+        rebuilt_tables: Dict[str, bool] = {}
 
         tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
         with tx_ctx:
+            if replace_all:
+                rebuilt_tables = _rebuild_sync_config_tables_for_replace_all(db)
+                has_billing_rules_table = _db_has_table(db, "system_api_billing_rules")
+                has_provider_key_pool_table = _db_has_table(db, "provider_key_pool")
+                has_smtp_table = _db_has_table(db, "smtp_system_configs")
+                has_wechat_table = _db_has_table(db, "wechat_pay_configs")
+                has_task_default_table = HAS_TASK_DEFAULT_SYSTEM_API_MODEL and _db_has_table(db, "system_task_default_apis")
+
             provider_items = []
             for raw in providers:
                 if not isinstance(raw, dict):
@@ -8570,6 +8626,7 @@ def import_system_config_sync_bundle_for_manage(
         return {
             "ok": True,
             "replace_all": replace_all,
+            "rebuild_tables": rebuilt_tables,
             "provider_result": provider_result,
             "billing_rules": {
                 "created": billing_created,
@@ -8674,6 +8731,12 @@ def import_system_settings_for_manage(
         else:
             create_raw_cfg = item.config if isinstance(item.config, dict) else {}
             create_billing = _billing_from_payload_or_config(item, create_raw_cfg)
+            fixed_id_raw = getattr(item, "fixed_id", None)
+            if fixed_id_raw in (None, ""):
+                fixed_id_raw = getattr(item, "id", None)
+            fixed_id = _safe_int(fixed_id_raw, None)
+            if isinstance(fixed_id, int) and fixed_id <= 0:
+                fixed_id = None
             target = SystemAPISetting(
                 name=(item.name or "System Setting").strip() or "System Setting",
                 category=category,
@@ -8689,6 +8752,8 @@ def import_system_settings_for_manage(
                 config=_strip_billing_from_config(create_raw_cfg),
                 is_active=False,
             )
+            if fixed_id is not None:
+                target.id = int(fixed_id)
             _assign_wide_modality_fields(target, item)
             _clear_row_billing_columns(target)
             db.add(target)

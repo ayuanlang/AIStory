@@ -189,6 +189,8 @@ class SystemAPISettingOut(BaseModel):
 
 
 class SystemAPISettingImportItem(BaseModel):
+    fixed_id: Optional[int] = None
+    id: Optional[int] = None
     name: Optional[str] = "System Setting"
     category: str = "LLM"
     provider: str
@@ -215,6 +217,8 @@ class SystemAPISettingImportRequest(BaseModel):
 
 
 class SystemAPIProviderModelImportItem(BaseModel):
+    fixed_id: Optional[int] = None
+    id: Optional[int] = None
     name: Optional[str] = "System Setting"
     category: str = "LLM"
     base_url: Optional[str] = None
