@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from app.models.all_models import SystemAPISetting, TaskDefaultSystemAPI
 from app.core.time_utils import now_bj_iso
@@ -83,6 +83,27 @@ def list_task_default_system_setting_ids(db: Session) -> Dict[str, int]:
     return out
 
 
+def _system_setting_query(db: Session):
+    return db.query(SystemAPISetting).options(
+        load_only(
+            SystemAPISetting.id,
+            SystemAPISetting.name,
+            SystemAPISetting.category,
+            SystemAPISetting.provider,
+            SystemAPISetting.api_key,
+            SystemAPISetting.base_url,
+            SystemAPISetting.model,
+            SystemAPISetting.base_model,
+            SystemAPISetting.modality,
+            SystemAPISetting.tags,
+            SystemAPISetting.supplier_info,
+            SystemAPISetting.deprecated,
+            SystemAPISetting.config,
+            SystemAPISetting.is_active,
+        )
+    )
+
+
 def is_task_default_system_setting(db: Session, system_api_id: int, category: Optional[str] = None) -> bool:
     sid = int(system_api_id or 0)
     if sid <= 0:
@@ -104,7 +125,7 @@ def get_task_default_system_setting(db: Session, task_category: str) -> Optional
     normalized = normalize_task_category(task_category)
     record = db.query(TaskDefaultSystemAPI).filter(TaskDefaultSystemAPI.task_category == normalized).first()
     if record:
-        row = db.query(SystemAPISetting).filter(SystemAPISetting.id == int(record.system_api_id)).first()
+        row = _system_setting_query(db).filter(SystemAPISetting.id == int(record.system_api_id)).first()
         if row:
             return row
     return None
@@ -114,7 +135,7 @@ def list_task_default_system_settings(db: Session) -> Dict[str, SystemAPISetting
     out: Dict[str, SystemAPISetting] = {}
     id_map = list_task_default_system_setting_ids(db)
     if id_map:
-        rows = db.query(SystemAPISetting).filter(SystemAPISetting.id.in_(list(id_map.values()))).all()
+        rows = _system_setting_query(db).filter(SystemAPISetting.id.in_(list(id_map.values()))).all()
         by_id = {int(r.id): r for r in rows}
         for category, sid in id_map.items():
             row = by_id.get(int(sid))
