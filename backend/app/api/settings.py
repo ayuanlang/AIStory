@@ -6999,8 +6999,83 @@ def _is_system_api_settings_missing_column_error(exc: Exception) -> bool:
     return False
 
 
+def _patch_system_api_settings_missing_columns_via_conn(db: Session) -> int:
+    required_columns = [
+        ("generation_modes", "JSON"),
+        ("input_formats", "JSON"),
+        ("output_format", "VARCHAR"),
+        ("supported_resolutions", "JSON"),
+        ("aspect_ratios", "JSON"),
+        ("max_images_per_call", "INTEGER"),
+        ("reference_image_limit", "VARCHAR"),
+        ("reference_video_limit", "VARCHAR"),
+        ("durations_seconds", "JSON"),
+        ("max_duration", "INTEGER"),
+        ("fps_options", "JSON"),
+        ("image_size_values", "JSON"),
+        ("quality_values", "JSON"),
+        ("has_audio", "BOOLEAN"),
+        ("sound_supported", "BOOLEAN"),
+        ("multi_shots_supported", "BOOLEAN"),
+        ("mode_values", "JSON"),
+        ("text_capabilities", "JSON"),
+        ("image_capabilities", "JSON"),
+        ("video_capabilities", "JSON"),
+        ("digital_human_capabilities", "JSON"),
+        ("voice_capabilities", "JSON"),
+        ("music_capabilities", "JSON"),
+        ("pricing_unit", "VARCHAR"),
+        ("token_billing_supported", "BOOLEAN"),
+        ("input_token_price", "FLOAT"),
+        ("output_token_price", "FLOAT"),
+        ("per_resolution_price_map", "JSON"),
+        ("per_duration_price_map", "JSON"),
+        ("has_tiered_pricing", "BOOLEAN"),
+        ("free_quota", "VARCHAR"),
+        ("currency", "VARCHAR"),
+    ]
+
+    engine = db.get_bind()
+    inspector = inspect(engine)
+    if not inspector.has_table("system_api_settings"):
+        return 0
+
+    existing_cols = {c["name"] for c in inspector.get_columns("system_api_settings")}
+    is_postgres = getattr(engine.dialect, "name", "") == "postgresql"
+    added = 0
+
+    for col_name, col_type in required_columns:
+        if col_name in existing_cols:
+            continue
+        if is_postgres:
+            sql = f"ALTER TABLE system_api_settings ADD COLUMN IF NOT EXISTS {col_name} {col_type}"
+        else:
+            sql = f"ALTER TABLE system_api_settings ADD COLUMN {col_name} {col_type}"
+        try:
+            db.execute(text(sql))
+            added += 1
+            existing_cols.add(col_name)
+        except Exception as exc:
+            msg = str(exc or "").lower()
+            if "duplicate" in msg or "already exists" in msg:
+                existing_cols.add(col_name)
+                continue
+            raise
+
+    return added
+
+
 def _try_patch_system_api_settings_missing_columns(db: Session) -> bool:
     try:
+        added = _patch_system_api_settings_missing_columns_via_conn(db)
+        if added > 0:
+            logger.warning("Applied inline system_api_settings column patch, added=%d", added)
+        # Flush DDL before retrying query paths in the same request.
+        try:
+            db.flush()
+        except Exception:
+            pass
+
         # Keep patch implementation in one place and reuse deployment script.
         from migrate_system_api_settings_missing_columns import migrate as migrate_missing_columns
 
