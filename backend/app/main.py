@@ -249,8 +249,10 @@ def _apply_cors_headers_to_response(request: Request, response: Response) -> Res
 _MAINTENANCE_CATEGORY = "System_Maintenance"
 _MAINTENANCE_PROVIDER = "maintenance_mode"
 _MAINTENANCE_CACHE_TTL_SECONDS = 5
+_MAINTENANCE_DB_FAILURE_COOLDOWN_SECONDS = 60
 _maintenance_cache = {
     "checked_at": 0.0,
+    "last_read_failed": False,
     "status": {
         "enabled": False,
         "is_active": False,
@@ -313,7 +315,7 @@ def _read_maintenance_status_from_db():
                 "is_active": is_active,
                 "ends_at": ends_at,
                 "message": message,
-            }
+            }, False
     except Exception as e:
         logger.warning("Failed to read maintenance status: %s", e)
         return {
@@ -321,13 +323,20 @@ def _read_maintenance_status_from_db():
             "is_active": False,
             "ends_at": None,
             "message": "系统正在维护",
-        }
+        }, True
 
 
 def _get_maintenance_status_cached(force: bool = False):
     now = time.time()
-    if force or (now - float(_maintenance_cache.get("checked_at", 0.0))) > _MAINTENANCE_CACHE_TTL_SECONDS:
-        _maintenance_cache["status"] = _read_maintenance_status_from_db()
+    cached_ttl = (
+        _MAINTENANCE_DB_FAILURE_COOLDOWN_SECONDS
+        if bool(_maintenance_cache.get("last_read_failed", False))
+        else _MAINTENANCE_CACHE_TTL_SECONDS
+    )
+    if force or (now - float(_maintenance_cache.get("checked_at", 0.0))) > cached_ttl:
+        status, read_failed = _read_maintenance_status_from_db()
+        _maintenance_cache["status"] = status
+        _maintenance_cache["last_read_failed"] = read_failed
         _maintenance_cache["checked_at"] = now
     return _maintenance_cache["status"]
 
