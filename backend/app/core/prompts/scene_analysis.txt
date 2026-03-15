@@ -386,11 +386,14 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
   - 过程控制词：`step`、`todo`、`note`、`备注`、`补充`、`建议`。
   - 结构污染符：JSON 键包裹、YAML 列表前缀、多余括号层级、代码围栏。
 - **严禁省略 Scene Subjects（Hard Rule）**：Part 1 每个 Scene 中凡在 `{Beats}`、`Linked Characters`、`Key Props`、`Environment Name` 出现的实体，必须进入 Subject Index 与 Part 2；禁止“只写代表人物/主角”替代全量实体。
+- **Base Environment 强制入索引（Mandatory）**：凡 `Environment Relation=REUSE/VARIANT_OF` 或 `Base Environment Reference` 非空时，`Base Environment Reference` 指向的 `ENV:[...]` 必须进入 Subject Index（`subject_type=environment`），并在 Part 2 的 `environments` 中有一条同名实体；禁止只写当前 `Environment Name` 而漏掉 Base 环境。
+- **Base Environment 强制入最终环境 JSON（Mandatory）**：上述 `ENV:[...]` 不仅要在 Subject Index 出现，还必须明确出现在最终输出的 `Part 2C - environments` JSON 数组中（作为独立 environment 对象，名称逐字符一致）；若仅在 Subject Index 出现但未进入最终环境 JSON，判定为无效输出并重写。
 - **出现即纳入（Mandatory）**：只要实体在任一 Scene 中被提及或可见参与（含被对视、被交互、被引用、作为环境容器），就必须计入；不得因戏份轻重、省略台词、镜头时长短而忽略。
 - **逐场闭环（Mandatory）**：每个 Scene 的实体集合必须满足：`Scene实体集合 ⊆ Subject Index ∩ Part2(JSON)`；任一差集均判无效，必须重写。
 - **逐行强制映射（Mandatory）**：`Subject Index` 的每一行都必须在 `Part 2 JSON` 中出现且仅出现一次，不得遗漏、不得合并、不得以“代表项”替代。
 - **类型一致强约束（Mandatory）**：`subject_type=character` 必须落在 `characters[]`，`subject_type=prop` 必须落在 `props[]`，`subject_type=environment` 必须落在 `environments[]`；跨类型映射一律判无效。
 - **可机审判定式（Mandatory）**：`SubjectIndexRows ⊆ Part2Rows` 且 `|SubjectIndexRows| == |MatchedRowsInPart2|`；若不成立，结果无效并必须重写。
+- **Base 环境可机审判定式（Mandatory）**：`Base Environment Reference` 中出现的每个 `ENV:[X]` 必须满足 `ENV:[X] ∈ SubjectIndexRows(subject_type=environment)` 且 `ENV:[X] ∈ Part2.environments`；任一缺失即无效并重写。
 - **禁止代表化（Forbidden）**：禁止用“群演/其他人/若干道具/背景角色”等统称替代具体已出现实体；若剧本明确出现可识别对象，必须给出稳定实体名并保持逐字符一致。
 - **剧本实体映射必填（Mandatory）**：Subject Index 每行必须标注该 subject 覆盖了剧本中的哪个实体（人名/物名/地点名/称谓或其稳定别称），用于可审计追踪。
 - **系统级 Subjects 列表复用（Mandatory）**：若原文或上游输入已给出“系统级 subjects 列表（含稳定命名/ID/类型）”，Subject Index 必须优先复用该列表的命名与标识；禁止改名、重编号、同义替换或拆并导致的标识漂移。
@@ -423,7 +426,8 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
   2. `subject_name_exact` 是否全部可在 Part 1 命中。
   3. `subject_no` 是否连续且无重复。
   4. 是否不存在解释性注入文本/黑名单词。
-  5. 是否不存在示例值残留（如 `Char A`、`Sword`、`LivingRoom_Front_Mid_Day`）。
+  5. `Base Environment Reference` 中的 `ENV:[...]` 是否全部出现在 Subject Index 且类型为 `environment`。
+  6. 是否不存在示例值残留（如 `Char A`、`Sword`、`LivingRoom_Front_Mid_Day`）。
 
 ### Part 2: Entities JSON (Strict Schema)
 
