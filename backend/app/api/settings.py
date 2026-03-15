@@ -7996,14 +7996,17 @@ def _safe_clear_transaction_action_rule_links(db: Session, *, clear_system_api_i
     if not _db_has_table(db, "transaction_action"):
         return
     try:
-        if clear_system_api_ids:
-            db.query(TransactionAction).filter(
-                TransactionAction.system_api_id.in_(clear_system_api_ids),
-            ).update({"system_api_id": None}, synchronize_session=False)
-        if clear_rule_ids:
-            db.query(TransactionAction).filter(
-                TransactionAction.matched_rule_id.in_(clear_rule_ids),
-            ).update({"matched_rule_id": None}, synchronize_session=False)
+        # Isolate legacy-schema failures so PostgreSQL transactions are not left
+        # in aborted state (InFailedSqlTransaction) for subsequent queries.
+        with db.begin_nested():
+            if clear_system_api_ids:
+                db.query(TransactionAction).filter(
+                    TransactionAction.system_api_id.in_(clear_system_api_ids),
+                ).update({"system_api_id": None}, synchronize_session=False)
+            if clear_rule_ids:
+                db.query(TransactionAction).filter(
+                    TransactionAction.matched_rule_id.in_(clear_rule_ids),
+                ).update({"matched_rule_id": None}, synchronize_session=False)
     except Exception as exc:
         logger.warning("Skip transaction_action cleanup due to schema mismatch: %s", exc)
 

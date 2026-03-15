@@ -90,7 +90,10 @@ def clear_task_defaults_for_system_api_ids(db: Session, system_api_ids: List[int
     if not ids:
         return
     try:
-        db.query(TaskDefaultSystemAPI).filter(TaskDefaultSystemAPI.system_api_id.in_(ids)).delete(synchronize_session=False)
+        # Keep cleanup failures isolated from caller transaction to avoid
+        # poisoning subsequent statements on PostgreSQL.
+        with db.begin_nested():
+            db.query(TaskDefaultSystemAPI).filter(TaskDefaultSystemAPI.system_api_id.in_(ids)).delete(synchronize_session=False)
     except Exception as exc:
         # Legacy production DB may still be missing this table when startup
         # bootstrap is disabled; skip cleanup instead of failing sync import.
