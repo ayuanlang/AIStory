@@ -6952,21 +6952,16 @@ def stop_episode_scenes_generation_job(
     _require_project_access(db, episode.project_id, current_user)
 
     status_payload = _read_episode_scene_generation_status(episode)
-    if not bool(status_payload.get("running")):
-        status_payload["message"] = "No running scene generation task"
-        return status_payload
+    removed = False
+    info = _episode_runtime_info_from_episode(episode)
+    if EPISODE_SCENE_GEN_STATUS_KEY in info:
+        info.pop(EPISODE_SCENE_GEN_STATUS_KEY, None)
+        episode.episode_info = info
+        db.add(episode)
+        db.commit()
+        removed = True
 
-    now_iso = now_bj_iso()
-    status_payload["stop_requested"] = True
-    status_payload["stop_requested_at"] = now_iso
-    status_payload["force_stopped"] = True
-    status_payload["stopped_by_user"] = True
-    status_payload["running"] = False
-    status_payload["status"] = "canceled"
-    status_payload["finished_at"] = status_payload.get("finished_at") or now_iso
-    status_payload["updated_at"] = now_iso
-    status_payload["message"] = "Force stopped"
-    _persist_episode_scene_generation_status(db, episode, status_payload)
+    _clear_episode_worker(EPISODE_SCENE_JOB_THREADS, EPISODE_SCENE_JOB_THREADS_LOCK, int(episode_id))
     _log_batch_sys_event(
         kind="episode-scenes",
         phase="stop",
@@ -6976,9 +6971,15 @@ def stop_episode_scenes_generation_job(
         episode_id=episode_id,
         job_id=f"episode-scenes:{int(episode_id)}",
         result="canceled",
-        message="Force stopped by user",
+        message="Force removed by user",
     )
-    return status_payload
+    return {
+        "episode_id": int(episode_id),
+        "running": False,
+        "status": "canceled",
+        "deleted": bool(removed),
+        "message": "Force removed",
+    }
 
 
 @router.post("/projects/{project_id}/script_generator/episodes/scripts", response_model=Dict[str, Any])
@@ -7717,31 +7718,12 @@ def stop_project_episode_scripts_generation(
 
     gi = dict(project.global_info or {})
     status_key = "episode_script_generation_status"
-    status_payload = gi.get(status_key) if isinstance(gi.get(status_key), dict) else None
-    now_iso = now_bj_iso()
-
-    if not isinstance(status_payload, dict):
-        status_payload = {
-            "project_id": project_id,
-            "running": False,
-            "stop_requested": False,
-        }
-
-    # Always force-reset -- handles stuck tasks, already-stopped states, etc.
-    status_payload["stop_requested"] = True
-    if not status_payload.get("stop_requested_at"):
-        status_payload["stop_requested_at"] = now_iso
-    status_payload["force_stopped"] = True
-    status_payload["stopped_by_user"] = True
-    status_payload["running"] = False
-    status_payload["status"] = "canceled"
-    status_payload["finished_at"] = status_payload.get("finished_at") or now_iso
-    status_payload["updated_at"] = now_iso
-    status_payload["message"] = "Force stopped"
-    gi[status_key] = status_payload
+    removed = status_key in gi
+    gi.pop(status_key, None)
     project.global_info = gi
     db.add(project)
     db.commit()
+    now_iso = now_bj_iso()
 
     try:
         log_action(
@@ -7760,8 +7742,10 @@ def stop_project_episode_scripts_generation(
     return {
         "success": True,
         "project_id": project_id,
-        **status_payload,
-        "message": "Stop requested",
+        "running": False,
+        "status": "canceled",
+        "deleted": bool(removed),
+        "message": "Force removed",
     }
 
 @router.delete("/episodes/{episode_id}", status_code=204)
@@ -9278,22 +9262,16 @@ def stop_scene_ai_shots_batch(
         raise HTTPException(status_code=404, detail="Episode not found")
     _require_project_access(db, episode.project_id, current_user)
 
-    status_payload = _read_scene_ai_shots_batch_status(episode)
-    if not bool(status_payload.get("running")):
-        status_payload["message"] = "No running batch task"
-        return status_payload
+    removed = False
+    info = _episode_runtime_info_from_episode(episode)
+    if SCENE_AI_SHOTS_BATCH_STATUS_KEY in info:
+        info.pop(SCENE_AI_SHOTS_BATCH_STATUS_KEY, None)
+        episode.episode_info = info
+        db.add(episode)
+        db.commit()
+        removed = True
 
-    now_iso = now_bj_iso()
-    status_payload["stop_requested"] = True
-    status_payload["stop_requested_at"] = now_iso
-    status_payload["force_stopped"] = True
-    status_payload["stopped_by_user"] = True
-    status_payload["running"] = False
-    status_payload["status"] = "canceled"
-    status_payload["finished_at"] = status_payload.get("finished_at") or now_iso
-    status_payload["updated_at"] = now_iso
-    status_payload["message"] = "Force stopped"
-    _persist_scene_ai_shots_batch_status(db, episode, status_payload)
+    _clear_episode_worker(SCENE_AI_SHOTS_BATCH_THREADS, SCENE_AI_SHOTS_BATCH_THREADS_LOCK, int(episode_id))
     _log_batch_sys_event(
         kind="scene-ai-shots-batch",
         phase="stop",
@@ -9303,9 +9281,15 @@ def stop_scene_ai_shots_batch(
         episode_id=episode_id,
         job_id=f"scene-ai-shots-batch:{int(episode_id)}",
         result="canceled",
-        message="Force stopped by user",
+        message="Force removed by user",
     )
-    return status_payload
+    return {
+        "episode_id": int(episode_id),
+        "running": False,
+        "status": "canceled",
+        "deleted": bool(removed),
+        "message": "Force removed",
+    }
 
 @router.post("/scenes/{scene_id}/ai_generate_shots")
 async def ai_generate_shots(
@@ -10863,14 +10847,14 @@ EMAIL_VERIFICATION_TRIAL_CREDITS = 500
 class UserOut(BaseModel):
     id: int
     username: str
-    email: Optional[str]
-    full_name: Optional[str]
+    email: Optional[str] = None
+    full_name: Optional[str] = None
     avatar_url: Optional[str] = None
     is_active: bool
     account_status: int = 1
     email_verified: bool = False
     is_superuser: bool
-    is_authorized: bool
+    is_authorized: bool = False
     is_system: bool
     credits: Optional[int] = 0
 
@@ -16215,11 +16199,34 @@ class UserPasswordUpdate(BaseModel):
 
 
 @router.get("/users/me", response_model=UserOut)
-def read_users_me(current_user: User = Depends(get_current_user)):
+def read_users_me(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """
     Get current user.
     """
-    return current_user
+    uid = int(getattr(current_user, "id", 0) or 0)
+    if uid > 0:
+        db_user = db.query(User).filter(User.id == uid).first()
+        if db_user is not None:
+            return db_user
+
+    # Fallback for transient DB issues: build a schema-safe payload from principal.
+    return {
+        "id": uid,
+        "username": str(getattr(current_user, "username", "") or "").strip(),
+        "email": getattr(current_user, "email", None),
+        "full_name": getattr(current_user, "full_name", None),
+        "avatar_url": getattr(current_user, "avatar_url", None),
+        "is_active": bool(getattr(current_user, "is_active", True)),
+        "account_status": int(getattr(current_user, "account_status", 1) or 1),
+        "email_verified": bool(getattr(current_user, "email_verified", False)),
+        "is_superuser": bool(getattr(current_user, "is_superuser", False)),
+        "is_authorized": bool(getattr(current_user, "is_authorized", False)),
+        "is_system": bool(getattr(current_user, "is_system", False)),
+        "credits": int(getattr(current_user, "credits", 0) or 0),
+    }
 
 
 @router.put("/users/me/profile", response_model=UserOut)
@@ -18458,8 +18465,6 @@ def stop_generation_job(
         if not target_id:
             raise HTTPException(status_code=400, detail="Invalid job_id")
 
-        now_iso = now_bj_iso()
-
         if safe_kind == "episode-scripts":
             project = db.query(Project).filter(Project.id == target_id).first()
             if not project:
@@ -18468,29 +18473,8 @@ def stop_generation_job(
                 _require_project_access(db, int(project.id), current_user)
 
             gi = dict(project.global_info or {})
-            payload = gi.get("episode_script_generation_status")
-            if not isinstance(payload, dict):
-                payload = {
-                    "project_id": int(project.id),
-                    "results": [],
-                    "processed": 0,
-                    "generated": 0,
-                    "failed": 0,
-                    "skipped": 0,
-                }
-
-            normalized_before = _normalize_batch_job_status(payload)
-
-            payload["stop_requested"] = True
-            payload["stop_requested_at"] = payload.get("stop_requested_at") or now_iso
-            payload["force_stopped"] = True
-            payload["running"] = False
-            payload["status"] = "canceled"
-            payload["stopped_by_user"] = True
-            payload["finished_at"] = payload.get("finished_at") or now_iso
-            payload["updated_at"] = now_iso
-            payload["message"] = "Force stopped from job pool"
-            gi["episode_script_generation_status"] = payload
+            removed = "episode_script_generation_status" in gi
+            gi.pop("episode_script_generation_status", None)
             project.global_info = gi
             db.add(project)
             db.commit()
@@ -18500,7 +18484,8 @@ def stop_generation_job(
                 "kind": safe_kind,
                 "job_id": job_id,
                 "status": "canceled",
-                "message": "Stopped" if normalized_before == "running" else "Marked as canceled",
+                "deleted": bool(removed),
+                "message": "Force removed",
             }
 
         episode = db.query(Episode).filter(Episode.id == target_id).first()
@@ -18517,43 +18502,28 @@ def stop_generation_job(
             status_key = SHOT_MEDIA_BATCH_STATUS_KEY
 
         info = _episode_runtime_info_from_episode(episode)
-        payload = info.get(status_key)
-        if not isinstance(payload, dict):
-            payload = {
-                "episode_id": int(episode.id),
-                "project_id": int(episode.project_id),
-                "errors": [],
-                "total": 0,
-                "completed": 0,
-                "success": 0,
-                "failed": 0,
-            }
-
-        normalized_before = _normalize_batch_job_status(payload)
-
-        payload["stop_requested"] = True
-        payload["stop_requested_at"] = payload.get("stop_requested_at") or now_iso
-        payload["force_stopped"] = True
-        payload["running"] = False
-        payload["status"] = "canceled"
-        payload["stopped_by_user"] = True
-        payload["finished_at"] = payload.get("finished_at") or now_iso
-        payload["updated_at"] = now_iso
-        payload["message"] = "Force stopped from job pool"
-        info[status_key] = payload
+        removed = status_key in info
+        info.pop(status_key, None)
         episode.episode_info = info
         db.add(episode)
         db.commit()
 
+        if safe_kind == "episode-scenes":
+            _clear_episode_worker(EPISODE_SCENE_JOB_THREADS, EPISODE_SCENE_JOB_THREADS_LOCK, int(episode.id))
+        elif safe_kind == "scene-ai-shots-batch":
+            _clear_episode_worker(SCENE_AI_SHOTS_BATCH_THREADS, SCENE_AI_SHOTS_BATCH_THREADS_LOCK, int(episode.id))
         if safe_kind == "shot-media-batch":
             _set_shot_media_batch_cancel_requested(int(episode.id))
+            _clear_episode_worker(SHOT_MEDIA_BATCH_THREADS, SHOT_MEDIA_BATCH_THREADS_LOCK, int(episode.id))
+            _clear_shot_media_batch_cancel_event(int(episode.id))
 
         return {
             "ok": True,
             "kind": safe_kind,
             "job_id": job_id,
             "status": "canceled",
-            "message": "Stopped" if normalized_before == "running" else "Marked as canceled",
+            "deleted": bool(removed),
+            "message": "Force removed",
         }
 
     if safe_kind == "image":
@@ -18874,16 +18844,7 @@ def stop_all_generation_jobs(
                 continue
             if (not force) and str(payload.get("status") or "").lower() in {"succeeded", "completed", "failed", "canceled", "cancelled", "error", "stopped", "idle", "partial"} and not bool(payload.get("running")):
                 continue
-            payload["stop_requested"] = True
-            payload["stop_requested_at"] = payload.get("stop_requested_at") or now_iso
-            payload["force_stopped"] = True
-            payload["running"] = False
-            payload["status"] = "canceled"
-            payload["stopped_by_user"] = True
-            payload["finished_at"] = payload.get("finished_at") or now_iso
-            payload["updated_at"] = now_iso
-            payload["message"] = "Force stopped from stop-all"
-            gi["episode_script_generation_status"] = payload
+            gi.pop("episode_script_generation_status", None)
             project.global_info = gi
             db.add(project)
             stopped += 1
@@ -18912,21 +18873,18 @@ def stop_all_generation_jobs(
                     continue
                 if (not force) and str(payload.get("status") or "").lower() in {"succeeded", "completed", "failed", "canceled", "cancelled", "error", "stopped", "idle", "partial"} and not bool(payload.get("running")):
                     continue
-                payload["stop_requested"] = True
-                payload["stop_requested_at"] = payload.get("stop_requested_at") or now_iso
-                payload["force_stopped"] = True
-                payload["running"] = False
-                payload["status"] = "canceled"
-                payload["stopped_by_user"] = True
-                payload["finished_at"] = payload.get("finished_at") or now_iso
-                payload["updated_at"] = now_iso
-                payload["message"] = "Force stopped from stop-all"
-                info[status_key] = payload
+                info.pop(status_key, None)
                 changed = True
                 stopped += 1
                 touched.append(f"{kind_name}:{int(episode.id)}")
+                if kind_name == "episode-scenes":
+                    _clear_episode_worker(EPISODE_SCENE_JOB_THREADS, EPISODE_SCENE_JOB_THREADS_LOCK, int(episode.id))
+                elif kind_name == "scene-ai-shots-batch":
+                    _clear_episode_worker(SCENE_AI_SHOTS_BATCH_THREADS, SCENE_AI_SHOTS_BATCH_THREADS_LOCK, int(episode.id))
                 if kind_name == "shot-media-batch":
                     _set_shot_media_batch_cancel_requested(int(episode.id))
+                    _clear_episode_worker(SHOT_MEDIA_BATCH_THREADS, SHOT_MEDIA_BATCH_THREADS_LOCK, int(episode.id))
+                    _clear_shot_media_batch_cancel_event(int(episode.id))
 
             if changed:
                 episode.episode_info = info
@@ -19921,25 +19879,18 @@ def stop_shot_media_batch_job(
         raise HTTPException(status_code=404, detail="Episode not found")
     _require_project_access(db, episode.project_id, current_user)
 
-    status_payload = _read_shot_media_batch_status(episode)
-    if not bool(status_payload.get("running")):
-        status_payload["message"] = "No running batch task"
-        return status_payload
+    removed = False
+    info = _episode_runtime_info_from_episode(episode)
+    if SHOT_MEDIA_BATCH_STATUS_KEY in info:
+        info.pop(SHOT_MEDIA_BATCH_STATUS_KEY, None)
+        episode.episode_info = info
+        db.add(episode)
+        db.commit()
+        removed = True
 
-    now_iso = now_bj_iso()
-    status_payload["stop_requested"] = True
-    status_payload["stop_requested_at"] = now_iso
-    status_payload["force_stopped"] = True
-    status_payload["stopped_by_user"] = True
-    status_payload["running"] = False
-    status_payload["status"] = "canceled"
-    status_payload["current_asset_type"] = None
-    status_payload["current_asset_label"] = ""
-    status_payload["finished_at"] = status_payload.get("finished_at") or now_iso
-    status_payload["updated_at"] = now_iso
-    status_payload["message"] = "Force stopped"
-    _persist_shot_media_batch_status(db, episode, status_payload)
     _set_shot_media_batch_cancel_requested(int(episode_id))
+    _clear_episode_worker(SHOT_MEDIA_BATCH_THREADS, SHOT_MEDIA_BATCH_THREADS_LOCK, int(episode_id))
+    _clear_shot_media_batch_cancel_event(int(episode_id))
     _log_batch_sys_event(
         kind="shot-media-batch",
         phase="stop",
@@ -19949,9 +19900,15 @@ def stop_shot_media_batch_job(
         episode_id=episode_id,
         job_id=f"shot-media-batch:{int(episode_id)}",
         result="canceled",
-        message="Force stopped by user",
+        message="Force removed by user",
     )
-    return status_payload
+    return {
+        "episode_id": int(episode_id),
+        "running": False,
+        "status": "canceled",
+        "deleted": bool(removed),
+        "message": "Force removed",
+    }
 
 class MontageItem(BaseModel):
     url: str

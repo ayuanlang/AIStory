@@ -7380,7 +7380,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             setSceneGenStatus((prev) => ({
                 ...(prev && typeof prev === 'object' ? prev : {}),
                 stop_requested: true,
-                message: res?.message || prev?.message || t('已请求停止，等待当前场景完成后中止。', 'Stop requested. Waiting for current scene to finish.'),
+                message: res?.message || prev?.message || t('已强制停止当前场景批处理。', 'Current scene batch force-stopped.'),
             }));
             await pollSceneGenStatus();
             if (onLog) onLog(`Scene generation: ${res?.message || 'stop requested'}`, 'warning');
@@ -12266,7 +12266,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
             setBatchAiShotsProgress((prev) => ({
                 ...prev,
                 stopRequested: true,
-                message: res?.message || prev.message || t('已请求停止，等待当前场景完成后中止。', 'Stop requested. Waiting for current scene to finish.'),
+                message: res?.message || prev.message || t('已强制停止当前场景批处理。', 'Current scene batch force-stopped.'),
             }));
             await pollBatchAiShotsStatus();
             onLog?.(`SceneManager: Batch AI Shots ${res?.message || 'stop requested'}.`, 'warning');
@@ -12507,7 +12507,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                         onClick={handleStopBatchAiShots}
                         disabled={!batchAiShotsProgress.running || isStoppingBatchAiShots || batchAiShotsProgress.stopRequested}
                         className="px-4 py-2 bg-white/10 text-white rounded-lg text-sm font-bold hover:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                        title={t('停止当前后台批量 AI Shots 任务（当前场景完成后停止）', 'Stop current background batch AI Shots task (stops after current scene finishes)')}
+                        title={t('强制停止当前后台批量 AI Shots 任务（立即生效）', 'Force stop current background batch AI Shots task (immediate)')}
                     >
                         {isStoppingBatchAiShots ? <Loader2 className="w-4 h-4 animate-spin" /> : <X className="w-4 h-4" />}
                         {isStoppingBatchAiShots
@@ -13535,11 +13535,31 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     const [subjectImageJobs, setSubjectImageJobs] = useState({});
     const subjectImageJobPollingRef = useRef(false);
     const subjectBatchGenerateStopRequestedRef = useRef(false);
+    const subjectBatchGenerateSessionRef = useRef('');
     const subjectImageJobStorageKey = useMemo(() => {
         const pid = String(projectId || '').trim();
         return pid ? `aistory.subjectImageJobs.${pid}` : '';
     }, [projectId]);
     const SUBJECT_IMAGE_JOB_TTL_MS = 1000 * 60 * 60 * 6;
+    const SUBJECT_IMAGE_JOB_MAX_RUNNING_MS = 1000 * 60 * 20;
+
+    const extractImageJobResultUrl = useCallback((statusResp) => {
+        const result = (statusResp?.result && typeof statusResp.result === 'object') ? statusResp.result : {};
+        const candidates = [
+            result?.url,
+            result?.image_url,
+            result?.imageUrl,
+            result?.generated_url,
+            statusResp?.url,
+            statusResp?.image_url,
+            statusResp?.imageUrl,
+        ];
+        for (const value of candidates) {
+            const stable = String(value || '').trim();
+            if (stable) return stable;
+        }
+        return '';
+    }, []);
 
     const normalizeSubjectImageJobs = useCallback((raw) => {
         if (!raw || typeof raw !== 'object') return {};
@@ -13741,6 +13761,12 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
 
                     const status = String(statusResp?.status || '').trim().toLowerCase();
                     if (status === 'queued' || status === 'running') {
+                        const startedAtMs = Number(job?.startedAt || 0) || 0;
+                        if (startedAtMs > 0 && (Date.now() - startedAtMs) > SUBJECT_IMAGE_JOB_MAX_RUNNING_MS) {
+                            if (onLog) onLog(t(`主体生成超时，已移除等待：${job?.entityName || entityId}`, `Subject generation timed out, removed from pending queue: ${job?.entityName || entityId}`), 'warning');
+                            completed.push(entityId);
+                            continue;
+                        }
                         statusUpdates[String(entityId)] = {
                             status,
                             lastPolledAt: Date.now(),
@@ -13748,8 +13774,8 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                         continue;
                     }
 
-                    if (status === 'succeeded') {
-                        const generatedUrl = String(statusResp?.result?.url || '').trim();
+                    if (status === 'succeeded' || status === 'completed') {
+                        const generatedUrl = extractImageJobResultUrl(statusResp);
                         if (generatedUrl) {
                             try {
                                 await updateEntity(Number(entityId), { image_url: generatedUrl });
@@ -13818,7 +13844,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
             disposed = true;
             clearInterval(timer);
         };
-    }, [onLog, selectedEntity?.id, showImageModal, subjectImageJobs, t]);
+    }, [extractImageJobResultUrl, onLog, selectedEntity?.id, showImageModal, subjectImageJobs, t]);
 
     useEffect(() => {
         const applySnapshot = (snapshot) => {
@@ -14839,6 +14865,8 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         if (!await confirmUiMessage(`Batch generate images for ${toGenerate.length} entities? This will respect dependency order.`)) return;
 
         subjectBatchGenerateStopRequestedRef.current = false;
+        const batchSessionId = `subject-batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        subjectBatchGenerateSessionRef.current = batchSessionId;
         setIsStoppingBatchGenerateEntities(false);
 
         updateGenerateBatchRuntimeState(true, { current: 0, total: toGenerate.length, status: 'Initializing...' });
@@ -14884,6 +14912,9 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
 
         try {
             while (queue.length > 0) {
+                if (subjectBatchGenerateSessionRef.current !== batchSessionId) {
+                    break;
+                }
                 if (subjectBatchGenerateStopRequestedRef.current) {
                     break;
                 }
@@ -14899,6 +14930,9 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                 }
 
                 for (const entity of batch) {
+                    if (subjectBatchGenerateSessionRef.current !== batchSessionId) {
+                        break;
+                    }
                     if (subjectBatchGenerateStopRequestedRef.current) {
                         break;
                     }
@@ -14978,6 +15012,10 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                             ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
                             negative_prompt: buildEntityNegativePrompt(basePrompt, entity, allEntities)
                         });
+
+                        if (subjectBatchGenerateSessionRef.current !== batchSessionId) {
+                            break;
+                        }
                         
                         if (res && res.url) {
                             // 4. Update
@@ -15006,6 +15044,9 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                         }
 
                     } catch(e) {
+                        if (subjectBatchGenerateSessionRef.current !== batchSessionId) {
+                            break;
+                        }
                          console.error(`Batch Gen Error for ${entity.name}`, e);
                     }
 
@@ -15013,7 +15054,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                     processedCount++;
                 }
             }
-            if (subjectBatchGenerateStopRequestedRef.current) {
+            if (subjectBatchGenerateSessionRef.current !== batchSessionId || subjectBatchGenerateStopRequestedRef.current) {
                 alert(t('批量补图已停止。', 'Batch fill-images stopped.'));
             } else if (skippedPromptCount > 0) {
                 alert(`Batch Generation Complete! Skipped ${skippedPromptCount} item(s) due to short prompt (<${MIN_BATCH_IMAGE_PROMPT_CHARS} chars).`);
@@ -15024,6 +15065,9 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
             console.error(e);
             alert("Batch Generation Failed: " + e.message);
         } finally {
+            if (subjectBatchGenerateSessionRef.current === batchSessionId) {
+                subjectBatchGenerateSessionRef.current = '';
+            }
             updateGenerateBatchRuntimeState(false, null);
             subjectBatchGenerateStopRequestedRef.current = false;
             setIsStoppingBatchGenerateEntities(false);
@@ -15033,11 +15077,10 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     const handleStopBatchGenerateEntities = async () => {
         if (!isBatchGeneratingEntities) return;
         subjectBatchGenerateStopRequestedRef.current = true;
+        subjectBatchGenerateSessionRef.current = '';
         setIsStoppingBatchGenerateEntities(true);
-        updateGenerateBatchRuntimeState(true, {
-            ...(batchEntityProgress || {}),
-            status: t('已请求停止，等待当前实体完成...', 'Stop requested. Waiting for current entity to finish...'),
-        });
+        updateGenerateBatchRuntimeState(false, null);
+        setIsStoppingBatchGenerateEntities(false);
         if (onLog) onLog(t('批量补图已请求停止。', 'Batch fill-images stop requested.'), 'warning');
     };
 
@@ -15077,7 +15120,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                         onClick={handleStopBatchGenerateEntities}
                         disabled={!isBatchGeneratingEntities || isStoppingBatchGenerateEntities}
                         className="px-3 py-2 text-xs font-bold uppercase rounded-md bg-red-500/20 hover:bg-red-500/30 text-red-200 flex items-center gap-2 disabled:opacity-50 transition-all border border-red-400/20"
-                        title={t('停止当前批量补图任务（当前实体完成后停止）', 'Stop current batch fill-images task (stops after current entity)')}
+                        title={t('强制停止当前批量补图任务（立即生效）', 'Force stop current batch fill-images task (immediate)')}
                     >
                         {isStoppingBatchGenerateEntities ? (
                             <>
@@ -16309,6 +16352,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const [shotIdFilter, setShotIdFilter] = useState('');
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [shots, setShots] = useState([]);
+    const [isShotsLoading, setIsShotsLoading] = useState(false);
+    const [hasShotInitialLoadCompleted, setHasShotInitialLoadCompleted] = useState(false);
     const [selectedShotIds, setSelectedShotIds] = useState([]);
     const [isImportOpen, setIsImportOpen] = useState(false);
     // const [editingShot, setEditingShot] = useState(null); // Lifted state
@@ -16396,6 +16441,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const startFrameAutoInheritRef = useRef('');
     const GENERATION_STATE_TTL_MS = 1000 * 60 * 60;
     const VIDEO_JOB_STATE_TTL_MS = 1000 * 60 * 60;
+    const shotsRefreshRequestSeqRef = useRef(0);
 
     const createShotBatchProgressState = useCallback(() => ({
         current: 0,
@@ -17342,6 +17388,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
     const refreshShots = useCallback(async () => {
         if (!selectedSceneId || !activeEpisode?.id) return;
+        const requestSeq = ++shotsRefreshRequestSeqRef.current;
+        setIsShotsLoading(true);
 
         const getSceneCodeFromShot = (shot) => {
             const explicit = String(shot?.scene_code || '').trim();
@@ -17378,7 +17426,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 filtered = filtered.filter((shot) => String(shot?.shot_id || '').toUpperCase().includes(normalizedShotId));
             }
 
-            setShots(filtered);
+            if (requestSeq === shotsRefreshRequestSeqRef.current) {
+                setShots(filtered);
+                setHasShotInitialLoadCompleted(true);
+            }
 
                 // Legacy Auto-Sync Check (Optional, but kept for script-to-shot workflow convenience)
                 if (filtered.length === 0 && (activeEpisode?.scene_content || activeEpisode?.shot_content)) {
@@ -17391,8 +17442,19 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 }
         } catch (e) {
             console.error("Failed to refresh shots", e);
+            if (requestSeq === shotsRefreshRequestSeqRef.current) {
+                setHasShotInitialLoadCompleted(true);
+            }
+        } finally {
+            if (requestSeq === shotsRefreshRequestSeqRef.current) {
+                setIsShotsLoading(false);
+            }
         }
     }, [activeEpisode?.id, selectedSceneId, sceneCodeFilter, shotIdFilter]);
+
+    useEffect(() => {
+        setHasShotInitialLoadCompleted(false);
+    }, [activeEpisode?.id]);
 
     useEffect(() => {
         if (!activeEpisode?.id) return;
@@ -19824,11 +19886,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
         setStoppingVideoByShot((prev) => ({ ...prev, [stableShotId]: true }));
         try {
-            const res = await stopGenerationJob('video', jobId);
+            const res = await stopGenerationJob('video', jobId, { force: true });
             clearPendingVideoJob(stableShotId);
             setShotGeneratingState(stableShotId, 'video', false);
-            onLog?.(res?.message || t('已请求停止视频任务。', 'Video stop requested.'), 'warning');
-            showNotification(t('已请求停止视频任务', 'Video stop requested'), 'warning');
+            onLog?.(res?.message || t('已强制停止视频任务。', 'Video task force-stopped.'), 'warning');
+            showNotification(t('已强制停止视频任务', 'Video task force-stopped'), 'warning');
         } catch (e) {
             const detail = e?.response?.data?.detail || e?.message || 'unknown error';
             onLog?.(`${t('停止视频任务失败', 'Failed to stop video task')}: ${detail}`, 'error');
@@ -19943,7 +20005,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             setBatchProgress((prev) => ({
                 ...prev,
                 stopRequested: true,
-                status: res?.message || prev.status || t('已请求停止，等待当前镜头完成后中止。', 'Stop requested. Waiting for current shot to finish.'),
+                status: res?.message || prev.status || t('已强制停止当前镜头批处理。', 'Current shot batch force-stopped.'),
                 currentAssetLabel: prev.currentAssetLabel || '',
             }));
             await pollShotBatchStatus();
@@ -20298,6 +20360,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
              <div className="flex-1 overflow-auto custom-scrollbar">
                  {selectedSceneId ? (
                      <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-6 pb-20">
+                        {isShotsLoading && !hasShotInitialLoadCompleted && sortedShots.length === 0 && (
+                            <div className="col-span-full h-64 flex flex-col items-center justify-center text-muted-foreground border-2 border-dashed border-primary/20 rounded-xl bg-primary/5">
+                                <Loader2 className="w-12 h-12 mb-4 animate-spin text-primary" />
+                                <p>{t('镜头预装入中...', 'Preloading shots...')}</p>
+                            </div>
+                        )}
                         {sortedShots.map((shot, idx) => {
                             const shotState = generatingStateByShot[String(shot.id)] || { start: false, end: false, video: false };
                             const isGeneratingThisShot = !!(shotState.start || shotState.end || shotState.video);
@@ -20386,7 +20454,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                             </div>
                             );
                         })}
-                        {sortedShots.length === 0 && (
+                        {sortedShots.length === 0 && !isShotsLoading && hasShotInitialLoadCompleted && (
                             <div className="col-span-full h-64 flex flex-col items-center justify-center text-muted-foreground border-2 border-dashed border-white/10 rounded-xl">
                                 <Film className="w-12 h-12 mb-4 opacity-20" />
                                 <p>{t('该场景暂无镜头。', 'No shots in this scene.')}</p>
@@ -20837,6 +20905,15 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 >
                                                     {currentGeneratingState.video ? <Loader2 className="w-3 h-3 animate-spin"/> : <Film className="w-3 h-3"/>} 
                                                     {currentGeneratingState.video ? t('生成中...', 'Generating...') : t('生成', 'Generate')}
+                                                </button>
+                                                <button
+                                                    onClick={() => handleForceStopShotVideo(editingShot?.id)}
+                                                    disabled={!getPendingVideoJobId(editingShot?.id) || Boolean(stoppingVideoByShot[String(editingShot?.id || '')])}
+                                                    className={`text-[10px] font-bold px-3 py-0.5 rounded flex items-center gap-1 ${(!getPendingVideoJobId(editingShot?.id) || Boolean(stoppingVideoByShot[String(editingShot?.id || '')])) ? 'bg-red-500/10 text-red-300/50 cursor-not-allowed' : 'bg-red-500/20 text-red-200 hover:bg-red-500/30'}`}
+                                                    title={t('强制停止当前镜头的视频生成任务', 'Force stop current shot video job')}
+                                                >
+                                                    {Boolean(stoppingVideoByShot[String(editingShot?.id || '')]) ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
+                                                    {Boolean(stoppingVideoByShot[String(editingShot?.id || '')]) ? t('停止中...', 'Stopping...') : t('强制停止', 'Force Stop')}
                                                 </button>
                                                 <button
                                                     onClick={handleGenerateVoiceoverOnly}

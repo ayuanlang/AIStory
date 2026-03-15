@@ -27,14 +27,28 @@ _user_auth_cache = {
 
 def _build_cached_principal(user: User) -> dict:
     now = time.time()
+    email_value = getattr(user, "email", None)
+    if email_value is not None:
+        email_value = str(email_value).strip() or None
+    full_name_value = getattr(user, "full_name", None)
+    if full_name_value is not None:
+        full_name_value = str(full_name_value).strip() or None
+    avatar_value = getattr(user, "avatar_url", None)
+    if avatar_value is not None:
+        avatar_value = str(avatar_value).strip() or None
     return {
         "id": int(getattr(user, "id", 0) or 0),
         "username": str(getattr(user, "username", "") or "").strip(),
-        "email": str(getattr(user, "email", "") or "").strip(),
+        "email": email_value,
+        "full_name": full_name_value,
+        "avatar_url": avatar_value,
         "is_active": bool(getattr(user, "is_active", True)),
         "is_superuser": bool(getattr(user, "is_superuser", False)),
+        "is_authorized": bool(getattr(user, "is_authorized", False)),
         "is_system": bool(getattr(user, "is_system", False)),
         "account_status": int(getattr(user, "account_status", 1) or 1),
+        "email_verified": bool(getattr(user, "email_verified", False)),
+        "credits": int(getattr(user, "credits", 0) or 0),
         "cached_at": now,
         "expires_at": now + max(1, _USER_AUTH_CACHE_TTL_SECONDS),
         "stale_until": now + max(1, _USER_AUTH_CACHE_TTL_SECONDS + _USER_AUTH_CACHE_STALE_GRACE_SECONDS),
@@ -75,14 +89,28 @@ def cache_user_identity(user: User) -> None:
 
 
 def _entry_to_principal(entry: dict) -> SimpleNamespace:
+    email_value = entry.get("email")
+    if email_value is not None:
+        email_value = str(email_value).strip() or None
+    full_name_value = entry.get("full_name")
+    if full_name_value is not None:
+        full_name_value = str(full_name_value).strip() or None
+    avatar_value = entry.get("avatar_url")
+    if avatar_value is not None:
+        avatar_value = str(avatar_value).strip() or None
     return SimpleNamespace(
         id=int(entry.get("id") or 0),
         username=str(entry.get("username") or ""),
-        email=str(entry.get("email") or ""),
+        email=email_value,
+        full_name=full_name_value,
+        avatar_url=avatar_value,
         is_active=bool(entry.get("is_active", True)),
         is_superuser=bool(entry.get("is_superuser", False)),
+        is_authorized=bool(entry.get("is_authorized", False)),
         is_system=bool(entry.get("is_system", False)),
         account_status=int(entry.get("account_status") or 1),
+        email_verified=bool(entry.get("email_verified", False)),
+        credits=int(entry.get("credits") or 0),
     )
 
 
