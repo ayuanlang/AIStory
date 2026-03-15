@@ -4,6 +4,7 @@ from typing import Iterable, Tuple
 from datetime import datetime
 import os
 import json
+import asyncio
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -56,10 +57,6 @@ def _bootstrap_db():
 
 
 _RUN_DB_BOOTSTRAP_ON_START = os.getenv("RUN_DB_BOOTSTRAP_ON_START", "1").strip().lower() in {"1", "true", "yes", "on"}
-if _RUN_DB_BOOTSTRAP_ON_START:
-    _bootstrap_db()
-else:
-    logger.warning("RUN_DB_BOOTSTRAP_ON_START is disabled; skipping startup DB bootstrap")
 
 limiter = Limiter(key_func=get_remote_address)
 
@@ -92,6 +89,11 @@ class SelectiveGZipMiddleware(GZipMiddleware):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     configure_uvicorn_logging_noise_reduction()
+    if _RUN_DB_BOOTSTRAP_ON_START:
+        # Start DB bootstrap in background so health checks can pass quickly.
+        asyncio.create_task(asyncio.to_thread(_bootstrap_db))
+    else:
+        logger.warning("RUN_DB_BOOTSTRAP_ON_START is disabled; skipping startup DB bootstrap")
     yield
 
 
@@ -489,4 +491,4 @@ def healthz():
 if __name__ == "__main__":
     import uvicorn
     # Use import string to enable reload
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("app.main:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")), reload=True)
