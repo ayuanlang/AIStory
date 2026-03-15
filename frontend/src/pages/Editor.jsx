@@ -464,6 +464,7 @@ import {
     getVideoGenerationJobStatus,
     getGenerationJobPool,
     stopGenerationJob,
+    deleteGenerationJob,
     stopAllGenerationJobs,
     stopShotMediaBatch,
     saveProjectStoryGeneratorGlobalInput,
@@ -13495,6 +13496,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     const [imageSelectAction, setImageSelectAction] = useState('direct_use');
     const [viewingEntity, setViewingEntity] = useState(null);
     const [isBatchGeneratingEntities, setIsBatchGeneratingEntities] = useState(false);
+    const [isStoppingBatchGenerateEntities, setIsStoppingBatchGenerateEntities] = useState(false);
     const [batchEntityProgress, setBatchEntityProgress] = useState(null);
     const [isBatchAnalyzingEntities, setIsBatchAnalyzingEntities] = useState(false);
     const [batchAnalyzeProgress, setBatchAnalyzeProgress] = useState(null);
@@ -13505,6 +13507,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     const [pickerConfig, setPickerConfig] = useState({ isOpen: false, callback: null });
     const [subjectImageJobs, setSubjectImageJobs] = useState({});
     const subjectImageJobPollingRef = useRef(false);
+    const subjectBatchGenerateStopRequestedRef = useRef(false);
     const subjectImageJobStorageKey = useMemo(() => {
         const pid = String(projectId || '').trim();
         return pid ? `aistory.subjectImageJobs.${pid}` : '';
@@ -14802,6 +14805,9 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
 
         if (!await confirmUiMessage(`Batch generate images for ${toGenerate.length} entities? This will respect dependency order.`)) return;
 
+        subjectBatchGenerateStopRequestedRef.current = false;
+        setIsStoppingBatchGenerateEntities(false);
+
         updateGenerateBatchRuntimeState(true, { current: 0, total: toGenerate.length, status: 'Initializing...' });
 
         // Determine Dependency Map
@@ -14845,6 +14851,9 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
 
         try {
             while (queue.length > 0) {
+                if (subjectBatchGenerateStopRequestedRef.current) {
+                    break;
+                }
                 // Find all entities that are ready
                 const readyBatch = queue.filter(e => isReady(e));
                 
@@ -14857,6 +14866,9 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                 }
 
                 for (const entity of batch) {
+                    if (subjectBatchGenerateStopRequestedRef.current) {
+                        break;
+                    }
                     const idx = processedCount + 1;
                     updateGenerateBatchRuntimeState(true, { current: idx, total: toGenerate.length, status: `Generating ${entity.name}...` });
                     
@@ -14968,7 +14980,9 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                     processedCount++;
                 }
             }
-            if (skippedPromptCount > 0) {
+            if (subjectBatchGenerateStopRequestedRef.current) {
+                alert(t('批量补图已停止。', 'Batch fill-images stopped.'));
+            } else if (skippedPromptCount > 0) {
                 alert(`Batch Generation Complete! Skipped ${skippedPromptCount} item(s) due to short prompt (<${MIN_BATCH_IMAGE_PROMPT_CHARS} chars).`);
             } else {
                 alert("Batch Generation Complete!");
@@ -14978,7 +14992,20 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
             alert("Batch Generation Failed: " + e.message);
         } finally {
             updateGenerateBatchRuntimeState(false, null);
+            subjectBatchGenerateStopRequestedRef.current = false;
+            setIsStoppingBatchGenerateEntities(false);
         }
+    };
+
+    const handleStopBatchGenerateEntities = async () => {
+        if (!isBatchGeneratingEntities) return;
+        subjectBatchGenerateStopRequestedRef.current = true;
+        setIsStoppingBatchGenerateEntities(true);
+        updateGenerateBatchRuntimeState(true, {
+            ...(batchEntityProgress || {}),
+            status: t('已请求停止，等待当前实体完成...', 'Stop requested. Waiting for current entity to finish...'),
+        });
+        if (onLog) onLog(t('批量补图已请求停止。', 'Batch fill-images stop requested.'), 'warning');
     };
 
     return (
@@ -15012,6 +15039,23 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                 <Wand2 size={12} /> {t('批量补图', 'Fill Images')}
                              </>
                          )}
+                    </button>
+                    <button
+                        onClick={handleStopBatchGenerateEntities}
+                        disabled={!isBatchGeneratingEntities || isStoppingBatchGenerateEntities}
+                        className="px-3 py-2 text-xs font-bold uppercase rounded-md bg-red-500/20 hover:bg-red-500/30 text-red-200 flex items-center gap-2 disabled:opacity-50 transition-all border border-red-400/20"
+                        title={t('停止当前批量补图任务（当前实体完成后停止）', 'Stop current batch fill-images task (stops after current entity)')}
+                    >
+                        {isStoppingBatchGenerateEntities ? (
+                            <>
+                                <Loader2 className="animate-spin" size={12} />
+                                {t('停止中', 'Stopping')}
+                            </>
+                        ) : (
+                            <>
+                                <X size={12} /> {t('停止补图', 'Stop Fill')}
+                            </>
+                        )}
                     </button>
                     <button
                         onClick={handleBatchAnalyzeExistingSubjects}
@@ -22229,6 +22273,7 @@ const Editor = ({
     const [isJobPoolOpen, setIsJobPoolOpen] = useState(false);
     const [jobPoolLoading, setJobPoolLoading] = useState(false);
     const [jobPoolStoppingId, setJobPoolStoppingId] = useState('');
+    const [jobPoolDeletingId, setJobPoolDeletingId] = useState('');
     const [jobPoolStoppingAll, setJobPoolStoppingAll] = useState(false);
     const [jobPoolStoppingAllApi, setJobPoolStoppingAllApi] = useState(false);
     const [jobPoolStopLimit, setJobPoolStopLimit] = useState('20');
@@ -22236,6 +22281,7 @@ const Editor = ({
     const [jobPoolRunningOnly, setJobPoolRunningOnly] = useState(true);
     const [jobPoolData, setJobPoolData] = useState({ total: 0, status_counts: {}, items: [] });
     const [isSuperuser, setIsSuperuser] = useState(false);
+    const [currentUserId, setCurrentUserId] = useState(null);
     const [refreshKey, setRefreshKey] = useState(0);
     const [editingShot, setEditingShot] = useState(null);
     const [shotsFocusRequest, setShotsFocusRequest] = useState(null);
@@ -22259,8 +22305,14 @@ const Editor = ({
 
     useEffect(() => {
         fetchMe()
-            .then((user) => setIsSuperuser(!!user?.is_superuser))
-            .catch(() => setIsSuperuser(false));
+            .then((user) => {
+                setIsSuperuser(!!user?.is_superuser);
+                setCurrentUserId(Number(user?.id || 0) || null);
+            })
+            .catch(() => {
+                setIsSuperuser(false);
+                setCurrentUserId(null);
+            });
     }, []);
 
     useEffect(() => {
@@ -24214,6 +24266,36 @@ const Editor = ({
         }
     };
 
+    const handleDeleteJobFromPool = async (item) => {
+        const kind = String(item?.kind || '').trim();
+        const jobId = String(item?.job_id || '').trim();
+        if (!kind || !jobId) return;
+        const ownerId = Number(item?.user_id || 0) || null;
+        const canDelete = isSuperuser || (ownerId !== null && currentUserId !== null && ownerId === currentUserId);
+        if (!canDelete) {
+            addLog(t('仅可删除自己的任务（超级用户可删除全部）。', 'You can only delete your own jobs (superuser can delete all).'), 'warning');
+            return;
+        }
+
+        const ok = await confirmUiMessage(t(
+            `确认删除任务记录？\n${kind} / ${jobId}\n该操作仅删除任务池记录，不会恢复已停止任务。`,
+            `Delete this job record?\n${kind} / ${jobId}\nThis removes it from job history and cannot be undone.`
+        ));
+        if (!ok) return;
+
+        const rowKey = `${kind}:${jobId}`;
+        setJobPoolDeletingId(rowKey);
+        try {
+            const res = await deleteGenerationJob(kind, jobId);
+            addLog(`Job deleted: ${kind}/${jobId} - ${res?.message || 'ok'}`, 'warning');
+            await refreshGenerationJobPool();
+        } catch (e) {
+            addLog(`Failed to delete job ${kind}/${jobId}: ${e?.response?.data?.detail || e?.message || 'unknown error'}`, 'error');
+        } finally {
+            setJobPoolDeletingId('');
+        }
+    };
+
     const isJobPoolItemStoppable = () => {
         return true;
     };
@@ -24750,6 +24832,9 @@ const Editor = ({
                                     const rowKey = `${item.kind}:${item.job_id}`;
                                     const stopping = jobPoolStoppingId === rowKey;
                                     const canStop = isJobPoolItemStoppable(item);
+                                    const deleting = jobPoolDeletingId === rowKey;
+                                    const ownerId = Number(item?.user_id || 0) || null;
+                                    const canDelete = isSuperuser || (ownerId !== null && currentUserId !== null && ownerId === currentUserId);
                                     return (
                                         <div key={`mobile-${rowKey}`} className="bg-white/5 border border-white/10 rounded-lg p-3 space-y-2.5">
                                             <div className="flex items-start justify-between gap-2">
@@ -24763,13 +24848,24 @@ const Editor = ({
                                                 <div className="text-[11px] text-amber-300/80 bg-black/30 border border-white/10 rounded px-2.5 py-1.5 break-all">{item.error}</div>
                                             ) : null}
                                             <div className="flex justify-end">
-                                                <button
-                                                    onClick={() => handleStopJobFromPool(item)}
-                                                    disabled={stopping || jobPoolStoppingAll || !canStop}
-                                                    className={`px-3 py-2 rounded-md text-[12px] font-semibold ${(stopping || jobPoolStoppingAll || !canStop) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-red-500/20 text-red-200 hover:bg-red-500/30'}`}
-                                                >
-                                                    {stopping ? t('停止中...', 'Stopping...') : t('强制停止', 'Force Stop')}
-                                                </button>
+                                                <div className="flex items-center gap-2">
+                                                    <button
+                                                        onClick={() => handleStopJobFromPool(item)}
+                                                        disabled={stopping || deleting || jobPoolStoppingAll || !canStop}
+                                                        className={`px-3 py-2 rounded-md text-[12px] font-semibold ${(stopping || deleting || jobPoolStoppingAll || !canStop) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-red-500/20 text-red-200 hover:bg-red-500/30'}`}
+                                                    >
+                                                        {stopping ? t('停止中...', 'Stopping...') : t('强制停止', 'Force Stop')}
+                                                    </button>
+                                                    {canDelete && (
+                                                        <button
+                                                            onClick={() => handleDeleteJobFromPool(item)}
+                                                            disabled={stopping || deleting || jobPoolStoppingAll}
+                                                            className={`px-3 py-2 rounded-md text-[12px] font-semibold ${(stopping || deleting || jobPoolStoppingAll) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-orange-500/20 text-orange-200 hover:bg-orange-500/30'}`}
+                                                        >
+                                                            {deleting ? t('删除中...', 'Deleting...') : t('删除', 'Delete')}
+                                                        </button>
+                                                    )}
+                                                </div>
                                             </div>
                                         </div>
                                     );
@@ -24796,6 +24892,9 @@ const Editor = ({
                                         const rowKey = `${item.kind}:${item.job_id}`;
                                         const stopping = jobPoolStoppingId === rowKey;
                                         const canStop = isJobPoolItemStoppable(item);
+                                        const deleting = jobPoolDeletingId === rowKey;
+                                        const ownerId = Number(item?.user_id || 0) || null;
+                                        const canDelete = isSuperuser || (ownerId !== null && currentUserId !== null && ownerId === currentUserId);
                                         return (
                                             <tr key={rowKey} className="border-b border-white/5 hover:bg-white/5">
                                                 <td className="px-3 py-2 text-white/80">{item.kind}</td>
@@ -24806,13 +24905,24 @@ const Editor = ({
                                                 <td className="px-3 py-2 text-white/60">{item.created_at || '-'}</td>
                                                 <td className="hidden lg:table-cell px-3 py-2 text-amber-300/80 max-w-[220px] truncate" title={item.error || ''}>{item.error || '-'}</td>
                                                 <td className="px-3 py-2 text-right">
-                                                    <button
-                                                        onClick={() => handleStopJobFromPool(item)}
-                                                        disabled={stopping || jobPoolStoppingAll}
-                                                        className={`px-2.5 py-1 rounded text-[11px] font-semibold ${(stopping || jobPoolStoppingAll) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-red-500/20 text-red-200 hover:bg-red-500/30'}`}
-                                                    >
-                                                        {stopping ? t('停止中...', 'Stopping...') : t('强制停止', 'Force Stop')}
-                                                    </button>
+                                                    <div className="flex justify-end items-center gap-1.5">
+                                                        <button
+                                                            onClick={() => handleStopJobFromPool(item)}
+                                                            disabled={stopping || deleting || jobPoolStoppingAll || !canStop}
+                                                            className={`px-2.5 py-1 rounded text-[11px] font-semibold ${(stopping || deleting || jobPoolStoppingAll || !canStop) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-red-500/20 text-red-200 hover:bg-red-500/30'}`}
+                                                        >
+                                                            {stopping ? t('停止中...', 'Stopping...') : t('强制停止', 'Force Stop')}
+                                                        </button>
+                                                        {canDelete && (
+                                                            <button
+                                                                onClick={() => handleDeleteJobFromPool(item)}
+                                                                disabled={stopping || deleting || jobPoolStoppingAll}
+                                                                className={`px-2.5 py-1 rounded text-[11px] font-semibold ${(stopping || deleting || jobPoolStoppingAll) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-orange-500/20 text-orange-200 hover:bg-orange-500/30'}`}
+                                                            >
+                                                                {deleting ? t('删除中...', 'Deleting...') : t('删除', 'Delete')}
+                                                            </button>
+                                                        )}
+                                                    </div>
                                                 </td>
                                             </tr>
                                         );

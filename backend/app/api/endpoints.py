@@ -18352,6 +18352,169 @@ def stop_generation_job(
     }
 
 
+@router.delete("/generate/jobs/{kind}/{job_id}")
+def delete_generation_job(
+    kind: str,
+    job_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    is_superuser = bool(getattr(current_user, "is_superuser", False))
+
+    safe_kind = str(kind or "").strip().lower()
+    if safe_kind not in {"image", "video", "episode-scenes", "episode-scripts", "scene-ai-shots-batch", "shot-media-batch"}:
+        raise HTTPException(status_code=400, detail="kind must be one of: image, video, episode-scenes, episode-scripts, scene-ai-shots-batch, shot-media-batch")
+
+    target_id = _extract_target_id_from_job_id(job_id)
+
+    if safe_kind in {"episode-scenes", "scene-ai-shots-batch", "shot-media-batch", "episode-scripts"}:
+        if not target_id:
+            raise HTTPException(status_code=400, detail="Invalid job_id")
+
+        if safe_kind == "episode-scripts":
+            project = db.query(Project).filter(Project.id == target_id).first()
+            if not project:
+                raise HTTPException(status_code=404, detail="Job not found")
+            gi = dict(project.global_info or {})
+            if "episode_script_generation_status" not in gi:
+                raise HTTPException(status_code=404, detail="Job not found")
+            payload = gi.get("episode_script_generation_status")
+            actor_user_id = None
+            if isinstance(payload, dict):
+                raw_uid = payload.get("started_by_user_id") or payload.get("user_id") or project.owner_id
+                try:
+                    actor_user_id = int(raw_uid) if raw_uid is not None else None
+                except Exception:
+                    actor_user_id = None
+            if not is_superuser and actor_user_id != int(current_user.id):
+                raise HTTPException(status_code=403, detail="Not authorized to delete this job")
+            gi.pop("episode_script_generation_status", None)
+            project.global_info = gi
+            db.add(project)
+            db.commit()
+            return {
+                "ok": True,
+                "kind": safe_kind,
+                "job_id": job_id,
+                "deleted": True,
+                "message": "Deleted from job history",
+            }
+
+        episode = db.query(Episode).filter(Episode.id == target_id).first()
+        if not episode:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        if safe_kind == "episode-scenes":
+            status_key = EPISODE_SCENE_GEN_STATUS_KEY
+        elif safe_kind == "scene-ai-shots-batch":
+            status_key = SCENE_AI_SHOTS_BATCH_STATUS_KEY
+        else:
+            status_key = SHOT_MEDIA_BATCH_STATUS_KEY
+
+        info = _episode_runtime_info_from_episode(episode)
+        if status_key not in info:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        payload = info.get(status_key)
+        actor_user_id = None
+        if isinstance(payload, dict):
+            raw_uid = payload.get("started_by_user_id") or payload.get("user_id")
+            if raw_uid is None:
+                try:
+                    project = db.query(Project).filter(Project.id == int(episode.project_id)).first()
+                    raw_uid = project.owner_id if project else None
+                except Exception:
+                    raw_uid = None
+            try:
+                actor_user_id = int(raw_uid) if raw_uid is not None else None
+            except Exception:
+                actor_user_id = None
+        if not is_superuser and actor_user_id != int(current_user.id):
+            raise HTTPException(status_code=403, detail="Not authorized to delete this job")
+
+        info.pop(status_key, None)
+        episode.episode_info = info
+        db.add(episode)
+        db.commit()
+
+        if safe_kind == "shot-media-batch":
+            _clear_shot_media_batch_cancel_event(int(episode.id))
+
+        return {
+            "ok": True,
+            "kind": safe_kind,
+            "job_id": job_id,
+            "deleted": True,
+            "message": "Deleted from job history",
+        }
+
+    if safe_kind == "image":
+        lock = IMAGE_JOB_LOCK
+        store = IMAGE_JOB_STORE
+        task_store = IMAGE_JOB_TASKS
+        active_scope_store = IMAGE_ACTIVE_SCOPE_STORE
+        idempotency_store = IMAGE_SUBMIT_IDEMPOTENCY_STORE
+        file_path = _image_job_file_path(job_id)
+    else:
+        lock = VIDEO_JOB_LOCK
+        store = VIDEO_JOB_STORE
+        task_store = VIDEO_JOB_TASKS
+        active_scope_store = VIDEO_ACTIVE_SCOPE_STORE
+        idempotency_store = VIDEO_SUBMIT_IDEMPOTENCY_STORE
+        file_path = _video_job_file_path(job_id)
+
+    task_ref = None
+    file_payload = None
+    with lock:
+        has_store_item = job_id in store
+        if not has_store_item:
+            file_payload = _read_image_job_file(job_id) if safe_kind == "image" else _read_video_job_file(job_id)
+            if not file_payload:
+                raise HTTPException(status_code=404, detail="Job not found")
+
+        live_payload = dict(store.get(job_id) or {})
+        owner_raw = live_payload.get("user_id") if live_payload else None
+        if owner_raw is None and isinstance(file_payload, dict):
+            owner_raw = file_payload.get("user_id")
+        try:
+            owner_id = int(owner_raw) if owner_raw is not None else None
+        except Exception:
+            owner_id = None
+        if not is_superuser and owner_id != int(current_user.id):
+            raise HTTPException(status_code=403, detail="Not authorized to delete this job")
+
+        task_ref = task_store.pop(job_id, None)
+        store.pop(job_id, None)
+
+        stale_scope_keys = [key for key, value in active_scope_store.items() if str(value or "") == job_id]
+        for key in stale_scope_keys:
+            active_scope_store.pop(key, None)
+
+        stale_idempotency_keys = [key for key, value in idempotency_store.items() if str((value or {}).get("job_id") or "") == job_id]
+        for key in stale_idempotency_keys:
+            idempotency_store.pop(key, None)
+
+    if task_ref:
+        try:
+            task_ref.cancel()
+        except Exception:
+            pass
+
+    try:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "kind": safe_kind,
+        "job_id": job_id,
+        "deleted": True,
+        "message": "Deleted from job history",
+    }
+
+
 @router.post("/generate/jobs/stop-all")
 def stop_all_generation_jobs(
     kind: str = "all",
