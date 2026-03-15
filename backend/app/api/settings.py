@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, load_only
-from sqlalchemy import cast, String, func, inspect, or_, and_, text, Table, MetaData
+from sqlalchemy import cast, String, func, inspect, or_, and_, text, Table, MetaData, bindparam
 import logging
 import csv
 import io
@@ -363,7 +363,7 @@ def _get_or_create_agent_policy_row(db: Session) -> SimpleNamespace:
         "base_url": "",
         "model": _AGENT_POLICY_MODEL,
         "deprecated": False,
-        "config": cfg,
+        "config": _safe_json_text(cfg),
         "is_active": True,
     })
 
@@ -391,7 +391,7 @@ def _persist_agent_policy_row_config(db: Session, row_id: int, config: Dict[str,
         WHERE id = :id
     """), {
         "id": int(row_id),
-        "config": _safe_json_dict(config),
+        "config": _safe_json_text(config),
     })
 
 
@@ -1110,6 +1110,13 @@ def _safe_json_dict(value) -> Dict:
 
         return raw_obj if isinstance(raw_obj, dict) else {}
     return {}
+
+
+def _safe_json_text(value: Any) -> str:
+    try:
+        return json.dumps(_safe_json_dict(value), ensure_ascii=False)
+    except Exception:
+        return "{}"
 
 
 def _assign_wide_modality_fields(target: SystemAPISetting, source: Any) -> None:
@@ -3139,12 +3146,16 @@ def _refresh_settings_price_cache_for_system_apis(db: Session, system_api_ids: L
         return 0
 
     pricing_map = _batch_system_api_pricing_from_rules_and_audit(db, ids, include_audit=True)
-    rows = db.query(SystemAPISetting).filter(SystemAPISetting.id.in_(ids)).all()
+    rows = db.execute(text("""
+        SELECT id, config
+        FROM system_api_settings
+        WHERE id IN :ids
+    """).bindparams(bindparam("ids", expanding=True)), {"ids": ids}).mappings().all()
     changed = 0
     now_iso = now_bj_iso()
 
     for row in rows:
-        sid = int(getattr(row, "id", 0) or 0)
+        sid = int(row.get("id") or 0)
         next_price = pricing_map.get(sid, {
             "average_cost": 0,
             "source": "range_from_rules_sample_from_audit",
@@ -3153,7 +3164,7 @@ def _refresh_settings_price_cache_for_system_apis(db: Session, system_api_ids: L
             "sample_prices": [],
         })
 
-        cfg = _safe_json_dict(getattr(row, "config", {}))
+        cfg = _safe_json_dict(row.get("config"))
         current_cfg = _read_settings_price_cache(cfg)
         current_cfg_cmp = {
             "average_cost": int(current_cfg.get("average_cost") or 0),
@@ -3161,14 +3172,6 @@ def _refresh_settings_price_cache_for_system_apis(db: Session, system_api_ids: L
             "min_cost": int(current_cfg.get("min_cost") or 0),
             "max_cost": int(current_cfg.get("max_cost") or 0),
             "sample_prices": [int(v) for v in (current_cfg.get("sample_prices") or []) if int(v or 0) > 0],
-        }
-        current_col = _read_settings_price_cache_from_row(row)
-        current_col_cmp = {
-            "average_cost": int(current_col.get("average_cost") or 0),
-            "source": str(current_col.get("source") or "") or None,
-            "min_cost": int(current_col.get("min_cost") or 0),
-            "max_cost": int(current_col.get("max_cost") or 0),
-            "sample_prices": [int(v) for v in (current_col.get("sample_prices") or []) if int(v or 0) > 0],
         }
         next_cmp = {
             "average_cost": int(next_price.get("average_cost") or 0),
@@ -3178,29 +3181,23 @@ def _refresh_settings_price_cache_for_system_apis(db: Session, system_api_ids: L
             "sample_prices": [int(v) for v in (next_price.get("sample_prices") or []) if int(v or 0) > 0],
         }
 
-        config_needs_update = current_cfg_cmp != next_cmp
-        columns_need_update = current_col_cmp != next_cmp or not str(getattr(row, "price_updated_at", "") or "").strip()
-
-        if not config_needs_update and not columns_need_update:
+        if current_cfg_cmp == next_cmp:
             continue
 
-        if config_needs_update:
-            cfg[_SETTINGS_PRICE_CACHE_KEY] = {
-                **next_cmp,
-                "updated_at": now_iso,
-            }
-            row.config = cfg
-
-        row.price_avg_cost = int(next_cmp["average_cost"])
-        row.price_source = str(next_cmp["source"] or "") or None
-        row.price_min_cost = int(next_cmp["min_cost"])
-        row.price_max_cost = int(next_cmp["max_cost"])
-        row.price_sample_prices = [int(v) for v in (next_cmp["sample_prices"] or []) if int(v) > 0]
-        row.price_updated_at = now_iso
+        cfg[_SETTINGS_PRICE_CACHE_KEY] = {
+            **next_cmp,
+            "updated_at": now_iso,
+        }
+        db.execute(text("""
+            UPDATE system_api_settings
+            SET config = :config
+            WHERE id = :id
+        """), {
+            "id": sid,
+            "config": _safe_json_text(cfg),
+        })
         changed += 1
 
-    if changed:
-        db.flush()
     return changed
 
 
@@ -3209,30 +3206,32 @@ def _refresh_settings_provider_price_cache_for_system_apis(db: Session, system_a
     if not ids:
         return 0
 
-    touched_rows = db.query(
-        SystemAPISetting.id,
-        SystemAPISetting.provider,
-        SystemAPISetting.category,
-    ).filter(SystemAPISetting.id.in_(ids)).all()
+    touched_rows = db.execute(text("""
+        SELECT id, provider, category
+        FROM system_api_settings
+        WHERE id IN :ids
+    """).bindparams(bindparam("ids", expanding=True)), {"ids": ids}).mappings().all()
 
     touched_keys: set = set()
     for row in touched_rows:
-        provider_key = str(getattr(row, "provider", "") or "").strip().lower()
-        category_key = str(getattr(row, "category", "") or "").strip().lower()
+        provider_key = str(row.get("provider") or "").strip().lower()
+        category_key = str(row.get("category") or "").strip().lower()
         if provider_key and category_key:
             touched_keys.add((provider_key, category_key))
 
     if not touched_keys:
         return 0
 
-    candidate_rows = db.query(SystemAPISetting).filter(
-        ~SystemAPISetting.category.like("System_%"),
-    ).all()
+    candidate_rows = db.execute(text("""
+        SELECT id, provider, category, config, deprecated
+        FROM system_api_settings
+        WHERE lower(coalesce(category, '')) NOT LIKE 'system_%'
+    """)).mappings().all()
 
-    grouped_rows: Dict[Tuple[str, str], List[SystemAPISetting]] = {}
+    grouped_rows: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
     for row in candidate_rows:
-        provider_key = str(getattr(row, "provider", "") or "").strip().lower()
-        category_key = str(getattr(row, "category", "") or "").strip().lower()
+        provider_key = str(row.get("provider") or "").strip().lower()
+        category_key = str(row.get("category") or "").strip().lower()
         if not provider_key or not category_key:
             continue
         key = (provider_key, category_key)
@@ -3246,7 +3245,7 @@ def _refresh_settings_provider_price_cache_for_system_apis(db: Session, system_a
     all_group_ids: List[int] = []
     for rows in grouped_rows.values():
         for row in rows:
-            sid = _safe_int(getattr(row, "id", None), 0)
+            sid = _safe_int(row.get("id"), 0)
             if sid > 0:
                 all_group_ids.append(sid)
 
@@ -3258,7 +3257,7 @@ def _refresh_settings_provider_price_cache_for_system_apis(db: Session, system_a
         active_rows = [
             row
             for row in rows
-            if not _is_setting_deprecated(getattr(row, "config", {}), getattr(row, "deprecated", None))
+            if not _is_setting_deprecated(row.get("config"), row.get("deprecated"))
         ]
 
         min_candidates: List[int] = []
@@ -3266,7 +3265,7 @@ def _refresh_settings_provider_price_cache_for_system_apis(db: Session, system_a
         sample_candidates: List[int] = []
 
         for row in active_rows:
-            sid = _safe_int(getattr(row, "id", None), 0)
+            sid = _safe_int(row.get("id"), 0)
             if sid <= 0:
                 continue
             p = pricing_map.get(sid) or {}
@@ -3296,7 +3295,11 @@ def _refresh_settings_provider_price_cache_for_system_apis(db: Session, system_a
         }
 
         for row in rows:
-            cfg = _safe_json_dict(getattr(row, "config", {}))
+            sid = _safe_int(row.get("id"), 0)
+            if sid <= 0:
+                continue
+
+            cfg = _safe_json_dict(row.get("config"))
             current_cfg = _read_settings_provider_price_cache(cfg)
             current_cfg_cmp = {
                 "average_cost": int(current_cfg.get("average_cost") or 0),
@@ -3305,37 +3308,23 @@ def _refresh_settings_provider_price_cache_for_system_apis(db: Session, system_a
                 "max_cost": int(current_cfg.get("max_cost") or 0),
                 "sample_prices": [int(v) for v in (current_cfg.get("sample_prices") or []) if int(v or 0) > 0],
             }
-            current_col = _read_settings_provider_price_cache_from_row(row)
-            current_col_cmp = {
-                "average_cost": int(current_col.get("average_cost") or 0),
-                "source": str(current_col.get("source") or "") or None,
-                "min_cost": int(current_col.get("min_cost") or 0),
-                "max_cost": int(current_col.get("max_cost") or 0),
-                "sample_prices": [int(v) for v in (current_col.get("sample_prices") or []) if int(v or 0) > 0],
-            }
-
-            config_needs_update = current_cfg_cmp != next_cmp
-            columns_need_update = current_col_cmp != next_cmp or not str(getattr(row, "provider_price_updated_at", "") or "").strip()
-            if not config_needs_update and not columns_need_update:
+            if current_cfg_cmp == next_cmp:
                 continue
 
-            if config_needs_update:
-                cfg[_SETTINGS_PROVIDER_PRICE_CACHE_KEY] = {
-                    **next_cmp,
-                    "updated_at": now_iso,
-                }
-                row.config = cfg
-
-            row.provider_price_avg_cost = int(next_cmp["average_cost"])
-            row.provider_price_source = str(next_cmp["source"] or "") or None
-            row.provider_price_min_cost = int(next_cmp["min_cost"])
-            row.provider_price_max_cost = int(next_cmp["max_cost"])
-            row.provider_price_sample_prices = [int(v) for v in (next_cmp["sample_prices"] or []) if int(v) > 0]
-            row.provider_price_updated_at = now_iso
+            cfg[_SETTINGS_PROVIDER_PRICE_CACHE_KEY] = {
+                **next_cmp,
+                "updated_at": now_iso,
+            }
+            db.execute(text("""
+                UPDATE system_api_settings
+                SET config = :config
+                WHERE id = :id
+            """), {
+                "id": sid,
+                "config": _safe_json_text(cfg),
+            })
             changed += 1
 
-    if changed:
-        db.flush()
     return changed
 
 
