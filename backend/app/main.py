@@ -248,11 +248,16 @@ def _apply_cors_headers_to_response(request: Request, response: Response) -> Res
 
 _MAINTENANCE_CATEGORY = "System_Maintenance"
 _MAINTENANCE_PROVIDER = "maintenance_mode"
+_MAINTENANCE_INTERCEPT_ENABLED = os.getenv("MAINTENANCE_INTERCEPT_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
 _MAINTENANCE_CACHE_TTL_SECONDS = 5
 _MAINTENANCE_DB_FAILURE_COOLDOWN_SECONDS = 60
+_MAINTENANCE_DB_FAILURE_CIRCUIT_THRESHOLD = 2
+_MAINTENANCE_DB_FAILURE_CIRCUIT_OPEN_SECONDS = 600
 _maintenance_cache = {
     "checked_at": 0.0,
     "last_read_failed": False,
+    "consecutive_failures": 0,
+    "circuit_open_until": 0.0,
     "status": {
         "enabled": False,
         "is_active": False,
@@ -328,6 +333,9 @@ def _read_maintenance_status_from_db():
 
 def _get_maintenance_status_cached(force: bool = False):
     now = time.time()
+    if not force and now < float(_maintenance_cache.get("circuit_open_until", 0.0)):
+        return _maintenance_cache["status"]
+
     cached_ttl = (
         _MAINTENANCE_DB_FAILURE_COOLDOWN_SECONDS
         if bool(_maintenance_cache.get("last_read_failed", False))
@@ -337,6 +345,14 @@ def _get_maintenance_status_cached(force: bool = False):
         status, read_failed = _read_maintenance_status_from_db()
         _maintenance_cache["status"] = status
         _maintenance_cache["last_read_failed"] = read_failed
+        if read_failed:
+            failures = int(_maintenance_cache.get("consecutive_failures", 0)) + 1
+            _maintenance_cache["consecutive_failures"] = failures
+            if failures >= _MAINTENANCE_DB_FAILURE_CIRCUIT_THRESHOLD:
+                _maintenance_cache["circuit_open_until"] = now + _MAINTENANCE_DB_FAILURE_CIRCUIT_OPEN_SECONDS
+        else:
+            _maintenance_cache["consecutive_failures"] = 0
+            _maintenance_cache["circuit_open_until"] = 0.0
         _maintenance_cache["checked_at"] = now
     return _maintenance_cache["status"]
 
@@ -382,6 +398,10 @@ class _MaintenanceModeMiddleware:
 
     async def __call__(self, scope, receive, send):
         if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        if not _MAINTENANCE_INTERCEPT_ENABLED:
             await self.app(scope, receive, send)
             return
 
@@ -482,7 +502,10 @@ class _SecurityHeadersMiddleware:
         await self.app(scope, receive, send_with_security_headers)
 
 
-app.add_middleware(_MaintenanceModeMiddleware)
+if _MAINTENANCE_INTERCEPT_ENABLED:
+    app.add_middleware(_MaintenanceModeMiddleware)
+else:
+    logger.warning("MAINTENANCE_INTERCEPT_ENABLED is disabled; skipping maintenance interception")
 app.add_middleware(_SecurityHeadersMiddleware)
 
 app.include_router(endpoints.router, prefix=settings.API_V1_STR)
