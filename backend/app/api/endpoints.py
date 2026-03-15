@@ -5,7 +5,7 @@ import logging
 import smtplib
 from email.message import EmailMessage
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy import or_, and_, text
 from app.db.session import get_db, SessionLocal
 from app.models.all_models import Project, ProjectShare, User, Episode, Scene, Shot, Entity, Asset, APISetting, SystemAPISetting, ScriptSegment, TransactionHistory, SMTPSystemConfig, WechatPayConfig, ProviderKeyPool
@@ -18903,6 +18903,45 @@ def stop_all_generation_jobs(
 
 
 SHOT_MEDIA_BATCH_STATUS_KEY = "shot_media_batch_status"
+SHOT_MEDIA_BATCH_RUNTIME_CACHE: Dict[int, Dict[str, Any]] = {}
+SHOT_MEDIA_BATCH_RUNTIME_CACHE_LOCK = threading.Lock()
+
+
+def _cache_shot_media_batch_status(episode_id: int, status_payload: Dict[str, Any]) -> None:
+    try:
+        safe_episode_id = int(episode_id)
+    except Exception:
+        return
+    if safe_episode_id <= 0:
+        return
+    snapshot = dict(status_payload or {})
+    with SHOT_MEDIA_BATCH_RUNTIME_CACHE_LOCK:
+        SHOT_MEDIA_BATCH_RUNTIME_CACHE[safe_episode_id] = snapshot
+
+
+def _get_cached_shot_media_batch_status(episode_id: int) -> Optional[Dict[str, Any]]:
+    try:
+        safe_episode_id = int(episode_id)
+    except Exception:
+        return None
+    if safe_episode_id <= 0:
+        return None
+    with SHOT_MEDIA_BATCH_RUNTIME_CACHE_LOCK:
+        payload = SHOT_MEDIA_BATCH_RUNTIME_CACHE.get(safe_episode_id)
+        if isinstance(payload, dict):
+            return dict(payload)
+    return None
+
+
+def _clear_cached_shot_media_batch_status(episode_id: int) -> None:
+    try:
+        safe_episode_id = int(episode_id)
+    except Exception:
+        return
+    if safe_episode_id <= 0:
+        return
+    with SHOT_MEDIA_BATCH_RUNTIME_CACHE_LOCK:
+        SHOT_MEDIA_BATCH_RUNTIME_CACHE.pop(safe_episode_id, None)
 
 
 def _read_shot_media_batch_status(episode: Episode) -> Dict[str, Any]:
@@ -18964,6 +19003,7 @@ def _persist_shot_media_batch_status(db: Session, episode: Episode, status_paylo
     target_episode.episode_info = info
     db.add(target_episode)
     db.commit()
+    _cache_shot_media_batch_status(int(target_episode.id), merged_status)
 
 
 def _parse_shot_tech(shot: Shot) -> Dict[str, Any]:
@@ -19459,7 +19499,34 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                 if need_end:
                     end_prompt_raw = str(shot.end_frame or "").strip()
                     if end_prompt_raw:
-                        if len(end_prompt_raw) < min_prompt_chars:
+                        normalized_end_prompt = end_prompt_raw.strip().upper()
+                        should_reuse_start_as_end = normalized_end_prompt in {"NO", "N/A", "NONE", "NULL", "NA"}
+                        if should_reuse_start_as_end:
+                            start_frame_url = str(shot.image_url or "").strip()
+                            if start_frame_url:
+                                tech = _parse_shot_tech(shot)
+                                prev_end_url = str(tech.get("end_frame_url") or "").strip()
+                                if prev_end_url != start_frame_url:
+                                    tech["end_frame_url"] = start_frame_url
+                                    tech["end_frame_reused_from_start"] = True
+                                    shot.technical_notes = json.dumps(tech, ensure_ascii=False)
+                                    db.add(shot)
+                                    db.commit()
+                                    db.refresh(shot)
+                                end_frame_url = start_frame_url
+                                logger.info(
+                                    "[shot_media_batch] end_frame=NO-like, reuse start_frame_url | shot_id=%s shot_label=%s end_frame_url=%s",
+                                    shot.id,
+                                    shot_label,
+                                    start_frame_url,
+                                )
+                            else:
+                                logger.info(
+                                    "[shot_media_batch] end_frame=NO-like but start_frame_url missing | shot_id=%s shot_label=%s",
+                                    shot.id,
+                                    shot_label,
+                                )
+                        elif len(end_prompt_raw) < min_prompt_chars:
                             logger.info(
                                 "[shot_media_batch] skip end_frame due to short prompt | shot_id=%s shot_label=%s prompt_len=%s",
                                 shot.id,
@@ -19842,30 +19909,63 @@ def get_shot_media_batch_job_status(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    episode = db.query(Episode).filter(Episode.id == episode_id).first()
-    if not episode:
-        raise HTTPException(status_code=404, detail="Episode not found")
-    _require_project_access(db, episode.project_id, current_user)
-    status_payload = _read_shot_media_batch_status(episode)
-    if (
-        bool(status_payload.get("running"))
-        and _is_stale_running_payload(status_payload, stale_minutes=10)
-        and not _is_episode_worker_alive(SHOT_MEDIA_BATCH_THREADS, SHOT_MEDIA_BATCH_THREADS_LOCK, int(episode_id))
-    ):
-        now_iso = now_bj_iso()
-        status_payload["running"] = False
-        status_payload["status"] = "canceled"
-        status_payload["force_stopped"] = True
-        status_payload["stopped_by_user"] = True
-        status_payload["current_shot_id"] = None
-        status_payload["current_shot_label"] = ""
-        status_payload["current_asset_type"] = None
-        status_payload["current_asset_label"] = ""
-        status_payload["updated_at"] = now_iso
-        status_payload["finished_at"] = status_payload.get("finished_at") or now_iso
-        status_payload["message"] = "Recovered orphaned task state (no active worker)"
-        _persist_shot_media_batch_status(db, episode, status_payload)
-    return status_payload
+    cached_status = _get_cached_shot_media_batch_status(int(episode_id))
+    try:
+        project_id = None
+        if isinstance(cached_status, dict):
+            try:
+                project_id = int(cached_status.get("project_id") or 0)
+            except Exception:
+                project_id = 0
+
+        episode = None
+        if project_id and project_id > 0:
+            _require_project_access(db, project_id, current_user)
+        else:
+            episode = db.query(Episode).filter(Episode.id == episode_id).first()
+            if not episode:
+                raise HTTPException(status_code=404, detail="Episode not found")
+            _require_project_access(db, episode.project_id, current_user)
+
+        if episode is None:
+            episode = db.query(Episode).filter(Episode.id == episode_id).first()
+            if not episode:
+                if isinstance(cached_status, dict):
+                    return cached_status
+                raise HTTPException(status_code=404, detail="Episode not found")
+
+        status_payload = _read_shot_media_batch_status(episode)
+        _cache_shot_media_batch_status(int(episode_id), status_payload)
+        if (
+            bool(status_payload.get("running"))
+            and _is_stale_running_payload(status_payload, stale_minutes=10)
+            and not _is_episode_worker_alive(SHOT_MEDIA_BATCH_THREADS, SHOT_MEDIA_BATCH_THREADS_LOCK, int(episode_id))
+        ):
+            now_iso = now_bj_iso()
+            status_payload["running"] = False
+            status_payload["status"] = "canceled"
+            status_payload["force_stopped"] = True
+            status_payload["stopped_by_user"] = True
+            status_payload["current_shot_id"] = None
+            status_payload["current_shot_label"] = ""
+            status_payload["current_asset_type"] = None
+            status_payload["current_asset_label"] = ""
+            status_payload["updated_at"] = now_iso
+            status_payload["finished_at"] = status_payload.get("finished_at") or now_iso
+            status_payload["message"] = "Recovered orphaned task state (no active worker)"
+            _persist_shot_media_batch_status(db, episode, status_payload)
+            _cache_shot_media_batch_status(int(episode_id), status_payload)
+        return status_payload
+    except SQLAlchemyTimeoutError:
+        if isinstance(cached_status, dict):
+            fallback = dict(cached_status)
+            fallback["degraded"] = True
+            fallback["message"] = str(fallback.get("message") or "Status temporarily served from cache (database busy)")
+            return fallback
+        raise HTTPException(
+            status_code=503,
+            detail="Database connection pool is busy, please retry shortly",
+        )
 
 
 @router.post("/episodes/{episode_id}/shots/batch-media/stop", response_model=Dict[str, Any])
@@ -19902,6 +20002,7 @@ def stop_shot_media_batch_job(
         result="canceled",
         message="Force removed by user",
     )
+    _clear_cached_shot_media_batch_status(int(episode_id))
     return {
         "episode_id": int(episode_id),
         "running": False,

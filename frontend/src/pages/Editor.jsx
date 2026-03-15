@@ -17204,6 +17204,37 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         await onUpdateShot(editingShot.id, updates);
     };
 
+    const handleManualEndFrameInputChange = (nextValue) => {
+        if (!editingShot) return;
+        let tech = {};
+        try {
+            tech = JSON.parse(editingShot.technical_notes || '{}');
+        } catch (e) {
+            tech = {};
+        }
+
+        tech.manual_end_frame = true;
+
+        const normalizedEndPrompt = String(nextValue || '').trim().toUpperCase();
+        const shouldReuseStartAsEnd = ['NO', 'N/A', 'NONE', 'NULL', 'NA'].includes(normalizedEndPrompt);
+        const currentStartFrameUrl = String(editingShot.image_url || '').trim();
+        const previousEndFrameUrl = String(tech.end_frame_url || '').trim();
+        const shouldSyncEndMeta = shouldReuseStartAsEnd && currentStartFrameUrl && previousEndFrameUrl !== currentStartFrameUrl;
+
+        if (shouldSyncEndMeta) {
+            tech.end_frame_url = currentStartFrameUrl;
+            tech.end_frame_reused_from_start = true;
+        }
+
+        const updatedTechNotes = JSON.stringify(tech);
+        setEditingShot(prev => (prev ? { ...prev, end_frame: nextValue, technical_notes: updatedTechNotes } : prev));
+
+        if (shouldSyncEndMeta && editingShot.id) {
+            onUpdateShot(editingShot.id, { end_frame: nextValue, technical_notes: updatedTechNotes }).catch(() => {});
+            onLog?.(t('结束帧为 NO，已将结束帧 URL 同步为起始帧 URL。', 'End frame is NO; synced End Frame URL to Start Frame URL.'), 'info');
+        }
+    };
+
     const resolveVideoModeFromTech = (techObj = {}) => {
         if (techObj?.video_mode_unified) return techObj.video_mode_unified;
         if (techObj?.video_ref_submit_mode === 'refs_video') return 'refs_video';
@@ -19629,6 +19660,23 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             const tech = JSON.parse(editingShot.technical_notes || '{}');
             const keyframes = tech.keyframes || [];
 
+            const normalizedEndPrompt = String(editingShot.end_frame || '').trim().toUpperCase();
+            const shouldReuseStartAsEnd = normalizedEndPrompt === 'NO';
+            const currentStartFrameUrl = String(editingShot.image_url || '').trim();
+            if (shouldReuseStartAsEnd && currentStartFrameUrl) {
+                const previousEndUrl = String(tech.end_frame_url || '').trim();
+                if (previousEndUrl !== currentStartFrameUrl) {
+                    tech.end_frame_url = currentStartFrameUrl;
+                    tech.end_frame_reused_from_start = true;
+                    const updatedTechNotes = JSON.stringify(tech);
+                    await onUpdateShot(targetShotId, { technical_notes: updatedTechNotes });
+                    setEditingShot((prev) => (prev && prev.id === targetShotId
+                        ? { ...prev, technical_notes: updatedTechNotes }
+                        : prev));
+                    onLog?.(t('结束帧为 NO，已将结束帧 URL 同步为起始帧 URL。', 'End frame is NO; synced End Frame URL to Start Frame URL.'), 'info');
+                }
+            }
+
             const resolveVideoMode = (t) => {
                 if (t?.video_mode_unified) return t.video_mode_unified;
                 if (t?.video_ref_submit_mode === 'refs_video') return 'refs_video';
@@ -20811,9 +20859,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                             placeholder={t('结束帧提示词...', 'End Frame Prompt...')}
                                             value={editingShot.end_frame || ''} 
                                             onChange={(e) => {
-                                                const tech = JSON.parse(editingShot.technical_notes || '{}');
-                                                tech.manual_end_frame = true;
-                                                setEditingShot({...editingShot, end_frame: e.target.value, technical_notes: JSON.stringify(tech)});
+                                                handleManualEndFrameInputChange(e.target.value);
                                             }}
                                         />
                                         <ReferenceManager 
@@ -20844,7 +20890,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                         checked={isVoiceoverSyncEnabled}
                                                         onChange={(e) => setVoiceoverSyncEnabled(e.target.checked)}
                                                     />
-                                                    {t('同时生成配音', 'Generate voiceover together')}
+                                                    {t('配音', 'Voiceover')}
                                                 </label>
                                                 <button
                                                     onClick={() => openAssetDetailModal('video')}
@@ -21585,7 +21631,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                             updateTechField('end_frame_cn', e.target.value);
                                                                             return;
                                                                         }
-                                                                        setEditingShot({...editingShot, end_frame: e.target.value});
+                                                                        handleManualEndFrameInputChange(e.target.value);
                                                                     }}
                                                                 />
                                                                 <div className="flex items-center justify-center gap-2">
@@ -21717,7 +21763,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                         checked={isVoiceoverSyncEnabled}
                                                                         onChange={(e) => setVoiceoverSyncEnabled(e.target.checked)}
                                                                     />
-                                                                    {t('同时生成配音', 'Generate voiceover together')}
+                                                                    {t('配音', 'Voiceover')}
                                                                 </label>
                                                                 <div className="flex items-center justify-between">
                                                                     <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('生成模式', 'Generation Mode')}</div>

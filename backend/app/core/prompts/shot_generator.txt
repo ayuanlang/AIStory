@@ -39,6 +39,10 @@
   2) **观察方向**（视线朝向谁/哪里，且可判定 Front/Reverse/Side）。
   - 禁止仅写抽象相机词（如 "cinematic shot"）而不写位置与朝向。
   - 禁止模糊方向词（如 "somewhere behind", "around there"）。
+  - **主观视角命名约束 (First-Person Naming Constraint, 强制)**：当镜头为第一人称主观视角（POV）时，提示词中只允许写“first-person POV / subjective POV / through-the-eyes view”等视角描述；**严禁出现“X 的第一视角/来自 X 视角”以及任何角色名称绑定的主观表述**。
+    - **不合规示例**：`from CHAR:[@Kael]'s POV`, `killer's first-person view`。
+    - **合规示例**：`first-person POV from a low chest-height observer position, facing ENV:[Dark Alley] exit`。
+  - **第一人称禁名细则 (POV No-Name Rule, 强制)**：在第一人称镜头里，`Start Frame` / `Video Content` / `End Frame` / `Keyframes` 不得出现执行视角角色的名字（含 `CHAR:[@Name]`）作为“观察者”身份说明；如需体现人物存在，只能通过前景肢体、倒影、影子、手部入镜、被他人注视方向等可见线索表达，且不写“这是某角色的视角”。
   - **反误解约束 (No Physical Camera Prop, 强制)**：`viewpoint/vantage/framing` 仅表示“观察位置与取景关系”，**不是**画内道具。除非剧情明确要求，严禁出现“camera / 摄像机 / 镜头设备”作为画面实体。
   - 推荐固定短语：`{Viewpoint Anchor}: ... in [Environment Anchor]` + `{Viewing Direction}: ... facing ...`.
     - **所有格特殊规则 (Possessive Exemption)**：当需要表达“角色的...”时（例如 `CHAR:[@RoleName]`'s hand），请直接书写 `CHAR:[@RoleName]'s`。这种形式会被系统识别并**跳过描述注入**，从而避免语法错误。这是**唯一**允许 Skipping Injection 的情况。请善用此规则来描述局部特写（e.g., `Close up of CHAR:[@RoleName]'s eyes`）。
@@ -59,6 +63,12 @@
   - `Noir / Thriller`：允许更高反差与方向性硬光，但必须保留关键面部可读性。
 - **Imagen 兼容写法 (Imagen-Compatible Wording, 强制)**：`Start Frame` / `Video Content` / `End Frame` / `Keyframes` 的英文文本必须采用自然语言描述，不得使用模型专属参数语法（如 `--ar`, `--stylize`, `::`, `<lora:...>`）。
 - **镜头语义顺序 (Prompt Semantic Order, 强制)**：每条镜头描述建议按“主体与场景锚点 → 机位与构图 → 光照与色彩 → 动作演化（视频）→ 结果状态”组织，避免词袋式罗列。
+- **画面纯描述约束 (Visual-Only Prompt Rule, 强制)**：`Start Frame` / `Video Content` / `End Frame` / `Keyframes` 只能写“可被镜头直接看到的画面信息”（主体位置、动作、表情、构图、光线、材质、景深、运动轨迹、结果状态）。
+  - 严禁写入剧情解释、人物动机、心理独白、叙事总结、因果推理、主题判断、对白意图等“不可见情节信息”。
+  - 严禁出现“因为/为了/试图/决定/想要/意识到/回忆起/预示着”等叙事化语句，除非它被改写为可见行为与画面结果。
+  - 若输入给出的是情节句，必须先转换成纯视觉指令再落到提示词，不得原句搬运进生成提示词。
+  - **不合规示例**：`CHAR:[@A] pushes the door to avoid detection.`
+  - **合规示例**：`CHAR:[@A] pushes PROP:[Door] until the latch clicks; shoulders stay low, breath held, then gaze fixes on the corridor.`
 - **视频时序可执行性 (Temporal Executability, 强制)**：`Video Content` 必须给出可执行的连续动作链（起始条件、过程变化、结束状态），避免“仅氛围词无动作”。
 - **冲突约束 (No Contradictory Directives)**：同一镜头文本中禁止给出互斥动作/光照/景别指令（例如同时要求 static lock-off 与 fast handheld shake）。
 - **负向约束继承 (Negative Constraint Inheritance)**：当上游实体提供 `negative_prompt_en` 时，本镜头描述需避免触发对应风险（身份漂移、塑料感、时代错置、文字水印等），并在必要时显式重申关键排除项。
@@ -286,7 +296,7 @@
 - **Advanced Technical Planning (高级规划)**:
   - **Dolly Zoom (Vertigo)**: 当角色意识到恐怖真相时使用。Video Content 描述 "Move viewpoint back while zooming in -> Background compresses while Subject scale stays constant".
   - **Orbit / Arc (Perspective)**: 角色被包围或困惑时。Viewpoint 做 full-circle 环绕，缓慢揭示周围环境的暗处威胁。
-  - **POV (Perspective)**: 模拟凶手视线窥视主角。
+  - **POV (Perspective)**: 采用第一人称主观视角从遮挡后观察主角（只描述视角位置与观察方向，不标注观察者身份名称）。
 - **Visual Style**: 强调负空间 (Negative Space) 与极端光比 (Chiaroscuro)。
 
 ### 4. 史诗场景 (Epic & Scale)
