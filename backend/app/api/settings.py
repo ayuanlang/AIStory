@@ -7949,8 +7949,11 @@ _SYNC_BILLING_RULE_FLOAT_FIELDS = {
 
 def _db_has_table(db: Session, table_name: str) -> bool:
     try:
-        engine = db.get_bind()
-        return bool(inspect(engine).has_table(table_name))
+        # Isolate metadata probe errors so failed reflection does not poison
+        # the caller transaction (InFailedSqlTransaction on PostgreSQL).
+        with db.begin_nested():
+            conn = db.connection()
+            return bool(inspect(conn).has_table(table_name))
     except Exception:
         return False
 
