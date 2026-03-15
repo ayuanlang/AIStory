@@ -3,6 +3,10 @@ from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
 from sqlalchemy.orm import Session
 import logging
+import os
+import time
+import threading
+from types import SimpleNamespace
 from app.core.config import settings
 from app.db.session import get_db
 from app.models.all_models import User
@@ -10,6 +14,130 @@ from app.models.all_models import User
 logger = logging.getLogger(__name__)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/login/access-token")
+
+_USER_AUTH_CACHE_TTL_SECONDS = int(os.getenv("USER_AUTH_CACHE_TTL_SECONDS", "45") or 45)
+_USER_AUTH_CACHE_STALE_GRACE_SECONDS = int(os.getenv("USER_AUTH_CACHE_STALE_GRACE_SECONDS", "600") or 600)
+_USER_AUTH_CACHE_MAX_ENTRIES = int(os.getenv("USER_AUTH_CACHE_MAX_ENTRIES", "2048") or 2048)
+_user_auth_cache_lock = threading.Lock()
+_user_auth_cache = {
+    "by_username": {},
+    "by_uid": {},
+}
+
+
+def _build_cached_principal(user: User) -> dict:
+    now = time.time()
+    return {
+        "id": int(getattr(user, "id", 0) or 0),
+        "username": str(getattr(user, "username", "") or "").strip(),
+        "email": str(getattr(user, "email", "") or "").strip(),
+        "is_active": bool(getattr(user, "is_active", True)),
+        "is_superuser": bool(getattr(user, "is_superuser", False)),
+        "is_system": bool(getattr(user, "is_system", False)),
+        "account_status": int(getattr(user, "account_status", 1) or 1),
+        "cached_at": now,
+        "expires_at": now + max(1, _USER_AUTH_CACHE_TTL_SECONDS),
+        "stale_until": now + max(1, _USER_AUTH_CACHE_TTL_SECONDS + _USER_AUTH_CACHE_STALE_GRACE_SECONDS),
+    }
+
+
+def _cache_user_entry(entry: dict) -> None:
+    username = str(entry.get("username") or "").strip()
+    uid = int(entry.get("id") or 0)
+    if not username or uid <= 0:
+        return
+
+    with _user_auth_cache_lock:
+        _user_auth_cache["by_username"][username] = entry
+        _user_auth_cache["by_uid"][uid] = entry
+
+        # Keep cache bounded.
+        by_username = _user_auth_cache["by_username"]
+        if len(by_username) > _USER_AUTH_CACHE_MAX_ENTRIES:
+            oldest = sorted(
+                by_username.items(),
+                key=lambda kv: float(kv[1].get("cached_at") or 0.0),
+            )[: max(1, len(by_username) - _USER_AUTH_CACHE_MAX_ENTRIES)]
+            for key, old_entry in oldest:
+                by_username.pop(key, None)
+                old_uid = int(old_entry.get("id") or 0)
+                if old_uid > 0:
+                    _user_auth_cache["by_uid"].pop(old_uid, None)
+
+
+def cache_user_identity(user: User) -> None:
+    """Warm auth cache from a trusted DB user row (e.g., after login)."""
+    try:
+        _cache_user_entry(_build_cached_principal(user))
+    except Exception:
+        # Never block auth flow due to cache failure.
+        return
+
+
+def _entry_to_principal(entry: dict) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=int(entry.get("id") or 0),
+        username=str(entry.get("username") or ""),
+        email=str(entry.get("email") or ""),
+        is_active=bool(entry.get("is_active", True)),
+        is_superuser=bool(entry.get("is_superuser", False)),
+        is_system=bool(entry.get("is_system", False)),
+        account_status=int(entry.get("account_status") or 1),
+    )
+
+
+def _read_cached_entry(username: str, uid: int = 0) -> dict:
+    now = time.time()
+    with _user_auth_cache_lock:
+        entry = None
+        if uid > 0:
+            entry = _user_auth_cache["by_uid"].get(uid)
+        if entry is None and username:
+            entry = _user_auth_cache["by_username"].get(username)
+        if not entry:
+            return {}
+
+        # If username changed in token/lookup path, treat as cache miss.
+        cached_username = str(entry.get("username") or "").strip()
+        if username and cached_username and cached_username != username:
+            return {}
+
+        # Hard-expire cache entries outside stale window.
+        if now > float(entry.get("stale_until") or 0.0):
+            if cached_username:
+                _user_auth_cache["by_username"].pop(cached_username, None)
+            cached_uid = int(entry.get("id") or 0)
+            if cached_uid > 0:
+                _user_auth_cache["by_uid"].pop(cached_uid, None)
+            return {}
+
+        return dict(entry)
+
+
+def warm_user_auth_cache_from_db(limit: int = 2000) -> int:
+    """Preload active users into in-memory auth cache to reduce cold-start DB bursts."""
+    try:
+        from app.db.session import SessionLocal
+        from app.models.all_models import User as UserModel
+
+        session = SessionLocal()
+        try:
+            rows = (
+                session.query(UserModel)
+                .filter(UserModel.is_active == True)  # noqa: E712
+                .order_by(UserModel.id.desc())
+                .limit(max(1, int(limit or 2000)))
+                .all()
+            )
+            count = 0
+            for row in rows:
+                _cache_user_entry(_build_cached_principal(row))
+                count += 1
+            return count
+        finally:
+            session.close()
+    except Exception:
+        return 0
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
     credentials_exception = HTTPException(
@@ -22,17 +150,32 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         username: str = payload.get("sub")
         if username is None:
             raise credentials_exception
+        uid_raw = payload.get("uid")
+        try:
+            token_uid = int(uid_raw) if uid_raw is not None else 0
+        except Exception:
+            token_uid = 0
     except JWTError:
         raise credentials_exception
+
+    cached_entry = _read_cached_entry(str(username or "").strip(), token_uid)
+    if cached_entry and time.time() <= float(cached_entry.get("expires_at") or 0.0):
+        return _entry_to_principal(cached_entry)
     
     try:
         user = db.query(User).filter(User.username == username).first()
+        if user is not None:
+            _cache_user_entry(_build_cached_principal(user))
     except Exception as exc:
         try:
             db.rollback()
         except Exception:
             pass
         logger.error("DB lookup failed in get_current_user: %s", type(exc).__name__)
+        # Fail-open with short-lived stale identity cache when DB is transiently unavailable.
+        stale_entry = _read_cached_entry(str(username or "").strip(), token_uid)
+        if stale_entry:
+            return _entry_to_principal(stale_entry)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable, please retry",

@@ -18,6 +18,7 @@ from app.services.llm_service import llm_service
 from app.services.payment_service import payment_service
 from app.services.task_manager import submit as _submit_task, get_status as _get_task_status, submit_async_endpoint as _submit_async, cancel as _cancel_task
 from app.services.system_default_api_service import get_task_default_system_setting
+from app.services.system_api_runtime_cache import resolve_system_api_cached
 from app.db.init_db import check_and_migrate_tables  # EMERGENCY FIX IMPORT
 from app.core.time_utils import now_bj_iso
 import os
@@ -25,7 +26,7 @@ import os
 
 from app.services.media_service import MediaGenerationService
 from app.services.video_service import create_montage
-from app.api.deps import get_current_user  # Import dependency
+from app.api.deps import get_current_user, cache_user_identity  # Import dependency
 from fastapi.responses import JSONResponse
 from typing import List, Optional, Dict, Any, Union, Tuple
 from pydantic import BaseModel
@@ -57,6 +58,7 @@ import hashlib
 import hmac
 import base64
 import random
+import copy
 
 # Import limiter from main app state or create a local reference if needed
 # We will use the request.app.state.limiter in the endpoints
@@ -280,6 +282,75 @@ SHOT_MEDIA_BATCH_THREADS: Dict[int, threading.Thread] = {}
 EPISODE_SCENE_JOB_THREADS_LOCK = threading.Lock()
 SCENE_AI_SHOTS_BATCH_THREADS_LOCK = threading.Lock()
 SHOT_MEDIA_BATCH_THREADS_LOCK = threading.Lock()
+
+_GENERATION_JOB_POOL_CACHE_TTL_SECONDS = max(1.0, float(os.getenv("GENERATION_JOB_POOL_CACHE_TTL_SECONDS", "3") or 3.0))
+_GENERATION_JOB_POOL_CACHE_MAX_ITEMS = max(32, int(os.getenv("GENERATION_JOB_POOL_CACHE_MAX_ITEMS", "256") or 256))
+_GENERATION_JOB_STALE_DELETE_SECONDS = max(300, int(os.getenv("GENERATION_JOB_STALE_DELETE_SECONDS", "3600") or 3600))
+_GENERATION_JOB_POOL_CACHE_LOCK = threading.Lock()
+_GENERATION_JOB_POOL_CACHE: Dict[str, Dict[str, Any]] = {}
+
+
+def _prune_generation_job_pool_cache_locked(now_ts: float) -> None:
+    stale_keys = [
+        key
+        for key, payload in _GENERATION_JOB_POOL_CACHE.items()
+        if (now_ts - float((payload or {}).get("ts") or 0.0)) > _GENERATION_JOB_POOL_CACHE_TTL_SECONDS
+    ]
+    for key in stale_keys:
+        _GENERATION_JOB_POOL_CACHE.pop(key, None)
+
+    if len(_GENERATION_JOB_POOL_CACHE) > _GENERATION_JOB_POOL_CACHE_MAX_ITEMS:
+        ordered = sorted(
+            _GENERATION_JOB_POOL_CACHE.items(),
+            key=lambda item: float(((item[1] or {}).get("ts") or 0.0)),
+        )
+        overflow = len(_GENERATION_JOB_POOL_CACHE) - _GENERATION_JOB_POOL_CACHE_MAX_ITEMS
+        for key, _ in ordered[:overflow]:
+            _GENERATION_JOB_POOL_CACHE.pop(key, None)
+
+
+def _build_generation_job_pool_cache_key(
+    *,
+    user_id: int,
+    is_superuser: bool,
+    kind: str,
+    running_only: bool,
+    limit: int,
+) -> str:
+    return f"{int(user_id)}|{1 if is_superuser else 0}|{kind}|{1 if running_only else 0}|{int(limit)}"
+
+
+def _read_generation_job_pool_cache(key: str) -> Optional[Dict[str, Any]]:
+    now_ts = time.time()
+    with _GENERATION_JOB_POOL_CACHE_LOCK:
+        _prune_generation_job_pool_cache_locked(now_ts)
+        hit = _GENERATION_JOB_POOL_CACHE.get(str(key))
+        if not hit:
+            return None
+        return copy.deepcopy(hit.get("payload"))
+
+
+def _write_generation_job_pool_cache(key: str, payload: Dict[str, Any]) -> None:
+    now_ts = time.time()
+    with _GENERATION_JOB_POOL_CACHE_LOCK:
+        _prune_generation_job_pool_cache_locked(now_ts)
+        _GENERATION_JOB_POOL_CACHE[str(key)] = {
+            "ts": now_ts,
+            "payload": copy.deepcopy(payload),
+        }
+
+
+def _is_generation_job_stale(payload: Dict[str, Any], *, now_dt: Optional[datetime] = None) -> bool:
+    anchor = (
+        _parse_iso_datetime(payload.get("updated_at"))
+        or _parse_iso_datetime(payload.get("started_at"))
+        or _parse_iso_datetime(payload.get("created_at"))
+        or _parse_iso_datetime(payload.get("finished_at"))
+    )
+    if not anchor:
+        return False
+    baseline = now_dt or datetime.utcnow()
+    return (baseline - anchor).total_seconds() > _GENERATION_JOB_STALE_DELETE_SECONDS
 
 
 def _register_episode_worker(store: Dict[int, threading.Thread], lock: threading.Lock, episode_id: int, worker: threading.Thread) -> None:
@@ -1075,6 +1146,15 @@ def get_system_api_setting(
     setting_id: int = None,
 ) -> Optional[SystemAPISetting]:
     """Helper to find a system-level API configuration by exact filters."""
+    cached = resolve_system_api_cached(
+        setting_id=setting_id,
+        provider=provider,
+        category=category,
+        model=model,
+    )
+    if cached is not None:
+        return cached
+
     query = db.query(SystemAPISetting)
     if setting_id:
         query = query.filter(SystemAPISetting.id == setting_id)
@@ -11256,6 +11336,7 @@ def login_access_token(request: Request, form_data: OAuth2PasswordRequestForm = 
     log_action(db, user_id=user.id, user_name=user.username, action="LOGIN", details="User logged in via OAuth2 Form")
     
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    cache_user_identity(user)
     access_token = create_access_token(
         data={
             "sub": user.username,
@@ -11301,6 +11382,7 @@ def login_json(request: Request, login_data: LoginRequest, db: Session = Depends
     log_action(db, user_id=user.id, user_name=user.username, action="LOGIN", details="User logged in via API")
     
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    cache_user_identity(user)
     access_token = create_access_token(
         data={
             "sub": user.username,
@@ -17852,59 +17934,174 @@ def get_generation_job_pool(
 
     safe_limit = max(1, min(int(limit or 200), 500))
 
+    t0 = time.perf_counter()
+    t_cache_ms = 0
+    t_collect_mem_ms = 0
+    t_query_projects_ms = 0
+    t_query_owners_ms = 0
+    t_query_episodes_ms = 0
+    t_filter_sort_ms = 0
+
+    cache_key = _build_generation_job_pool_cache_key(
+        user_id=int(getattr(current_user, "id", 0) or 0),
+        is_superuser=bool(getattr(current_user, "is_superuser", False)),
+        kind=safe_kind,
+        running_only=bool(running_only),
+        limit=safe_limit,
+    )
+
+    t_cache_start = time.perf_counter()
+    cached_payload = _read_generation_job_pool_cache(cache_key)
+    t_cache_ms = int((time.perf_counter() - t_cache_start) * 1000)
+    if cached_payload is not None:
+        logger.info(
+            "jobs.pool.timing user_id=%s kind=%s running_only=%s limit=%s cache_hit=1 total_ms=%s cache_ms=%s mem_ms=%s proj_ms=%s owner_ms=%s ep_ms=%s finalize_ms=%s total=%s",
+            getattr(current_user, "id", None),
+            safe_kind,
+            bool(running_only),
+            safe_limit,
+            int((time.perf_counter() - t0) * 1000),
+            t_cache_ms,
+            0,
+            0,
+            0,
+            0,
+            0,
+            int((cached_payload or {}).get("total") or 0),
+        )
+        return cached_payload
+
     items: List[Dict[str, Any]] = []
     final_statuses = {"succeeded", "completed", "failed", "canceled", "cancelled", "error", "stopped", "idle", "partial"}
+    now_dt = datetime.utcnow()
 
+    stale_image_job_ids: List[str] = []
+    stale_video_job_ids: List[str] = []
+    stale_episode_script_project_ids: List[int] = []
+    stale_episode_status_updates: Dict[int, Dict[str, Any]] = {}
+
+    t_collect_mem_start = time.perf_counter()
     if safe_kind in {"all", "image"}:
         with IMAGE_JOB_LOCK:
             _prune_image_jobs_locked()
-            for job_id, payload in IMAGE_JOB_STORE.items():
+            for job_id, payload in list(IMAGE_JOB_STORE.items()):
+                if _is_generation_job_stale(dict(payload or {}), now_dt=now_dt):
+                    stale_image_job_ids.append(str(job_id))
+                    continue
                 item = dict(payload or {})
                 item["job_id"] = item.get("job_id") or job_id
                 item["kind"] = "image"
                 item["has_task"] = job_id in IMAGE_JOB_TASKS
                 items.append(item)
 
+            for stale_id in stale_image_job_ids:
+                IMAGE_JOB_STORE.pop(stale_id, None)
+                IMAGE_JOB_TASKS.pop(stale_id, None)
+
+            if stale_image_job_ids:
+                stale_set = set(stale_image_job_ids)
+                stale_scope_keys = [k for k, v in IMAGE_ACTIVE_SCOPE_STORE.items() if str(v or "") in stale_set]
+                for k in stale_scope_keys:
+                    IMAGE_ACTIVE_SCOPE_STORE.pop(k, None)
+                stale_idempotency_keys = [k for k, v in IMAGE_SUBMIT_IDEMPOTENCY_STORE.items() if str((v or {}).get("job_id") or "") in stale_set]
+                for k in stale_idempotency_keys:
+                    IMAGE_SUBMIT_IDEMPOTENCY_STORE.pop(k, None)
+
+    if stale_image_job_ids:
+        for stale_id in stale_image_job_ids:
+            try:
+                stale_path = _image_job_file_path(stale_id)
+                if os.path.exists(stale_path):
+                    os.remove(stale_path)
+            except Exception:
+                pass
+
     if safe_kind in {"all", "video"}:
         with VIDEO_JOB_LOCK:
             _prune_video_jobs_locked()
-            for job_id, payload in VIDEO_JOB_STORE.items():
+            for job_id, payload in list(VIDEO_JOB_STORE.items()):
+                if _is_generation_job_stale(dict(payload or {}), now_dt=now_dt):
+                    stale_video_job_ids.append(str(job_id))
+                    continue
                 item = dict(payload or {})
                 item["job_id"] = item.get("job_id") or job_id
                 item["kind"] = "video"
                 item["has_task"] = job_id in VIDEO_JOB_TASKS
                 items.append(item)
 
+            for stale_id in stale_video_job_ids:
+                VIDEO_JOB_STORE.pop(stale_id, None)
+                VIDEO_JOB_TASKS.pop(stale_id, None)
+
+            if stale_video_job_ids:
+                stale_set = set(stale_video_job_ids)
+                stale_scope_keys = [k for k, v in VIDEO_ACTIVE_SCOPE_STORE.items() if str(v or "") in stale_set]
+                for k in stale_scope_keys:
+                    VIDEO_ACTIVE_SCOPE_STORE.pop(k, None)
+                stale_idempotency_keys = [k for k, v in VIDEO_SUBMIT_IDEMPOTENCY_STORE.items() if str((v or {}).get("job_id") or "") in stale_set]
+                for k in stale_idempotency_keys:
+                    VIDEO_SUBMIT_IDEMPOTENCY_STORE.pop(k, None)
+
+    if stale_video_job_ids:
+        for stale_id in stale_video_job_ids:
+            try:
+                stale_path = _video_job_file_path(stale_id)
+                if os.path.exists(stale_path):
+                    os.remove(stale_path)
+            except Exception:
+                pass
+    t_collect_mem_ms = int((time.perf_counter() - t_collect_mem_start) * 1000)
+
     include_batch_kinds = {"episode-scenes", "episode-scripts", "scene-ai-shots-batch", "shot-media-batch"}
     if safe_kind in {"all", *include_batch_kinds}:
+        project_rows: List[Tuple[Any, Any, Any]] = []
+        t_query_projects_start = time.perf_counter()
         if current_user.is_superuser:
-            projects = db.query(Project).all()
+            project_rows = db.query(Project.id, Project.owner_id, Project.global_info).all()
         else:
             accessible_project_ids = _resolve_accessible_project_ids_for_user(db, current_user)
             if not accessible_project_ids:
-                projects = []
+                project_rows = []
             else:
-                projects = db.query(Project).filter(Project.id.in_(accessible_project_ids)).all()
+                project_rows = (
+                    db.query(Project.id, Project.owner_id, Project.global_info)
+                    .filter(Project.id.in_(accessible_project_ids))
+                    .all()
+                )
+        t_query_projects_ms = int((time.perf_counter() - t_query_projects_start) * 1000)
 
-        owner_ids = sorted({int(p.owner_id) for p in projects if p and p.owner_id is not None})
+        owner_ids = sorted({int(owner_id) for _, owner_id, _ in project_rows if owner_id is not None})
         owners_by_id: Dict[int, str] = {}
-        if owner_ids:
-            owner_rows = db.query(User).filter(User.id.in_(owner_ids)).all()
-            owners_by_id = {int(row.id): str(row.username or "") for row in owner_rows}
+        if current_user.is_superuser and owner_ids:
+            t_query_owners_start = time.perf_counter()
+            owner_rows = db.query(User.id, User.username).filter(User.id.in_(owner_ids)).all()
+            owners_by_id = {int(row_id): str(username or "") for row_id, username in owner_rows}
+            t_query_owners_ms = int((time.perf_counter() - t_query_owners_start) * 1000)
 
-        project_ids = [int(p.id) for p in projects]
-        project_owner_by_id = {int(p.id): int(p.owner_id) for p in projects if p.owner_id is not None}
-        project_owner_name_by_id = {
-            int(p.id): owners_by_id.get(int(p.owner_id), "")
-            for p in projects
-            if p.owner_id is not None
-        }
+        project_ids: List[int] = []
+        project_owner_by_id: Dict[int, int] = {}
+        project_owner_name_by_id: Dict[int, str] = {}
+        for pid, owner_id, _ in project_rows:
+            if pid is None:
+                continue
+            project_id_int = int(pid)
+            project_ids.append(project_id_int)
+
+            if owner_id is None:
+                continue
+
+            owner_id_int = int(owner_id)
+            project_owner_by_id[project_id_int] = owner_id_int
+            if current_user.is_superuser:
+                project_owner_name_by_id[project_id_int] = owners_by_id.get(owner_id_int, "")
+            elif owner_id_int == int(current_user.id):
+                project_owner_name_by_id[project_id_int] = str(current_user.username or "")
 
         if safe_kind in {"all", "episode-scripts"}:
-            for project in projects:
+            for project_id, owner_id, project_global_info in project_rows:
                 payload = None
                 try:
-                    gi = dict(project.global_info or {})
+                    gi = dict(project_global_info or {})
                     candidate = gi.get("episode_script_generation_status")
                     if isinstance(candidate, dict):
                         payload = dict(candidate)
@@ -17913,67 +18110,125 @@ def get_generation_job_pool(
                 if not payload:
                     continue
 
+                if _is_generation_job_stale(payload, now_dt=now_dt):
+                    stale_episode_script_project_ids.append(int(project_id))
+                    continue
+
+                project_id_int = int(project_id)
+                owner_id_int = int(owner_id) if owner_id is not None else None
+
                 items.append(
                     _build_batch_job_item(
                         kind="episode-scripts",
-                        job_id=f"episode-scripts:{int(project.id)}",
+                        job_id=f"episode-scripts:{project_id_int}",
                         payload=payload,
-                        user_id=project_owner_by_id.get(int(project.id)),
-                        username=project_owner_name_by_id.get(int(project.id)),
+                        user_id=project_owner_by_id.get(project_id_int, owner_id_int),
+                        username=project_owner_name_by_id.get(project_id_int),
                     )
                 )
 
         if project_ids and safe_kind in {"all", "episode-scenes", "scene-ai-shots-batch", "shot-media-batch"}:
-            episodes = db.query(Episode).filter(Episode.project_id.in_(project_ids)).all()
-            for episode in episodes:
-                owner_id = project_owner_by_id.get(int(episode.project_id))
-                owner_name = project_owner_name_by_id.get(int(episode.project_id))
-                info = _episode_runtime_info_from_episode(episode)
+            t_query_episodes_start = time.perf_counter()
+            episode_rows = (
+                db.query(Episode.id, Episode.project_id, Episode.episode_info)
+                .filter(Episode.project_id.in_(project_ids))
+                .all()
+            )
+            t_query_episodes_ms = int((time.perf_counter() - t_query_episodes_start) * 1000)
+            for episode_id, episode_project_id, episode_info_raw in episode_rows:
+                if episode_id is None or episode_project_id is None:
+                    continue
+                episode_id_int = int(episode_id)
+                episode_project_id_int = int(episode_project_id)
+                owner_id = project_owner_by_id.get(episode_project_id_int)
+                owner_name = project_owner_name_by_id.get(episode_project_id_int)
+                info = _safe_json_dict(episode_info_raw)
+                info_changed = False
 
                 if safe_kind in {"all", "episode-scenes"}:
                     payload = info.get(EPISODE_SCENE_GEN_STATUS_KEY)
                     if isinstance(payload, dict):
-                        actor_user_id = payload.get("started_by_user_id") or owner_id
-                        actor_username = payload.get("started_by_username") or owner_name
-                        items.append(
-                            _build_batch_job_item(
-                                kind="episode-scenes",
-                                job_id=f"episode-scenes:{int(episode.id)}",
-                                payload=dict(payload),
-                                user_id=actor_user_id,
-                                username=actor_username,
+                        if _is_generation_job_stale(dict(payload), now_dt=now_dt):
+                            info.pop(EPISODE_SCENE_GEN_STATUS_KEY, None)
+                            info_changed = True
+                        else:
+                            actor_user_id = payload.get("started_by_user_id") or owner_id
+                            actor_username = payload.get("started_by_username") or owner_name
+                            items.append(
+                                _build_batch_job_item(
+                                    kind="episode-scenes",
+                                    job_id=f"episode-scenes:{episode_id_int}",
+                                    payload=dict(payload),
+                                    user_id=actor_user_id,
+                                    username=actor_username,
+                                )
                             )
-                        )
 
                 if safe_kind in {"all", "scene-ai-shots-batch"}:
                     payload = info.get(SCENE_AI_SHOTS_BATCH_STATUS_KEY)
                     if isinstance(payload, dict):
-                        actor_user_id = payload.get("started_by_user_id") or owner_id
-                        actor_username = payload.get("started_by_username") or owner_name
-                        items.append(
-                            _build_batch_job_item(
-                                kind="scene-ai-shots-batch",
-                                job_id=f"scene-ai-shots-batch:{int(episode.id)}",
-                                payload=dict(payload),
-                                user_id=actor_user_id,
-                                username=actor_username,
+                        if _is_generation_job_stale(dict(payload), now_dt=now_dt):
+                            info.pop(SCENE_AI_SHOTS_BATCH_STATUS_KEY, None)
+                            info_changed = True
+                        else:
+                            actor_user_id = payload.get("started_by_user_id") or owner_id
+                            actor_username = payload.get("started_by_username") or owner_name
+                            items.append(
+                                _build_batch_job_item(
+                                    kind="scene-ai-shots-batch",
+                                    job_id=f"scene-ai-shots-batch:{episode_id_int}",
+                                    payload=dict(payload),
+                                    user_id=actor_user_id,
+                                    username=actor_username,
+                                )
                             )
-                        )
 
                 if safe_kind in {"all", "shot-media-batch"}:
                     payload = info.get(SHOT_MEDIA_BATCH_STATUS_KEY)
                     if isinstance(payload, dict):
-                        actor_user_id = payload.get("started_by_user_id") or owner_id
-                        actor_username = payload.get("started_by_username") or owner_name
-                        items.append(
-                            _build_batch_job_item(
-                                kind="shot-media-batch",
-                                job_id=f"shot-media-batch:{int(episode.id)}",
-                                payload=dict(payload),
-                                user_id=actor_user_id,
-                                username=actor_username,
+                        if _is_generation_job_stale(dict(payload), now_dt=now_dt):
+                            info.pop(SHOT_MEDIA_BATCH_STATUS_KEY, None)
+                            info_changed = True
+                        else:
+                            actor_user_id = payload.get("started_by_user_id") or owner_id
+                            actor_username = payload.get("started_by_username") or owner_name
+                            items.append(
+                                _build_batch_job_item(
+                                    kind="shot-media-batch",
+                                    job_id=f"shot-media-batch:{episode_id_int}",
+                                    payload=dict(payload),
+                                    user_id=actor_user_id,
+                                    username=actor_username,
+                                )
                             )
-                        )
+
+                if info_changed:
+                    stale_episode_status_updates[episode_id_int] = info
+
+        if stale_episode_script_project_ids:
+            stale_project_set = sorted(set(int(v) for v in stale_episode_script_project_ids if int(v) > 0))
+            stale_projects = db.query(Project).filter(Project.id.in_(stale_project_set)).all()
+            for project in stale_projects:
+                gi = dict(project.global_info or {})
+                if "episode_script_generation_status" in gi:
+                    gi.pop("episode_script_generation_status", None)
+                    project.global_info = gi
+                    db.add(project)
+
+        if stale_episode_status_updates:
+            stale_episode_ids = sorted(stale_episode_status_updates.keys())
+            stale_episodes = db.query(Episode).filter(Episode.id.in_(stale_episode_ids)).all()
+            for episode in stale_episodes:
+                next_info = stale_episode_status_updates.get(int(episode.id))
+                if isinstance(next_info, dict):
+                    episode.episode_info = next_info
+                    db.add(episode)
+
+        if stale_episode_script_project_ids or stale_episode_status_updates:
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
 
     if not current_user.is_superuser:
         items = [item for item in items if item.get("user_id") == current_user.id]
@@ -17981,6 +18236,7 @@ def get_generation_job_pool(
     if running_only:
         items = [item for item in items if str(item.get("status") or "").lower() not in final_statuses]
 
+    t_filter_sort_start = time.perf_counter()
     items.sort(key=lambda item: _job_sort_key(item), reverse=True)
     items = items[:safe_limit]
 
@@ -17988,8 +18244,9 @@ def get_generation_job_pool(
     for item in items:
         status = str(item.get("status") or "unknown").lower()
         status_counts[status] = status_counts.get(status, 0) + 1
+    t_filter_sort_ms = int((time.perf_counter() - t_filter_sort_start) * 1000)
 
-    return {
+    response_payload = {
         "total": len(items),
         "kind": safe_kind,
         "running_only": bool(running_only),
@@ -18010,6 +18267,26 @@ def get_generation_job_pool(
             for item in items
         ],
     }
+
+    _write_generation_job_pool_cache(cache_key, response_payload)
+
+    logger.info(
+        "jobs.pool.timing user_id=%s kind=%s running_only=%s limit=%s cache_hit=0 total_ms=%s cache_ms=%s mem_ms=%s proj_ms=%s owner_ms=%s ep_ms=%s finalize_ms=%s total=%s",
+        getattr(current_user, "id", None),
+        safe_kind,
+        bool(running_only),
+        safe_limit,
+        int((time.perf_counter() - t0) * 1000),
+        t_cache_ms,
+        t_collect_mem_ms,
+        t_query_projects_ms,
+        t_query_owners_ms,
+        t_query_episodes_ms,
+        t_filter_sort_ms,
+        len(items),
+    )
+
+    return response_payload
 
 
 @router.post("/generate/jobs/repair-history")

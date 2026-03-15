@@ -23,6 +23,34 @@ from app.core.time_utils import now_bj_iso
 logger = logging.getLogger(__name__)
 
 
+def _ensure_core_performance_indexes() -> None:
+    """Create hot-path indexes idempotently for auth/project/system-api reads."""
+    ddl_statements = [
+        # users: auth and profile lookups
+        "CREATE INDEX IF NOT EXISTS ix_users_username_active ON users(username, is_active)",
+        "CREATE INDEX IF NOT EXISTS ix_users_email_active ON users(email, is_active)",
+        # projects: owner dashboard listing and recency sorting
+        "CREATE INDEX IF NOT EXISTS ix_projects_owner_updated ON projects(owner_id, updated_at)",
+        "CREATE INDEX IF NOT EXISTS ix_projects_owner_created ON projects(owner_id, created_at)",
+        # project share checks
+        "CREATE INDEX IF NOT EXISTS ix_project_shares_project_user ON project_shares(project_id, user_id)",
+        "CREATE INDEX IF NOT EXISTS ix_project_shares_user_project ON project_shares(user_id, project_id)",
+        # user api bindings
+        "CREATE INDEX IF NOT EXISTS ix_api_settings_user_category_system ON api_settings(user_id, category, system_api_id)",
+        # system api selection hot paths
+        "CREATE INDEX IF NOT EXISTS ix_system_api_settings_cat_depr ON system_api_settings(category, deprecated)",
+        "CREATE INDEX IF NOT EXISTS ix_system_api_settings_provider_cat_model ON system_api_settings(provider, category, model)",
+        "CREATE INDEX IF NOT EXISTS ix_system_api_settings_active_cat ON system_api_settings(is_active, category)",
+    ]
+
+    with engine.begin() as conn:
+        for ddl in ddl_statements:
+            try:
+                conn.execute(text(ddl))
+            except Exception as exc:
+                logger.warning("Index DDL failed (non-fatal): %s | err=%s", ddl, exc)
+
+
 def _should_manage_api_settings_on_init() -> bool:
     """
     Whether init/deploy flow is allowed to mutate API settings data records.
@@ -889,6 +917,12 @@ def check_and_migrate_tables():
                 logger.info("Ensured entities.generation_prompt_cn exists")
         except Exception as e:
             logger.error(f"Failed to migrate entities table: {e}")
+
+        # Ensure core performance indexes are always present at startup.
+        try:
+            _ensure_core_performance_indexes()
+        except Exception as e:
+            logger.error(f"Failed to ensure core performance indexes: {e}")
         
     except Exception as e:
         logger.critical(f"Migration CRITICAL FAILURE: {e}")

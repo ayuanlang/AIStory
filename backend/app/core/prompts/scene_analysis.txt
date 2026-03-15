@@ -39,6 +39,8 @@
 - 每个环境必须明确当前画面主体（Primary Subject）与次级支撑主体（Secondary Subject），并与景别/机位保持一致。
 - 环境锚点禁人物（Mandatory）：Environment 的 `Primary Subject`/`Secondary Subject` 与 `Viewpoint Anchor` 必须使用固定显目物体或结构锚点（如门框、窗、舞台口、桌组、灯具、柱体、屏幕、墙面标识），禁止使用任何人物/人体部位作为锚点。
 - 环境描述去人物化（Mandatory）：Environment 的 `generation_prompt_cn/generation_prompt_en` 仅描述空间、材质、构图、光照与可变部件状态，禁止夹带人物外观、服装、姿态、表情、身份描述。
+- 通道隔离硬规则（Mandatory）：`Core Scene Info/{Beats}` 可以描述角色与动作，但 `Environment generation_prompt_cn/en` 必须做“角色清零”。同一 Scene 内若两处信息冲突，以“环境提示词去人物化规则”优先，必须删除环境提示词中的角色语义。
+- OTS 污染防护（Mandatory）：OTS 语义只允许出现在机位说明层（`{Observer View}` / `{Beats}`），禁止写入环境提示词正文；环境提示词中出现 `over shoulder / over-the-shoulder / A over B / B over A / shoulder silhouette / behind head / CHAR:[@...]` 任一词，判为无效并重写。
 - 环境锚点合规示例（Mandatory）：
   - 不合规：`Primary Subject: CHAR:[@A] shoulder silhouette`、`Viewpoint Anchor: behind CHAR:[@B] head`。
   - 合规：`Primary Subject: stage portal + desk lamp cluster`、`Viewpoint Anchor: doorway threshold facing stage portal`。
@@ -106,13 +108,13 @@
 - 层级重排示例（Base 前景后移为当前背景）：
   `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint moved behind ENV:[DeskZone], now facing ENV:[EntranceCorridor]; Axis Side: left -> right; Background Set Change: Visible Set = [entrance door, corridor wall lamps, visitor chairs], Excluded Set = [window wall panorama, skyline glass reflection as dominant backdrop]; Lighting Direction Change: key shifts to back-right from window spill; Framing Change: medium shot with ENV:[EntranceDoor] and visitor chairs as MG anchor, desk edge no longer dominant; Depth Role Reassignment: Base FG/MG:[DeskEdge, DeskFrontPlane] -> Current BG:[DeskEdge, DeskFrontPlane]; Base BG:[EntranceDoor, CorridorWall] -> Current MG:[EntranceDoor, VisitorChairs]; Dynamic Parts State: None}`。
 - 方向切换 Few-shot A（门内看外 -> 门外看内）：
-  `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint moved from inside doorway threshold to exterior corridor side, now facing inward to ENV:[RoomEntrance]; Axis Side: right -> left; Background Set Change: Visible Set = [door frame interior edge, corridor wall lamps, entry mat], Excluded Set = [window-side bookshelf, bed corner, inner desk area]; Lighting Direction Change: key light switches to corridor practicals from viewer-left; Framing Change: medium-wide with doorway centered and room depth behind; Dynamic Parts State: PROP:[Door](Open -> Half-Open, reason: CHAR:[@Guard] pushes it and pauses to listen)}`。
+  `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint moved from inside doorway threshold to exterior corridor side, now facing inward to ENV:[RoomEntrance]; Axis Side: right -> left; Background Set Change: Visible Set = [door frame interior edge, corridor wall lamps, entry mat], Excluded Set = [window-side bookshelf, bed corner, inner desk area]; Lighting Direction Change: key light switches to corridor practicals from viewer-left; Framing Change: medium-wide with doorway centered and room depth behind; Dynamic Parts State: PROP:[Door](Open -> Half-Open, trigger: draft airflow and closer damping)}`。
 - 方向切换 Few-shot B（街道正向 -> 街道反向）：
   `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint relocated to opposite sidewalk across traffic lane, now facing reverse toward ENV:[CrosswalkJunction]; Axis Side: left -> right; Background Set Change: Visible Set = [crosswalk signal pole, storefront neon, bus-stop shelter], Excluded Set = [alley dumpster row, rear parking gate, service entrance shutter]; Lighting Direction Change: key light becomes back-right from street signage and vehicle headlights; Framing Change: wide shot with crosswalk signal as new composition anchor; Dynamic Parts State: None}`。
-- `Dynamic Parts State` 非 `None` 时必须写 `Before -> After + reason`。
-  - 合规：`Dynamic Parts State: PROP:[Door](Open -> Closed, reason: CHAR:[@Character A] closes it quietly to avoid detection)`。
-  - 不合规：`Dynamic Parts State: Door: Closed`。
-  - 不合规改写：`Dynamic Parts State: PROP:[Door](Open -> Closed, reason: CHAR:[@Character A] shuts the door before hiding behind the cabinet)`。
+- `Dynamic Parts State` 非 `None` 时必须写 `Before -> After + trigger`（仅允许非角色、非叙事触发因素）。
+  - 合规：`Dynamic Parts State: PROP:[Door](Open -> Closed, trigger: hinge self-close + latch tension)`。
+  - 不合规：`Dynamic Parts State: Door: Closed`
+  - 不合规改写：`Dynamic Parts State: PROP:[Door](Open -> Closed, trigger: latch rebound after partial release)`。
 - `REUSE` 默认模板：
   `Environment Delta = {Viewpoint Anchor/Viewing Direction: None, Axis Side: None, Background Set Change: None, Lighting Direction Change: None, Framing Change: None, Dynamic Parts State: None}`。
   仅可在可变部件确有变化时让 `DP` 非 `None`。
@@ -250,6 +252,7 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 ### 1) Environment Prompt Template
 - 硬约束优先级（Mandatory）：本小节约束高于 Environment 示例中的历史写法；若冲突，以本小节最新硬约束为准。
 - 去叙事化硬规则（Mandatory）：Environment 的 `generation_prompt_cn/generation_prompt_en` 仅允许描述“抽象空间结构、几何关系、光照层次、材质质感、构图层级”，不得涉及角色、剧情事件、动作因果、对话语义。
+- 泄漏根因提示（Mandatory）：高频误差来自“把 OTS 的角色关系（A/B shoulder）从分镜层串写进环境提示词”。处理顺序必须为：先完成 Scene/Beats，再单独生成 Environment prompt，最后执行角色词剔除。
 - 禁止角色信息（Hard Rule）：严禁出现任何角色名、角色代号、`CHAR:[@...]`、人称指代（如“他/她/他们”）及人物身份词（如警察、记者、保安、母亲等）。
 - 禁止剧情信息（Hard Rule）：严禁出现剧情推进语句（如“因为…所以…”、“进入/离开/追逐/躲藏/对峙”等事件描述）与时间线动作指令。
 - 抽象元素约束（Mandatory）：提示词中的“物体/主体”只能使用无具象非生命物体表达。
@@ -276,6 +279,7 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - 风格表达示例（仅示范写法，不可照抄值）：`Luxury style via BG only: FG keeps clean blocking lanes and action surfaces; MG retains minimal playable anchors; BG carries luxury cues through marble veining, brass trims, chandelier bokeh, and warm specular layering.`
 - 风格映射必须动态，真人剧避免“游戏感”。
 - 环境提示词输出自检（Mandatory）：提交前必须逐条校验 `No character names`、`No role labels`、`No story events`、`Only abstract non-living object expression`；任一不满足即判无效并重写。
+- 环境提示词门禁词自检（Mandatory）：提交前必须额外扫描并确保不存在以下词或模式：`CHAR:[@`、`over shoulder`、`over-the-shoulder`、`A over B`、`B over A`、`shoulder silhouette`、`behind head`、`he/she/they`（中英代词均禁）。命中任一即整条环境提示词作废并重写。
 
 ### 2) Character Prompt Template
 - 模板已合并到本文件（Merged In-File, Authoritative）。

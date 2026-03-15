@@ -42,6 +42,7 @@ from app.services.system_default_api_service import (
     clear_task_defaults_for_system_api_ids,
     normalize_task_category,
 )
+from app.services.system_api_runtime_cache import invalidate_system_api_cache
 from app.schemas.settings import (
     APISettingOut,
     APISettingUpdate,
@@ -162,6 +163,20 @@ _MODEL_MODE_DEFAULTS_ALIASES = (
     "default_mode_by_model",
     "model_mode_bindings",
 )
+
+
+def _invalidate_provider_pool_cache() -> None:
+    _provider_pool_cache["ts"] = 0.0
+    _provider_pool_cache["runtime_key_map"] = {}
+    _provider_pool_cache["alias_map"] = {}
+    _provider_pool_cache["row_count"] = 0
+
+
+def _invalidate_system_api_runtime_cache(refresh: bool = False) -> None:
+    try:
+        invalidate_system_api_cache(refresh=refresh)
+    except Exception as exc:
+        logger.warning("settings.system.runtime_cache_invalidate skipped: %s", str(exc)[:300])
 
 _USER_PREF_ALLOWED_PROMPT_SUBMIT_LANGUAGE = {"en", "cn", "auto"}
 _USER_PREF_ALLOWED_REASONING_EFFORT = {"low", "medium", "high"}
@@ -7124,6 +7139,7 @@ def create_system_setting_for_manage(
 
         db.commit()
         db.refresh(existing)
+        _invalidate_system_api_runtime_cache(refresh=True)
         return _setting_to_out(db, existing)
 
     raw_create_config = payload.config if isinstance(payload.config, dict) else {}
@@ -7171,6 +7187,7 @@ def create_system_setting_for_manage(
 
     db.commit()
     db.refresh(new_setting)
+    _invalidate_system_api_runtime_cache(refresh=True)
     return _setting_to_out(db, new_setting)
 
 
@@ -7240,6 +7257,7 @@ def update_system_setting_for_manage(
 
     db.commit()
     db.refresh(target)
+    _invalidate_system_api_runtime_cache(refresh=True)
     return _setting_to_out(db, target)
 
 
@@ -7326,6 +7344,7 @@ def toggle_system_setting_deprecated_for_manage(
 
     db.commit()
     db.refresh(target)
+    _invalidate_system_api_runtime_cache(refresh=True)
     logger.warning(
         "[system_api.deprecated.toggle_by_id] committed setting_id=%s target_deprecated_col=%s target_config=%s",
         target.id,
@@ -7417,6 +7436,7 @@ def toggle_system_setting_deprecated_by_key_for_manage(
 
     db.commit()
     db.refresh(latest)
+    _invalidate_system_api_runtime_cache(refresh=True)
     logger.warning(
         "[system_api.deprecated.toggle_by_key] committed latest_id=%s latest_deprecated_col=%s latest_config=%s",
         latest.id,
@@ -7471,6 +7491,7 @@ def batch_toggle_system_provider_deprecated_for_manage(
         )
 
     db.commit()
+    _invalidate_system_api_runtime_cache(refresh=True)
 
     return {
         "ok": True,
@@ -7530,6 +7551,8 @@ def set_system_provider_keys_for_manage(
 
     _apply_provider_key_bundle_to_rows(db, provider_name, pool, strategy, weights)
     db.commit()
+    _invalidate_system_api_runtime_cache(refresh=True)
+    _invalidate_provider_pool_cache()
 
     return {
         "ok": True,
@@ -8855,6 +8878,7 @@ def delete_system_setting_for_manage(
     db.query(SystemAPIBillingRule).filter(SystemAPIBillingRule.system_api_id == target.id).delete(synchronize_session=False)
     db.delete(target)
     db.commit()
+    _invalidate_system_api_runtime_cache(refresh=True)
     return {"ok": True}
 
 @router.delete("/settings/{setting_id}")
@@ -8934,6 +8958,7 @@ def create_provider_key_pool(
     db.add(record)
     db.commit()
     db.refresh(record)
+    _invalidate_provider_pool_cache()
     return ProviderKeyPoolOut(
         id=record.id,
         provider=record.provider,
@@ -8984,6 +9009,7 @@ def update_provider_key_pool(
     record.updated_at = now_bj_iso()
     db.commit()
     db.refresh(record)
+    _invalidate_provider_pool_cache()
     return ProviderKeyPoolOut(
         id=record.id,
         provider=record.provider,
@@ -9012,6 +9038,7 @@ def delete_provider_key_pool(
 
     db.delete(record)
     db.commit()
+    _invalidate_provider_pool_cache()
     return {"ok": True}
 
 

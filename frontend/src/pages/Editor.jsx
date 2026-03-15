@@ -10287,6 +10287,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         errors: [],
     });
     const [scenes, setScenes] = useState([]);
+    const [sceneListLoading, setSceneListLoading] = useState(false);
     const [sceneSortMode, setSceneSortMode] = useState('updated_desc');
     const [sceneSortDirection, setSceneSortDirection] = useState('desc');
     const [selectedSceneKeys, setSelectedSceneKeys] = useState([]);
@@ -11017,6 +11018,9 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
 
         const loadScenes = async () => {
              if (activeEpisode?.id) {
+                 setSceneListLoading(true);
+                 const quickPreview = parseScenesFromText(activeEpisode?.scene_content);
+                 setScenes(quickPreview);
                  try {
                      const dbScenes = await fetchScenes(activeEpisode.id);
                      if (dbScenes && dbScenes.length > 0) {
@@ -11058,7 +11062,11 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                      console.error("Failed to load scenes from DB", e);
                      const parsedFallback = parseScenesFromText(activeEpisode?.scene_content);
                      setScenes(parsedFallback);
+                 } finally {
+                     setSceneListLoading(false);
                  }
+             } else {
+                 setSceneListLoading(false);
              }
         };
 
@@ -12217,22 +12225,22 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         let cancelled = false;
 
         const hydrate = async () => {
-            batchAiShotsBootstrapUntilRef.current = Date.now() + 15000;
-
             // Task pool is the source of truth when local runtime is stale after tab/page switch.
+            let recovered = false;
             if (!batchAiShotsProgressRef.current?.running) {
-                await recoverBatchAiShotsFromJobPool();
+                recovered = await recoverBatchAiShotsFromJobPool();
             }
 
-            if (!batchAiShotsStatusTimerRef.current) {
-                batchAiShotsStatusTimerRef.current = setInterval(pollBatchAiShotsStatus, 3000);
-            }
             const status = await pollBatchAiShotsStatus();
             if (cancelled || !status) return;
 
             const shouldKeepPolling = Boolean(status?.running)
                 || Boolean(batchAiShotsProgressRef.current?.running)
-                || Date.now() < Number(batchAiShotsBootstrapUntilRef.current || 0);
+                || Boolean(recovered);
+
+            if (shouldKeepPolling && !batchAiShotsStatusTimerRef.current) {
+                batchAiShotsStatusTimerRef.current = setInterval(pollBatchAiShotsStatus, 3000);
+            }
 
             if (!shouldKeepPolling && batchAiShotsStatusTimerRef.current) {
                 clearInterval(batchAiShotsStatusTimerRef.current);
@@ -12615,7 +12623,24 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
             )}
 
             <div className="flex-1 overflow-auto custom-scrollbar pb-20">
-                    {filteredScenes.length === 0 ? (
+                    {sceneListLoading && filteredScenes.length === 0 ? (
+                    <div className="space-y-4">
+                        <div className="flex items-center justify-center gap-2 py-2 text-sm text-muted-foreground">
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            {t('场景加载中...', 'Loading scenes...')}
+                        </div>
+                        <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4">
+                            {Array.from({ length: 6 }).map((_, idx) => (
+                                <div key={`scene-skeleton-${idx}`} className="border border-white/10 rounded-lg p-4 bg-white/[0.02] animate-pulse">
+                                    <div className="h-4 bg-white/10 rounded w-1/3 mb-3" />
+                                    <div className="h-3 bg-white/10 rounded w-full mb-2" />
+                                    <div className="h-3 bg-white/10 rounded w-5/6 mb-2" />
+                                    <div className="h-3 bg-white/10 rounded w-2/3" />
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                    ) : filteredScenes.length === 0 ? (
                     <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
                         <Clapperboard className="w-12 h-12 mb-4 opacity-20" />
                         <p>{t('未找到场景。', 'No scenes found.')}</p>
@@ -13475,6 +13500,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     const subjectBatchScopeKey = String(projectId || '');
     const isMountedRef = useRef(false);
     const [subTab, setSubTab] = useState('character');
+    const [entityListLoading, setEntityListLoading] = useState(false);
     const [entities, setEntities] = useState([]);
     const [allEntities, setAllEntities] = useState([]); // Store ALL entities for cross-reference
     const [selectedEntity, setSelectedEntity] = useState(null);
@@ -13490,6 +13516,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     const [refImage, setRefImage] = useState(null);
     const [refSelectionMode, setRefSelectionMode] = useState(null); // 'assets'
     const [assets, setAssets] = useState([]);
+    const [assetsLoading, setAssetsLoading] = useState(false);
     const [assetKeyword, setAssetKeyword] = useState('');
     const [assetProjectFilter, setAssetProjectFilter] = useState('all');
     const [assetImageTypeFilter, setAssetImageTypeFilter] = useState('all');
@@ -13829,6 +13856,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     // Load entities - NOW FETCHES ALL and filters locally
     const loadEntities = useCallback(async () => {
         if (!projectId) return [];
+        setEntityListLoading(true);
         try {
             const data = await fetchEntities(projectId); // Fetch ALL types
             setAllEntities(data);
@@ -13836,6 +13864,8 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         } catch (e) {
             console.error(e);
             return [];
+        } finally {
+            setEntityListLoading(false);
         }
     }, [projectId]);
 
@@ -14483,6 +14513,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
 
     // Load Assets
     const loadAssets = async () => {
+        setAssetsLoading(true);
         try {
             const data = await fetchAssets();
             const imageAssets = data.filter(a => a.type === 'image');
@@ -14500,6 +14531,8 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
             }
         } catch (e) {
             console.error(e);
+        } finally {
+            setAssetsLoading(false);
         }
     };
 
@@ -15224,7 +15257,25 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                         </div>
                     </div>
                 ))}
+
+                {entityListLoading && entities.length === 0 && Array.from({ length: 8 }).map((_, idx) => (
+                    <div
+                        key={`subject-skeleton-${idx}`}
+                        className="aspect-[3/4] border border-white/10 rounded-xl bg-white/[0.02] animate-pulse p-3"
+                    >
+                        <div className="h-[70%] rounded-lg bg-white/10 mb-3" />
+                        <div className="h-4 rounded bg-white/10 w-2/3 mb-2" />
+                        <div className="h-3 rounded bg-white/10 w-1/2" />
+                    </div>
+                ))}
             </div>
+
+            {entityListLoading && entities.length === 0 && (
+                <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    {t('主体加载中...', 'Loading subjects...')}
+                </div>
+            )}
 
             {/* Entity Detail Modal */}
             <AnimatePresence>
@@ -15824,7 +15875,12 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                                 <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                                             </div>
                                         ))}
-                                        {filteredAssets.length === 0 && (
+                                        {assetsLoading ? (
+                                            <div className="col-span-4 py-12 text-center text-muted-foreground flex items-center justify-center gap-2">
+                                                <Loader2 className="w-4 h-4 animate-spin" />
+                                                {t('素材加载中...', 'Loading assets...')}
+                                            </div>
+                                        ) : filteredAssets.length === 0 && (
                                             <div className="col-span-4 py-12 text-center text-muted-foreground">
                                                 {t('没有匹配筛选条件的素材', 'No assets matched current filters')}
                                             </div>
@@ -15961,7 +16017,11 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                                                 <div className="text-[10px] truncate font-bold text-white px-0.5" title={dep}>
                                                                     {depEntity ? depEntity.name : dep}
                                                                 </div>
-                                                                {!depEntity && <div className="text-[8px] text-red-400 px-0.5">{t('未找到', 'Not Found')}</div>}
+                                                                {!depEntity && (
+                                                                    <div className="text-[8px] text-red-400 px-0.5">
+                                                                        {entityListLoading ? t('加载中', 'Loading') : t('未找到', 'Not Found')}
+                                                                    </div>
+                                                                )}
                                                             </div>
                                                         );
                                                     })}
@@ -16084,7 +16144,12 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                                                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                                                                      </div>
                                                                  ))}
-                                                                 {filteredAssets.length === 0 && (
+                                                                 {assetsLoading ? (
+                                                                     <div className="col-span-4 py-8 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
+                                                                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                                                         {t('素材加载中...', 'Loading assets...')}
+                                                                     </div>
+                                                                 ) : filteredAssets.length === 0 && (
                                                                      <div className="col-span-4 py-8 text-center text-xs text-muted-foreground">{t('未找到素材', 'No assets found')}</div>
                                                                  )}
                                                              </div>
@@ -19839,21 +19904,20 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         let cancelled = false;
 
         const hydrate = async () => {
-            shotBatchBootstrapUntilRef.current = Date.now() + 15000;
-
+            let recovered = false;
             if (!isBatchGeneratingRef.current) {
-                await recoverShotBatchFromJobPool();
-            }
-
-            if (!shotBatchStatusTimerRef.current) {
-                shotBatchStatusTimerRef.current = setInterval(pollShotBatchStatus, 3000);
+                recovered = await recoverShotBatchFromJobPool();
             }
             const status = await pollShotBatchStatus();
             if (cancelled) return;
 
             const shouldKeepPolling = Boolean(status?.running)
                 || Boolean(isBatchGeneratingRef.current)
-                || Date.now() < Number(shotBatchBootstrapUntilRef.current || 0);
+                || Boolean(recovered);
+
+            if (shouldKeepPolling && !shotBatchStatusTimerRef.current) {
+                shotBatchStatusTimerRef.current = setInterval(pollShotBatchStatus, 3000);
+            }
 
             if (!shouldKeepPolling && shotBatchStatusTimerRef.current) {
                 clearInterval(shotBatchStatusTimerRef.current);

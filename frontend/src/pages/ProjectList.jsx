@@ -244,6 +244,8 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const t = (zh, en) => tUI(uiLang, zh, en);
     const location = useLocation();
     const [projects, setProjects] = useState([]);
+    const [isProjectsLoading, setIsProjectsLoading] = useState(false);
+    const [hasLoadedProjectsOnce, setHasLoadedProjectsOnce] = useState(false);
     const [isCreating, setIsCreating] = useState(false);
     const [newTitle, setNewTitle] = useState('');
     const [newDescription, setNewDescription] = useState('');
@@ -413,6 +415,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     }, []);
 
     const loadProjects = async () => {
+        setIsProjectsLoading(true);
         try {
             const data = await fetchProjects();
             const sorted = sortProjectsNewestFirst(data);
@@ -441,6 +444,9 @@ const ProjectList = ({ initialTab = 'projects' }) => {
             setProjectShareCounts(nextCounts);
         } catch (error) {
             console.error("Failed to load projects", error);
+        } finally {
+            setIsProjectsLoading(false);
+            setHasLoadedProjectsOnce(true);
         }
     };
 
@@ -975,7 +981,20 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                     </motion.div>
                                 )}
 
-                                {projects.length === 0 && !isCreating ? (
+                                {!isCreating && isProjectsLoading && projects.length === 0 ? (
+                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
+                                        {Array.from({ length: 8 }).map((_, idx) => (
+                                            <div key={`project-skeleton-${idx}`} className="bg-card/40 border border-white/5 rounded-3xl overflow-hidden animate-pulse">
+                                                <div className="h-64 bg-white/5" />
+                                                <div className="p-4 space-y-3">
+                                                    <div className="h-5 bg-white/10 rounded w-2/3" />
+                                                    <div className="h-3 bg-white/10 rounded w-full" />
+                                                    <div className="h-3 bg-white/10 rounded w-3/4" />
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : projects.length === 0 && !isCreating && hasLoadedProjectsOnce ? (
                                     <div className="text-center py-24 rounded-3xl border border-dashed border-white/10 bg-white/[0.02] backdrop-blur-sm">
                                         <div className="w-20 h-20 bg-gradient-to-tr from-primary/20 to-purple-500/20 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-inner ring-1 ring-white/10">
                                             <Folder className="w-10 h-10 text-primary blur-[1px] absolute opacity-50" />

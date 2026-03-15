@@ -18,6 +18,8 @@ from app.models.all_models import Base, User
 from sqlalchemy import text
 from app.core.logging import LoggingMiddleware, logger, configure_uvicorn_logging_noise_reduction
 from app.db.init_db import check_and_migrate_tables, create_default_superuser, init_initial_data
+from app.api.deps import warm_user_auth_cache_from_db
+from app.services.system_api_runtime_cache import warm_system_api_cache
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -43,6 +45,10 @@ def _bootstrap_db():
             check_and_migrate_tables()
             create_default_superuser()
             init_initial_data()
+            try:
+                _warm_runtime_caches()
+            except Exception as cache_exc:
+                logger.warning("Runtime cache warm failed after bootstrap: %s", cache_exc)
             return  # success
         except Exception as exc:
             if _attempt < _DB_BOOT_MAX_RETRIES:
@@ -57,6 +63,21 @@ def _bootstrap_db():
 
 
 _RUN_DB_BOOTSTRAP_ON_START = os.getenv("RUN_DB_BOOTSTRAP_ON_START", "1").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _warm_runtime_caches() -> None:
+    """Pre-read hot user/system-api rows into memory for faster first-hit routing."""
+    try:
+        user_count = warm_user_auth_cache_from_db()
+        logger.info("Warm user auth cache done | users=%s", user_count)
+    except Exception as exc:
+        logger.warning("Warm user auth cache failed: %s", exc)
+
+    try:
+        api_count = warm_system_api_cache()
+        logger.info("Warm system api cache done | rows=%s", api_count)
+    except Exception as exc:
+        logger.warning("Warm system api cache failed: %s", exc)
 
 limiter = Limiter(key_func=get_remote_address)
 

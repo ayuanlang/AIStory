@@ -82,6 +82,9 @@
 
 ### 1) Environment Prompt Template
 - 去叙事化硬规则（Mandatory）：Environment 的 generation_prompt_cn/generation_prompt_en 仅允许描述抽象空间结构、几何关系、光照层次、材质质感、构图层级，不得涉及角色、剧情事件、动作因果、对话语义。
+- 通道隔离硬规则（Mandatory）：`Core Scene Info/{Beats}` 可以描述角色与动作，但 `Environment generation_prompt_cn/en` 必须做“角色清零”。同一 Scene 内若两处信息冲突，以“环境提示词去人物化规则”优先，必须删除环境提示词中的角色语义。
+- OTS 污染防护（Mandatory）：OTS 语义只允许出现在机位说明层（`{Observer View}` / `{Beats}`），禁止写入环境提示词正文；环境提示词中出现 `over shoulder / over-the-shoulder / A over B / B over A / shoulder silhouette / behind head / CHAR:[@...]` 任一词，判为无效并重写。
+- 泄漏根因提示（Mandatory）：高频误差来自“把 OTS 的角色关系（A/B shoulder）从分镜层串写进环境提示词”。处理顺序必须为：先完成 Scene/Beats，再单独生成 Environment prompt，最后执行角色词剔除。
 - 禁止角色信息（Hard Rule）：严禁出现任何角色名、角色代号、CHAR:[@...]、人称指代（如他/她/他们）及人物身份词（如警察、记者、保安、母亲等）。
 - 禁止剧情信息（Hard Rule）：严禁出现剧情推进语句（如因为所以、进入/离开/追逐/躲藏/对峙等）与时间线动作指令。
 - 抽象元素约束（Mandatory）：提示词中的物体/主体只能使用无具象非生命物体表达。
@@ -106,6 +109,7 @@
 - 风格表达示例（仅示范写法，不可照抄值）：Luxury style via BG only: FG keeps clean blocking lanes and action surfaces; MG retains minimal playable anchors; BG carries luxury cues through marble veining, brass trims, chandelier bokeh, and warm specular layering.
 - 风格映射必须动态，真人剧避免游戏感。
 - 环境提示词输出自检（Mandatory）：提交前必须逐条校验 No character names、No role labels、No story events、Only abstract non-living object expression；任一不满足即判无效并重写。
+- 环境提示词门禁词自检（Mandatory）：提交前必须额外扫描并确保不存在以下词或模式：CHAR:[@、over shoulder、over-the-shoulder、A over B、B over A、shoulder silhouette、behind head、he/she/they（中英代词均禁）。命中任一即整条环境提示词作废并重写。
 
 ### 1.5) OTS 场景要求（Subject 相关，Mandatory）
 - OTS 切换硬规则（Mandatory）：当对话/对峙从 `A over B shoulder` 切到 `B over A shoulder` 时，必须切分为独立 Shot；可在同一 Scene 内保留该正反打，但必须同时满足：
