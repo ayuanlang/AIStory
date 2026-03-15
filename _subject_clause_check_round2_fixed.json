@@ -1,0 +1,82 @@
+﻿[
+    {
+        "pattern":  "OTS 切换硬规则（Mandatory）",
+        "in_scene":  true,
+        "in_subject":  true
+    },
+    {
+        "pattern":  "双环境显式：同场内写明 ENV:[..._OTS_A] 与 ENV:[..._OTS_B]",
+        "in_scene":  false,
+        "in_subject":  false
+    },
+    {
+        "pattern":  "机位编号显式：在 {Observer View} 与 {Beats} 中标注 Cam-01（A over B）与 Cam-02（B over A）",
+        "in_scene":  false,
+        "in_subject":  false
+    },
+    {
+        "pattern":  "轴线变化显式：在 {Axis} 中标注 Axis Side",
+        "in_scene":  false,
+        "in_subject":  false
+    },
+    {
+        "pattern":  "OTS 锚点硬规则（Mandatory）",
+        "in_scene":  true,
+        "in_subject":  true
+    },
+    {
+        "pattern":  "OTS 双变体合规示例（Mandatory）",
+        "in_scene":  true,
+        "in_subject":  true
+    },
+    {
+        "pattern":  "ENV:[Cafe_OTS_A]",
+        "in_scene":  true,
+        "in_subject":  true
+    },
+    {
+        "pattern":  "ENV:[Cafe_OTS_B]",
+        "in_scene":  true,
+        "in_subject":  true
+    },
+    {
+        "pattern":  "下游交付约束（Shot 级）：上述 OTS 双 Beat 在 shot_generator 阶段必须落成两个独立 Shot",
+        "in_scene":  false,
+        "in_subject":  false
+    },
+    {
+        "pattern":  "OTS 同场双环境规则：当 OTS 正反打在同一 Scene 内执行时",
+        "in_scene":  true,
+        "in_subject":  true
+    },
+    {
+        "pattern":  "适用范围（Mandatory）：以上正反示例同样适用于含 OTS 在内的多角度环境提示词描述",
+        "in_scene":  true,
+        "in_subject":  true
+    },
+    {
+        "pattern":  "正反环境补充约束（Mandatory）",
+        "in_scene":  true,
+        "in_subject":  true
+    },
+    {
+        "pattern":  "正反环境唯一大件例外（Mandatory）",
+        "in_scene":  true,
+        "in_subject":  true
+    },
+    {
+        "pattern":  "系统级 Subjects 列表复用（Mandatory）",
+        "in_scene":  true,
+        "in_subject":  true
+    },
+    {
+        "pattern":  "系统级依赖引用（Mandatory）",
+        "in_scene":  true,
+        "in_subject":  true
+    },
+    {
+        "pattern":  "系统级列表一致性（Mandatory）",
+        "in_scene":  true,
+        "in_subject":  true
+    }
+]

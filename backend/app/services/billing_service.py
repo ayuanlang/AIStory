@@ -543,6 +543,75 @@ class BillingService:
         return None
 
     @staticmethod
+    def _categories_for_mode(mode: Optional[str]) -> List[str]:
+        normalized = str(mode or "").strip().lower()
+        if not normalized:
+            return []
+        if normalized == "video":
+            return ["Video"]
+        if normalized == "image":
+            return ["Image"]
+        if normalized == "text":
+            return ["LLM", "Vision", "Tools", "Voice", "Music"]
+        return []
+
+    @staticmethod
+    def _normalize_model_identity(model: Any) -> str:
+        text = str(model or "").strip().lower()
+        if not text:
+            return ""
+        text = text.replace("_", "-").replace(".", "-")
+        text = re.sub(r"\s+", "", text)
+        text = re.sub(r"-+", "-", text)
+        return text.strip("-")
+
+    @staticmethod
+    def _query_active_rules_by_identity(
+        db: Session,
+        provider: str,
+        model: str,
+        mode: Optional[str],
+    ) -> List[SystemAPIBillingRule]:
+        provider_text = str(provider or "").strip()
+        model_text = str(model or "").strip()
+        normalized_model_text = BillingService._normalize_model_identity(model_text)
+        if not provider_text or not normalized_model_text:
+            return []
+
+        query = db.query(SystemAPIBillingRule, SystemAPISetting.model).join(
+            SystemAPISetting,
+            SystemAPIBillingRule.system_api_id == SystemAPISetting.id,
+        ).filter(
+            SystemAPIBillingRule.is_active == True,
+            SystemAPISetting.provider == provider_text,
+        )
+
+        categories = BillingService._categories_for_mode(mode)
+        if categories:
+            query = query.filter(SystemAPISetting.category.in_(categories))
+
+        rows = query.order_by(SystemAPIBillingRule.priority.desc(), SystemAPIBillingRule.id.desc()).all()
+        matched_rows: List[SystemAPIBillingRule] = []
+        for rule_row, setting_model in rows:
+            if BillingService._normalize_model_identity(setting_model) != normalized_model_text:
+                continue
+            matched_rows.append(rule_row)
+        return matched_rows
+
+    @staticmethod
+    def _get_base_billing_rule_by_identity(
+        db: Session,
+        provider: str,
+        model: str,
+        mode: Optional[str],
+    ) -> Optional[SystemAPIBillingRule]:
+        rows = BillingService._query_active_rules_by_identity(db, provider, model, mode)
+        for row in rows:
+            if BillingService._is_base_billing_rule(row):
+                return row
+        return None
+
+    @staticmethod
     def _task_type_to_category(task_type: str) -> str:
         normalized = str(task_type or "").strip().lower()
         if normalized == "image_gen":
@@ -1484,21 +1553,24 @@ class BillingService:
             return False
 
         gm = BillingService._to_lower_text(getattr(rule, "generation_mode", ""))
-        if gm and gm != BillingService._to_lower_text(usage.get("generation_mode")):
+        usage_gm = BillingService._to_lower_text(usage.get("generation_mode"))
+        if gm and usage_gm and gm != usage_gm:
             return False
 
         inf = BillingService._to_lower_text(getattr(rule, "input_format", ""))
-        if inf and inf != BillingService._to_lower_text(usage.get("input_format")):
+        usage_inf = BillingService._to_lower_text(usage.get("input_format"))
+        if inf and usage_inf and inf != usage_inf:
             return False
 
         outf = BillingService._to_lower_text(getattr(rule, "output_format", ""))
-        if outf and outf != BillingService._to_lower_text(usage.get("output_format")):
+        usage_outf = BillingService._to_lower_text(usage.get("output_format"))
+        if outf and usage_outf and outf != usage_outf:
             return False
 
         rule_has_audio = getattr(rule, "has_audio", None)
         if rule_has_audio is not None:
             usage_has_audio = usage.get("has_audio", None)
-            if usage_has_audio is None or bool(rule_has_audio) != bool(usage_has_audio):
+            if usage_has_audio is not None and bool(rule_has_audio) != bool(usage_has_audio):
                 return False
 
         if not BillingService._in_range_int(usage.get("input_tokens", 0), getattr(rule, "input_tokens_min", None), getattr(rule, "input_tokens_max", None)):
@@ -1643,14 +1715,12 @@ class BillingService:
     @staticmethod
     def _select_best_matching_rule(
         db: Session,
-        system_api_id: int,
+        provider: str,
+        model: str,
         usage: Dict[str, Any],
-        mode: str,
+        mode: Optional[str],
     ) -> Dict[str, Any]:
-        rows = db.query(SystemAPIBillingRule).filter(
-            SystemAPIBillingRule.system_api_id == system_api_id,
-            SystemAPIBillingRule.is_active == True,
-        ).order_by(SystemAPIBillingRule.priority.desc(), SystemAPIBillingRule.id.desc()).all()
+        rows = BillingService._query_active_rules_by_identity(db, provider, model, mode)
 
         if not rows:
             return {"matched": [], "best": None}
@@ -1813,9 +1883,9 @@ class BillingService:
             if isinstance(std_usage.get("standard_trace"), dict) and std_usage.get("standard_trace"):
                 usage["standard_trace"] = dict(std_usage.get("standard_trace") or {})
 
-        # Billing order: system API billing rules -> system API base rule -> generic default pricing.
-        if system_row:
-            base_rule = BillingService._get_base_billing_rule(db, int(system_row.id))
+        # Billing order: provider/model/mode identity rules -> identity base rule -> generic default pricing.
+        if provider_text and model_text:
+            base_rule = BillingService._get_base_billing_rule_by_identity(db, provider_text, model_text, mode)
             if base_rule:
                 api_cfg = BillingService._billing_from_rule(base_rule)
                 api_pricing_source = "system_api_base_rule"
@@ -1843,8 +1913,8 @@ class BillingService:
         selected_api_cost = api_cost_fallback
         rule_match_count = 0
 
-        if system_row:
-            matched_info = BillingService._select_best_matching_rule(db, int(system_row.id), usage, mode)
+        if provider_text and model_text:
+            matched_info = BillingService._select_best_matching_rule(db, provider_text, model_text, usage, mode)
             matched_rows = matched_info.get("matched") or []
             rule_match_count = len(matched_rows)
             matched_rule_ids = [int(item["rule"].id) for item in matched_rows]

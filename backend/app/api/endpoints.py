@@ -6,7 +6,7 @@ import smtplib
 from email.message import EmailMessage
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
-from sqlalchemy import or_, and_
+from sqlalchemy import or_, and_, text
 from app.db.session import get_db, SessionLocal
 from app.models.all_models import Project, ProjectShare, User, Episode, Scene, Shot, Entity, Asset, APISetting, SystemAPISetting, ScriptSegment, TransactionHistory, SMTPSystemConfig, WechatPayConfig, ProviderKeyPool
 from app.schemas.agent import AgentRequest, AgentResponse, AnalyzeSceneRequest
@@ -1471,6 +1471,7 @@ def get_effective_setting_snapshot(
 _PROMPT_SKILL_ALIAS = {
     "scene_analysis.txt": "skill:scene_analysis/scene_analysis.txt",
     "scene_analysis_subject_recovery_lite.txt": "skill:scene_analysis/scene_analysis_subject_recovery_lite.txt",
+    "subject_generation.txt": "subject_generation.txt",
     "story_generator_global.txt": "skill:story_generation/story_generator_global.txt",
     "story_generator_episode.txt": "skill:story_generation/story_generator_episode.txt",
     "story_generator_analyze_novel.txt": "skill:story_generation/story_generator_analyze_novel.txt",
@@ -2175,6 +2176,34 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 len(meta_str),
                 _estimate_tokens(meta_str),
             )
+
+        # Inject project entity inventory as system-level subject baseline for recognizability.
+        try:
+            project_id_for_inventory = None
+            ep_id_for_inventory = getattr(request, "episode_id", None)
+            if ep_id_for_inventory:
+                episode_for_inventory = db.query(Episode).filter(Episode.id == ep_id_for_inventory).first()
+                if episode_for_inventory:
+                    project_id_for_inventory = int(episode_for_inventory.project_id)
+
+            if project_id_for_inventory:
+                inventory = _build_project_subject_inventory(db, project_id_for_inventory, limit_per_type=80)
+                inventory_block = _format_project_subject_inventory_block(inventory)
+                inventory_guidance = (
+                    "System-level subject reuse rules:\n"
+                    "- Treat the above inventory as authoritative identifiers for this project.\n"
+                    "- Prefer reusing listed subject_ref names directly in Scene Subjects and Part 2 outputs.\n"
+                    "- Preserve anchor semantics when generating/repairing character, prop, and environment subjects."
+                )
+                user_content = f"{inventory_block}\n\n{inventory_guidance}\n\n{user_content}"
+                logger.info(
+                    "Injected system-level subject inventory into analyze_scene prompt: chars=%s props=%s envs=%s",
+                    len(inventory.get("characters") or []),
+                    len(inventory.get("props") or []),
+                    len(inventory.get("environments") or []),
+                )
+        except Exception as inventory_inject_err:
+            logger.warning("[analyze_scene] failed to inject system-level subject inventory: %s", inventory_inject_err)
 
         attention_notes = (getattr(request, "analysis_attention_notes", None) or "").strip()
         if attention_notes:
@@ -7649,6 +7678,98 @@ class SceneRegenerateRequest(BaseModel):
     entity_only_mode: Optional[bool] = False
 
 
+def _build_project_subject_inventory(db: Session, project_id: int, limit_per_type: int = 120) -> Dict[str, List[Dict[str, str]]]:
+    """Build canonical project subject inventory for prompt-time reuse and recognition."""
+    inventory: Dict[str, List[Dict[str, str]]] = {
+        "characters": [],
+        "props": [],
+        "environments": [],
+    }
+
+    entities = db.query(Entity).filter(Entity.project_id == int(project_id)).order_by(Entity.id.asc()).all()
+    seen_keys = set()
+
+    for ent in entities:
+        normalized_type = _normalize_subject_entity_type(getattr(ent, "type", None))
+        bucket = (
+            "characters" if normalized_type == "character"
+            else "props" if normalized_type == "prop"
+            else "environments"
+        )
+
+        name = str(getattr(ent, "name", None) or "").strip()
+        name_en = str(getattr(ent, "name_en", None) or "").strip()
+        canonical_name = name or name_en
+        if not canonical_name:
+            continue
+
+        key = f"{bucket}:{canonical_name.lower()}"
+        if key in seen_keys:
+            continue
+        if len(inventory[bucket]) >= limit_per_type:
+            continue
+        seen_keys.add(key)
+
+        if bucket == "characters":
+            subject_ref = f"CHAR:[@{canonical_name}]"
+        elif bucket == "props":
+            subject_ref = f"PROP:[{canonical_name}]"
+        else:
+            subject_ref = f"ENV:[{canonical_name}]"
+
+        anchor_description = str(getattr(ent, "anchor_description", None) or "").strip()
+        if anchor_description:
+            anchor_description = anchor_description[:220]
+
+        narrative_hint = str(getattr(ent, "description", None) or "").strip()
+        if narrative_hint:
+            narrative_hint = narrative_hint[:260]
+
+        inventory[bucket].append({
+            "id": str(getattr(ent, "id", "") or "").strip(),
+            "name": canonical_name,
+            "name_en": name_en,
+            "subject_ref": subject_ref,
+            "anchor_description": anchor_description,
+            "description": narrative_hint,
+            "type": normalized_type or bucket[:-1],
+        })
+
+    return inventory
+
+
+def _format_project_subject_inventory_block(inventory: Dict[str, List[Dict[str, str]]]) -> str:
+    def _format_bucket(bucket_name: str) -> str:
+        items = inventory.get(bucket_name) or []
+        if not items:
+            return f"- {bucket_name}: (none)"
+
+        lines: List[str] = [f"- {bucket_name} ({len(items)}):"]
+        for item in items:
+            bits: List[str] = []
+            subject_ref = str(item.get("subject_ref") or "").strip()
+            entity_id = str(item.get("id") or "").strip()
+            if entity_id:
+                bits.append(f"id={entity_id}")
+            if subject_ref:
+                bits.append(subject_ref)
+            if item.get("name_en"):
+                bits.append(f"name_en={item['name_en']}")
+            if item.get("anchor_description"):
+                bits.append(f"anchor={item['anchor_description']}")
+            if item.get("description"):
+                bits.append(f"hint={item['description']}")
+            lines.append(f"  - {' | '.join(bits)}")
+        return "\n".join(lines)
+
+    return (
+        "System-level Subjects Inventory (authoritative reusable entities; use subject_ref + anchor for recognition):\n"
+        f"{_format_bucket('characters')}\n"
+        f"{_format_bucket('props')}\n"
+        f"{_format_bucket('environments')}"
+    )
+
+
 def _normalize_scene_header(value: Any) -> str:
     text = str(value or "").strip().lower()
     if not text:
@@ -8024,46 +8145,8 @@ async def regenerate_scene(
         f"| EP{int(episode.id):02d} | EP{int(episode.id):02d}_SCXX | {db_scene.scene_no or ''} | {db_scene.scene_name or ''} | {db_scene.equivalent_duration or ''} | {(db_scene.core_scene_info or '').replace(chr(10), '<br>')} | {(db_scene.original_script_text or '').replace(chr(10), '<br>')} | {db_scene.environment_name or ''} | {db_scene.linked_characters or ''} | {db_scene.key_props or ''} |"
     )
 
-    existing_entities = db.query(Entity).filter(Entity.project_id == project.id).all()
-    existing_subjects: Dict[str, List[str]] = {
-        "characters": [],
-        "props": [],
-        "environments": [],
-    }
-    seen_subject_keys = set()
-    for entity in existing_entities:
-        normalized_type = _normalize_subject_entity_type(getattr(entity, "type", None))
-        target_bucket = (
-            "characters" if normalized_type == "character"
-            else "props" if normalized_type == "prop"
-            else "environments"
-        )
-        for raw_name in [getattr(entity, "name", None), getattr(entity, "name_en", None)]:
-            name = str(raw_name or "").strip()
-            key = f"{target_bucket}:{name.lower()}"
-            if not name or key in seen_subject_keys:
-                continue
-            seen_subject_keys.add(key)
-            existing_subjects[target_bucket].append(name)
-
-    def _format_existing_subject_line(category_key: str, limit: int = 80) -> str:
-        values = existing_subjects.get(category_key) or []
-        trimmed = [str(v or "").strip() for v in values if str(v or "").strip()]
-        total = len(trimmed)
-        if total == 0:
-            return f"- {category_key}: (none)"
-        shown = trimmed[:limit]
-        suffix = ""
-        if total > limit:
-            suffix = f" ... (+{total - limit} more)"
-        return f"- {category_key} ({total}): {', '.join(shown)}{suffix}"
-
-    existing_subjects_block = (
-        "Existing Entity Inventory By Category (project baseline dependencies; reusable as-is; DO NOT rewrite/rename/redefine):\n"
-        f"{_format_existing_subject_line('characters')}\n"
-        f"{_format_existing_subject_line('props')}\n"
-        f"{_format_existing_subject_line('environments')}"
-    )
+    existing_subject_inventory = _build_project_subject_inventory(db, int(project.id))
+    existing_subjects_block = _format_project_subject_inventory_block(existing_subject_inventory)
 
     existing_subjects_system_guard = (
         "\n\n"
@@ -8080,9 +8163,9 @@ async def regenerate_scene(
         "[regenerate_scene] entity injection scene_id=%s project_id=%s counts: characters=%s props=%s environments=%s",
         scene_id,
         project.id,
-        len(existing_subjects.get("characters") or []),
-        len(existing_subjects.get("props") or []),
-        len(existing_subjects.get("environments") or []),
+        len(existing_subject_inventory.get("characters") or []),
+        len(existing_subject_inventory.get("props") or []),
+        len(existing_subject_inventory.get("environments") or []),
     )
 
     user_prompt = (
@@ -8098,11 +8181,12 @@ async def regenerate_scene(
         "- Prioritize User Requirements over the previous scene wording.\n"
         "- Keep output concise and directly importable as scene rows.\n"
         "- You may split into multiple rows when needed.\n"
-        "- Treat Existing Entity Inventory as dependency baselines already available in project DB.\n"
+        "- Treat System-level Subjects Inventory as authoritative dependency baselines already available in project DB.\n"
         "- Existing entities are immutable references: MUST NOT be rewritten, renamed, redefined, or replaced.\n"
+        "- Reuse subject_ref tokens and keep anchor semantics consistent for recognition continuity.\n"
         "- They can be referenced/reused directly, but MUST NOT be regenerated as new entities.\n"
         "- MUST supplement complete missing subjects from script content and return JSON with keys: characters, props, environments.\n"
-        "- SUBJECTS_JSON must contain ONLY missing/new entities that are not already listed in Existing Entity Inventory.\n"
+        "- SUBJECTS_JSON must contain ONLY missing/new entities that are not already listed in System-level Subjects Inventory.\n"
         "- Keep existing subject names stable; do not duplicate existing names in SUBJECTS_JSON.\n"
         "- If no missing entity exists for a category, return an empty array for that category.\n\n"
         "Required Output Format:\n"
@@ -8120,7 +8204,7 @@ async def regenerate_scene(
     logger.info(
         "[regenerate_scene] prompt injection markers scene_id=%s has_existing_block_in_user_prompt=%s has_existing_guard_in_system_prompt=%s",
         scene_id,
-        "Existing Entity Inventory By Category" in user_prompt,
+        "System-level Subjects Inventory" in user_prompt,
         "[Existing Entity Reuse Guard - High Priority]" in system_instruction,
     )
 
@@ -10149,8 +10233,17 @@ async def clone_entity_with_llm(
     source_payload_json = json.dumps(source_payload, ensure_ascii=False)
     name_hint = str(req.new_name_hint or "").strip()
 
+    try:
+        base_subject_prompt = _resolve_prompt_text("subject_generation.txt")
+    except Exception:
+        base_subject_prompt = (
+            "You are a senior subject prompt editor for film/storyboard assets. "
+            "Generate stable subject fields and keep identity anchors consistent."
+        )
+
     system_prompt = (
-        "You are a senior subject prompt editor for film/storyboard assets. "
+        f"{str(base_subject_prompt or '').strip()}\n\n"
+        "[Clone Subject Mode - Mandatory]\n"
         "Given a source subject object and a modification request, generate an updated subject draft. "
         "Return STRICT JSON only with one top-level object key: \"entity\".\n\n"
         "Hard constraints:\n"
@@ -12477,12 +12570,29 @@ def _parse_iso_datetime_safe(value: Any) -> Optional[datetime]:
 
 
 def _resolve_maintenance_config_raw(db: Session) -> Dict[str, Any]:
-    setting = db.query(SystemAPISetting).filter(
-        SystemAPISetting.category == _MAINTENANCE_CATEGORY,
-        SystemAPISetting.provider == _MAINTENANCE_PROVIDER,
-    ).order_by(SystemAPISetting.id.desc()).first()
+    row = db.execute(text("""
+        SELECT config
+        FROM system_api_settings
+        WHERE category = :category
+          AND provider = :provider
+        ORDER BY id DESC
+        LIMIT 1
+    """), {
+        "category": _MAINTENANCE_CATEGORY,
+        "provider": _MAINTENANCE_PROVIDER,
+    }).mappings().first()
 
-    cfg = dict(setting.config or {}) if setting else {}
+    cfg_raw = row.get("config") if row else None
+    if isinstance(cfg_raw, dict):
+        cfg = dict(cfg_raw)
+    elif isinstance(cfg_raw, str) and cfg_raw.strip():
+        try:
+            parsed = json.loads(cfg_raw)
+            cfg = dict(parsed) if isinstance(parsed, dict) else {}
+        except Exception:
+            cfg = {}
+    else:
+        cfg = {}
     enabled = bool(cfg.get("enabled", False))
     ends_at_raw = str(cfg.get("ends_at") or "").strip()
     message = str(cfg.get("message") or "").strip()
@@ -12798,36 +12908,69 @@ def update_maintenance_config(
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Not authorized")
 
-    setting = db.query(SystemAPISetting).filter(
-        SystemAPISetting.category == _MAINTENANCE_CATEGORY,
-        SystemAPISetting.provider == _MAINTENANCE_PROVIDER
-    ).order_by(SystemAPISetting.id.desc()).first()
-
-    if not setting:
-        setting = SystemAPISetting(
-            category=_MAINTENANCE_CATEGORY,
-            provider=_MAINTENANCE_PROVIDER,
-            name="System Maintenance Config",
-            model="maintenance_mode_config",
-            is_active=True,
-        )
-        db.add(setting)
+    row = db.execute(text("""
+        SELECT id
+        FROM system_api_settings
+        WHERE category = :category
+          AND provider = :provider
+        ORDER BY id DESC
+        LIMIT 1
+    """), {
+        "category": _MAINTENANCE_CATEGORY,
+        "provider": _MAINTENANCE_PROVIDER,
+    }).mappings().first()
 
     ends_at = str(idx.ends_at or "").strip()
     if ends_at and not _parse_iso_datetime_safe(ends_at):
         raise HTTPException(status_code=400, detail="ends_at must be a valid ISO datetime")
 
-    setting.config = {
+    next_config = {
         "enabled": bool(idx.enabled),
         "ends_at": ends_at or None,
         "message": str(idx.message or "系统正在维护").strip() or "系统正在维护",
     }
+
+    if row and row.get("id") is not None:
+        db.execute(text("""
+            UPDATE system_api_settings
+            SET config = :config
+            WHERE id = :id
+        """), {
+            "id": int(row["id"]),
+            "config": next_config,
+        })
+    else:
+        db.execute(text("""
+            INSERT INTO system_api_settings (
+                category,
+                provider,
+                name,
+                model,
+                is_active,
+                config
+            ) VALUES (
+                :category,
+                :provider,
+                :name,
+                :model,
+                :is_active,
+                :config
+            )
+        """), {
+            "category": _MAINTENANCE_CATEGORY,
+            "provider": _MAINTENANCE_PROVIDER,
+            "name": "System Maintenance Config",
+            "model": "maintenance_mode_config",
+            "is_active": True,
+            "config": next_config,
+        })
+
     db.commit()
 
     return MaintenanceConfig(
-        enabled=bool(setting.config.get("enabled", False)),
-        ends_at=setting.config.get("ends_at"),
-        message=setting.config.get("message") or "系统正在维护",
+        enabled=bool(next_config.get("enabled", False)),
+        ends_at=next_config.get("ends_at"),
+        message=next_config.get("message") or "系统正在维护",
     )
 
 
@@ -16603,6 +16746,49 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
     _estimated_tokens = 0
 
     try:
+        resolved_sound_for_reserve: Optional[bool] = None
+        if req.sound is not None:
+            resolved_sound_for_reserve = bool(req.sound)
+        elif req.project_id:
+            project_for_reserve = db.query(Project).filter(Project.id == req.project_id).first()
+            reserve_global_info: Dict[str, Any] = {}
+            if project_for_reserve and isinstance(project_for_reserve.global_info, dict):
+                reserve_global_info = dict(project_for_reserve.global_info)
+            elif project_for_reserve and isinstance(project_for_reserve.global_info, str):
+                try:
+                    parsed_reserve_info = json.loads(project_for_reserve.global_info)
+                    if isinstance(parsed_reserve_info, dict):
+                        reserve_global_info = parsed_reserve_info
+                except Exception:
+                    reserve_global_info = {}
+
+            reserve_defaults = (
+                reserve_global_info.get("project_generation_defaults")
+                if isinstance(reserve_global_info.get("project_generation_defaults"), dict)
+                else {}
+            )
+            reserve_candidates = [
+                reserve_defaults.get("sound"),
+                reserve_defaults.get("generate_audio"),
+                reserve_global_info.get("video_sound"),
+                reserve_global_info.get("sound"),
+                reserve_global_info.get("generate_audio"),
+            ]
+
+            reserve_tech = reserve_global_info.get("tech_params") if isinstance(reserve_global_info.get("tech_params"), dict) else {}
+            reserve_visual = reserve_tech.get("visual_standard") if isinstance(reserve_tech.get("visual_standard"), dict) else {}
+            reserve_candidates.extend([
+                reserve_visual.get("sound"),
+                reserve_visual.get("has_audio"),
+                reserve_visual.get("generate_audio"),
+            ])
+
+            for candidate in reserve_candidates:
+                if candidate is None:
+                    continue
+                resolved_sound_for_reserve = bool(_to_bool(candidate))
+                break
+
         if _is_token_billing:
             _video_token_cfg = billing_service.resolve_video_token_config(db, reserve_provider, reserve_model)
             est_duration = max(5, int(req.duration or 5)) if (req.duration and req.duration > 0) else 5
@@ -16632,8 +16818,8 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
         if reserve_model:
             reserve_details["model"] = reserve_model
             reserve_details["resolved_model"] = reserve_model
-        if req.sound is not None:
-            reserve_details["has_audio"] = bool(req.sound)
+        if resolved_sound_for_reserve is not None:
+            reserve_details["has_audio"] = bool(resolved_sound_for_reserve)
         if req.mode is not None and str(req.mode).strip():
             reserve_details["mode"] = str(req.mode).strip().lower()
         if reserve_system_api_id is not None:
@@ -16754,8 +16940,10 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
             )
             sound_candidates = [
                 project_defaults.get("sound"),
+                project_defaults.get("generate_audio"),
                 project_global_info.get("video_sound"),
                 project_global_info.get("sound"),
+                project_global_info.get("generate_audio"),
             ]
             visual_standard = {}
             tech_params = project_global_info.get("tech_params")
@@ -16768,6 +16956,7 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
             sound_candidates.extend([
                 visual_standard.get("sound"),
                 visual_standard.get("has_audio"),
+                visual_standard.get("generate_audio"),
             ])
             for candidate in sound_candidates:
                 if candidate is None:

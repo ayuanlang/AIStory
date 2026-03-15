@@ -4800,10 +4800,10 @@ class MediaGenerationService:
             if "fixed_lens" in tool_conf:
                 payload_input["fixed_lens"] = bool(tool_conf.get("fixed_lens"))
 
-            if "generate_audio" in tool_conf:
-                payload_input["generate_audio"] = bool(tool_conf.get("generate_audio"))
-            elif "sound" in payload_input:
+            if "sound" in payload_input:
                 payload_input["generate_audio"] = bool(payload_input.get("sound"))
+            elif "generate_audio" in tool_conf:
+                payload_input["generate_audio"] = bool(tool_conf.get("generate_audio"))
 
         if not use_veo_api and gen_type == "video":
             model_lower = str(model or "").strip().lower()

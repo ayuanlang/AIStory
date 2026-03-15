@@ -4941,14 +4941,19 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
 
             let promptContent = '';
             try {
-                const promptRes = await fetchPrompt('scene_analysis_subject_recovery_lite.txt');
+                const promptRes = await fetchPrompt('subject_generation.txt');
                 promptContent = promptRes?.content || '';
             } catch {
                 try {
-                    const fallbackRes = await fetchPrompt('scene_analysis.txt');
+                    const fallbackRes = await fetchPrompt('scene_analysis_subject_recovery_lite.txt');
                     promptContent = fallbackRes?.content || '';
                 } catch {
-                    promptContent = '';
+                    try {
+                        const fallbackRes2 = await fetchPrompt('scene_analysis.txt');
+                        promptContent = fallbackRes2?.content || '';
+                    } catch {
+                        promptContent = '';
+                    }
                 }
             }
             const recoveryPrompt = buildSubjectOnlyRecoveryPrompt(promptContent);
@@ -10267,6 +10272,19 @@ const SceneCard = ({ scene, entities, onClick, onGenerateShots, onDelete, select
 const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShots, uiLang = 'zh' }) => {
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
     const defaultSceneRegenRequirement = t('补充所缺实体', 'Supplement missing entities');
+    const SCENE_AI_SHOTS_BATCH_KIND = 'scene-ai-shots-batch';
+    const SCENE_AI_SHOTS_RUNTIME_TTL_MS = 1000 * 60 * 60 * 6;
+    const createBatchAiShotsProgressState = () => ({
+        running: false,
+        total: 0,
+        completed: 0,
+        success: 0,
+        failed: 0,
+        stopRequested: false,
+        currentSceneLabel: '',
+        message: '',
+        errors: [],
+    });
     const [scenes, setScenes] = useState([]);
     const [sceneSortMode, setSceneSortMode] = useState('updated_desc');
     const [sceneSortDirection, setSceneSortDirection] = useState('desc');
@@ -10293,20 +10311,14 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
     const [sceneRegenScenePatching, setSceneRegenScenePatching] = useState(false);
     const [shotPromptModal, setShotPromptModal] = useState({ open: false, sceneId: null, data: null, loading: false });
     const [aiShotsFlowStatus, setAiShotsFlowStatus] = useState({ phase: 'idle', message: '', sceneId: null });
-    const [batchAiShotsProgress, setBatchAiShotsProgress] = useState({
-        running: false,
-        total: 0,
-        completed: 0,
-        success: 0,
-        failed: 0,
-        stopRequested: false,
-        currentSceneLabel: '',
-        message: '',
-        errors: [],
-    });
+    const [batchAiShotsProgress, setBatchAiShotsProgress] = useState(() => createBatchAiShotsProgressState());
     const [isStoppingBatchAiShots, setIsStoppingBatchAiShots] = useState(false);
     const batchAiShotsStatusTimerRef = useRef(null);
     const batchAiShotsStartupGuardUntilRef = useRef(0);
+    const batchAiShotsBootstrapUntilRef = useRef(0);
+    const batchAiShotsProgressRef = useRef(createBatchAiShotsProgressState());
+    const recoverBatchAiShotsInFlightRef = useRef(false);
+    const recoverBatchAiShotsLastAtRef = useRef(0);
     const aiShotsResumeInFlightRef = useRef(false);
     const [aiShotsStaging, setAiShotsStaging] = useState({
         loading: false,
@@ -10325,14 +10337,142 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         data: null,
     });
 
-    const getAiShotsTaskStorageKey = useCallback((episodeId) => {
-        if (!episodeId) return '';
-        return `aistory:scene-ai-shots-task:${episodeId}`;
+    const getAiShotsTaskStorageKey = useCallback((episodeId, sceneId) => {
+        if (!episodeId || !sceneId) return '';
+        return `aistory:scene-ai-shots-task:${episodeId}:scene:${sceneId}`;
     }, []);
 
-    const loadAiShotsTaskMarker = useCallback((episodeId) => {
+    const getAiShotsTaskActiveSceneKey = useCallback((episodeId) => {
+        if (!episodeId) return '';
+        return `aistory:scene-ai-shots-task-active-scene:${episodeId}`;
+    }, []);
+
+    const getBatchAiShotsRuntimeStorageKey = useCallback((episodeId) => {
+        if (!episodeId) return '';
+        return `aistory:scene-ai-shots-progress:${episodeId}`;
+    }, []);
+
+    const loadBatchAiShotsRuntime = useCallback((episodeId) => {
         try {
-            const key = getAiShotsTaskStorageKey(episodeId);
+            const key = getBatchAiShotsRuntimeStorageKey(episodeId);
+            if (!key || !window?.localStorage) return null;
+            const raw = window.localStorage.getItem(key);
+            if (!raw) return null;
+            const parsed = JSON.parse(raw);
+            const updatedAt = Number(parsed?.updatedAt || 0);
+            if (!Number.isFinite(updatedAt) || updatedAt <= 0) return null;
+            if ((Date.now() - updatedAt) > SCENE_AI_SHOTS_RUNTIME_TTL_MS) {
+                window.localStorage.removeItem(key);
+                return null;
+            }
+            return {
+                running: Boolean(parsed?.running),
+                total: Number(parsed?.total || 0),
+                completed: Number(parsed?.completed || 0),
+                success: Number(parsed?.success || 0),
+                failed: Number(parsed?.failed || 0),
+                stopRequested: Boolean(parsed?.stopRequested),
+                currentSceneLabel: String(parsed?.currentSceneLabel || ''),
+                message: String(parsed?.message || ''),
+                errors: Array.isArray(parsed?.errors) ? parsed.errors : [],
+            };
+        } catch (_) {
+            return null;
+        }
+    }, [getBatchAiShotsRuntimeStorageKey, SCENE_AI_SHOTS_RUNTIME_TTL_MS]);
+
+    const saveBatchAiShotsRuntime = useCallback((episodeId, progress) => {
+        try {
+            const key = getBatchAiShotsRuntimeStorageKey(episodeId);
+            if (!key || !window?.localStorage) return;
+            const payload = {
+                running: Boolean(progress?.running),
+                total: Number(progress?.total || 0),
+                completed: Number(progress?.completed || 0),
+                success: Number(progress?.success || 0),
+                failed: Number(progress?.failed || 0),
+                stopRequested: Boolean(progress?.stopRequested),
+                currentSceneLabel: String(progress?.currentSceneLabel || ''),
+                message: String(progress?.message || ''),
+                errors: Array.isArray(progress?.errors) ? progress.errors : [],
+                updatedAt: Date.now(),
+            };
+            window.localStorage.setItem(key, JSON.stringify(payload));
+        } catch (_) {
+            // Ignore localStorage failures.
+        }
+    }, [getBatchAiShotsRuntimeStorageKey]);
+
+    const extractEpisodeIdFromJobPoolItem = useCallback((item) => {
+        const direct = Number(item?.episode_id || item?.episodeId || 0);
+        if (Number.isFinite(direct) && direct > 0) return direct;
+        const metadata = (item?.metadata && typeof item.metadata === 'object') ? item.metadata : {};
+        const payload = (item?.payload && typeof item.payload === 'object') ? item.payload : {};
+        const context = (item?.context && typeof item.context === 'object') ? item.context : {};
+        const nested = Number(
+            metadata?.episode_id
+            || payload?.episode_id
+            || context?.episode_id
+            || metadata?.episodeId
+            || payload?.episodeId
+            || context?.episodeId
+            || 0
+        );
+        return Number.isFinite(nested) && nested > 0 ? nested : 0;
+    }, []);
+
+    const recoverBatchAiShotsFromJobPool = useCallback(async () => {
+        if (!activeEpisode?.id) return false;
+        const now = Date.now();
+        if (recoverBatchAiShotsInFlightRef.current) return false;
+        if ((now - Number(recoverBatchAiShotsLastAtRef.current || 0)) < 4000) return false;
+
+        recoverBatchAiShotsInFlightRef.current = true;
+        recoverBatchAiShotsLastAtRef.current = now;
+        try {
+            const data = await getGenerationJobPool({
+                kind: SCENE_AI_SHOTS_BATCH_KIND,
+                running_only: true,
+                limit: 200,
+            });
+            const items = Array.isArray(data?.items) ? data.items : [];
+            if (items.length === 0) return false;
+
+            const currentEpisodeId = Number(activeEpisode.id || 0);
+            const matched = items.find((item) => extractEpisodeIdFromJobPoolItem(item) === currentEpisodeId)
+                || items.find((item) => String(item?.status || '').toLowerCase() === 'running')
+                || items[0];
+            if (!matched) return false;
+
+            const running = String(matched?.status || '').toLowerCase() === 'running';
+            if (!running) return false;
+
+            setBatchAiShotsProgress((prev) => ({
+                ...prev,
+                running: true,
+                message: String(prev?.message || t('检测到任务池中的批量任务，正在恢复进度...', 'Detected running batch task in job pool, restoring progress...')),
+            }));
+            return true;
+        } catch (_) {
+            return false;
+        } finally {
+            recoverBatchAiShotsInFlightRef.current = false;
+        }
+    }, [SCENE_AI_SHOTS_BATCH_KIND, activeEpisode?.id, extractEpisodeIdFromJobPoolItem, t]);
+
+    const loadAiShotsTaskMarker = useCallback((episodeId, preferredSceneId = null) => {
+        try {
+            let stableSceneId = Number(preferredSceneId || 0);
+            if (!Number.isFinite(stableSceneId) || stableSceneId <= 0) {
+                const activeSceneKey = getAiShotsTaskActiveSceneKey(episodeId);
+                if (activeSceneKey && window?.localStorage) {
+                    const activeSceneRaw = window.localStorage.getItem(activeSceneKey);
+                    stableSceneId = Number(activeSceneRaw || 0);
+                }
+            }
+            if (!Number.isFinite(stableSceneId) || stableSceneId <= 0) return null;
+
+            const key = getAiShotsTaskStorageKey(episodeId, stableSceneId);
             if (!key || !window?.localStorage) return null;
             const raw = window.localStorage.getItem(key);
             if (!raw) return null;
@@ -10353,35 +10493,81 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         } catch (_) {
             return null;
         }
-    }, [getAiShotsTaskStorageKey]);
+    }, [getAiShotsTaskStorageKey, getAiShotsTaskActiveSceneKey]);
 
     const saveAiShotsTaskMarker = useCallback((episodeId, marker) => {
         try {
-            const key = getAiShotsTaskStorageKey(episodeId);
-            if (!key || !window?.localStorage) return;
             const taskId = String(marker?.taskId || '').trim();
             const sceneId = Number(marker?.sceneId || 0);
             if (!taskId || !Number.isFinite(sceneId) || sceneId <= 0) return;
+            const key = getAiShotsTaskStorageKey(episodeId, sceneId);
+            if (!key || !window?.localStorage) return;
             const payload = {
                 taskId,
                 sceneId,
                 startedAt: Number(marker?.startedAt || Date.now()),
             };
             window.localStorage.setItem(key, JSON.stringify(payload));
+            const activeSceneKey = getAiShotsTaskActiveSceneKey(episodeId);
+            if (activeSceneKey) {
+                window.localStorage.setItem(activeSceneKey, String(sceneId));
+            }
         } catch (_) {
             // Ignore localStorage failures.
         }
-    }, [getAiShotsTaskStorageKey]);
+    }, [getAiShotsTaskStorageKey, getAiShotsTaskActiveSceneKey]);
 
-    const clearAiShotsTaskMarker = useCallback((episodeId) => {
+    const clearAiShotsTaskMarker = useCallback((episodeId, sceneId = null) => {
         try {
-            const key = getAiShotsTaskStorageKey(episodeId);
-            if (!key || !window?.localStorage) return;
-            window.localStorage.removeItem(key);
+            if (!window?.localStorage || !episodeId) return;
+
+            const stableSceneId = Number(sceneId || 0);
+            if (Number.isFinite(stableSceneId) && stableSceneId > 0) {
+                const sceneKey = getAiShotsTaskStorageKey(episodeId, stableSceneId);
+                if (sceneKey) window.localStorage.removeItem(sceneKey);
+                const activeSceneKey = getAiShotsTaskActiveSceneKey(episodeId);
+                if (activeSceneKey) {
+                    const activeSceneRaw = Number(window.localStorage.getItem(activeSceneKey) || 0);
+                    if (activeSceneRaw === stableSceneId) {
+                        window.localStorage.removeItem(activeSceneKey);
+                    }
+                }
+                return;
+            }
+
+            const activeSceneKey = getAiShotsTaskActiveSceneKey(episodeId);
+            const activeSceneRaw = activeSceneKey ? Number(window.localStorage.getItem(activeSceneKey) || 0) : 0;
+            if (Number.isFinite(activeSceneRaw) && activeSceneRaw > 0) {
+                const sceneKey = getAiShotsTaskStorageKey(episodeId, activeSceneRaw);
+                if (sceneKey) window.localStorage.removeItem(sceneKey);
+            }
+            if (activeSceneKey) window.localStorage.removeItem(activeSceneKey);
         } catch (_) {
             // Ignore localStorage failures.
         }
-    }, [getAiShotsTaskStorageKey]);
+    }, [getAiShotsTaskStorageKey, getAiShotsTaskActiveSceneKey]);
+
+    useEffect(() => {
+        if (!activeEpisode?.id) {
+            setBatchAiShotsProgress(createBatchAiShotsProgressState());
+            return;
+        }
+        const restored = loadBatchAiShotsRuntime(activeEpisode.id);
+        if (restored) {
+            setBatchAiShotsProgress(restored);
+        } else {
+            setBatchAiShotsProgress(createBatchAiShotsProgressState());
+        }
+    }, [activeEpisode?.id, loadBatchAiShotsRuntime]);
+
+    useEffect(() => {
+        if (!activeEpisode?.id) return;
+        saveBatchAiShotsRuntime(activeEpisode.id, batchAiShotsProgress);
+    }, [activeEpisode?.id, batchAiShotsProgress, saveBatchAiShotsRuntime]);
+
+    useEffect(() => {
+        batchAiShotsProgressRef.current = batchAiShotsProgress;
+    }, [batchAiShotsProgress]);
     const normalizeOriginalScriptText = (value) => {
         const raw = typeof value === 'string' ? value.trim() : '';
         if (!raw) return '';
@@ -10859,14 +11045,6 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         return `${contextInfo}${header}\n${content}`;
     };
 
-    const normalizeSubjectType = (rawType, fallbackType = 'character') => {
-        const value = String(rawType || '').trim().toLowerCase();
-        if (value === 'character' || value === 'char' || value === '角色' || value === '人物') return 'character';
-        if (value === 'prop' || value === 'props' || value === '道具' || value === '物件') return 'prop';
-        if (value === 'environment' || value === 'env' || value === '场景' || value === '环境') return 'environment';
-        return fallbackType;
-    };
-
     const importSubjectsFromRegeneratedJson = useCallback(async (subjectsJson) => {
         const payload = (subjectsJson && typeof subjectsJson === 'object') ? subjectsJson : null;
         if (!projectId || !payload) {
@@ -10882,210 +11060,60 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                 },
             };
         }
-
-        const toKey = (type, name) => `${String(type || '').trim().toLowerCase()}::${String(name || '').trim().toLowerCase()}`;
-        const existingMap = new Map();
-        for (const entity of (entities || [])) {
-            const entityType = normalizeSubjectType(entity?.type, 'character');
-            const zhName = String(entity?.name || '').trim();
-            const enName = String(entity?.name_en || '').trim();
-            if (zhName) existingMap.set(toKey(entityType, zhName), entity);
-            if (enName) existingMap.set(toKey(entityType, enName), entity);
-        }
-
-        let created = 0;
-        let skipped = 0;
-        const createdItems = [];
-        const skippedItems = [];
-        const byType = {
-            character: { created: 0, skipped: 0 },
-            environment: { created: 0, skipped: 0 },
-            prop: { created: 0, skipped: 0 },
-        };
-        const seenInBatch = new Set();
-        let hasMutations = false;
-
-        const resolveName = (obj) => String(
-            obj?.name
-            || obj?.subject_name_exact
-            || obj?.subject_name
-            || obj?.name_zh
-            || obj?.name_en
-            || ''
-        ).trim();
-
-        const resolveNameEn = (obj) => String(
-            obj?.name_en
-            || obj?.english_name
-            || obj?.en_name
-            || ''
-        ).trim();
-
-        const upsertOne = async (rawItem, fallbackType) => {
-            if (!rawItem || typeof rawItem !== 'object') return;
-            const type = normalizeSubjectType(rawItem?.type || fallbackType, fallbackType);
-            const name = resolveName(rawItem);
-            const nameEn = resolveNameEn(rawItem);
-            if (!name) {
-                skipped += 1;
-                byType[type].skipped += 1;
-                skippedItems.push({ type, name: '', reason: 'missing_name' });
-                return;
-            }
-
-            const batchKey = toKey(type, name);
-            if (seenInBatch.has(batchKey)) {
-                skipped += 1;
-                byType[type].skipped += 1;
-                skippedItems.push({ type, name, reason: 'duplicate_in_payload' });
-                return;
-            }
-            seenInBatch.add(batchKey);
-
-            let entityPayload = {
-                name,
-                type,
-                description: `Imported from regenerated scene subjects_json (${String(type)})`,
-                name_en: nameEn,
+        const normalizedPayload =
+            getEntitiesPayloadFromJsonText(JSON.stringify(payload))
+            || {
+                characters: Array.isArray(payload?.characters) ? payload.characters : [],
+                props: Array.isArray(payload?.props) ? payload.props : [],
+                environments: Array.isArray(payload?.environments) ? payload.environments : [],
             };
 
-            if (type === 'character') {
-                const desc = [
-                    `Name (EN): ${nameEn || rawItem?.name_en || ''}`,
-                    `Role: ${rawItem?.role || ''}`,
-                    `Archetype: ${rawItem?.archetype || ''}`,
-                    `Appearance: ${rawItem?.appearance_cn || ''}`,
-                    `Clothing: ${rawItem?.clothing || ''}`,
-                    `Action: ${rawItem?.action_characteristics || ''}`,
-                    rawItem?.generation_prompt_cn ? `Prompt (CN): ${rawItem.generation_prompt_cn}` : '',
-                    rawItem?.generation_prompt_en ? `Prompt: ${rawItem.generation_prompt_en}` : '',
-                    rawItem?.negative_prompt_en ? `Negative Prompt: ${rawItem.negative_prompt_en}` : '',
-                ].filter(Boolean).join('\n\n');
-
-                entityPayload = {
-                    ...entityPayload,
-                    description: desc || entityPayload.description,
-                    generation_prompt_cn: rawItem?.generation_prompt_cn || '',
-                    generation_prompt_en: rawItem?.generation_prompt_en || '',
-                    anchor_description: rawItem?.anchor_description || '',
-                    gender: rawItem?.gender,
-                    role: rawItem?.role,
-                    archetype: rawItem?.archetype,
-                    appearance_cn: rawItem?.appearance_cn,
-                    clothing: rawItem?.clothing,
-                    action_characteristics: rawItem?.action_characteristics,
-                    visual_dependencies: rawItem?.visual_dependencies || [],
-                    dependency_strategy: rawItem?.dependency_strategy || {},
-                    custom_attributes: {
-                        ...(rawItem?.custom_attributes || {}),
-                        ...(rawItem?.negative_prompt_en ? { negative_prompt_en: rawItem.negative_prompt_en } : {}),
-                    },
-                };
-            } else if (type === 'prop') {
-                const desc = [
-                    `Name (EN): ${nameEn || rawItem?.name_en || ''}`,
-                    `Type: ${rawItem?.type || ''}`,
-                    `Description: ${rawItem?.description_cn || ''}`,
-                    rawItem?.generation_prompt_cn ? `Prompt (CN): ${rawItem.generation_prompt_cn}` : '',
-                    rawItem?.generation_prompt_en ? `Prompt: ${rawItem.generation_prompt_en}` : '',
-                    rawItem?.negative_prompt_en ? `Negative Prompt: ${rawItem.negative_prompt_en}` : '',
-                    rawItem?.dependency_strategy?.logic ? `Dependency: ${rawItem.dependency_strategy.logic}` : '',
-                ].filter(Boolean).join('\n\n');
-
-                entityPayload = {
-                    ...entityPayload,
-                    description: desc || entityPayload.description,
-                    generation_prompt_cn: rawItem?.generation_prompt_cn || '',
-                    generation_prompt_en: rawItem?.generation_prompt_en || '',
-                    anchor_description: rawItem?.anchor_description || '',
-                    visual_dependencies: rawItem?.visual_dependencies || [],
-                    dependency_strategy: rawItem?.dependency_strategy || {},
-                    custom_attributes: {
-                        ...(rawItem?.custom_attributes || {}),
-                        ...(rawItem?.negative_prompt_en ? { negative_prompt_en: rawItem.negative_prompt_en } : {}),
-                    },
-                };
-            } else {
-                const desc = [
-                    `Name (EN): ${nameEn || rawItem?.name_en || ''}`,
-                    `Atmosphere: ${rawItem?.atmosphere || ''}`,
-                    `Visual Params: ${rawItem?.visual_params || ''}`,
-                    `Description: ${rawItem?.description_cn || ''}`,
-                    rawItem?.generation_prompt_cn ? `Prompt (CN): ${rawItem.generation_prompt_cn}` : '',
-                    rawItem?.generation_prompt_en ? `Prompt: ${rawItem.generation_prompt_en}` : '',
-                    rawItem?.negative_prompt_en ? `Negative Prompt: ${rawItem.negative_prompt_en}` : '',
-                ].filter(Boolean).join('\n\n');
-
-                entityPayload = {
-                    ...entityPayload,
-                    description: desc || entityPayload.description,
-                    generation_prompt_cn: rawItem?.generation_prompt_cn || '',
-                    generation_prompt_en: rawItem?.generation_prompt_en || '',
-                    anchor_description: rawItem?.anchor_description || '',
-                    atmosphere: rawItem?.atmosphere,
-                    visual_params: rawItem?.visual_params,
-                    narrative_description: rawItem?.description_cn,
-                    visual_dependencies: rawItem?.visual_dependencies || [],
-                    dependency_strategy: rawItem?.dependency_strategy || {},
-                    custom_attributes: {
-                        ...(rawItem?.custom_attributes || {}),
-                        ...(rawItem?.negative_prompt_en ? { negative_prompt_en: rawItem.negative_prompt_en } : {}),
-                    },
-                };
-            }
-
-            try {
-                const existing = existingMap.get(toKey(type, name)) || (nameEn ? existingMap.get(toKey(type, nameEn)) : null);
-                if (existing?.id) {
-                    await updateEntity(existing.id, entityPayload);
-                    const updated = { ...existing, ...entityPayload };
-                    existingMap.set(toKey(type, name), updated);
-                    if (nameEn) existingMap.set(toKey(type, nameEn), updated);
-                    createdItems.push({ type, name, action: 'updated' });
-                } else {
-                    const createdEntity = await createEntity(projectId, entityPayload);
-                    if (createdEntity) {
-                        existingMap.set(toKey(type, name), createdEntity);
-                        if (nameEn) existingMap.set(toKey(type, nameEn), createdEntity);
-                    }
-                    createdItems.push({ type, name, action: 'created' });
-                }
-                hasMutations = true;
-                created += 1;
-                byType[type].created += 1;
-            } catch (_) {
-                skipped += 1;
-                byType[type].skipped += 1;
-                skippedItems.push({ type, name, reason: 'upsert_failed' });
-            }
+        const plannedByType = {
+            character: Array.isArray(normalizedPayload.characters) ? normalizedPayload.characters.length : 0,
+            prop: Array.isArray(normalizedPayload.props) ? normalizedPayload.props.length : 0,
+            environment: Array.isArray(normalizedPayload.environments) ? normalizedPayload.environments.length : 0,
         };
 
-        const sections = [
-            { name: 'characters', fallbackType: 'character' },
-            { name: 'props', fallbackType: 'prop' },
-            { name: 'environments', fallbackType: 'environment' },
-        ];
+        const importReport = await doImportText(JSON.stringify(normalizedPayload, null, 2), 'json');
+        const importedCounts = {
+            character: Number(importReport?.importedSubjectCounts?.character || 0),
+            prop: Number(importReport?.importedSubjectCounts?.prop || 0),
+            environment: Number(importReport?.importedSubjectCounts?.environment || 0),
+        };
 
-        for (const section of sections) {
-            const items = Array.isArray(payload?.[section.name]) ? payload[section.name] : [];
-            for (const item of items) {
-                // Reuse the same field-mapping semantics as the standard subjects import path.
-                // eslint-disable-next-line no-await-in-loop
-                await upsertOne(item, section.fallbackType);
-            }
+        const byType = {
+            character: {
+                created: importedCounts.character,
+                skipped: Math.max(0, plannedByType.character - importedCounts.character),
+            },
+            prop: {
+                created: importedCounts.prop,
+                skipped: Math.max(0, plannedByType.prop - importedCounts.prop),
+            },
+            environment: {
+                created: importedCounts.environment,
+                skipped: Math.max(0, plannedByType.environment - importedCounts.environment),
+            },
+        };
+
+        const created = byType.character.created + byType.prop.created + byType.environment.created;
+        const skipped = byType.character.skipped + byType.prop.skipped + byType.environment.skipped;
+
+        try {
+            const refreshed = await fetchEntities(projectId);
+            setEntities(Array.isArray(refreshed) ? refreshed : []);
+        } catch {
+            // Non-blocking refresh failure.
         }
 
-        if (hasMutations) {
-            try {
-                const refreshed = await fetchEntities(projectId);
-                setEntities(Array.isArray(refreshed) ? refreshed : []);
-            } catch {
-                // Non-blocking refresh failure.
-            }
-        }
-
-        return { created, skipped, createdItems, skippedItems, byType };
-    }, [projectId, entities]);
+        return {
+            created,
+            skipped,
+            createdItems: [],
+            skippedItems: [],
+            byType,
+        };
+    }, [projectId]);
 
     const persistSceneRegenSubjectsReport = useCallback(async (report) => {
         if (!activeEpisode?.id || !report) return false;
@@ -11584,11 +11612,11 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
 
         try {
             const result = await waitForAsyncTask(marker.taskId, { interval: 1200, timeout: 600000 });
-            clearAiShotsTaskMarker(activeEpisode.id);
+            clearAiShotsTaskMarker(activeEpisode.id, sceneId);
             await finalizeAiShotsGenerationResult({ sceneId, result });
         } catch (e) {
             const canceled = Boolean(e?.isCanceled) || Number(e?.errorCode || e?.response?.status || 0) === 499;
-            clearAiShotsTaskMarker(activeEpisode.id);
+            clearAiShotsTaskMarker(activeEpisode.id, sceneId);
             setAiShotsFlowStatus(
                 canceled
                     ? {
@@ -11638,11 +11666,11 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                     });
                 },
             });
-            clearAiShotsTaskMarker(activeEpisode?.id);
+            clearAiShotsTaskMarker(activeEpisode?.id, sceneId);
             await finalizeAiShotsGenerationResult({ sceneId, result });
         } catch (e) {
             console.error(e);
-            clearAiShotsTaskMarker(activeEpisode?.id);
+            clearAiShotsTaskMarker(activeEpisode?.id, sceneId);
             onLog?.(`SceneManager: Failed to generate/apply shots - ${e.message}`, 'error');
             setAiShotsFlowStatus({
                 phase: 'failed',
@@ -12088,6 +12116,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         try {
             const status = await getSceneAiShotsBatchStatus(activeEpisode.id);
             if (!status || typeof status !== 'object') return null;
+            const prevProgress = batchAiShotsProgressRef.current || createBatchAiShotsProgressState();
 
             const nowMs = Date.now();
             const isTransientIdle = !Boolean(status.running) && Number(status.total || 0) <= 0;
@@ -12096,11 +12125,11 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                 return {
                     ...status,
                     running: true,
-                    total: Number(batchAiShotsProgress.total || 0),
-                    completed: Number(batchAiShotsProgress.completed || 0),
-                    success: Number(batchAiShotsProgress.success || 0),
-                    failed: Number(batchAiShotsProgress.failed || 0),
-                    message: status.message || batchAiShotsProgress.message || t('批量任务启动中...', 'Batch task is starting...'),
+                    total: Number(prevProgress.total || 0),
+                    completed: Number(prevProgress.completed || 0),
+                    success: Number(prevProgress.success || 0),
+                    failed: Number(prevProgress.failed || 0),
+                    message: status.message || prevProgress.message || t('批量任务启动中...', 'Batch task is starting...'),
                 };
             }
 
@@ -12129,17 +12158,39 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         } catch (e) {
             return null;
         }
-    }, [activeEpisode?.id, onSwitchToShots, batchAiShotsProgress.total, batchAiShotsProgress.completed, batchAiShotsProgress.success, batchAiShotsProgress.failed, batchAiShotsProgress.message, t]);
+    }, [activeEpisode?.id, onSwitchToShots, t]);
 
     useEffect(() => {
-        if (!activeEpisode?.id) return;
+        if (!activeEpisode?.id) {
+            if (batchAiShotsStatusTimerRef.current) {
+                clearInterval(batchAiShotsStatusTimerRef.current);
+                batchAiShotsStatusTimerRef.current = null;
+            }
+            return;
+        }
         let cancelled = false;
 
         const hydrate = async () => {
+            batchAiShotsBootstrapUntilRef.current = Date.now() + 15000;
+
+            // Task pool is the source of truth when local runtime is stale after tab/page switch.
+            if (!batchAiShotsProgressRef.current?.running) {
+                await recoverBatchAiShotsFromJobPool();
+            }
+
+            if (!batchAiShotsStatusTimerRef.current) {
+                batchAiShotsStatusTimerRef.current = setInterval(pollBatchAiShotsStatus, 3000);
+            }
             const status = await pollBatchAiShotsStatus();
             if (cancelled || !status) return;
-            if (status.running && !batchAiShotsStatusTimerRef.current) {
-                batchAiShotsStatusTimerRef.current = setInterval(pollBatchAiShotsStatus, 3000);
+
+            const shouldKeepPolling = Boolean(status?.running)
+                || Boolean(batchAiShotsProgressRef.current?.running)
+                || Date.now() < Number(batchAiShotsBootstrapUntilRef.current || 0);
+
+            if (!shouldKeepPolling && batchAiShotsStatusTimerRef.current) {
+                clearInterval(batchAiShotsStatusTimerRef.current);
+                batchAiShotsStatusTimerRef.current = null;
             }
         };
 
@@ -12151,7 +12202,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                 batchAiShotsStatusTimerRef.current = null;
             }
         };
-    }, [activeEpisode?.id, pollBatchAiShotsStatus]);
+    }, [activeEpisode?.id, pollBatchAiShotsStatus, recoverBatchAiShotsFromJobPool]);
 
     const handleStopBatchAiShots = async () => {
         if (!activeEpisode?.id) return;
@@ -12195,6 +12246,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                 scene_ids: targets.map((s) => s.id),
             });
             batchAiShotsStartupGuardUntilRef.current = Date.now() + 12000;
+            batchAiShotsBootstrapUntilRef.current = Date.now() + 15000;
             setBatchAiShotsProgress((prev) => ({
                 ...prev,
                 running: true,
@@ -13728,12 +13780,14 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
 
     // Load entities - NOW FETCHES ALL and filters locally
     const loadEntities = useCallback(async () => {
-        if (!projectId) return;
+        if (!projectId) return [];
         try {
             const data = await fetchEntities(projectId); // Fetch ALL types
             setAllEntities(data);
+            return Array.isArray(data) ? data : [];
         } catch (e) {
             console.error(e);
+            return [];
         }
     }, [projectId]);
 
@@ -14296,11 +14350,19 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                 new_name_hint: newNameHint || null,
             });
 
-            setAllEntities(prev => [...prev, created]);
-            if (String(created?.type || '') === String(subTab || '')) {
-                setEntities(prev => [...prev, created]);
+            const refreshed = await loadEntities();
+            const stableCreatedId = String(created?.id || '').trim();
+            const hydrated = (Array.isArray(refreshed) ? refreshed : []).find((item) => String(item?.id || '').trim() === stableCreatedId);
+            const nextEntity = hydrated || created;
+
+            if (String(nextEntity?.type || '').trim()) {
+                setSubTab(String(nextEntity.type).trim());
             }
-            setViewingEntity(created);
+            setViewingEntity(nextEntity);
+            setSelectedEntity((prev) => {
+                const prevId = String(prev?.id || '').trim();
+                return prevId && prevId === stableCreatedId ? nextEntity : prev;
+            });
 
             if (onLog) onLog(t(`主体复制生成成功：${created?.name || created?.id}`, `Subject cloned successfully: ${created?.name || created?.id}`), 'success');
         } catch (e) {
@@ -16151,8 +16213,15 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         currentShotLabel: '',
         currentAssetLabel: '',
     }); // Progress tracking
+    const SHOT_MEDIA_BATCH_KIND = 'shot-media-batch';
+    const SHOT_BATCH_RUNTIME_TTL_MS = 1000 * 60 * 60 * 6;
     const shotBatchStatusTimerRef = useRef(null);
     const shotBatchStartupGuardUntilRef = useRef(0);
+    const shotBatchBootstrapUntilRef = useRef(0);
+    const isBatchGeneratingRef = useRef(false);
+    const batchProgressRef = useRef({ current: 0, total: 0, status: '' });
+    const recoverShotBatchInFlightRef = useRef(false);
+    const recoverShotBatchLastAtRef = useRef(0);
     const activeResumeVideoJobsRef = useRef(new Set());
     const pausedResumeVideoJobsRef = useRef({});
     const pendingImageJobsRef = useRef({});
@@ -16173,6 +16242,129 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const startFrameAutoInheritRef = useRef('');
     const GENERATION_STATE_TTL_MS = 1000 * 60 * 60;
     const VIDEO_JOB_STATE_TTL_MS = 1000 * 60 * 60;
+
+    const createShotBatchProgressState = useCallback(() => ({
+        current: 0,
+        total: 0,
+        status: '',
+        stopRequested: false,
+        currentShotLabel: '',
+        currentAssetLabel: '',
+    }), []);
+
+    const getShotBatchRuntimeStorageKey = useCallback((episodeId, sceneId) => {
+        if (!episodeId) return '';
+        const scope = String(sceneId || 'all').trim() || 'all';
+        return `aistory:shot-batch-progress:${episodeId}:scene:${scope}`;
+    }, []);
+
+    const loadShotBatchRuntime = useCallback((episodeId, sceneId) => {
+        try {
+            const key = getShotBatchRuntimeStorageKey(episodeId, sceneId);
+            if (!key || !window?.localStorage) return null;
+            const raw = window.localStorage.getItem(key);
+            if (!raw) return null;
+
+            const parsed = JSON.parse(raw);
+            const updatedAt = Number(parsed?.updatedAt || 0);
+            if (!Number.isFinite(updatedAt) || updatedAt <= 0) return null;
+            if ((Date.now() - updatedAt) > SHOT_BATCH_RUNTIME_TTL_MS) {
+                window.localStorage.removeItem(key);
+                return null;
+            }
+
+            return {
+                running: Boolean(parsed?.running),
+                progress: {
+                    current: Number(parsed?.current || 0),
+                    total: Number(parsed?.total || 0),
+                    status: String(parsed?.status || ''),
+                    stopRequested: Boolean(parsed?.stopRequested),
+                    currentShotLabel: String(parsed?.currentShotLabel || ''),
+                    currentAssetLabel: String(parsed?.currentAssetLabel || ''),
+                },
+            };
+        } catch (_) {
+            return null;
+        }
+    }, [getShotBatchRuntimeStorageKey, SHOT_BATCH_RUNTIME_TTL_MS]);
+
+    const saveShotBatchRuntime = useCallback((episodeId, sceneId, running, progress) => {
+        try {
+            const key = getShotBatchRuntimeStorageKey(episodeId, sceneId);
+            if (!key || !window?.localStorage) return;
+
+            const payload = {
+                running: Boolean(running),
+                current: Number(progress?.current || 0),
+                total: Number(progress?.total || 0),
+                status: String(progress?.status || ''),
+                stopRequested: Boolean(progress?.stopRequested),
+                currentShotLabel: String(progress?.currentShotLabel || ''),
+                currentAssetLabel: String(progress?.currentAssetLabel || ''),
+                updatedAt: Date.now(),
+            };
+            window.localStorage.setItem(key, JSON.stringify(payload));
+        } catch (_) {
+            // Ignore localStorage failures.
+        }
+    }, [getShotBatchRuntimeStorageKey]);
+
+    const extractEpisodeIdFromJobPoolItem = useCallback((item) => {
+        const direct = Number(item?.episode_id || item?.episodeId || 0);
+        if (Number.isFinite(direct) && direct > 0) return direct;
+        const metadata = (item?.metadata && typeof item.metadata === 'object') ? item.metadata : {};
+        const payload = (item?.payload && typeof item.payload === 'object') ? item.payload : {};
+        const context = (item?.context && typeof item.context === 'object') ? item.context : {};
+        const nested = Number(
+            metadata?.episode_id
+            || payload?.episode_id
+            || context?.episode_id
+            || metadata?.episodeId
+            || payload?.episodeId
+            || context?.episodeId
+            || 0
+        );
+        return Number.isFinite(nested) && nested > 0 ? nested : 0;
+    }, []);
+
+    const recoverShotBatchFromJobPool = useCallback(async () => {
+        if (!activeEpisode?.id) return false;
+        const now = Date.now();
+        if (recoverShotBatchInFlightRef.current) return false;
+        if ((now - Number(recoverShotBatchLastAtRef.current || 0)) < 4000) return false;
+
+        recoverShotBatchInFlightRef.current = true;
+        recoverShotBatchLastAtRef.current = now;
+        try {
+            const data = await getGenerationJobPool({
+                kind: SHOT_MEDIA_BATCH_KIND,
+                running_only: true,
+                limit: 200,
+            });
+            const items = Array.isArray(data?.items) ? data.items : [];
+            if (items.length === 0) return false;
+
+            const currentEpisodeId = Number(activeEpisode.id || 0);
+            const matched = items.find((item) => extractEpisodeIdFromJobPoolItem(item) === currentEpisodeId)
+                || items.find((item) => String(item?.status || '').toLowerCase() === 'running')
+                || items[0];
+            if (!matched) return false;
+
+            if (String(matched?.status || '').toLowerCase() !== 'running') return false;
+
+            setIsBatchGenerating(true);
+            setBatchProgress((prev) => ({
+                ...prev,
+                status: String(prev?.status || t('检测到任务池中的批量视频任务，正在恢复进度...', 'Detected running batch media task in job pool, restoring progress...')),
+            }));
+            return true;
+        } catch (_) {
+            return false;
+        } finally {
+            recoverShotBatchInFlightRef.current = false;
+        }
+    }, [SHOT_MEDIA_BATCH_KIND, activeEpisode?.id, extractEpisodeIdFromJobPoolItem, t]);
 
     useEffect(() => {
         const syncPromptSubmitLangPref = () => {
@@ -16445,6 +16637,35 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         if (!hasHydratedGenerationStateRef.current) return;
         writeGenerationStateStorage(generatingStateByShot);
     }, [generatingStateByShot, writeGenerationStateStorage]);
+
+    useEffect(() => {
+        if (!activeEpisode?.id) {
+            setIsBatchGenerating(false);
+            setBatchProgress(createShotBatchProgressState());
+            return;
+        }
+        const restored = loadShotBatchRuntime(activeEpisode.id, selectedSceneId);
+        if (!restored) {
+            setIsBatchGenerating(false);
+            setBatchProgress(createShotBatchProgressState());
+            return;
+        }
+        setIsBatchGenerating(Boolean(restored.running));
+        setBatchProgress(restored.progress || createShotBatchProgressState());
+    }, [activeEpisode?.id, selectedSceneId, loadShotBatchRuntime, createShotBatchProgressState]);
+
+    useEffect(() => {
+        if (!activeEpisode?.id) return;
+        saveShotBatchRuntime(activeEpisode.id, selectedSceneId, isBatchGenerating, batchProgress);
+    }, [activeEpisode?.id, selectedSceneId, isBatchGenerating, batchProgress, saveShotBatchRuntime]);
+
+    useEffect(() => {
+        isBatchGeneratingRef.current = Boolean(isBatchGenerating);
+    }, [isBatchGenerating]);
+
+    useEffect(() => {
+        batchProgressRef.current = batchProgress || { current: 0, total: 0, status: '' };
+    }, [batchProgress]);
 
     const currentGeneratingState = editingShot?.id
         ? (generatingStateByShot[String(editingShot.id)] || { start: false, end: false, video: false, startAt: 0, endAt: 0, videoAt: 0 })
@@ -19472,15 +19693,16 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         try {
             const status = await getShotMediaBatchStatus(activeEpisode.id);
             if (!status || typeof status !== 'object') return null;
+            const prevProgress = batchProgressRef.current || { current: 0, total: 0, status: '' };
 
             const nowMs = Date.now();
             const isTransientIdle = !Boolean(status.running) && Number(status.total || 0) <= 0;
             const withinStartupGuard = nowMs < Number(shotBatchStartupGuardUntilRef.current || 0);
             if (isTransientIdle && withinStartupGuard) {
                 status.running = true;
-                status.total = Number(batchProgress.total || 0);
-                status.completed = Number(batchProgress.current || 0);
-                status.message = status.message || batchProgress.status || t('批量任务启动中...', 'Batch task is starting...');
+                status.total = Number(prevProgress.total || 0);
+                status.completed = Number(prevProgress.current || 0);
+                status.message = status.message || prevProgress.status || t('批量任务启动中...', 'Batch task is starting...');
             }
 
             const rawAssetType = String(status.current_asset_type || '').trim().toLowerCase();
@@ -19515,18 +19737,39 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         } catch (e) {
             return null;
         }
-    }, [activeEpisode?.id, refreshShots, batchProgress.total, batchProgress.current, batchProgress.status, t]);
+    }, [activeEpisode?.id, refreshShots, t]);
 
     useEffect(() => {
-        if (!activeEpisode?.id) return;
+        if (!activeEpisode?.id) {
+            if (shotBatchStatusTimerRef.current) {
+                clearInterval(shotBatchStatusTimerRef.current);
+                shotBatchStatusTimerRef.current = null;
+            }
+            return;
+        }
         let cancelled = false;
 
         const hydrate = async () => {
+            shotBatchBootstrapUntilRef.current = Date.now() + 15000;
+
+            if (!isBatchGeneratingRef.current) {
+                await recoverShotBatchFromJobPool();
+            }
+
             if (!shotBatchStatusTimerRef.current) {
                 shotBatchStatusTimerRef.current = setInterval(pollShotBatchStatus, 3000);
             }
             const status = await pollShotBatchStatus();
-            if (cancelled || !status) return;
+            if (cancelled) return;
+
+            const shouldKeepPolling = Boolean(status?.running)
+                || Boolean(isBatchGeneratingRef.current)
+                || Date.now() < Number(shotBatchBootstrapUntilRef.current || 0);
+
+            if (!shouldKeepPolling && shotBatchStatusTimerRef.current) {
+                clearInterval(shotBatchStatusTimerRef.current);
+                shotBatchStatusTimerRef.current = null;
+            }
         };
 
         hydrate();
@@ -19537,7 +19780,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 shotBatchStatusTimerRef.current = null;
             }
         };
-    }, [activeEpisode?.id, pollShotBatchStatus]);
+    }, [activeEpisode?.id, selectedSceneId, pollShotBatchStatus, recoverShotBatchFromJobPool]);
 
     const handleStopShotBatch = async () => {
         if (!activeEpisode?.id) return;
@@ -19602,6 +19845,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 overwrite_existing: false,
             });
             shotBatchStartupGuardUntilRef.current = Date.now() + 12000;
+            shotBatchBootstrapUntilRef.current = Date.now() + 15000;
 
             setIsBatchGenerating(true);
             setBatchProgress({
@@ -24013,6 +24257,61 @@ const Editor = ({
         }
     };
 
+    const getJobPoolScopeText = useCallback((item) => {
+        if (!item || typeof item !== 'object') return '-';
+        const metadata = (item?.metadata && typeof item.metadata === 'object') ? item.metadata : {};
+        const payload = (item?.payload && typeof item.payload === 'object') ? item.payload : {};
+        const context = (item?.context && typeof item.context === 'object') ? item.context : {};
+
+        const episodeId = Number(
+            item?.episode_id
+            || metadata?.episode_id
+            || payload?.episode_id
+            || context?.episode_id
+            || 0
+        );
+        const currentSceneLabel = String(
+            item?.current_scene_label
+            || metadata?.current_scene_label
+            || payload?.current_scene_label
+            || context?.current_scene_label
+            || ''
+        ).trim();
+        const sceneId = Number(
+            item?.scene_id
+            || metadata?.scene_id
+            || payload?.scene_id
+            || context?.scene_id
+            || 0
+        );
+        const shotId = Number(
+            item?.shot_id
+            || metadata?.shot_id
+            || payload?.shot_id
+            || context?.shot_id
+            || 0
+        );
+        const sceneIds =
+            (Array.isArray(payload?.scene_ids) && payload.scene_ids.length > 0 ? payload.scene_ids : null)
+            || (Array.isArray(metadata?.scene_ids) && metadata.scene_ids.length > 0 ? metadata.scene_ids : null)
+            || (Array.isArray(context?.scene_ids) && context.scene_ids.length > 0 ? context.scene_ids : null)
+            || [];
+        const shotIds =
+            (Array.isArray(payload?.shot_ids) && payload.shot_ids.length > 0 ? payload.shot_ids : null)
+            || (Array.isArray(metadata?.shot_ids) && metadata.shot_ids.length > 0 ? metadata.shot_ids : null)
+            || (Array.isArray(context?.shot_ids) && context.shot_ids.length > 0 ? context.shot_ids : null)
+            || [];
+
+        const chunks = [];
+        if (Number.isFinite(episodeId) && episodeId > 0) chunks.push(`EP:${episodeId}`);
+        if (currentSceneLabel) chunks.push(`${t('当前场景', 'Current Scene')}:${currentSceneLabel}`);
+        if (Number.isFinite(sceneId) && sceneId > 0) chunks.push(`SC:${sceneId}`);
+        if (sceneIds.length > 0) chunks.push(`SCx${sceneIds.length}`);
+        if (Number.isFinite(shotId) && shotId > 0) chunks.push(`SH:${shotId}`);
+        if (shotIds.length > 0) chunks.push(`SHx${shotIds.length}`);
+        return chunks.length > 0 ? chunks.join(' · ') : '-';
+    }, [t]);
+
     const activeEpisode = episodes.find(e => e.id === activeEpisodeId);
     const activeEpisodeIndex = activeEpisode ? episodes.findIndex((episode) => episode.id === activeEpisode.id) : -1;
     const activeEpisodeLabel = activeEpisode
@@ -24413,6 +24712,7 @@ const Editor = ({
                                                 <span className="text-[11px] px-2.5 py-1 rounded bg-white/10 border border-white/10 text-white/80">{item.status || '-'}</span>
                                             </div>
                                             <div className="text-[12px] font-mono text-white/80 break-all">{item.job_id || '-'}</div>
+                                            <div className="text-[11px] text-white/70 break-all">{getJobPoolScopeText(item)}</div>
                                             <div className="text-[11px] text-muted-foreground">{item.created_at || '-'}</div>
                                             {item.error ? (
                                                 <div className="text-[11px] text-amber-300/80 bg-black/30 border border-white/10 rounded px-2.5 py-1.5 break-all">{item.error}</div>
@@ -24440,6 +24740,7 @@ const Editor = ({
                                         <th className="px-3 py-2 text-left">job_id</th>
                                         <th className="px-3 py-2 text-left">status</th>
                                         <th className="hidden md:table-cell px-3 py-2 text-left">user</th>
+                                        <th className="hidden lg:table-cell px-3 py-2 text-left">scope</th>
                                         <th className="px-3 py-2 text-left">created_at</th>
                                         <th className="hidden lg:table-cell px-3 py-2 text-left">error</th>
                                         <th className="px-3 py-2 text-right">action</th>
@@ -24456,6 +24757,7 @@ const Editor = ({
                                                 <td className="px-3 py-2 font-mono text-[11px] text-white/80">{item.job_id}</td>
                                                 <td className="px-3 py-2 text-white">{item.status}</td>
                                                 <td className="hidden md:table-cell px-3 py-2 text-white/70">{item.username || item.user_id || '-'}</td>
+                                                <td className="hidden lg:table-cell px-3 py-2 text-white/70 max-w-[280px] truncate" title={getJobPoolScopeText(item)}>{getJobPoolScopeText(item)}</td>
                                                 <td className="px-3 py-2 text-white/60">{item.created_at || '-'}</td>
                                                 <td className="hidden lg:table-cell px-3 py-2 text-amber-300/80 max-w-[220px] truncate" title={item.error || ''}>{item.error || '-'}</td>
                                                 <td className="px-3 py-2 text-right">
@@ -24472,7 +24774,7 @@ const Editor = ({
                                     })}
                                     {(!jobPoolData?.items || jobPoolData.items.length === 0) && (
                                         <tr>
-                                            <td colSpan={7} className="px-3 py-8 text-center text-muted-foreground">{t('暂无任务', 'No tasks')}</td>
+                                            <td colSpan={8} className="px-3 py-8 text-center text-muted-foreground">{t('暂无任务', 'No tasks')}</td>
                                         </tr>
                                     )}
                                 </tbody>

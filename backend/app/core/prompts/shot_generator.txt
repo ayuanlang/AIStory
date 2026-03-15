@@ -530,10 +530,21 @@
       *   **Micro-Beats Structure (微节拍链)**：严禁枯燥的单一动作。
           - `{Bad}: "He sits down."`
           - `{Good}: "(1) {@Subject} approaches the wooden chair -> (2) {@Subject} grabs the armrests -> (3) {@Subject} lowers body slowly, knees bending -> (4) {@Subject} settles weight into the cushion -> (5) {@Subject} smooths out coat laps."`
+      *   **Pause Beats (停顿节拍, 强制)**：微节拍链中必须适当插入“短停顿/反应窗口”（建议每 3-5 个微节拍至少 1 次，或在情绪/决策节点强制插入），用于承接信息与强化真实感。
+        - 停顿不是“无事发生”：停顿段必须伴随可见细节变化（如呼吸起伏、眼神停留或偏移、吞咽、唇角收紧、眉眼微变、手指微调、重心微移）。
+        - 停顿不得改变主叙事动作方向，不得引入新剧情事件；其作用是“节奏缓冲 + 情绪显影 + 动作蓄力/回收”。
+        - `{Good}`: `"(1) CHAR:[@A] raises hand toward the handle -> (2) CHAR:[@A] pauses for a beat, breath tightens and gaze fixes on the lock -> (3) fingers adjust grip subtly -> (4) CHAR:[@A] pushes the door open."`
+      *   **Action-Effect Beats (动作效果节拍, 强制)**：节奏不仅包含“动作发生”，还必须包含“动作效果被看见”。每个关键动作后应在紧邻微节拍写出至少一种效果反馈：
+        - 受力反馈：命中后的后坐、失衡、缓冲、回弹、物体位移。
+        - 二次运动：衣摆/头发/悬挂物/液体/烟尘/碎屑的延迟响应。
+        - 环境反应：地面积水涟漪、门框震动、桌面轻颤、光影遮挡变化。
+        - 听感对应：强动作点要有可见的“重拍感”（如身体顿挫、短停、呼吸重置），与 SFX/音乐重音可对齐。
+        - `{Good}`: `"(5) CHAR:[@B] shoves the metal door hard -> (6) the door rebounds slightly, hinge vibrates, and CHAR:[@B] shoulder absorbs the recoil before settling stance."`
       *   **Primary Sustain Action (核心维持动作)**: **Critical**. 
           - `{Example}: "(1) {@Subject} eyes scanning continuously across text, (2) {@Subject} finger tracing lines vertically." (Instead of just "reading").`
       *   **Continuous Flow**: 确保 `Start` 到 `End` 之间没有时间真空。
         *   **Density Guideline (密度建议)**: 动作/细节数量应与时长匹配，默认基准密度为 **每秒 1.5 个微节拍（可见变化）**（含动作或运镜变化）。建置镜头或强氛围镜头允许更低密度；但严禁为了凑数制造会改变剧情的无意义抽搐/乱动。
+        - 停顿节拍计入密度时，必须满足“可见变化”条件（表情/呼吸/视线/手部细节之一明确可观察），纯静止空白不计入有效微节拍。
           - `{Formula}: Aim(Index of Actions) ≈ Duration * 1.5`（可按镜头类型在 ±20% 范围内微调）。
           - `{Example}: Duration 5s 建议 Index 7-8 左右: "(1) {@Subject} head turns left -> (2) Viewpoint pushes in subtly -> (3) {@Subject} lips part slightly -> (4) {@Subject} hand raises -> (5) {@Subject} gaze locks on target -> (6) Shadows shift across {@Subject} face -> (7) {@Subject} exhales and settles."`
 
@@ -618,7 +629,7 @@
   - **预估**：时长 {T}s，基准密度 {2T} 个，实策 {N} 个微节拍。
   - **动态**：方向 {Direction}，速率 {Speed}，量化 {Relative Ref}。
   - **首帧**：{中文} 描述 T=0s 时的主体稳定状态与位置。
-  - **过程**：{中文} 完整罗列从首帧到尾帧的所有微节拍动作（例如10个）。为了阅读简洁，此处不必强制标注【方向+速率+量化】，但后续生成 English Video Content 时必须根据语境自动补全这些详细物理参数。
+  - **过程**：{中文} 完整罗列从首帧到尾帧的所有微节拍动作（例如10个），并显式包含“停顿/反应”节点、细节描写（至少覆盖表情、呼吸、视线、手部微动作中的两类）以及“动作效果节拍”（受力反馈/二次运动/环境反应至少一类）。为了阅读简洁，此处不必强制标注【方向+速率+量化】，但后续生成 English Video Content 时必须根据语境自动补全这些详细物理参数。
   - **尾帧**：{中文} 描述 T=End 时的主体落位与最终状态。**必须显式标注**：{稳定态（非动作过渡）: 是/否(原因)}，{近景收束: 是/否(原因)}。
   - **校验**：{实体完整性: 通过/已强制修正(说明补回了哪些遗漏角色)}。
 - **作用**：以此为逻辑基准，生成后续的英文 Prompt。如果逻辑不通或密度不足，则视为无效生成。

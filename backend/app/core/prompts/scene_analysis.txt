@@ -263,11 +263,17 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
   - `Reverse / generation_prompt_en`：`Cinematic photoreal environment study. Use ENV:[HarborOffice_Base] as visual base; keep architecture and material anchors unchanged. Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint moved to opposite axis side near desk back edge, now facing entrance corridor and interior door frame; Axis Side: right -> left; Background Set Change: Visible Set = [entrance door frame, corridor wall lamps, visitor chair set, signage panel], Excluded Set = [window wall as dominant backdrop, desk lamp row as primary anchor]; Lighting Direction Change: key from corridor practicals at viewer-left with controlled warm spill; Framing Change: medium-wide, primary subject is entrance frame cluster, secondary subject is visitor chair set; Dynamic Parts State: None}. FG: desk back edge strip and cable channel cover. MG: entrance frame and chair cluster. BG: corridor wall planes and signage panel. No humans, no character identifiers, no narrative events.`
   - `Front / generation_prompt_cn`：`电影级写实环境表达。以 ENV:[HarborOffice_Base] 为视觉基底，保持建筑结构与材质锚点不变。环境增量：机位位于门槛处并朝向桌组与窗墙；轴线由左侧切到右侧；可见集合为玻璃隔断、台灯组、挂钟、窗框分格；排除集合为后部储物走廊作为主背景；光照方向为前右侧实景灯主光并辅以低强度冷色环境补光；构图为中广景，主主体为桌组，次主体为窗面反射带；动态部件状态为 None。前景为门框边与地面压条，中景为桌面平面与灯具组及空椅轮廓（无人物占位），后景为雨痕窗面反射与挂钟墙面。禁止人物、角色标识与剧情事件。`
   - `Reverse / generation_prompt_cn`：`电影级写实环境表达。以 ENV:[HarborOffice_Base] 为视觉基底，保持建筑结构与材质锚点不变。环境增量：机位移动至轴线对侧的桌后边缘并朝向入口走廊与内门框；轴线由右侧切到左侧；可见集合为入口门框、走廊壁灯、访客椅组、标识面板；排除集合为窗墙作为主背景、台灯组作为主锚点；光照方向为观察者左侧走廊实景灯主光并带受控暖色溢出；构图为中广景，主主体为入口门框群，次主体为访客椅组；动态部件状态为 None。前景为桌后边缘条与线槽盖板，中景为门框与椅组，后景为走廊墙面与标识面板。禁止人物、角色标识与剧情事件。`
+- 正反环境补充约束（Mandatory）：除“边界共同瞄定物/固定锚点集合”必须保持一致外，Front 与 Reverse 应尽量避免重复出现同类大件主体物（如床、整组沙发、大型柜体）作为两侧主构图锚点；应通过主次锚点重排体现视角差异。
+- 正反环境唯一大件例外（Mandatory）：若剧本语义明确该大件为场景唯一且不可替代（例如单床病房、集体宿舍统一床位编排、剧情指定唯一舞台装置），可在正反两侧重复出现，但必须在 Delta 的 `Background Set Change/Framing Change` 中写明“唯一大件复用原因 + 其余差异锚点”。
 - 变体写作必须 Delta-only；可追溯 Base；Delta 顺序必须合法。
 - 缩写映射：`CPD/AS/BG/LD/FR/DP`。
 - `generation_prompt_en` 必须写清 FG/MG/BG 三层构图，并明确 `Primary Subject`（画面主体）与 `Secondary Subject`（支撑主体）。
 - 未给定风格时默认注入高审美回退语义。
 - 必须显式说明空间可达与调度可行性。
+- 极简主义硬规则（Mandatory）：Environment 提示词必须优先采用“叙事必要最小集”（Narrative Minimal Set）原则；凡对剧情推进、角色调度、镜头动线不必要的物件，默认不进入 `FG/MG` 的故事发展区域。
+- 故事区去冗余（Mandatory）：`FG/MG` 仅保留剧情刚需锚点与可调度结构（如通道、门框、桌面工作区、关键道具落位面）；非必要装饰物（摆件、杂物、重复陈设）应移至 `BG` 弱化呈现或直接排除到 `Excluded Set`。
+- 风格后置表达（Mandatory）：环境风格（如奢华、复古、工业）应优先通过 `BG` 的材质、光照、色温、体块与纹理节奏来表达，不得以占用故事动作区的堆砌式前景装饰实现风格。
+- 风格表达示例（仅示范写法，不可照抄值）：`Luxury style via BG only: FG keeps clean blocking lanes and action surfaces; MG retains minimal playable anchors; BG carries luxury cues through marble veining, brass trims, chandelier bokeh, and warm specular layering.`
 - 风格映射必须动态，真人剧避免“游戏感”。
 - 环境提示词输出自检（Mandatory）：提交前必须逐条校验 `No character names`、`No role labels`、`No story events`、`Only abstract non-living object expression`；任一不满足即判无效并重写。
 
@@ -381,6 +387,8 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - **可机审判定式（Mandatory）**：`SubjectIndexRows ⊆ Part2Rows` 且 `|SubjectIndexRows| == |MatchedRowsInPart2|`；若不成立，结果无效并必须重写。
 - **禁止代表化（Forbidden）**：禁止用“群演/其他人/若干道具/背景角色”等统称替代具体已出现实体；若剧本明确出现可识别对象，必须给出稳定实体名并保持逐字符一致。
 - **剧本实体映射必填（Mandatory）**：Subject Index 每行必须标注该 subject 覆盖了剧本中的哪个实体（人名/物名/地点名/称谓或其稳定别称），用于可审计追踪。
+- **系统级 Subjects 列表复用（Mandatory）**：若原文或上游输入已给出“系统级 subjects 列表（含稳定命名/ID/类型）”，Subject Index 必须优先复用该列表的命名与标识；禁止改名、重编号、同义替换或拆并导致的标识漂移。
+- **系统级依赖引用（Mandatory）**：当涉及角色/道具状态变化、环境视角变化（含 OTS/Front/Reverse 变体）时，必须基于系统级 subjects 列表做依赖引用：在 Subject Index 保持同名同类型映射，在 Part 2 通过 `visual_dependencies` 与 `dependency_strategy` 建立可追溯依赖链。
 - 先输出去重 Subject 列表，覆盖 Part 1 全部角色/道具/环境（使用编号列表，不得用 Markdown 表）。
 - `subject_no` 全局唯一连续（建议 `S001...`）。
 - `subject_type` 仅允许：`character/prop/environment`。
@@ -420,6 +428,7 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - **禁止漏行与并行合并（Hard Rule）**：禁止把 Subject Index 多行合并为 Part 2 一行，或仅保留“主实体”省略其余行；必须逐行一一对应。
 - **命名一致（Mandatory）**：Part 1、Subject Index、Part 2 三处名称必须可一一映射且逐字符一致（仅允许 Part 2A `name/name_en` 去壳，不允许语义替换）。
 - **中文项目命名规则（Mandatory）**：当项目语言为中文时，Part 2 中所有实体 `name` 默认必须使用中文；仅在“明确为英文专有名词”时才允许 `name` 为英文，此时仍必须保留 `name_en`。
+- **系统级列表一致性（Mandatory）**：若存在系统级 subjects 列表，Part 2 的 `characters/props/environments` 必须与其逐条同名同类型对齐；任何偏离（重命名、跨类型映射、丢失依赖引用）均判无效。
 - 每个实体（character / prop / environment）都必须包含：`visual_dependencies` 与 `dependency_strategy`。
 - `visual_dependencies`：
   - `[]` 表示原创主资产（无上游依赖）；

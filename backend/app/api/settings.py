@@ -312,34 +312,87 @@ def _normalize_agent_tool_policy(value: Any) -> Dict[str, Any]:
     return base
 
 
-def _get_or_create_agent_policy_row(db: Session) -> SystemAPISetting:
-    row = db.query(SystemAPISetting).filter(
-        SystemAPISetting.category == _AGENT_POLICY_CATEGORY,
-        SystemAPISetting.provider == _AGENT_POLICY_PROVIDER,
-        SystemAPISetting.model == _AGENT_POLICY_MODEL,
-    ).order_by(SystemAPISetting.id.desc()).first()
+def _get_or_create_agent_policy_row(db: Session) -> SimpleNamespace:
+    row = db.execute(text("""
+        SELECT id, config
+        FROM system_api_settings
+        WHERE category = :category
+          AND provider = :provider
+          AND model = :model
+        ORDER BY id DESC
+        LIMIT 1
+    """), {
+        "category": _AGENT_POLICY_CATEGORY,
+        "provider": _AGENT_POLICY_PROVIDER,
+        "model": _AGENT_POLICY_MODEL,
+    }).mappings().first()
 
-    if row:
-        normalized = _normalize_agent_tool_policy(_safe_json_dict(row.config).get("agent_tool_policy", {}))
-        cfg = _safe_json_dict(row.config)
-        cfg["agent_tool_policy"] = normalized
-        row.config = cfg
-        return row
+    if row and row.get("id") is not None:
+        cfg = _safe_json_dict(row.get("config"))
+        cfg["agent_tool_policy"] = _normalize_agent_tool_policy(cfg.get("agent_tool_policy", {}))
+        return SimpleNamespace(id=int(row["id"]), config=cfg)
 
-    row = SystemAPISetting(
-        name="Agent Tool Policy",
-        category=_AGENT_POLICY_CATEGORY,
-        provider=_AGENT_POLICY_PROVIDER,
-        api_key="",
-        base_url="",
-        model=_AGENT_POLICY_MODEL,
-        deprecated=False,
-        config={"agent_tool_policy": _default_agent_tool_policy()},
-        is_active=True,
-    )
-    db.add(row)
-    db.flush()
-    return row
+    cfg = {"agent_tool_policy": _default_agent_tool_policy()}
+    db.execute(text("""
+        INSERT INTO system_api_settings (
+            name,
+            category,
+            provider,
+            api_key,
+            base_url,
+            model,
+            deprecated,
+            config,
+            is_active
+        ) VALUES (
+            :name,
+            :category,
+            :provider,
+            :api_key,
+            :base_url,
+            :model,
+            :deprecated,
+            :config,
+            :is_active
+        )
+    """), {
+        "name": "Agent Tool Policy",
+        "category": _AGENT_POLICY_CATEGORY,
+        "provider": _AGENT_POLICY_PROVIDER,
+        "api_key": "",
+        "base_url": "",
+        "model": _AGENT_POLICY_MODEL,
+        "deprecated": False,
+        "config": cfg,
+        "is_active": True,
+    })
+
+    inserted = db.execute(text("""
+        SELECT id
+        FROM system_api_settings
+        WHERE category = :category
+          AND provider = :provider
+          AND model = :model
+        ORDER BY id DESC
+        LIMIT 1
+    """), {
+        "category": _AGENT_POLICY_CATEGORY,
+        "provider": _AGENT_POLICY_PROVIDER,
+        "model": _AGENT_POLICY_MODEL,
+    }).mappings().first()
+
+    return SimpleNamespace(id=int(inserted["id"]), config=cfg)
+
+
+def _persist_agent_policy_row_config(db: Session, row_id: int, config: Dict[str, Any]) -> None:
+    db.execute(text("""
+        UPDATE system_api_settings
+        SET config = :config
+        WHERE id = :id
+    """), {
+        "id": int(row_id),
+        "config": _safe_json_dict(config),
+    })
 
 
 def _default_billing_rule_reset_config() -> Dict[str, Any]:
@@ -429,6 +482,7 @@ def _get_billing_rule_reset_config(db: Session) -> Dict[str, Any]:
     normalized = _normalize_billing_rule_reset_config(cfg.get(_BILLING_RESET_CONFIG_KEY, {}))
     cfg[_BILLING_RESET_CONFIG_KEY] = normalized
     row.config = cfg
+    _persist_agent_policy_row_config(db, row.id, row.config)
     return normalized
 
 
@@ -438,6 +492,7 @@ def _get_sora_mention_config(db: Session) -> Dict[str, Any]:
     normalized = _normalize_sora_mention_config(cfg.get(_SORA_MENTION_CONFIG_KEY, {}))
     cfg[_SORA_MENTION_CONFIG_KEY] = normalized
     row.config = cfg
+    _persist_agent_policy_row_config(db, row.id, row.config)
     return normalized
 
 
@@ -5426,7 +5481,6 @@ def get_agent_tool_policy(
 
     row = _get_or_create_agent_policy_row(db)
     db.commit()
-    db.refresh(row)
     cfg = _safe_json_dict(row.config)
     normalized = _normalize_agent_tool_policy(cfg.get("agent_tool_policy", {}))
     return AgentToolPolicyOut(**normalized)
@@ -5474,8 +5528,8 @@ def update_billing_rule_reset_config(
     merged_cfg = {**current_cfg, **_safe_json_dict(patch)}
     cfg[_BILLING_RESET_CONFIG_KEY] = _normalize_billing_rule_reset_config(merged_cfg)
     row.config = cfg
+    _persist_agent_policy_row_config(db, row.id, row.config)
     db.commit()
-    db.refresh(row)
 
     normalized = _normalize_billing_rule_reset_config(_safe_json_dict(row.config).get(_BILLING_RESET_CONFIG_KEY, {}))
     return BillingRuleResetConfigOut(**normalized)
@@ -5497,8 +5551,8 @@ def update_sora_mention_config(
     merged_cfg = {**current_cfg, **_safe_json_dict(patch)}
     cfg[_SORA_MENTION_CONFIG_KEY] = _normalize_sora_mention_config(merged_cfg)
     row.config = cfg
+    _persist_agent_policy_row_config(db, row.id, row.config)
     db.commit()
-    db.refresh(row)
 
     normalized = _normalize_sora_mention_config(_safe_json_dict(row.config).get(_SORA_MENTION_CONFIG_KEY, {}))
     return SoraMentionConfigOut(**normalized)
@@ -5849,8 +5903,8 @@ def update_agent_tool_policy(
     cfg = _safe_json_dict(row.config)
     cfg["agent_tool_policy"] = _normalize_agent_tool_policy(payload.dict())
     row.config = cfg
+    _persist_agent_policy_row_config(db, row.id, row.config)
     db.commit()
-    db.refresh(row)
 
     normalized = _normalize_agent_tool_policy(_safe_json_dict(row.config).get("agent_tool_policy", {}))
     return AgentToolPolicyOut(**normalized)
