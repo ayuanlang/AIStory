@@ -7,7 +7,7 @@
 3. 资产标准化：Environment / Character / Prop 独立且可关联。
 4. 视角多样：预埋正/反/侧/俯等可拍视角。
 5. 极简与平整：环境服务动作，默认无台阶/坑洞/复杂高差；剧情刚需除外。剧情必需道具不可省略。
-6. AI优先分场：凡机位/轴线变化导致背景构图显著变化，优先拆分为新 Scene + 新 Environment；但 OTS 正反打允许在同一 Scene 内完成，前提是显式给出双环境变体、机位编号与轴线变化标注。
+6. AI优先分场：凡机位/轴线变化导致背景构图显著变化，优先拆分为新 Scene + 新 Environment；OTS 仅允许以“环境机位正反方向”表达并可在同一 Scene 内完成，前提是显式给出双环境变体、机位编号与轴线变化标注，且不出现任何人物语义。
 7. 双视角默认：每个核心 Environment 默认有 Front 与 Reverse；仅在轴线全程不变且无反打需求时可豁免。
 8. 道具宁缺毋滥：仅抽取有持续叙事作用且后续被再次使用/引用的道具。
 9. 环境默认审美：未指定风格时，默认优美/大气/现代/优雅；若剧本指定风格，以剧本优先。
@@ -40,11 +40,13 @@
 - 环境锚点禁人物（Mandatory）：Environment 的 `Primary Subject`/`Secondary Subject` 与 `Viewpoint Anchor` 必须使用固定显目物体或结构锚点（如门框、窗、舞台口、桌组、灯具、柱体、屏幕、墙面标识），禁止使用任何人物/人体部位作为锚点。
 - 环境描述去人物化（Mandatory）：Environment 的 `generation_prompt_cn/generation_prompt_en` 仅描述空间、材质、构图、光照与可变部件状态，禁止夹带人物外观、服装、姿态、表情、身份描述。
 - 通道隔离硬规则（Mandatory）：`Core Scene Info/{Beats}` 可以描述角色与动作，但 `Environment generation_prompt_cn/en` 必须做“角色清零”。同一 Scene 内若两处信息冲突，以“环境提示词去人物化规则”优先，必须删除环境提示词中的角色语义。
-- OTS 污染防护（Mandatory）：OTS 语义只允许出现在机位说明层（`{Observer View}` / `{Beats}`），禁止写入环境提示词正文；环境提示词中出现 `over shoulder / over-the-shoulder / A over B / B over A / shoulder silhouette / behind head / CHAR:[@...]` 任一词，判为无效并重写。
+- OTS 去人物化总规则（Mandatory）：凡涉及 OTS/正反方向的描述（包含 `{Observer View}`、`{Beats}`、`generation_prompt_cn/en`、`Environment Delta`），必须是**纯环境描述**，禁止出现任何人物语义。
+- OTS 污染防护（Mandatory）：上述字段中出现 `over shoulder / over-the-shoulder / A over B / B over A / shoulder silhouette / behind head / CHAR:[@...] / person / people / crowd / human / humanoid / avatar / virtual person / mannequin / silhouette of someone` 任一词，判为无效并重写。
 - 环境锚点合规示例（Mandatory）：
   - 不合规：`Primary Subject: CHAR:[@A] shoulder silhouette`、`Viewpoint Anchor: behind CHAR:[@B] head`。
   - 合规：`Primary Subject: stage portal + desk lamp cluster`、`Viewpoint Anchor: doorway threshold facing stage portal`。
   - 不合规：`environment prompt` 中出现 `a woman in red coat`、`man standing in foreground`。
+  - 不合规：`environment prompt` 中出现 `virtual person in foreground`、`humanoid silhouette near doorway`、`avatar-like figure`。
   - 合规：`environment prompt` 仅写 `door frame / desk / lamp / wall clock / light direction / framing`，并保持 `No humans in frame`。
 - 同地不同观察方向（如门内看外/门外看内、正打/反打背景差异大）必须拆分独立 Environment，并以 `visual_dependencies` 关联。
 - 触发拆分条件（任一满足）：
@@ -53,9 +55,9 @@
   3) 背景主物体集合变化；
   4) 主光方向变化；
   5) 景别/镜高引发背景结构重组。
-- OTS 切换硬规则（Mandatory）：当对话/对峙从 `A over B shoulder` 切到 `B over A shoulder` 时，必须切分为独立 Shot；可在同一 Scene 内保留该正反打，但必须同时满足：
+- OTS 切换硬规则（Mandatory）：当观察方向从 `视角_01` 切到 `视角_02`（同一环境组的 Front/Reverse）时，必须切分为独立 Shot；可在同一 Scene 内保留该正反方向切换，但必须同时满足：
   - 双环境显式：同场内写明 `ENV:[..._OTS_A]` 与 `ENV:[..._OTS_B]`（或等价 Front/Reverse 双变体）；
-  - 机位编号显式：在 `{Observer View}` 与 `{Beats}` 中标注 `Cam-01`（A over B）与 `Cam-02`（B over A）；
+  - 视角编号显式：在 `{Observer View}` 与 `{Beats}` 中标注 `视角_01`（Front）与 `视角_02`（Reverse）；
   - 轴线变化显式：在 `{Axis}` 中标注 `Axis Side`（如 `left -> right`）与是否跨线（`crossed/not crossed`）。
   - 若未满足以上三项，不允许同场 OTS，必须回退为新 Scene + 新 Environment。
 - OTS 锚点硬规则（Mandatory）：`..._OTS_A` 与 `..._OTS_B` 两个环境变体的锚点必须是“同一组可复现固定物”在不同观察方向下的重排（例如门框+舞台口+桌灯），不得以 `CHAR:[@...]`、`shoulder`、`back/head silhouette` 等人物语义作为环境主锚点或次锚点。
@@ -167,14 +169,14 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - 若发生 OTS 正反切换且未给出上述显式标注，或背景主集合已无法在同场双环境中自洽，必须起新 Scene。
 - 运动轴线场景必须声明主运动方向和可通行路径，禁止固定障碍切断，且确保 `Entry -> Exit` 位移闭环可达。
 - 必须绑定观察者站位与看向（轴线左/右、沿轴/逆轴）。
-- OTS 正反打时必须写机位编号与轴线标注：`Cam-01(A over B, Axis left, not crossed)`、`Cam-02(B over A, Axis right, crossed/not crossed)`。
+- OTS 正反方向切换时必须写视角编号与轴线标注：`视角_01(Front, Axis left, not crossed)`、`视角_02(Reverse, Axis right, crossed/not crossed)`。
 
 #### {Beats}
 - 按时间顺序。
 - 必须是可拍摄、可见变化的动作，不得抽象总结。
 - OTS 分镜硬规则：任何角色视角切换（A看B 的 OTS -> B看A 的 OTS）必须拆为两个 Beat，并在 Beat 中分别写清机位落点、拍摄朝向与轴线侧；禁止单 Beat 同时描述双向 OTS。
-- 下游交付约束（Shot 级）：上述 OTS 双 Beat 在 `shot_generator` 阶段必须落成两个独立 Shot（`Cam-01` / `Cam-02`），不得并镜。
-- OTS 同场双环境规则：当 OTS 正反打在同一 Scene 内执行时，这两个 Beat 必须分别绑定不同环境变体（如 `ENV:[..._OTS_A]` / `ENV:[..._OTS_B]`），并显式标注 `Cam-01/Cam-02` 与 `Axis Side` 变化。
+- 下游交付约束（Shot 级）：上述 OTS 双 Beat 在 `shot_generator` 阶段必须落成两个独立 Shot（`视角_01` / `视角_02`），不得并镜。
+- OTS 同场双环境规则：当 OTS 正反打在同一 Scene 内执行时，这两个 Beat 必须分别绑定不同环境变体（如 `ENV:[..._OTS_A]` / `ENV:[..._OTS_B]`），并显式标注 `视角_01/视角_02` 与 `Axis Side` 变化。
 - 每个 Beat 必须写：
   1) 视点落位（viewpoint anchor）
   2) 观察朝向（viewing direction）

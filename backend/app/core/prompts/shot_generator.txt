@@ -24,9 +24,9 @@
 - **环境继承权威 (Scene-to-Shot Environment Inheritance, 强制)**：环境在 Scene 阶段已定稿（名称/视角语义/Entry-Exit 连续性）。Shot 阶段只能继承，不得重命名、重定义或新建环境。
 - **环境变更回退规则 (Environment Change Fallback, 强制)**：若某镜头需求导致背景集合显著变化、轴线跨越/反转、观察方向重构或已超出当前 Scene 环境语义，不得在 Shot 内临时改环境；必须回退到 Scene 层新增 Scene + Environment 变体后再生成该 Shot。
 - **OTS 切换强制拆分 (OTS Split Mandate, 强制)**：当出现过肩镜头从 `A over B shoulder` 切换到 `B over A shoulder`（角色视角切换）时，必须至少拆成两个独立 Shot，禁止在同一 Shot 内同时完成双向 OTS。
-  - 即使在同一 Scene 内执行正反打，也必须输出两个独立 Shot（`Cam-01` 与 `Cam-02`），不得合并为单镜。
+  - 即使在同一 Scene 内执行正反方向切换，也必须输出两个独立 Shot（`视角_01` 与 `视角_02`），不得合并为单镜。
   - 两个 OTS Shot 必须分别写明：机位落点、拍摄朝向、`Axis Side`（如 `left/right`）与是否跨线（`crossed/not crossed`）。
-  - 两个 OTS Shot 必须在 `Shot Logic (CN)` 中显式标注对应关系：`Cam-01: A over B`、`Cam-02: B over A`。
+  - 两个 OTS Shot 必须在 `Shot Logic (CN)` 中显式标注对应关系：`视角_01: Front`、`视角_02: Reverse`。
 - **OTS 分场触发器 (OTS Scene-Split Trigger, 强制)**：若 OTS 切换伴随背景主集合变化、轴线跨越/反转、观察方向重构、镜位由门内看外↔门外看内，必须新起 Scene 并绑定对应 Environment 变体；禁止在原 Scene 内硬写“反打重构”。
 - **禁止新造实体 (No New Entity Creation, 强制)**：Shot 生成阶段绝不能新增角色/环境/道具实体名；`Associated Entities` 仅能由 Start/Video/End 中已出现且属于上游实体清单的名称组成。
 - **默认审美基调 (Default Aesthetic Bias, 强制)**：当输入未指定特殊风格时，所有镜头默认追求“高审美 + 现代 + 精致 + 电影级视觉享受”：
@@ -114,7 +114,7 @@
 - **拆分规则 (The Cut Triggers)**
   - **Must Cut**: 时间跳跃、空间瞬移、视角剧烈反转 (Reverse Angle)。
   - **Must Cut (OTS)**: 任何 OTS 主体切换（A→B 或 B→A）都必须切镜；连续对话至少输出一组可审计的 OTS 正反打镜头对。
-    - **OTS 审计标注（强制）**：该正反打镜头对必须可被一眼审计，至少包含 `Cam-01/Cam-02`、`A over B/B over A`、`Axis Side`。
+    - **OTS 审计标注（强制）**：该正反打镜头对必须可被一眼审计，至少包含 `视角_01/视角_02`、`Front/Reverse`、`Axis Side`。
 - **景别递进**：同一 Scene 内遵循 Master → Medium → Close/Detail → Insert 的视觉呼吸感，避免单调重复。
 - **人物塑造与景变 (Character Shaping & Scale Rules)**
   - **强制特写 (Mandatory Character Shot)**: 每个 Scene 的分镜序列中，**必须至少包含一次**针对主要人物 (Lead Character) 的 Close-up 或 Medium Close-up 级别分镜，以强化人物形象与面部细节。

@@ -13536,6 +13536,10 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     const subjectImageJobPollingRef = useRef(false);
     const subjectBatchGenerateStopRequestedRef = useRef(false);
     const subjectBatchGenerateSessionRef = useRef('');
+    const subjectBatchAnalyzeStopRequestedRef = useRef(false);
+    const subjectBatchAnalyzeSessionRef = useRef('');
+    const subjectBatchReconstructStopRequestedRef = useRef(false);
+    const subjectBatchReconstructSessionRef = useRef('');
     const subjectImageJobStorageKey = useMemo(() => {
         const pid = String(projectId || '').trim();
         return pid ? `aistory.subjectImageJobs.${pid}` : '';
@@ -14063,17 +14067,17 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     const handleBatchAnalyzeExistingSubjects = async () => {
         const runtimeSnapshot = getSubjectBatchSnapshot();
         if (runtimeSnapshot?.analyze?.running && runtimeSnapshot?.analyze?.scopeKey === subjectBatchScopeKey) {
-            alert(t('批量分析任务正在运行中，请稍候。', 'Batch analyze task is already running.'));
+            alert(t('批量提示词反推任务正在运行中，请稍候。', 'Batch prompt reverse task is already running.'));
             return;
         }
 
         if (runtimeSnapshot?.reconstruct?.running && runtimeSnapshot?.reconstruct?.scopeKey === subjectBatchScopeKey) {
-            alert(t('批量分析并重生图任务正在运行中，请稍候。', 'Batch analyze + regenerate task is already running.'));
+            alert(t('批量参考生图任务正在运行中，请稍候。', 'Batch reference image generation task is already running.'));
             return;
         }
 
         if (isBatchReconstructingEntities) {
-            alert(t('批量分析并重生图任务正在运行中，请稍候。', 'Batch analyze + regenerate task is already running.'));
+            alert(t('批量参考生图任务正在运行中，请稍候。', 'Batch reference image generation task is already running.'));
             return;
         }
 
@@ -14095,10 +14099,14 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         }
 
         const confirmed = await confirmUiMessage(t(
-            `将批量分析并反写 ${targets.length} 个“用户上传图片”主体信息${skippedSystemCount > 0 ? `（自动跳过系统生成 ${skippedSystemCount} 个）` : ''}，是否继续？`,
-            `Analyze and write back metadata for ${targets.length} user-uploaded subject images${skippedSystemCount > 0 ? ` (skip ${skippedSystemCount} system-generated)` : ''}?`
+            `将批量提示词反推并反写 ${targets.length} 个“用户上传图片”主体信息${skippedSystemCount > 0 ? `（自动跳过系统生成 ${skippedSystemCount} 个）` : ''}，是否继续？`,
+            `Run batch prompt reverse and write back metadata for ${targets.length} user-uploaded subject images${skippedSystemCount > 0 ? ` (skip ${skippedSystemCount} system-generated)` : ''}?`
         ));
         if (!confirmed) return;
+
+        subjectBatchAnalyzeStopRequestedRef.current = false;
+        const batchSessionId = `subject-analyze-batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        subjectBatchAnalyzeSessionRef.current = batchSessionId;
 
         updateAnalyzeBatchRuntimeState(true, { current: 0, total: targets.length, status: t('准备开始...', 'Preparing...') });
 
@@ -14107,6 +14115,9 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
 
         try {
             for (let idx = 0; idx < targets.length; idx += 1) {
+                if (subjectBatchAnalyzeSessionRef.current !== batchSessionId || subjectBatchAnalyzeStopRequestedRef.current) {
+                    break;
+                }
                 const entity = targets[idx];
                 const current = idx + 1;
                 updateAnalyzeBatchRuntimeState(true, {
@@ -14126,8 +14137,8 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                     if (onLog) {
                         onLog(
                             t(
-                                `批量分析失败：${entity?.name || entity?.name_en || entity?.id} - ${err?.response?.data?.detail || err?.message || 'Unknown error'}`,
-                                `Batch analyze failed: ${entity?.name || entity?.name_en || entity?.id} - ${err?.response?.data?.detail || err?.message || 'Unknown error'}`
+                                `批量提示词反推失败：${entity?.name || entity?.name_en || entity?.id} - ${err?.response?.data?.detail || err?.message || 'Unknown error'}`,
+                                `Batch prompt reverse failed: ${entity?.name || entity?.name_en || entity?.id} - ${err?.response?.data?.detail || err?.message || 'Unknown error'}`
                             ),
                             'error'
                         );
@@ -14135,13 +14146,27 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                 }
             }
 
+            if (subjectBatchAnalyzeSessionRef.current !== batchSessionId || subjectBatchAnalyzeStopRequestedRef.current) {
+                const stoppedSummary = t(
+                    `批量提示词反推已停止：成功 ${successCount}，失败 ${failedCount}`,
+                    `Batch prompt reverse stopped: ${successCount} succeeded, ${failedCount} failed`
+                );
+                if (onLog) onLog(stoppedSummary, 'warning');
+                alert(stoppedSummary);
+                return;
+            }
+
             const summary = t(
-                `批量分析完成（仅用户上传图片）：成功 ${successCount}，失败 ${failedCount}${skippedSystemCount > 0 ? `，跳过系统生成 ${skippedSystemCount}` : ''}`,
-                `Batch analyze complete (uploaded images only): ${successCount} succeeded, ${failedCount} failed${skippedSystemCount > 0 ? `, skipped ${skippedSystemCount} system-generated` : ''}`
+                `批量提示词反推完成（仅用户上传图片）：成功 ${successCount}，失败 ${failedCount}${skippedSystemCount > 0 ? `，跳过系统生成 ${skippedSystemCount}` : ''}`,
+                `Batch prompt reverse complete (uploaded images only): ${successCount} succeeded, ${failedCount} failed${skippedSystemCount > 0 ? `, skipped ${skippedSystemCount} system-generated` : ''}`
             );
             if (onLog) onLog(summary, failedCount > 0 ? 'warning' : 'success');
             alert(summary);
         } finally {
+            if (subjectBatchAnalyzeSessionRef.current === batchSessionId) {
+                subjectBatchAnalyzeSessionRef.current = '';
+            }
+            subjectBatchAnalyzeStopRequestedRef.current = false;
             updateAnalyzeBatchRuntimeState(false, null);
         }
     };
@@ -14258,15 +14283,19 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         const targets = hasImageEntities.filter((item) => isUserUploadedEntityImage(item, uploadedImageTokens));
         const skippedSystemCount = Math.max(0, hasImageEntities.length - targets.length);
         if (targets.length === 0) {
-            alert(t('当前没有可执行“批量分析并重生图”的用户上传图片主体。', 'No user-uploaded subject images available for batch analyze + regenerate.'));
+            alert(t('当前没有可执行“批量参考生图”的用户上传图片主体。', 'No user-uploaded subject images available for batch reference image generation.'));
             return;
         }
 
         const confirmed = await confirmUiMessage(t(
-            `将对 ${targets.length} 个“用户上传图片”主体执行“批量分析并重生图”${skippedSystemCount > 0 ? `（自动跳过系统生成 ${skippedSystemCount} 个）` : ''}，是否继续？`,
-            `Run batch analyze + regenerate for ${targets.length} user-uploaded subject images${skippedSystemCount > 0 ? ` (skip ${skippedSystemCount} system-generated)` : ''}?`
+            `将对 ${targets.length} 个“用户上传图片”主体执行“批量参考生图”${skippedSystemCount > 0 ? `（自动跳过系统生成 ${skippedSystemCount} 个）` : ''}，是否继续？`,
+            `Run batch reference image generation for ${targets.length} user-uploaded subject images${skippedSystemCount > 0 ? ` (skip ${skippedSystemCount} system-generated)` : ''}?`
         ));
         if (!confirmed) return;
+
+        subjectBatchReconstructStopRequestedRef.current = false;
+        const batchSessionId = `subject-reference-batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        subjectBatchReconstructSessionRef.current = batchSessionId;
 
         updateReconstructBatchRuntimeState(true, { current: 0, total: targets.length, status: t('准备开始...', 'Preparing...') });
 
@@ -14275,6 +14304,9 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
 
         try {
             for (let idx = 0; idx < targets.length; idx += 1) {
+                if (subjectBatchReconstructSessionRef.current !== batchSessionId || subjectBatchReconstructStopRequestedRef.current) {
+                    break;
+                }
                 const entity = targets[idx];
                 const current = idx + 1;
                 updateReconstructBatchRuntimeState(true, {
@@ -14295,8 +14327,8 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                     if (onLog) {
                         onLog(
                             t(
-                                `批量分析并重生图失败：${entity?.name || entity?.name_en || entity?.id} - ${err?.response?.data?.detail || err?.message || 'Unknown error'}`,
-                                `Batch analyze + regenerate failed: ${entity?.name || entity?.name_en || entity?.id} - ${err?.response?.data?.detail || err?.message || 'Unknown error'}`
+                                `批量参考生图失败：${entity?.name || entity?.name_en || entity?.id} - ${err?.response?.data?.detail || err?.message || 'Unknown error'}`,
+                                `Batch reference image generation failed: ${entity?.name || entity?.name_en || entity?.id} - ${err?.response?.data?.detail || err?.message || 'Unknown error'}`
                             ),
                             'error'
                         );
@@ -14304,13 +14336,27 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                 }
             }
 
+            if (subjectBatchReconstructSessionRef.current !== batchSessionId || subjectBatchReconstructStopRequestedRef.current) {
+                const stoppedSummary = t(
+                    `批量参考生图已停止：成功 ${successCount}，失败 ${failedCount}`,
+                    `Batch reference image generation stopped: ${successCount} succeeded, ${failedCount} failed`
+                );
+                if (onLog) onLog(stoppedSummary, 'warning');
+                alert(stoppedSummary);
+                return;
+            }
+
             const summary = t(
-                `批量分析并重生图完成（仅用户上传图片）：成功 ${successCount}，失败 ${failedCount}${skippedSystemCount > 0 ? `，跳过系统生成 ${skippedSystemCount}` : ''}`,
-                `Batch analyze + regenerate complete (uploaded images only): ${successCount} succeeded, ${failedCount} failed${skippedSystemCount > 0 ? `, skipped ${skippedSystemCount} system-generated` : ''}`
+                `批量参考生图完成（仅用户上传图片）：成功 ${successCount}，失败 ${failedCount}${skippedSystemCount > 0 ? `，跳过系统生成 ${skippedSystemCount}` : ''}`,
+                `Batch reference image generation complete (uploaded images only): ${successCount} succeeded, ${failedCount} failed${skippedSystemCount > 0 ? `, skipped ${skippedSystemCount} system-generated` : ''}`
             );
             if (onLog) onLog(summary, failedCount > 0 ? 'warning' : 'success');
             alert(summary);
         } finally {
+            if (subjectBatchReconstructSessionRef.current === batchSessionId) {
+                subjectBatchReconstructSessionRef.current = '';
+            }
+            subjectBatchReconstructStopRequestedRef.current = false;
             updateReconstructBatchRuntimeState(false, null);
         }
     };
@@ -14852,7 +14898,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         const MIN_BATCH_IMAGE_PROMPT_CHARS = 5;
         const runtimeSnapshot = getSubjectBatchSnapshot();
         if (runtimeSnapshot?.generate?.running && runtimeSnapshot?.generate?.scopeKey === subjectBatchScopeKey) {
-            alert(t('批量补图任务正在运行中，请稍候。', 'Batch fill-images task is already running.'));
+            alert(t('批量生图任务正在运行中，请稍候。', 'Batch image generation task is already running.'));
             return;
         }
 
@@ -14959,8 +15005,8 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                             skippedPromptCount += 1;
                             onLog?.(
                                 t(
-                                    `批量补图跳过：${entity?.name || entity?.name_en || entity?.id} 的提示词少于 ${MIN_BATCH_IMAGE_PROMPT_CHARS} 字符。`,
-                                    `Batch fill-images skipped: prompt for ${entity?.name || entity?.name_en || entity?.id} is shorter than ${MIN_BATCH_IMAGE_PROMPT_CHARS} chars.`
+                                    `批量生图跳过：${entity?.name || entity?.name_en || entity?.id} 的提示词少于 ${MIN_BATCH_IMAGE_PROMPT_CHARS} 字符。`,
+                                    `Batch image generation skipped: prompt for ${entity?.name || entity?.name_en || entity?.id} is shorter than ${MIN_BATCH_IMAGE_PROMPT_CHARS} chars.`
                                 ),
                                 'warning'
                             );
@@ -15055,7 +15101,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                 }
             }
             if (subjectBatchGenerateSessionRef.current !== batchSessionId || subjectBatchGenerateStopRequestedRef.current) {
-                alert(t('批量补图已停止。', 'Batch fill-images stopped.'));
+                alert(t('批量生图已停止。', 'Batch image generation stopped.'));
             } else if (skippedPromptCount > 0) {
                 alert(`Batch Generation Complete! Skipped ${skippedPromptCount} item(s) due to short prompt (<${MIN_BATCH_IMAGE_PROMPT_CHARS} chars).`);
             } else {
@@ -15074,15 +15120,35 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         }
     };
 
-    const handleStopBatchGenerateEntities = async () => {
-        if (!isBatchGeneratingEntities) return;
-        subjectBatchGenerateStopRequestedRef.current = true;
-        subjectBatchGenerateSessionRef.current = '';
+    const handleStopSubjectBatchTasks = async () => {
+        const hasRunningTask = isBatchGeneratingEntities || isBatchAnalyzingEntities || isBatchReconstructingEntities;
+        if (!hasRunningTask) return;
+
         setIsStoppingBatchGenerateEntities(true);
-        updateGenerateBatchRuntimeState(false, null);
+
+        if (isBatchGeneratingEntities) {
+            subjectBatchGenerateStopRequestedRef.current = true;
+            subjectBatchGenerateSessionRef.current = '';
+            updateGenerateBatchRuntimeState(false, null);
+        }
+
+        if (isBatchAnalyzingEntities) {
+            subjectBatchAnalyzeStopRequestedRef.current = true;
+            subjectBatchAnalyzeSessionRef.current = '';
+            updateAnalyzeBatchRuntimeState(false, null);
+        }
+
+        if (isBatchReconstructingEntities) {
+            subjectBatchReconstructStopRequestedRef.current = true;
+            subjectBatchReconstructSessionRef.current = '';
+            updateReconstructBatchRuntimeState(false, null);
+        }
+
         setIsStoppingBatchGenerateEntities(false);
-        if (onLog) onLog(t('批量补图已请求停止。', 'Batch fill-images stop requested.'), 'warning');
+        if (onLog) onLog(t('已请求停止当前批量任务。', 'Stop requested for current batch task.'), 'warning');
     };
+
+    const hasRunningSubjectBatchTask = isBatchGeneratingEntities || isBatchAnalyzingEntities || isBatchReconstructingEntities;
 
     return (
         <div className="p-6 h-full flex flex-col w-full relative">
@@ -15112,15 +15178,15 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                              </>
                          ) : (
                              <>
-                                <Wand2 size={12} /> {t('批量补图', 'Fill Images')}
+                                <Wand2 size={12} /> {t('批量生图', 'Batch Generate Images')}
                              </>
                          )}
                     </button>
                     <button
-                        onClick={handleStopBatchGenerateEntities}
-                        disabled={!isBatchGeneratingEntities || isStoppingBatchGenerateEntities}
+                        onClick={handleStopSubjectBatchTasks}
+                        disabled={!hasRunningSubjectBatchTask || isStoppingBatchGenerateEntities}
                         className="px-3 py-2 text-xs font-bold uppercase rounded-md bg-red-500/20 hover:bg-red-500/30 text-red-200 flex items-center gap-2 disabled:opacity-50 transition-all border border-red-400/20"
-                        title={t('强制停止当前批量补图任务（立即生效）', 'Force stop current batch fill-images task (immediate)')}
+                        title={t('停止当前批量任务（支持批量生图/批量提示词反推/批量参考生图）', 'Stop current batch task (supports batch generation / prompt reverse / reference generation)')}
                     >
                         {isStoppingBatchGenerateEntities ? (
                             <>
@@ -15129,7 +15195,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                             </>
                         ) : (
                             <>
-                                <X size={12} /> {t('停止补图', 'Stop Fill')}
+                                <X size={12} /> {t('停止', 'Stop')}
                             </>
                         )}
                     </button>
@@ -15137,16 +15203,16 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                         onClick={handleBatchAnalyzeExistingSubjects}
                         disabled={isBatchAnalyzingEntities || isBatchGeneratingEntities || isBatchReconstructingEntities || isReconstructingEntity || isAnalyzingEntity}
                         className="px-3 py-2 text-xs font-bold uppercase rounded-md bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-200 flex items-center gap-2 disabled:opacity-50 transition-all border border-indigo-400/20"
-                        title={t('仅批量分析“用户上传图片”的主体并反写信息', 'Batch analyze user-uploaded subject images only and write back metadata')}
+                        title={t('仅批量对“用户上传图片”执行提示词反推并反写信息', 'Batch prompt reverse user-uploaded subject images only and write back metadata')}
                     >
                         {isBatchAnalyzingEntities ? (
                             <>
                                 <RefreshCw className="animate-spin" size={12} />
-                                {t('批量分析中', 'Batch Analyzing')} {batchAnalyzeProgress ? `${batchAnalyzeProgress.current}/${batchAnalyzeProgress.total}` : '...'}
+                                {t('批量反推中', 'Batch Prompt Reversing')} {batchAnalyzeProgress ? `${batchAnalyzeProgress.current}/${batchAnalyzeProgress.total}` : '...'}
                             </>
                         ) : (
                             <>
-                                <Sparkles size={12} /> {t('批量分析(上传图)', 'Analyze Uploaded')}
+                                <Sparkles size={12} /> {t('批量提示词反推', 'Batch Prompt Reverse')}
                             </>
                         )}
                     </button>
@@ -15154,16 +15220,16 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                         onClick={handleBatchAnalyzeAndReconstructSubjects}
                         disabled={isBatchReconstructingEntities || isBatchAnalyzingEntities || isBatchGeneratingEntities || isReconstructingEntity || isAnalyzingEntity}
                         className="px-3 py-2 text-xs font-bold uppercase rounded-md bg-violet-500/20 hover:bg-violet-500/30 text-violet-100 flex items-center gap-2 disabled:opacity-50 transition-all border border-violet-400/20"
-                        title={t('仅对用户上传图片执行：批量分析并重生图', 'Analyze + regenerate in batch for user-uploaded images only')}
+                        title={t('仅对用户上传图片执行：批量参考生图', 'Batch reference image generation for user-uploaded images only')}
                     >
                         {isBatchReconstructingEntities ? (
                             <>
                                 <RefreshCw className="animate-spin" size={12} />
-                                {t('批量重生图中', 'Batch Rebuilding')} {batchReconstructProgress ? `${batchReconstructProgress.current}/${batchReconstructProgress.total}` : '...'}
+                                {t('批量参考生图中', 'Batch Reference Generating')} {batchReconstructProgress ? `${batchReconstructProgress.current}/${batchReconstructProgress.total}` : '...'}
                             </>
                         ) : (
                             <>
-                                <Wand2 size={12} /> {t('批量分析并重生图(上传图)', 'Analyze + Regenerate')}
+                                <Wand2 size={12} /> {t('批量参考生图', 'Batch Reference Generate')}
                             </>
                         )}
                     </button>
@@ -15185,6 +15251,10 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                         ))}
                     </div>
                 </div>
+            </div>
+
+            <div className="mb-4 text-xs text-amber-100/90 border border-amber-300/20 bg-amber-500/10 rounded-lg px-3 py-2">
+                {t('提示：上传用户自己的图片后，请先执行“提示词反推”或“参考生图”，再进行后续生成。', 'Tip: After uploading user-provided images, run prompt reverse or reference image generation before further generation.')}
             </div>
             
             {/* Batch Status Bar */}
@@ -15860,8 +15930,8 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                                                 </div>
                                                 <div className="mt-2 text-[10px] text-white/50">
                                                     {t(
-                                                        '说明：点击素材图后会先应用图片，再按上方策略执行。若不是本系统生成的图，原则上应先做“按图同步提示词”；若原图不是六视图或人物细节不清晰，建议继续“按图修改提示词并重生成”。如需批量处理，请在改图后使用顶部“批量分析并重生图(上传图)”或“批量补图”。',
-                                                        'Note: Clicking an asset first applies the image, then runs the selected strategy. If the image was not generated by this system, you should generally run Sync Prompt from Image first. If the source is not six-view or character details are unclear, it is recommended to continue with Rewrite Prompt and Regenerate. For batch workflows, after replacing images use the top toolbar actions Analyze + Regenerate (Uploaded) or Fill Images.'
+                                                        '说明：点击素材图后会先应用图片，再按上方策略执行。若不是本系统生成的图，原则上应先做“按图同步提示词”；若原图不是六视图或人物细节不清晰，建议继续“按图修改提示词并重生成”。如需批量处理，请在改图后使用顶部“批量提示词反推”或“批量参考生图”。',
+                                                        'Note: Clicking an asset first applies the image, then runs the selected strategy. If the image was not generated by this system, you should generally run Sync Prompt from Image first. If the source is not six-view or character details are unclear, it is recommended to continue with Rewrite Prompt and Regenerate. For batch workflows, after replacing images use the top toolbar actions Batch Prompt Reverse or Batch Reference Generate.'
                                                     )}
                                                 </div>
                                             </div>
