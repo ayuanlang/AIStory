@@ -10347,6 +10347,11 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         return `aistory:scene-ai-shots-task-active-scene:${episodeId}`;
     }, []);
 
+    const getAiShotsAutoSwitchTicketKey = useCallback((episodeId) => {
+        if (!episodeId) return '';
+        return `aistory:scene-ai-shots-auto-switch-ticket:${episodeId}`;
+    }, []);
+
     const getBatchAiShotsRuntimeStorageKey = useCallback((episodeId) => {
         if (!episodeId) return '';
         return `aistory:scene-ai-shots-progress:${episodeId}`;
@@ -10546,6 +10551,48 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
             // Ignore localStorage failures.
         }
     }, [getAiShotsTaskStorageKey, getAiShotsTaskActiveSceneKey]);
+
+    const armAiShotsAutoSwitchTicket = useCallback((episodeId, sceneId) => {
+        try {
+            if (!window?.localStorage || !episodeId) return;
+            const key = getAiShotsAutoSwitchTicketKey(episodeId);
+            if (!key) return;
+            const payload = {
+                armed: true,
+                sceneId: Number(sceneId || 0),
+                updatedAt: Date.now(),
+            };
+            window.localStorage.setItem(key, JSON.stringify(payload));
+        } catch (_) {
+            // Ignore localStorage failures.
+        }
+    }, [getAiShotsAutoSwitchTicketKey]);
+
+    const consumeAiShotsAutoSwitchTicket = useCallback((episodeId) => {
+        try {
+            if (!window?.localStorage || !episodeId) return false;
+            const key = getAiShotsAutoSwitchTicketKey(episodeId);
+            if (!key) return false;
+            const raw = window.localStorage.getItem(key);
+            if (!raw) return false;
+
+            const parsed = JSON.parse(raw);
+            const armed = Boolean(parsed?.armed);
+            if (!armed) return false;
+
+            window.localStorage.setItem(
+                key,
+                JSON.stringify({
+                    ...parsed,
+                    armed: false,
+                    updatedAt: Date.now(),
+                })
+            );
+            return true;
+        } catch (_) {
+            return false;
+        }
+    }, [getAiShotsAutoSwitchTicketKey]);
 
     useEffect(() => {
         if (!activeEpisode?.id) {
@@ -11588,15 +11635,15 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         await applySceneAIResult(sceneId, { content: generatedRows });
 
         onLog?.(`SceneManager: Auto-import finished for Scene ${sceneId}.`, 'success');
-        if (typeof onSwitchToShots === 'function') {
-            onSwitchToShots();
+        if (typeof onSwitchToShots === 'function' && consumeAiShotsAutoSwitchTicket(activeEpisode?.id)) {
+            onSwitchToShots(sceneId);
         }
         setAiShotsFlowStatus({
             phase: 'completed',
             sceneId,
             message: t('AI Shots 已导入，已切换到 Shots 页面。', 'AI Shots imported. Switched to Shots page.'),
         });
-    }, [onLog, onSwitchToShots, scenes, t]);
+    }, [activeEpisode?.id, consumeAiShotsAutoSwitchTicket, onLog, onSwitchToShots, scenes, t]);
 
     const resumeAiShotsFromTaskMarker = useCallback(async (marker) => {
         if (!activeEpisode?.id || !marker?.taskId || !marker?.sceneId) return;
@@ -11645,6 +11692,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
     }, [activeEpisode?.id, aiShotsFlowStatus.phase, loadAiShotsTaskMarker, resumeAiShotsFromTaskMarker]);
 
     const executeGenerateShots = async ({ sceneId, promptData }) => {
+        armAiShotsAutoSwitchTicket(activeEpisode?.id, sceneId);
         setAiShotsFlowStatus({
             phase: 'generating',
             sceneId,
@@ -12149,9 +12197,6 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
             if (!status.running && batchAiShotsStatusTimerRef.current) {
                 clearInterval(batchAiShotsStatusTimerRef.current);
                 batchAiShotsStatusTimerRef.current = null;
-                if (typeof onSwitchToShots === 'function' && Number(status.completed || 0) > 0) {
-                    onSwitchToShots();
-                }
             }
 
             return status;
@@ -24188,8 +24233,8 @@ const Editor = ({
 
         const limitLabel = stopAllUsesUnlimited ? t('全部', 'all') : String(parsedStopLimit);
         const ok = await confirmUiMessage(t(
-            `确认批量停止运行中任务？\n将停止前 ${limitLabel} 个（本次 ${candidates.length} / 可停止 ${runningJobPoolItems.length}）。`,
-            `Stop running tasks in batch?\nWill stop first ${limitLabel} (this run ${candidates.length} / stoppable ${runningJobPoolItems.length}).`
+            `确认批量强制停止任务？\n将停止前 ${limitLabel} 个（本次 ${candidates.length} / 可停止 ${runningJobPoolItems.length}）。`,
+            `Force stop tasks in batch?\nWill stop first ${limitLabel} (this run ${candidates.length} / stoppable ${runningJobPoolItems.length}).`
         ));
         if (!ok) return;
 
@@ -24207,7 +24252,7 @@ const Editor = ({
                     continue;
                 }
                 try {
-                    await stopGenerationJob(kind, jobId);
+                    await stopGenerationJob(kind, jobId, { force: true });
                     successCount += 1;
                 } catch (e) {
                     failedCount += 1;
@@ -24243,7 +24288,7 @@ const Editor = ({
 
         setJobPoolStoppingAllApi(true);
         try {
-            const res = await stopAllGenerationJobs(targetKind);
+            const res = await stopAllGenerationJobs(targetKind, { force: true });
             const stopped = Number(res?.stopped || 0);
             addLog(t(
                 `已请求停止全部任务：kind=${targetKind}，停止 ${stopped} 个。`,
@@ -24621,7 +24666,7 @@ const Editor = ({
                         <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between gap-3">
                             <div>
                                 <div className="text-sm font-bold text-white">{t('全局任务池', 'Global Job Pool')}</div>
-                                <div className="text-[11px] text-muted-foreground">{t('可查询并停止 image/video 异步任务。', 'Query and stop async image/video tasks.')}</div>
+                                <div className="text-[11px] text-muted-foreground">{t('可查询并强制停止 image/video 及批处理任务。', 'Query and force-stop async image/video and batch tasks.')}</div>
                             </div>
                             <button className="p-2 rounded hover:bg-white/10" onClick={() => setIsJobPoolOpen(false)}><X size={16} /></button>
                         </div>
@@ -24659,19 +24704,19 @@ const Editor = ({
                                 onClick={handleStopAllJobsFromPool}
                                 disabled={jobPoolStoppingAll || stopAllTargetItems.length === 0}
                                 className={`px-3 py-1.5 rounded text-white flex items-center gap-1 disabled:opacity-50 ${jobPoolStoppingAll ? 'bg-red-500/30' : 'bg-red-500/20 hover:bg-red-500/30'}`}
-                                title={t('停止全部运行中任务', 'Stop all running tasks')}
+                                title={t('按列表批量强制停止任务', 'Force stop tasks in current list')}
                             >
                                 {jobPoolStoppingAll ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Square className="w-3.5 h-3.5" />}
-                                {jobPoolStoppingAll ? t('批量停止中...', 'Stopping...') : t('批量停止', 'Batch Stop')}
+                                {jobPoolStoppingAll ? t('批量强停中...', 'Force stopping...') : t('批量强制停止', 'Batch Force Stop')}
                             </button>
                             <button
                                 onClick={handleStopAllJobsFromApi}
                                 disabled={jobPoolStoppingAllApi}
                                 className={`px-3 py-1.5 rounded text-white flex items-center gap-1 disabled:opacity-50 ${jobPoolStoppingAllApi ? 'bg-red-600/40' : 'bg-red-600/25 hover:bg-red-600/35'}`}
-                                title={t('直接调用后端 stop-all 接口', 'Directly call backend stop-all endpoint')}
+                                title={t('直接调用后端强制 stop-all 接口', 'Directly call backend force stop-all endpoint')}
                             >
                                 {jobPoolStoppingAllApi ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Square className="w-3.5 h-3.5" />}
-                                {jobPoolStoppingAllApi ? t('接口停止中...', 'Stopping via API...') : t('停止全部（接口）', 'Stop All (API)')}
+                                {jobPoolStoppingAllApi ? t('接口强停中...', 'Force stopping via API...') : t('强制停止全部（接口）', 'Force Stop All (API)')}
                             </button>
                             <label className="flex items-center gap-1 text-muted-foreground">
                                 {t('阈值', 'Limit')}

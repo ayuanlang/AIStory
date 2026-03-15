@@ -568,7 +568,10 @@ const ProjectList = ({ initialTab = 'projects' }) => {
 
     const handleDeleteProject = async (e, projectId) => {
         e.stopPropagation(); // Prevent opening the project
-        if (!await confirmUiMessage(t('确定要删除这个项目吗？', 'Are you sure you want to delete this project?'))) return;
+        if (!await confirmUiMessage(t(
+            '确定要删除这个项目吗？该项目关联的业务数据库记录（场景/镜头/实体/资产关联等）和相关资产物理文件将一并删除，且不可恢复。审计日志会保留。',
+            'Are you sure you want to delete this project? Related business database records (scenes/shots/entities/asset links, etc.) and associated asset files will also be permanently deleted and cannot be recovered. Audit logs will be retained.'
+        ))) return;
         
         try {
             await deleteProject(projectId);

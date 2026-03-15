@@ -1386,9 +1386,9 @@ export const stopGenerationJob = async (kind, jobId, { force = false } = {}) => 
     return response?.data || {};
 };
 
-export const stopAllGenerationJobs = async (kind = 'all') => {
+export const stopAllGenerationJobs = async (kind = 'all', { force = false } = {}) => {
     const response = await api.post('/generate/jobs/stop-all', null, {
-        params: { kind },
+        params: force ? { kind, force: true } : { kind },
     });
     return response?.data || {};
 };

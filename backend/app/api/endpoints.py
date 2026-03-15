@@ -5313,18 +5313,32 @@ def delete_project(
     project = _require_project_access(db, project_id, current_user, owner_only=True)
 
     # Cascade delete related data (scenes, shots, subjects/entities, etc.)
-    # Note: We do not delete user-level assets unless they are explicitly referenced by the project.
+    # Audit logs are intentionally retained (transaction_history / transaction_action / system_logs).
     try:
         # Collect related IDs
         episode_ids = [row[0] for row in db.query(Episode.id).filter(Episode.project_id == project_id).all()]
         scene_ids: List[int] = []
+        project_scoped_shot_ids: List[int] = []
+        asset_ids_to_delete: List[int] = []
         if episode_ids:
             scene_ids = [row[0] for row in db.query(Scene.id).filter(Scene.episode_id.in_(episode_ids)).all()]
 
+        # Defensive cleanup: some historical shots may be project-scoped but no longer reachable via scene linkage.
+        project_scoped_shot_ids = [
+            row[0]
+            for row in db.query(Shot.id).filter(Shot.project_id == project_id).all()
+        ]
+
         # Collect referenced upload URLs/paths before deleting rows
         candidate_urls: List[str] = []
-        if scene_ids:
-            for (img_url, vid_url) in db.query(Shot.image_url, Shot.video_url).filter(Shot.scene_id.in_(scene_ids)).all():
+        if scene_ids or project_scoped_shot_ids:
+            shot_filter = []
+            if scene_ids:
+                shot_filter.append(Shot.scene_id.in_(scene_ids))
+            if project_scoped_shot_ids:
+                shot_filter.append(Shot.id.in_(project_scoped_shot_ids))
+
+            for (img_url, vid_url) in db.query(Shot.image_url, Shot.video_url).filter(or_(*shot_filter)).all():
                 if img_url:
                     candidate_urls.append(img_url)
                 if vid_url:
@@ -5333,9 +5347,45 @@ def delete_project(
             if img_url:
                 candidate_urls.append(img_url)
 
+        # Collect project-related asset rows (for DB row cleanup + physical file cleanup).
+        # Rule:
+        # 1) Explicitly tagged to this project in meta_info.project_id
+        # 2) URL matches media already referenced by this project (shots/entities)
+        normalized_candidate_urls = {str(u).strip() for u in candidate_urls if str(u or "").strip()}
+        user_assets = db.query(Asset.id, Asset.url, Asset.meta_info).filter(
+            Asset.user_id == current_user.id,
+        ).all()
+        for aid, aurl, ameta in user_assets:
+            meta = ameta if isinstance(ameta, dict) else {}
+            meta_project_id = meta.get("project_id")
+            url_txt = str(aurl or "").strip()
+            should_delete = False
+
+            try:
+                if meta_project_id is not None and int(meta_project_id) == int(project_id):
+                    should_delete = True
+            except Exception:
+                pass
+
+            if not should_delete and url_txt and url_txt in normalized_candidate_urls:
+                should_delete = True
+
+            if should_delete:
+                asset_ids_to_delete.append(int(aid))
+                if url_txt:
+                    candidate_urls.append(url_txt)
+
         # Delete DB rows bottom-up to avoid FK constraints
+        if scene_ids or project_scoped_shot_ids:
+            shot_delete_filter = []
+            if scene_ids:
+                shot_delete_filter.append(Shot.scene_id.in_(scene_ids))
+            if project_scoped_shot_ids:
+                shot_delete_filter.append(Shot.id.in_(project_scoped_shot_ids))
+
+            db.query(Shot).filter(or_(*shot_delete_filter)).delete(synchronize_session=False)
+
         if scene_ids:
-            db.query(Shot).filter(Shot.scene_id.in_(scene_ids)).delete(synchronize_session=False)
             db.query(Scene).filter(Scene.id.in_(scene_ids)).delete(synchronize_session=False)
 
         if episode_ids:
@@ -5343,6 +5393,12 @@ def delete_project(
             db.query(Episode).filter(Episode.id.in_(episode_ids)).delete(synchronize_session=False)
 
         db.query(Entity).filter(Entity.project_id == project_id).delete(synchronize_session=False)
+
+        if asset_ids_to_delete:
+            db.query(Asset).filter(
+                Asset.user_id == current_user.id,
+                Asset.id.in_(asset_ids_to_delete),
+            ).delete(synchronize_session=False)
 
         db.delete(project)
         db.commit()
@@ -18299,6 +18355,7 @@ def stop_generation_job(
 @router.post("/generate/jobs/stop-all")
 def stop_all_generation_jobs(
     kind: str = "all",
+    force: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -18323,7 +18380,10 @@ def stop_all_generation_jobs(
     if safe_kind in {"all", "image"}:
         with IMAGE_JOB_LOCK:
             _prune_image_jobs_locked()
-            image_ids = [jid for jid, payload in IMAGE_JOB_STORE.items() if str((payload or {}).get("status") or "").lower() in {"queued", "running"}]
+            if force:
+                image_ids = list(IMAGE_JOB_STORE.keys())
+            else:
+                image_ids = [jid for jid, payload in IMAGE_JOB_STORE.items() if str((payload or {}).get("status") or "").lower() in {"queued", "running"}]
         for jid in image_ids:
             with IMAGE_JOB_LOCK:
                 payload = dict(IMAGE_JOB_STORE.get(jid) or {})
@@ -18343,7 +18403,10 @@ def stop_all_generation_jobs(
     if safe_kind in {"all", "video"}:
         with VIDEO_JOB_LOCK:
             _prune_video_jobs_locked()
-            video_ids = [jid for jid, payload in VIDEO_JOB_STORE.items() if str((payload or {}).get("status") or "").lower() in {"queued", "running"}]
+            if force:
+                video_ids = list(VIDEO_JOB_STORE.keys())
+            else:
+                video_ids = [jid for jid, payload in VIDEO_JOB_STORE.items() if str((payload or {}).get("status") or "").lower() in {"queued", "running"}]
         for jid in video_ids:
             with VIDEO_JOB_LOCK:
                 payload = dict(VIDEO_JOB_STORE.get(jid) or {})
@@ -18369,7 +18432,7 @@ def stop_all_generation_jobs(
             payload = gi.get("episode_script_generation_status")
             if not isinstance(payload, dict):
                 continue
-            if str(payload.get("status") or "").lower() in {"succeeded", "completed", "failed", "canceled", "cancelled", "error", "stopped", "idle", "partial"} and not bool(payload.get("running")):
+            if (not force) and str(payload.get("status") or "").lower() in {"succeeded", "completed", "failed", "canceled", "cancelled", "error", "stopped", "idle", "partial"} and not bool(payload.get("running")):
                 continue
             payload["stop_requested"] = True
             payload["stop_requested_at"] = payload.get("stop_requested_at") or now_iso
@@ -18407,7 +18470,7 @@ def stop_all_generation_jobs(
                 payload = info.get(status_key)
                 if not isinstance(payload, dict):
                     continue
-                if str(payload.get("status") or "").lower() in {"succeeded", "completed", "failed", "canceled", "cancelled", "error", "stopped", "idle", "partial"} and not bool(payload.get("running")):
+                if (not force) and str(payload.get("status") or "").lower() in {"succeeded", "completed", "failed", "canceled", "cancelled", "error", "stopped", "idle", "partial"} and not bool(payload.get("running")):
                     continue
                 payload["stop_requested"] = True
                 payload["stop_requested_at"] = payload.get("stop_requested_at") or now_iso
@@ -18434,6 +18497,7 @@ def stop_all_generation_jobs(
     return {
         "ok": True,
         "kind": safe_kind,
+        "force": bool(force),
         "stopped": stopped,
         "items": touched[:200],
         "message": "Stop-all requested",
