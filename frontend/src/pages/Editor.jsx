@@ -2135,30 +2135,49 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
     if (!project) return <div className="p-8 text-muted-foreground">{t('加载中...', 'Loading...')}</div>;
 
     const prefix = "proj-";
+    const generatorTabs = [
+        { id: 'story_generator', label: t('故事生成器', 'Story Generator') },
+        { id: 'promo_generator', label: t('宣传片生成器', 'Promo Generator') },
+    ];
 
     return (
         <div className="p-4 sm:p-6 lg:p-8 w-full h-full overflow-y-auto">
-            <div className="flex justify-between items-center mb-8">
+            <div className="flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-center mb-8">
                 <h2 className="text-2xl font-bold">{mode === 'generator' ? t('生成器', 'Generators') : t('项目总览', 'Project Overview')}</h2>
-                <button onClick={handleSave} className="px-4 py-2 bg-primary text-black rounded-lg text-sm font-bold hover:bg-primary/90 flex items-center gap-2">
+                <button onClick={handleSave} className="px-4 py-2 bg-primary text-black rounded-lg text-sm font-bold hover:bg-primary/90 flex items-center justify-center gap-2 w-full sm:w-auto">
                     <SettingsIcon className="w-4 h-4" /> {t('保存修改', 'Save Changes')}
                 </button>
             </div>
 
             {mode === 'generator' && (
-                <div className="mb-6 flex items-center gap-2">
-                    <button
-                        onClick={() => setProjectTab('story_generator')}
-                        className={`px-4 py-2 rounded-lg text-sm font-bold ${projectTab === 'story_generator' ? 'bg-white text-black' : 'bg-white/10 text-white hover:bg-white/20'}`}
-                    >
-                        {t('故事生成器', 'Story Generator')}
-                    </button>
-                    <button
-                        onClick={() => setProjectTab('promo_generator')}
-                        className={`px-4 py-2 rounded-lg text-sm font-bold ${projectTab === 'promo_generator' ? 'bg-white text-black' : 'bg-white/10 text-white hover:bg-white/20'}`}
-                    >
-                        {t('宣传片生成器', 'Promo Generator')}
-                    </button>
+                <div className="mb-6 space-y-3">
+                    <div className="sm:hidden">
+                        <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground/80">
+                            {t('生成器模块', 'Generator Mode')}
+                        </label>
+                        <select
+                            value={projectTab}
+                            onChange={(e) => setProjectTab(e.target.value)}
+                            className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none transition-colors focus:border-primary/40"
+                        >
+                            {generatorTabs.map((tab) => (
+                                <option key={`generator-tab-select-${tab.id}`} value={tab.id}>{tab.label}</option>
+                            ))}
+                        </select>
+                    </div>
+                    <div className="overflow-x-auto no-scrollbar">
+                        <div className="flex items-center gap-2 min-w-max">
+                            {generatorTabs.map((tab) => (
+                                <button
+                                    key={`generator-tab-${tab.id}`}
+                                    onClick={() => setProjectTab(tab.id)}
+                                    className={`shrink-0 px-4 py-2 rounded-lg text-sm font-bold ${projectTab === tab.id ? 'bg-white text-black' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                >
+                                    {tab.label}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
                 </div>
             )}
 
@@ -10318,6 +10337,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
     const [shotPromptModal, setShotPromptModal] = useState({ open: false, sceneId: null, data: null, loading: false });
     const [aiShotsFlowStatus, setAiShotsFlowStatus] = useState({ phase: 'idle', message: '', sceneId: null });
     const [batchAiShotsProgress, setBatchAiShotsProgress] = useState(() => createBatchAiShotsProgressState());
+    const [isSceneBatchProgressDismissed, setIsSceneBatchProgressDismissed] = useState(false);
     const [isStoppingBatchAiShots, setIsStoppingBatchAiShots] = useState(false);
     const batchAiShotsStatusTimerRef = useRef(null);
     const batchAiShotsStartupGuardUntilRef = useRef(0);
@@ -12514,6 +12534,15 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
             `Total ${total}, processed ${Number(batchAiShotsProgress?.completed || 0)}${sceneSuffix}`
         );
     })();
+    const isSceneBatchCompleted = !Boolean(batchAiShotsProgress?.running)
+        && Number(batchAiShotsProgress?.total || 0) > 0
+        && Number(batchAiShotsProgress?.completed || 0) >= Number(batchAiShotsProgress?.total || 0);
+    const shouldShowSceneBatchProgressBanner = (batchAiShotsProgress.running || batchAiShotsProgress.total > 0)
+        && (!isSceneBatchProgressDismissed || !isSceneBatchCompleted);
+
+    useEffect(() => {
+        setIsSceneBatchProgressDismissed(false);
+    }, [activeEpisode?.id]);
 
     if (!activeEpisode) return <div className="p-6 text-muted-foreground">{t('请选择分集以管理场景。', 'Select an episode to manage scenes.')}</div>;
 
@@ -12552,7 +12581,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                 </div>
             </div>
 
-            {(batchAiShotsProgress.running || batchAiShotsProgress.total > 0) && (
+            {shouldShowSceneBatchProgressBanner && (
                 <div className={`mb-4 rounded-lg border px-4 py-2.5 flex items-center gap-2 text-sm shrink-0 ${
                     batchAiShotsProgress.running
                         ? 'border-blue-500/30 bg-blue-500/10 text-blue-100'
@@ -12561,11 +12590,23 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                             : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100'
                 }`}>
                     {batchAiShotsProgress.running ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
-                    <span>
-                        {batchAiShotsProgress.message}
-                        {batchAiShotsProgress.stopRequested ? ` · ${t('已请求停止', 'Stop requested')}` : ''}
-                        {batchAiShotsProgressSummary ? ` · ${batchAiShotsProgressSummary}` : ''}
-                    </span>
+                    <div className="flex items-center justify-between w-full gap-3">
+                        <span>
+                            {batchAiShotsProgress.message}
+                            {batchAiShotsProgress.stopRequested ? ` · ${t('已请求停止', 'Stop requested')}` : ''}
+                            {batchAiShotsProgressSummary ? ` · ${batchAiShotsProgressSummary}` : ''}
+                        </span>
+                        {isSceneBatchCompleted && (
+                            <button
+                                onClick={() => setIsSceneBatchProgressDismissed(true)}
+                                className="inline-flex items-center justify-center rounded p-1 text-current/80 hover:text-current hover:bg-white/10"
+                                title={t('关闭进度条幅', 'Dismiss progress banner')}
+                                aria-label={t('关闭进度条幅', 'Dismiss progress banner')}
+                            >
+                                <X className="w-4 h-4" />
+                            </button>
+                        )}
+                    </div>
                 </div>
             )}
 
@@ -16513,6 +16554,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         currentShotLabel: '',
         currentAssetLabel: '',
     }); // Progress tracking
+    const [isShotBatchProgressDismissed, setIsShotBatchProgressDismissed] = useState(false);
     const SHOT_MEDIA_BATCH_KIND = 'shot-media-batch';
     const SHOT_BATCH_RUNTIME_TTL_MS = 1000 * 60 * 60 * 6;
     const shotBatchStatusTimerRef = useRef(null);
@@ -20317,6 +20359,43 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         setSelectedShotIds(Array.from(new Set(ids)));
     }, [sortedShots]);
 
+    const isShotBatchCompleted = !Boolean(isBatchGenerating)
+        && Number(batchProgress?.total || 0) > 0
+        && Number(batchProgress?.current || 0) >= Number(batchProgress?.total || 0);
+    const shouldShowShotBatchProgress = (isBatchGenerating || Number(batchProgress?.total || 0) > 0)
+        && (!isShotBatchProgressDismissed || !isShotBatchCompleted);
+    const shotBatchProgressPercent = (() => {
+        const total = Number(batchProgress?.total || 0);
+        const current = Number(batchProgress?.current || 0);
+        if (total <= 0) return 0;
+        return Math.max(0, Math.min(100, Math.round((current / total) * 100)));
+    })();
+    const shotBatchProgressSummary = (() => {
+        const total = Number(batchProgress?.total || 0);
+        if (total <= 0) return '';
+        const current = Number(batchProgress?.current || 0);
+        const shotSuffix = batchProgress?.currentShotLabel
+            ? t(`（镜头 ${batchProgress.currentShotLabel}）`, ` (Shot ${batchProgress.currentShotLabel})`)
+            : '';
+        const assetSuffix = batchProgress?.currentAssetLabel
+            ? t(`（资源 ${batchProgress.currentAssetLabel}）`, ` (Asset ${batchProgress.currentAssetLabel})`)
+            : '';
+        if (isBatchGenerating) {
+            return t(
+                `共 ${total} 个，进行到 ${current}/${total}（${shotBatchProgressPercent}%）${shotSuffix}${assetSuffix}`,
+                `Total ${total}, processing ${current}/${total} (${shotBatchProgressPercent}%)${shotSuffix}${assetSuffix}`
+            );
+        }
+        return t(
+            `共 ${total} 个，已完成 ${current}/${total}${shotSuffix}${assetSuffix}`,
+            `Total ${total}, completed ${current}/${total}${shotSuffix}${assetSuffix}`
+        );
+    })();
+
+    useEffect(() => {
+        setIsShotBatchProgressDismissed(false);
+    }, [activeEpisode?.id]);
+
     return (
         <div className="flex flex-col h-full w-full p-6 overflow-hidden">
              {/* Header / Toolbar */}
@@ -20418,46 +20497,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                             )}
                         </div>
 
-                        {/* Progress Indicator */}
-                        {isBatchGenerating && batchProgress.total > 0 && (
-                            <div className="fixed right-2 sm:right-4 top-16 sm:top-20 z-[70] bg-black/90 px-3 sm:px-4 py-2.5 sm:py-3 rounded-lg border border-primary/30 backdrop-blur-md shadow-2xl w-[1120px] max-w-[95vw] sm:max-w-[92vw]">
-                                <div className="flex items-center justify-between mb-2">
-                                    <span className="text-xs font-bold text-primary tracking-wide">{t('批处理进度', 'Batch Processing')}</span>
-                                    <span className="text-xs text-white font-mono">{batchProgress.current}/{batchProgress.total} · {Math.round((batchProgress.current / batchProgress.total) * 100)}%</span>
-                                </div>
-                                <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden mb-2">
-                                    <div 
-                                        className="h-full bg-primary transition-all duration-300 ease-out"
-                                        style={{ width: `${(batchProgress.current / batchProgress.total) * 100}%` }}
-                                    ></div>
-                                </div>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-1 mb-2 text-xs text-white/90">
-                                    {batchProgress.currentShotLabel && (
-                                        <div className="break-words">
-                                            <span className="text-muted-foreground">{t('镜头', 'Shot')}: </span>
-                                            <span>{batchProgress.currentShotLabel}</span>
-                                        </div>
-                                    )}
-                                    {batchProgress.currentAssetLabel && (
-                                        <div className="break-words">
-                                            <span className="text-muted-foreground">{t('图片', 'Asset')}: </span>
-                                            <span>{batchProgress.currentAssetLabel}</span>
-                                        </div>
-                                    )}
-                                    {batchProgress.stopRequested && (
-                                        <div className="break-words">
-                                            <span className="text-muted-foreground">{t('停止', 'Stop')}: </span>
-                                            <span>{t('已请求停止', 'Stop requested')}</span>
-                                        </div>
-                                    )}
-                                </div>
-                                {batchProgress.status && (
-                                    <div className="text-[11px] text-muted-foreground break-words leading-relaxed max-h-20 overflow-auto custom-scrollbar" title={batchProgress.status}>
-                                        {batchProgress.status}
-                                    </div>
-                                )}
-                            </div>
-                        )}
                     </div>
 
                     <div className="flex items-center gap-1 ml-2">
@@ -20490,17 +20529,34 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 </div>
             </div>
 
-             {/* Progress Bar for Batch */}
-             <div className="px-4">
-                 <div className={`transition-all duration-300 overflow-hidden ${isBatchGenerating ? 'h-6 mt-2' : 'h-0'}`}>
-                    <div className="w-full h-1 bg-white/10 rounded-full overflow-hidden mb-1.5">
-                        <div 
-                            className="h-full bg-primary transition-all duration-300 ease-out"
-                            style={{ width: `${(batchProgress.current / batchProgress.total) * 100}%` }}
-                        ></div>
+            {shouldShowShotBatchProgress && (
+                <div className={`sticky top-0 z-20 mb-4 rounded-lg border px-4 py-2.5 flex items-center gap-2 text-sm shrink-0 backdrop-blur-sm ${
+                    isBatchGenerating
+                        ? 'border-blue-500/30 bg-blue-500/10 text-blue-100'
+                        : batchProgress.stopRequested
+                            ? 'border-yellow-500/30 bg-yellow-500/10 text-yellow-100'
+                            : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100'
+                }`}>
+                    {isBatchGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
+                    <div className="flex items-center justify-between w-full gap-3">
+                        <span>
+                            {batchProgress.status || t('批量任务状态已更新。', 'Batch task status updated.')}
+                            {batchProgress.stopRequested ? ` · ${t('已请求停止', 'Stop requested')}` : ''}
+                            {shotBatchProgressSummary ? ` · ${shotBatchProgressSummary}` : ''}
+                        </span>
+                        {isShotBatchCompleted && (
+                            <button
+                                onClick={() => setIsShotBatchProgressDismissed(true)}
+                                className="inline-flex items-center justify-center rounded p-1 text-current/80 hover:text-current hover:bg-white/10"
+                                title={t('关闭进度条幅', 'Dismiss progress banner')}
+                                aria-label={t('关闭进度条幅', 'Dismiss progress banner')}
+                            >
+                                <X className="w-4 h-4" />
+                            </button>
+                        )}
                     </div>
                 </div>
-            </div>
+            )}
 
             {/* Sub-header Actions */}
             <div className="px-4 pb-2 flex justify-end" />
@@ -24746,6 +24802,7 @@ const Editor = ({
         { id: 'shots', label: t('镜头', 'Shots'), icon: Film },
         { id: 'montage', label: t('剪辑', 'Montage'), icon: Video },
     ];
+    const activeMenuItem = MENU_ITEMS.find((item) => item.id === activeTab) || MENU_ITEMS[0];
 
     const trackMenuAction = (menuKey, menuLabel, actionFn) => {
         const page = `${window.location.pathname}${window.location.search}${window.location.hash}`;
@@ -24802,28 +24859,36 @@ const Editor = ({
         }
     };
 
+    const navigateTopMenu = (item) => {
+        if (!item) return;
+        trackMenuAction(`editor.top_menu.${item.id}`, item.label, () => {
+            setActiveTab(item.id);
+            if (item.id === 'shots') setEditingShot(null);
+        });
+    };
+
     return (
         <div className="flex flex-col h-screen w-full bg-background overflow-hidden relative text-foreground">
             {/* Top Navigation Bar - Compact */}
-            <div className="h-12 px-4 border-b border-white/10 bg-[#09090b] flex items-center justify-between shrink-0 z-40 relative">
+            <div className="px-3 py-3 md:h-12 md:px-4 md:py-0 border-b border-white/10 bg-[#09090b] flex flex-col md:flex-row md:items-center md:justify-between gap-3 shrink-0 z-40 relative">
                 {/* Left: Project Info & Episode Selector */}
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-3 md:gap-4 min-w-0 w-full md:w-auto">
                      {/* Back Button if in embedded mode */}
                      {onClose && (
                                 <button onClick={() => trackMenuAction('editor.back.embedded', t('返回项目', 'Back to Projects'), onClose)} className="p-1.5 hover:bg-white/10 rounded-md text-muted-foreground hover:text-white transition-colors mr-2">
                             <ArrowLeft className="w-5 h-5" />
                         </button>
                      )}
-                     <div className="flex items-center gap-4">
-                        <h1 className="font-bold text-sm tracking-wide text-white flex items-center gap-2">
-                            <span className="text-primary hover:underline cursor-pointer">{project ? project.title : `Project #${id}`}</span>
+                     <div className="flex items-center gap-3 md:gap-4 min-w-0 w-full md:w-auto">
+                        <h1 className="font-bold text-sm tracking-wide text-white flex items-center gap-2 min-w-0">
+                            <span className="text-primary hover:underline cursor-pointer truncate">{project ? project.title : `Project #${id}`}</span>
                         </h1>
                         
                         {/* Episode Dropdown */}
-                        <div className="relative">
+                        <div className="relative flex-1 md:flex-none min-w-0">
                             <button 
                                 onClick={() => trackMenuAction('editor.episode.dropdown_toggle', t('剧集菜单', 'Episode Menu'), () => setIsEpisodeMenuOpen(!isEpisodeMenuOpen))}
-                                className="w-[260px] flex items-center justify-between gap-2 px-3 py-1 bg-white/5 hover:bg-white/10 border border-white/10 rounded-md text-xs font-medium text-white transition-colors"
+                                className="w-full md:w-[260px] flex items-center justify-between gap-2 px-3 py-2 md:py-1 bg-white/5 hover:bg-white/10 border border-white/10 rounded-md text-xs font-medium text-white transition-colors"
                             >
                                 <span className="truncate text-left">{activeEpisodeLabel}</span>
                                 <ChevronDown className="w-3 h-3 text-muted-foreground" />
@@ -24831,7 +24896,7 @@ const Editor = ({
 
                             {/* Dropdown Menu */}
                             {isEpisodeMenuOpen && (
-                                <div className="absolute top-full left-0 mt-2 w-[320px] bg-[#09090b] border border-white/10 rounded-lg shadow-xl py-1 z-50">
+                                <div className="absolute top-full left-0 mt-2 w-full md:w-[320px] bg-[#09090b] border border-white/10 rounded-lg shadow-xl py-1 z-50 max-h-[60vh] overflow-y-auto">
                                     {episodes.map((ep, index) => (
                                         <div 
                                             key={ep.id}
@@ -24869,31 +24934,44 @@ const Editor = ({
                 </div>
 
                 {/* Center: Navigation Menu */}
-                <div className="flex items-center bg-transparent">
-                    {MENU_ITEMS.map(item => {
-                        const Icon = item.icon;
-                        const isActive = activeTab === item.id;
-                        return (
-                            <button
-                                key={item.id}
-                                onClick={() => {
-                                    trackMenuAction(`editor.top_menu.${item.id}`, item.label, () => {
-                                        setActiveTab(item.id);
-                                        if (item.id === 'shots') setEditingShot(null);
-                                    });
-                                }}
-                                className={`flex items-center gap-2 px-4 py-1.5 text-xs font-bold transition-all relative ${isActive ? 'text-primary' : 'text-muted-foreground hover:text-white'}`}
-                            >
-                                <Icon className="w-3.5 h-3.5" />
-                                {item.label}
-                                {isActive && <div className="absolute bottom-[-13px] left-0 right-0 h-[2px] bg-primary shadow-[0_0_10px_rgba(255,255,255,0.5)]"></div>}
-                            </button>
-                        )
-                    })}
+                <div className="w-full md:flex-1 md:min-w-0">
+                    <div className="md:hidden mb-2">
+                        <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground/80">
+                            {t('当前模块', 'Current Section')}
+                        </label>
+                        <select
+                            value={activeMenuItem?.id || activeTab}
+                            onChange={(e) => navigateTopMenu(MENU_ITEMS.find((item) => item.id === e.target.value))}
+                            className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none transition-colors focus:border-primary/40"
+                        >
+                            {MENU_ITEMS.map((item) => (
+                                <option key={`editor-top-menu-${item.id}`} value={item.id}>{item.label}</option>
+                            ))}
+                        </select>
+                    </div>
+                    <div className="overflow-x-auto no-scrollbar">
+                        <div className="flex items-center bg-transparent min-w-max">
+                            {MENU_ITEMS.map(item => {
+                                const Icon = item.icon;
+                                const isActive = activeTab === item.id;
+                                return (
+                                    <button
+                                        key={item.id}
+                                        onClick={() => navigateTopMenu(item)}
+                                        className={`shrink-0 flex items-center gap-2 px-4 py-1.5 text-xs font-bold transition-all relative ${isActive ? 'text-primary' : 'text-muted-foreground hover:text-white'}`}
+                                    >
+                                        <Icon className="w-3.5 h-3.5" />
+                                        {item.label}
+                                        {isActive && <div className="absolute bottom-[-13px] left-0 right-0 h-[2px] bg-primary shadow-[0_0_10px_rgba(255,255,255,0.5)]"></div>}
+                                    </button>
+                                )
+                            })}
+                        </div>
+                    </div>
                 </div>
 
                 {/* Right: Actions */}
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 md:gap-3 flex-wrap md:flex-nowrap justify-end w-full md:w-auto">
                     <button
                         onClick={() => trackMenuAction('editor.ui_language.toggle', t('切换界面语言', 'Toggle UI Language'), () => setUiLang(prev => prev === 'zh' ? 'en' : 'zh'))}
                         className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1.5"

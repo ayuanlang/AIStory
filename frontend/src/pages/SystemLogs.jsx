@@ -45,12 +45,12 @@ const SystemLogs = () => {
     return (
         <div className="flex flex-col h-full bg-[#121212] text-white">
             {/* Header */}
-            <header className="flex items-center justify-between px-6 py-4 border-b border-white/10 bg-[#1e1e1e]">
-                <div className="flex items-center gap-4">
+            <header className="flex items-center justify-between gap-3 px-4 py-4 sm:px-6 border-b border-white/10 bg-[#1e1e1e]">
+                <div className="flex items-center gap-3 sm:gap-4 min-w-0">
                     <button onClick={() => navigate('/')} className="hover:bg-white/10 p-2 rounded-full">
                         <ArrowLeft size={20} />
                     </button>
-                    <h1 className="text-xl font-bold flex items-center gap-2">
+                    <h1 className="text-lg sm:text-xl font-bold flex items-center gap-2 min-w-0 truncate">
                         <Layers className="text-primary" />
                         {t('系统日志', 'System Logs')}
                     </h1>
@@ -64,14 +64,57 @@ const SystemLogs = () => {
             </header>
 
             {/* Content */}
-            <div className="flex-1 overflow-auto p-6">
+            <div className="flex-1 overflow-auto p-4 sm:p-6">
                 {error && (
                     <div className="bg-red-500/20 text-red-200 p-4 rounded-lg mb-4 border border-red-500/30">
                         {error}
                     </div>
                 )}
 
-                <div className="bg-[#1e1e1e] rounded-xl border border-white/10 overflow-hidden">
+                <div className="md:hidden space-y-3">
+                    {logs.map((log) => (
+                        <button
+                            key={log.id}
+                            type="button"
+                            className="w-full text-left bg-[#1e1e1e] rounded-xl border border-white/10 p-4 space-y-3 hover:bg-white/[0.03] transition-colors"
+                            onClick={() => setSelectedLog(log)}
+                        >
+                            <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                    <div className="text-sm font-semibold text-white truncate">{log.user_name || `${t('用户', 'User')} #${log.user_id}`}</div>
+                                    <div className="text-xs text-white/50 mt-1">{new Date(log.timestamp).toLocaleString()}</div>
+                                </div>
+                                <span className={`shrink-0 px-2 py-0.5 rounded text-[11px] font-bold ${
+                                    log.action === 'LOGIN' ? 'bg-green-500/20 text-green-400' :
+                                    log.action === 'LOGIN_FAILED' ? 'bg-red-500/20 text-red-400' :
+                                    'bg-blue-500/20 text-blue-400'
+                                }`}>
+                                    {log.action}
+                                </span>
+                            </div>
+                            <div className="grid grid-cols-1 gap-2 text-xs">
+                                <div>
+                                    <div className="text-white/40 mb-1">{t('详情', 'Details')}</div>
+                                    <div className="text-white/80 line-clamp-3 break-words">{log.details || '-'}</div>
+                                </div>
+                                <div>
+                                    <div className="text-white/40 mb-1">{t('IP 地址', 'IP')}</div>
+                                    <div className="text-white/60 font-mono break-all">{log.ip_address || '-'}</div>
+                                </div>
+                            </div>
+                            <div className="flex justify-end">
+                                <span className="px-2.5 py-1 rounded-md text-xs bg-white/10">{t('详情', 'Details')}</span>
+                            </div>
+                        </button>
+                    ))}
+                    {logs.length === 0 && !loading && (
+                        <div className="bg-[#1e1e1e] rounded-xl border border-white/10 px-4 py-8 text-center text-muted-foreground">
+                            {t('暂无日志。', 'No logs found.')}
+                        </div>
+                    )}
+                </div>
+
+                <div className="hidden md:block bg-[#1e1e1e] rounded-xl border border-white/10 overflow-hidden">
                     <table className="w-full text-sm text-left">
                         <thead className="bg-black/30 text-muted-foreground uppercase text-xs">
                             <tr>
@@ -160,25 +203,25 @@ const SystemLogs = () => {
                         </div>
 
                         <div className="px-5 py-4 space-y-3 text-sm">
-                            <div className="grid grid-cols-3 gap-3">
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
                                 <span className="text-white/50">{t('时间戳', 'Timestamp')}</span>
-                                <span className="col-span-2">{new Date(selectedLog.timestamp).toLocaleString()}</span>
+                                <span className="sm:col-span-2">{new Date(selectedLog.timestamp).toLocaleString()}</span>
                             </div>
-                            <div className="grid grid-cols-3 gap-3">
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
                                 <span className="text-white/50">{t('用户', 'User')}</span>
-                                <span className="col-span-2">{selectedLog.user_name || `${t('用户', 'User')} #${selectedLog.user_id}`}</span>
+                                <span className="sm:col-span-2">{selectedLog.user_name || `${t('用户', 'User')} #${selectedLog.user_id}`}</span>
                             </div>
-                            <div className="grid grid-cols-3 gap-3">
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
                                 <span className="text-white/50">{t('动作', 'Action')}</span>
-                                <span className="col-span-2">{selectedLog.action}</span>
+                                <span className="sm:col-span-2">{selectedLog.action}</span>
                             </div>
-                            <div className="grid grid-cols-3 gap-3">
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
                                 <span className="text-white/50">{t('IP 地址', 'IP')}</span>
-                                <span className="col-span-2 font-mono text-xs">{selectedLog.ip_address || '-'}</span>
+                                <span className="sm:col-span-2 font-mono text-xs break-all">{selectedLog.ip_address || '-'}</span>
                             </div>
-                            <div className="grid grid-cols-3 gap-3 items-start">
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3 items-start">
                                 <span className="text-white/50">{t('详情', 'Details')}</span>
-                                <pre className="col-span-2 whitespace-pre-wrap break-words bg-black/20 border border-white/10 rounded-md p-3 text-white/85 text-xs">
+                                <pre className="sm:col-span-2 whitespace-pre-wrap break-words bg-black/20 border border-white/10 rounded-md p-3 text-white/85 text-xs overflow-x-auto">
                                     {selectedLog.details || '-'}
                                 </pre>
                             </div>

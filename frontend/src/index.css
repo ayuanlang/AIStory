@@ -153,3 +153,12 @@
 }
 .agent-chat-md strong { font-weight: 600; }
 .agent-chat-md em { font-style: italic; }
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}

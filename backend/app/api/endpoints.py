@@ -3787,6 +3787,17 @@ def _ensure_project_generation_defaults(global_info: Any) -> Dict[str, Any]:
         visual_standard.setdefault("horizontal_resolution", int(current_w))
         visual_standard.setdefault("vertical_resolution", int(current_h))
 
+    # If only logical size tier exists, infer concrete dimensions from aspect ratio.
+    if (not current_w or not current_h) and aspect_ratio and image_size:
+        inferred_dims = _infer_project_resolution(aspect_ratio, image_size)
+        if inferred_dims:
+            inferred_w, inferred_h = inferred_dims
+            if inferred_w and inferred_h:
+                defaults["horizontal_resolution"] = int(inferred_w)
+                defaults["vertical_resolution"] = int(inferred_h)
+                visual_standard.setdefault("horizontal_resolution", int(inferred_w))
+                visual_standard.setdefault("vertical_resolution", int(inferred_h))
+
     quality = str(
         defaults.get("quality")
         or visual_standard.get("quality")
@@ -5374,6 +5385,9 @@ def update_project(
         current_info = dict(project.global_info) if project.global_info else {}
         current_info['notes'] = project_in.description
         project.global_info = current_info
+
+    # Normalize and persist generation defaults for consistent downstream billing inputs.
+    project.global_info = _ensure_project_generation_defaults(project.global_info)
     
     db.commit()
     db.refresh(project)
@@ -13821,6 +13835,30 @@ class VoiceGenerationRequest(BaseModel):
     seed: Optional[int] = None
 
 
+_DEFAULT_FRAME_INTEGRITY_NEGATIVE_PROMPT = (
+    "no split-screen, no multi-panel, no collage, no duplicated subject, "
+    "no repeated background blocks, no tiled composition, no comic-strip layout, "
+    "no text, no watermark"
+)
+
+
+def _resolve_effective_negative_prompt(
+    negative_prompt: Optional[str],
+    asset_type: Optional[str],
+    media_type: str,
+) -> Tuple[str, str]:
+    supplied = str(negative_prompt or "").strip()
+    if supplied:
+        return supplied, "request"
+
+    asset_kind = str(asset_type or "").strip().lower()
+    media_kind = str(media_type or "").strip().lower()
+    if media_kind == "image" and asset_kind in {"start", "start_frame", "end", "end_frame"}:
+        return _DEFAULT_FRAME_INTEGRITY_NEGATIVE_PROMPT, "default_frame_integrity"
+
+    return "", "none"
+
+
 def _normalize_seed_value(value: Any) -> Optional[int]:
     try:
         seed_num = int(value)
@@ -15525,10 +15563,16 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
         if fallback_model_candidate:
             image_provider_options["fallbackModel"] = fallback_model_candidate
 
+        effective_negative_prompt, negative_prompt_source = _resolve_effective_negative_prompt(
+            req.negative_prompt,
+            req.asset_type,
+            "image",
+        )
+
         # Assuming generate_image returns {"url": "...", ...}
         result = await media_service.generate_image(
             prompt=req.prompt, 
-            negative_prompt=req.negative_prompt,
+            negative_prompt=effective_negative_prompt,
             llm_config=runtime_llm_config,
             reference_image_url=req.ref_image_url,
             width=width,
@@ -15549,7 +15593,10 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
             active_seed = explicit_seed or project_seed
             if active_seed:
                 stable_meta.setdefault("seed", int(active_seed))
-                result["metadata"] = stable_meta
+            if effective_negative_prompt:
+                stable_meta["negative_prompt_submitted"] = effective_negative_prompt
+            stable_meta["negative_prompt_source"] = negative_prompt_source
+            result["metadata"] = stable_meta
 
         result_meta = result.get("metadata") if isinstance(result, dict) else {}
         if not isinstance(result_meta, dict):
@@ -16699,9 +16746,15 @@ async def generate_voice_endpoint(
             str(effective_prompt or "")[:120],
         )
 
+        effective_negative_prompt, negative_prompt_source = _resolve_effective_negative_prompt(
+            req.negative_prompt,
+            req.asset_type,
+            "voice",
+        )
+
         result = await media_service.generate_voice(
             prompt=effective_prompt,
-            negative_prompt=req.negative_prompt,
+            negative_prompt=effective_negative_prompt,
             llm_config=runtime_llm_config,
             duration=5,
             provider_options=provider_options,
@@ -16716,7 +16769,10 @@ async def generate_voice_endpoint(
             active_seed = explicit_seed or project_seed
             if active_seed:
                 stable_meta.setdefault("seed", int(active_seed))
-                result["metadata"] = stable_meta
+            if effective_negative_prompt:
+                stable_meta["negative_prompt_submitted"] = effective_negative_prompt
+            stable_meta["negative_prompt_source"] = negative_prompt_source
+            result["metadata"] = stable_meta
 
         if "error" in result:
             detail = result["error"]
@@ -16967,6 +17023,36 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
         aspect_ratio_source = "fallback"
         project_global_info: Dict[str, Any] = {}
         resolved_project_id = req.project_id
+        resolved_episode_id = _to_positive_int_or_none(getattr(req, "episode_id", None))
+        resolved_shot_id = _to_positive_int_or_none(getattr(req, "shot_id", None))
+
+        # Billing context fallback: infer missing IDs from shot/episode lineage.
+        context_shot: Optional[Shot] = None
+        if resolved_shot_id:
+            context_shot = db.query(Shot).filter(Shot.id == int(resolved_shot_id)).first()
+            if context_shot:
+                if not resolved_project_id:
+                    shot_project_id = _to_positive_int_or_none(getattr(context_shot, "project_id", None))
+                    if shot_project_id:
+                        resolved_project_id = int(shot_project_id)
+
+                if not resolved_episode_id:
+                    shot_episode_id = _to_positive_int_or_none(getattr(context_shot, "episode_id", None))
+                    if shot_episode_id:
+                        resolved_episode_id = int(shot_episode_id)
+
+                if not resolved_episode_id and getattr(context_shot, "scene_id", None):
+                    context_scene = db.query(Scene).filter(Scene.id == int(context_shot.scene_id)).first()
+                    if context_scene and _to_positive_int_or_none(getattr(context_scene, "episode_id", None)):
+                        resolved_episode_id = int(context_scene.episode_id)
+
+        if not resolved_project_id:
+            resolved_project_id = _resolve_project_id_for_generation(req, db)
+
+        if not resolved_project_id and resolved_episode_id:
+            context_episode = db.query(Episode).filter(Episode.id == int(resolved_episode_id)).first()
+            if context_episode and _to_positive_int_or_none(getattr(context_episode, "project_id", None)):
+                resolved_project_id = int(context_episode.project_id)
 
         # Only read project-level realtime config for visual params.
         if resolved_project_id:
@@ -17029,6 +17115,8 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
             aspect_ratio = project_ratio
             aspect_ratio_source = "project_global_info"
 
+        normalized_mode = str(req.mode or "").strip().lower() or None
+
         # Inject project visual size defaults for video providers that support/need them.
         width_candidates = [
             project_visual.get("width"),
@@ -17076,6 +17164,19 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
                 resolved_video_image_size = normalized
                 break
 
+        # If project only provides logical size tier (e.g. 1K) plus aspect ratio,
+        # infer concrete dimensions so billing-rule range matching can use width/height.
+        if (not resolved_video_width or not resolved_video_height) and resolved_video_image_size and aspect_ratio:
+            inferred_dims = _infer_project_resolution(aspect_ratio, resolved_video_image_size)
+            if inferred_dims:
+                inferred_w, inferred_h = inferred_dims
+                if not resolved_video_width and inferred_w:
+                    resolved_video_width = int(inferred_w)
+                if not resolved_video_height and inferred_h:
+                    resolved_video_height = int(inferred_h)
+                if resolved_video_width and resolved_video_height:
+                    resolved_video_resolution = f"{int(resolved_video_width)}x{int(resolved_video_height)}"
+
         if _is_token_billing:
             _video_token_cfg = billing_service.resolve_video_token_config(db, reserve_provider, reserve_model)
             est_duration = max(5, int(req.duration or 5)) if (req.duration and req.duration > 0) else 5
@@ -17106,6 +17207,10 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
                 "billing_mode": "RESERVE",
             }
 
+        if req.duration is not None:
+            reserve_details["duration"] = req.duration
+            reserve_details["duration_seconds"] = req.duration
+
         if resolved_video_width:
             reserve_details["width"] = int(resolved_video_width)
         if resolved_video_height:
@@ -17122,8 +17227,15 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
             reserve_details["resolved_model"] = reserve_model
         if resolved_sound is not None:
             reserve_details["has_audio"] = bool(resolved_sound)
-        if req.mode is not None and str(req.mode).strip():
-            reserve_details["mode"] = str(req.mode).strip().lower()
+        if normalized_mode:
+            reserve_details["mode"] = normalized_mode
+            reserve_details["generation_mode"] = normalized_mode
+        if resolved_project_id:
+            reserve_details["project_id"] = int(resolved_project_id)
+        if resolved_episode_id:
+            reserve_details["episode_id"] = int(resolved_episode_id)
+        if resolved_shot_id:
+            reserve_details["shot_id"] = int(resolved_shot_id)
         if reserve_system_api_id is not None:
             reserve_details["system_api_id"] = reserve_system_api_id
             reserve_details["resolved_system_api_id"] = reserve_system_api_id
@@ -17143,13 +17255,14 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
         explicit_seed = _normalize_seed_value(getattr(req, "seed", None))
 
         logger.info(
-            "[GenerateVideo] Resolved aspect ratio=%s source=%s sound=%s sound_source=%s project_id=%s shot_id=%s width=%s height=%s resolution=%s image_size=%s",
+            "[GenerateVideo] Resolved aspect ratio=%s source=%s sound=%s sound_source=%s project_id=%s episode_id=%s shot_id=%s width=%s height=%s resolution=%s image_size=%s",
             aspect_ratio,
             aspect_ratio_source,
             resolved_sound,
             sound_source,
             resolved_project_id,
-            req.shot_id,
+            resolved_episode_id,
+            resolved_shot_id,
             resolved_video_width,
             resolved_video_height,
             resolved_video_resolution,
@@ -17310,9 +17423,15 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
             video_provider_options["seed"] = int(project_seed)
             video_provider_options["seeds"] = int(project_seed)
 
+        effective_negative_prompt, negative_prompt_source = _resolve_effective_negative_prompt(
+            req.negative_prompt,
+            req.asset_type,
+            "video",
+        )
+
         result = await media_service.generate_video(
             prompt=prompt_text,
-            negative_prompt=req.negative_prompt,
+            negative_prompt=effective_negative_prompt,
             llm_config=runtime_llm_config,
             reference_image_url=req.ref_image_url,
             last_frame_url=req.last_frame_url,
@@ -17332,7 +17451,10 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
             active_seed = explicit_seed or project_seed
             if active_seed:
                 stable_meta.setdefault("seed", int(active_seed))
-                result["metadata"] = stable_meta
+            if effective_negative_prompt:
+                stable_meta["negative_prompt_submitted"] = effective_negative_prompt
+            stable_meta["negative_prompt_source"] = negative_prompt_source
+            result["metadata"] = stable_meta
         print(
             "[GenerateVideo][Config] req_provider=%s req_model=%s runtime_llm_config=%s"
             % (
@@ -17458,6 +17580,21 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
                     final_has_audio = bool(resolved_sound)
                 if final_has_audio is not None:
                     settle_details["has_audio"] = bool(final_has_audio)
+
+            if req.duration is not None:
+                settle_details["duration"] = req.duration
+                settle_details["duration_seconds"] = req.duration
+            if normalized_mode:
+                settle_details["mode"] = normalized_mode
+                settle_details["generation_mode"] = normalized_mode
+            if resolved_sound is not None and settle_details.get("has_audio") is None:
+                settle_details["has_audio"] = bool(resolved_sound)
+            if resolved_project_id:
+                settle_details["project_id"] = int(resolved_project_id)
+            if resolved_episode_id:
+                settle_details["episode_id"] = int(resolved_episode_id)
+            if resolved_shot_id:
+                settle_details["shot_id"] = int(resolved_shot_id)
 
             if final_provider:
                 settle_details["provider"] = final_provider
@@ -19067,6 +19204,7 @@ def _inject_shot_prompt_anchors(
         return text
 
     regex = re.compile(r"[\[【](.*?)[\]】]")
+    injected_entities: set[str] = set()
 
     def _replace(match: re.Match) -> str:
         token = str(match.group(1) or "").strip()
@@ -19083,6 +19221,16 @@ def _inject_shot_prompt_anchors(
             anchor = str(row.get("anchor") or "").strip()
             entity_id = str(row.get("entity_id") or "").strip()
             ref_no = (subject_ref_index_map or {}).get(entity_id)
+
+            if normalized in injected_entities:
+                # Duplicate reference: skip anchor description to prevent
+                # image models from interpreting repeated descriptions as
+                # multiple subjects (二宫格 / split-panel issue).
+                if ref_no:
+                    return f"{match.group(0)}(ref_image_url: #{ref_no})"
+                return match.group(0)
+
+            injected_entities.add(normalized)
             anchor_with_ref = anchor
             if ref_no:
                 anchor_with_ref = f"{anchor} | ref_image_url: #{ref_no}"

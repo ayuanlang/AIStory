@@ -4145,6 +4145,23 @@ const UserAdmin = () => {
         </button>
     );
 
+    const adminTabs = [
+        { id: 'users', label: t('用户', 'Users'), icon: User },
+        { id: 'pricing', label: t('定价', 'Pricing'), icon: DollarSign },
+        { id: 'transactions', label: t('记录', 'History'), icon: Activity },
+        { id: 'system_api', label: t('系统 API', 'System API'), icon: Key },
+        { id: 'config_sync', label: t('配置同步', 'Config Sync'), icon: Database },
+        { id: 'pricing_rules', label: t('计费规则', 'Pricing Rules'), icon: DollarSign },
+        { id: 'supplier_ops', label: t('供应商运营', 'Supplier Ops'), icon: Settings },
+        { id: 'kie_pricing', label: t('KIE 定价助手', 'KIE Pricing Assistant'), icon: Settings },
+        { id: 'prompt_skills', label: t('Prompt Skills', 'Prompt Skills'), icon: List },
+        { id: 'storage_usage', label: t('磁盘统计', 'Storage Usage'), icon: HardDrive },
+        { id: 'runtime_logs', label: t('系统日志', 'Runtime Logs'), icon: List },
+        { id: 'llm_logs', label: t('LLM 日志', 'LLM Logs'), icon: List },
+        { id: 'payment', label: t('支付', 'Payment'), icon: CreditCard },
+        { id: 'smtp', label: t('邮件 SMTP', 'Email SMTP'), icon: Mail },
+    ];
+
     const Toggle = ({ active, onClick, color = "bg-green-500", label }) => (
         <button 
             onClick={onClick}
@@ -4227,22 +4244,35 @@ const UserAdmin = () => {
 
                 </div>
 
-                <div className="mb-6 rounded-xl border border-white/10 bg-white/5 p-1.5 overflow-x-auto">
+                <div className="mb-4 space-y-3 md:hidden">
+                    <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                        <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-gray-400">
+                            {t('当前模块', 'Current Section')}
+                        </label>
+                        <select
+                            value={activeTab}
+                            onChange={(e) => setActiveTab(e.target.value)}
+                            className="w-full rounded-xl border border-white/10 bg-[#111114] px-4 py-3 text-sm text-white outline-none transition-colors focus:border-primary/40"
+                        >
+                            {adminTabs.map((tab) => (
+                                <option key={`admin-tab-select-${tab.id}`} value={tab.id}>{tab.label}</option>
+                            ))}
+                        </select>
+                    </div>
+                    <div className="overflow-x-auto no-scrollbar rounded-xl border border-white/10 bg-white/[0.03] p-1.5">
+                        <div className="flex min-w-max items-center gap-1">
+                            {adminTabs.map((tab) => (
+                                <TabButton key={`admin-tab-mobile-${tab.id}`} id={tab.id} label={tab.label} icon={tab.icon} />
+                            ))}
+                        </div>
+                    </div>
+                </div>
+
+                <div className="hidden md:block mb-6 rounded-xl border border-white/10 bg-white/5 p-1.5 overflow-x-auto no-scrollbar">
                     <div className="flex items-center gap-1 min-w-max">
-                        <TabButton id="users" label={t('用户', 'Users')} icon={User} />
-                        <TabButton id="pricing" label={t('定价', 'Pricing')} icon={DollarSign} />
-                        <TabButton id="transactions" label={t('记录', 'History')} icon={Activity} />
-                        <TabButton id="system_api" label={t('系统 API', 'System API')} icon={Key} />
-                        <TabButton id="config_sync" label={t('配置同步', 'Config Sync')} icon={Database} />
-                        <TabButton id="pricing_rules" label={t('计费规则', 'Pricing Rules')} icon={DollarSign} />
-                        <TabButton id="supplier_ops" label={t('供应商运营', 'Supplier Ops')} icon={Settings} />
-                        <TabButton id="kie_pricing" label={t('KIE 定价助手', 'KIE Pricing Assistant')} icon={Settings} />
-                        <TabButton id="prompt_skills" label={t('Prompt Skills', 'Prompt Skills')} icon={List} />
-                        <TabButton id="storage_usage" label={t('磁盘统计', 'Storage Usage')} icon={HardDrive} />
-                        <TabButton id="runtime_logs" label={t('系统日志', 'Runtime Logs')} icon={List} />
-                        <TabButton id="llm_logs" label={t('LLM 日志', 'LLM Logs')} icon={List} />
-                        <TabButton id="payment" label={t('支付', 'Payment')} icon={CreditCard} />
-                        <TabButton id="smtp" label={t('邮件 SMTP', 'Email SMTP')} icon={Mail} />
+                        {adminTabs.map((tab) => (
+                            <TabButton key={`admin-tab-${tab.id}`} id={tab.id} label={tab.label} icon={tab.icon} />
+                        ))}
                     </div>
                 </div>
 
@@ -4774,7 +4804,99 @@ const UserAdmin = () => {
                                     </button>
                                 </div>
                             </div>
-                            <div className="overflow-x-auto">
+                            <div className="md:hidden space-y-3">
+                                {users.map((user) => (
+                                    <div key={`user-card-${user.id}`} className="rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-4">
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className="min-w-0">
+                                                <div className="text-sm font-semibold text-white">#{user.id} {user.username || t('未命名用户', 'Unnamed User')}</div>
+                                                <div className="text-xs text-gray-400 truncate mt-1">{user.email || '-'}</div>
+                                            </div>
+                                            <button
+                                                className="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20 shrink-0"
+                                                onClick={async () => {
+                                                    const pwd = window.prompt(t('请输入新密码（至少 6 位）', 'Enter new password (min 6 chars)'));
+                                                    if (!pwd) return;
+                                                    await updateUser(user.id, { password: pwd });
+                                                }}
+                                            >
+                                                {t('重置密码', 'Reset Password')}
+                                            </button>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 gap-3 text-sm">
+                                            <div>
+                                                <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">{t('用户', 'User')}</div>
+                                                <input
+                                                    className="w-full bg-black/30 border border-gray-700 rounded px-3 py-2 text-sm"
+                                                    value={user.username || ''}
+                                                    onChange={(e) => setUsers(users.map(u => u.id === user.id ? { ...u, username: e.target.value } : u))}
+                                                    onBlur={() => updateUser(user.id, { username: user.username })}
+                                                />
+                                            </div>
+                                            <div>
+                                                <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">{t('邮箱', 'Email')}</div>
+                                                <input
+                                                    className="w-full bg-black/30 border border-gray-700 rounded px-3 py-2 text-sm text-gray-300"
+                                                    value={user.email || ''}
+                                                    onChange={(e) => setUsers(users.map(u => u.id === user.id ? { ...u, email: e.target.value } : u))}
+                                                    onBlur={() => updateUser(user.id, { email: user.email })}
+                                                />
+                                            </div>
+                                            <div>
+                                                <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">{t('姓名', 'Full Name')}</div>
+                                                <input
+                                                    className="w-full bg-black/30 border border-gray-700 rounded px-3 py-2 text-sm"
+                                                    value={user.full_name || ''}
+                                                    onChange={(e) => setUsers(users.map(u => u.id === user.id ? { ...u, full_name: e.target.value } : u))}
+                                                    onBlur={() => updateUser(user.id, { full_name: user.full_name })}
+                                                />
+                                            </div>
+                                        </div>
+
+                                        <div className="grid grid-cols-2 gap-3 text-sm">
+                                            <div className="rounded-lg bg-black/20 border border-white/5 px-3 py-2">
+                                                <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">{t('积分', 'Credits')}</div>
+                                                <button
+                                                    onClick={() => { setCreditEditUser(user); setCreditAmount(user.credits); }}
+                                                    className="inline-flex items-center gap-2 text-green-400 font-mono"
+                                                >
+                                                    {user.credits}
+                                                    <Edit2 size={12} />
+                                                </button>
+                                            </div>
+                                            <div className="rounded-lg bg-black/20 border border-white/5 px-3 py-2">
+                                                <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">{t('状态', 'Status')}</div>
+                                                <select
+                                                    className="w-full bg-black/30 border border-gray-700 rounded px-2 py-1 text-xs"
+                                                    value={user.account_status ?? 1}
+                                                    onChange={(e) => updateUser(user.id, { account_status: Number(e.target.value) })}
+                                                >
+                                                    <option value={1}>{t('正常', 'Active')}</option>
+                                                    <option value={0}>{t('禁用', 'Disabled')}</option>
+                                                    <option value={-1}>{t('待邮箱校验', 'Pending Verify')}</option>
+                                                </select>
+                                            </div>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 gap-3 text-sm">
+                                            <div className="flex items-center justify-between rounded-lg bg-black/20 border border-white/5 px-3 py-2">
+                                                <span>{t('启用', 'Active')}</span>
+                                                <Toggle active={user.is_active} onClick={() => updateUser(user.id, { is_active: !user.is_active })} />
+                                            </div>
+                                            <div className="flex items-center justify-between rounded-lg bg-black/20 border border-white/5 px-3 py-2">
+                                                <span>{t('邮箱已验证', 'Email Verified')}</span>
+                                                <Toggle active={!!user.email_verified} color="bg-amber-500" onClick={() => updateUser(user.id, { email_verified: !user.email_verified })} />
+                                            </div>
+                                            <div className="flex items-center justify-between rounded-lg bg-black/20 border border-white/5 px-3 py-2">
+                                                <span>{t('超级管理员', 'Superuser')}</span>
+                                                <Toggle active={user.is_superuser} color="bg-red-500" onClick={() => updateUser(user.id, { is_superuser: !user.is_superuser })} />
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                            <div className="hidden md:block overflow-x-auto">
                             <table className="w-full text-left border-collapse">
                                 <thead>
                                     <tr className="border-b border-gray-800 text-gray-400 text-sm">
@@ -5251,9 +5373,9 @@ const UserAdmin = () => {
                     {/* TRANSACTIONS TAB */}
                     {activeTab === 'transactions' && (
                         <div>
-                             <div className="flex justify-between items-center mb-4">
+                             <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-3 mb-4">
                                 <h3 className="text-lg font-bold">{t('最近交易（最近 50 条）', 'Recent Transactions (Last 50)')}</h3>
-                                <div className="flex items-center gap-2">
+                                <div className="flex flex-col sm:flex-row sm:items-center gap-2">
                                     <span className="text-sm text-gray-400">{t('按用户筛选：', 'Filter by User:')}</span>
                                     <select 
                                         className="bg-gray-800 border border-gray-700 text-sm rounded p-2 text-gray-300 focus:outline-none focus:border-primary min-w-[200px]"
@@ -5276,7 +5398,36 @@ const UserAdmin = () => {
                                     </button>
                                 </div>
                              </div>
-                             <div className="overflow-x-auto">
+                             <div className="md:hidden space-y-3">
+                                {transactions.map(t => (
+                                    <div key={`txn-card-${t.id}`} className="rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-3">
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className="min-w-0">
+                                                <div className="text-sm font-semibold text-white">{formatAdminDateTime(t.created_at)}</div>
+                                                <div className="text-xs text-gray-400 mt-1">User #{t.user_id}</div>
+                                            </div>
+                                            <span className="bg-gray-800 px-2 py-0.5 rounded text-xs uppercase text-gray-300 shrink-0">{t.task_type}</span>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-3 text-sm">
+                                            <div className="rounded-lg bg-black/20 border border-white/5 px-3 py-2">
+                                                <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">{t('金额', 'Amount')}</div>
+                                                <div className={`font-mono ${t.amount < 0 ? 'text-red-400' : 'text-green-400'}`}>{t.amount > 0 ? '+' : ''}{t.amount}</div>
+                                            </div>
+                                            <div className="rounded-lg bg-black/20 border border-white/5 px-3 py-2">
+                                                <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">{t('余额', 'Balance')}</div>
+                                                <div className="font-mono text-gray-300">{t.balance_after}</div>
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">{t('详情', 'Details')}</div>
+                                            <div className="max-h-[180px] overflow-y-auto whitespace-pre-wrap break-all rounded-lg bg-gray-900/50 p-2 border border-gray-800 font-mono text-[11px] text-gray-400">
+                                                {JSON.stringify(t.details, null, 2)}
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                             <div className="hidden md:block overflow-x-auto">
                                 <table className="w-full text-left border-collapse text-sm">
                                     <thead>
                                         <tr className="border-b border-gray-800 text-gray-400">
@@ -5426,7 +5577,36 @@ const UserAdmin = () => {
                                 {isMissingBillingRuleCheckLoading ? (
                                     <div className="text-xs text-gray-300">{t('检查中...', 'Checking...')}</div>
                                 ) : (
-                                    <div className="overflow-x-auto max-h-[220px] border border-indigo-400/20 rounded">
+                                    <>
+                                    <div className="md:hidden space-y-2">
+                                        {missingBillingRuleApiRows.map((row) => (
+                                            <div key={`missing-billing-card-${row.id}`} className="rounded-lg border border-indigo-400/20 bg-indigo-500/10 p-3 text-xs space-y-2">
+                                                <div className="flex items-start justify-between gap-3">
+                                                    <div className="min-w-0">
+                                                        <div className="font-semibold text-indigo-100 break-all">#{row.id} {row.name || '-'}</div>
+                                                        <div className="text-indigo-100/70 mt-1">[{row.category || '-'}] {row.provider || '-'} / {row.model || '-'}</div>
+                                                    </div>
+                                                    <span className="shrink-0 rounded bg-indigo-950/60 px-2 py-1 text-[11px] text-indigo-100">{row.base_model || '-'}</span>
+                                                </div>
+                                                <div className="grid grid-cols-2 gap-2 text-[11px] text-indigo-100/80">
+                                                    <div className="rounded bg-black/20 px-2 py-1.5">
+                                                        <div className="text-indigo-100/50 mb-1">{t('类别', 'Category')}</div>
+                                                        <div>{row.category || '-'}</div>
+                                                    </div>
+                                                    <div className="rounded bg-black/20 px-2 py-1.5">
+                                                        <div className="text-indigo-100/50 mb-1">{t('类别默认', 'Category Default')}</div>
+                                                        <div>{row.is_active ? t('是', 'Yes') : t('否', 'No')}</div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                        {missingBillingRuleApiRows.length === 0 && (
+                                            <div className="rounded border border-indigo-400/20 px-3 py-4 text-indigo-100/80 text-xs">
+                                                {t('暂无缺失项，请点击“检查缺失规则 API”执行检测。', 'No missing items yet. Click "Check Missing-Rule APIs" to run detection.')}
+                                            </div>
+                                        )}
+                                    </div>
+                                    <div className="hidden md:block overflow-x-auto max-h-[220px] border border-indigo-400/20 rounded">
                                         <table className="w-full text-xs min-w-[680px]">
                                             <thead className="bg-indigo-500/10 text-indigo-100 sticky top-0">
                                                 <tr>
@@ -5459,6 +5639,7 @@ const UserAdmin = () => {
                                             </tbody>
                                         </table>
                                     </div>
+                                    </>
                                 )}
                             </div>
 
@@ -5476,7 +5657,41 @@ const UserAdmin = () => {
                                             <div className="text-xs text-gray-400">{t('加载中...', 'Loading...')}</div>
                                         ) : (
                                             <>
-                                                <div className="overflow-x-auto">
+                                                <div className="md:hidden space-y-2">
+                                                    {providerKeyPoolRows.map((row) => (
+                                                        <button
+                                                            key={`key-pool-card-${row.id}`}
+                                                            type="button"
+                                                            onClick={() => setSelectedKeyPoolId(String(row.id))}
+                                                            className={`w-full rounded-lg border p-3 text-left space-y-2 transition-colors ${String(row.id) === String(selectedKeyPoolId) ? 'border-emerald-400/40 bg-emerald-500/10' : 'border-white/10 bg-black/20 hover:bg-white/5'}`}
+                                                        >
+                                                            <div className="flex items-start justify-between gap-3">
+                                                                <div className="min-w-0">
+                                                                    <div className="font-semibold text-sm text-white">#{row.id} {row.provider || '-'}</div>
+                                                                    <div className="text-xs text-gray-400 mt-1 break-all">{row.provider_alias || '-'}</div>
+                                                                </div>
+                                                                <span className="shrink-0 rounded bg-emerald-950/60 px-2 py-1 text-[11px] text-emerald-100">{row.strategy || 'random'}</span>
+                                                            </div>
+                                                            <div className="grid grid-cols-2 gap-2 text-[11px] text-gray-300">
+                                                                <div className="rounded bg-black/20 px-2 py-1.5">
+                                                                    <div className="text-gray-500 mb-1">{t('密钥数', 'Keys')}</div>
+                                                                    <div>{Array.isArray(row.api_keys) ? row.api_keys.length : 0}</div>
+                                                                </div>
+                                                                <div className="rounded bg-black/20 px-2 py-1.5">
+                                                                    <div className="text-gray-500 mb-1">{t('更新时间', 'Updated')}</div>
+                                                                    <div>{row.updated_at || '-'}</div>
+                                                                </div>
+                                                            </div>
+                                                            <div className="text-[11px] text-gray-400 break-all">
+                                                                <span className="text-gray-500">{t('介绍 URL', 'Intro URL')}:</span> {row.intro_url || '-'}
+                                                            </div>
+                                                        </button>
+                                                    ))}
+                                                    {providerKeyPoolRows.length === 0 && (
+                                                        <div className="rounded border border-white/10 px-3 py-4 text-center text-xs text-gray-500">{t('暂无数据', 'No data')}</div>
+                                                    )}
+                                                </div>
+                                                <div className="hidden md:block overflow-x-auto">
                                                     <table className="w-full text-xs">
                                                         <thead>
                                                             <tr className="text-gray-400 border-b border-white/10">
@@ -6866,7 +7081,65 @@ const UserAdmin = () => {
                                 {isBillingRuleLoading ? (
                                     <div className="text-xs text-gray-400">{t('定价规则加载中...', 'Loading pricing rules...')}</div>
                                 ) : (
-                                    <div className="overflow-x-auto max-h-[320px] border border-white/10 rounded">
+                                    <>
+                                    <div className="md:hidden space-y-2">
+                                        {filteredBillingRuleRows.map((row) => {
+                                            const apiRow = systemApiRows.find((api) => Number(api?.id) === Number(row?.system_api_id));
+                                            const apiLabel = apiRow ? `[${apiRow.category}] ${apiRow.provider}/${apiRow.model || '-'}` : `ID:${row?.system_api_id || '-'}`;
+                                            const isSelected = String(selectedBillingRuleId) === String(row.id);
+                                            return (
+                                                <button
+                                                    key={`billing-rule-card-${row.id}`}
+                                                    type="button"
+                                                    onClick={() => setSelectedBillingRuleId(String(row.id))}
+                                                    onDoubleClick={() => {
+                                                        setSelectedBillingRuleId(String(row.id));
+                                                        setIsBillingRuleEditing(true);
+                                                        showBillingRuleEditToast(t('已进入规则编辑模式', 'Entered rule edit mode'));
+                                                    }}
+                                                    className={`w-full rounded-lg border p-3 text-left space-y-2 transition-colors ${isSelected ? 'border-sky-400/40 bg-sky-500/10' : 'border-white/10 bg-black/20 hover:bg-white/5'}`}
+                                                >
+                                                    <div className="flex items-start justify-between gap-3">
+                                                        <div className="min-w-0">
+                                                            <div className="font-semibold text-sm text-white">#{row.id} {row.name || '-'}</div>
+                                                            <div className="text-[11px] text-gray-400 mt-1 break-words">{apiLabel}</div>
+                                                        </div>
+                                                        <span className={`shrink-0 rounded px-2 py-1 text-[11px] ${row.is_active ? 'bg-emerald-500/20 text-emerald-300' : 'bg-gray-700 text-gray-300'}`}>
+                                                            {row.is_active ? t('启用', 'Active') : t('停用', 'Inactive')}
+                                                        </span>
+                                                    </div>
+                                                    <div className="grid grid-cols-2 gap-2 text-[11px] text-gray-300">
+                                                        <div className="rounded bg-black/20 px-2 py-1.5">
+                                                            <div className="text-gray-500 mb-1">{t('优先级', 'Priority')}</div>
+                                                            <div>{row.priority ?? 0}</div>
+                                                        </div>
+                                                        <div className="rounded bg-black/20 px-2 py-1.5">
+                                                            <div className="text-gray-500 mb-1">{t('计费单位', 'Billing Unit')}</div>
+                                                            <div>{row?.billing_unit_type || 'per_call'}</div>
+                                                        </div>
+                                                        <div className="rounded bg-black/20 px-2 py-1.5">
+                                                            <div className="text-gray-500 mb-1">billing_cost</div>
+                                                            <div>{toNonNegativeInt(row?.billing_cost ?? 0)}</div>
+                                                        </div>
+                                                        <div className="rounded bg-black/20 px-2 py-1.5">
+                                                            <div className="text-gray-500 mb-1">charge_multiplier</div>
+                                                            <div>{toRuleChargeMultiplier(row?.charge_multiplier, 2).toFixed(2)}</div>
+                                                        </div>
+                                                    </div>
+                                                    <div className="flex flex-wrap gap-2 text-[11px] text-gray-400">
+                                                        <span className="rounded bg-white/5 px-2 py-1">T: {row?.applies_to_text ? t('是', 'Yes') : t('否', 'No')}</span>
+                                                        <span className="rounded bg-white/5 px-2 py-1">I: {row?.applies_to_image ? t('是', 'Yes') : t('否', 'No')}</span>
+                                                        <span className="rounded bg-white/5 px-2 py-1">V: {row?.applies_to_video ? t('是', 'Yes') : t('否', 'No')}</span>
+                                                        <span className="rounded bg-white/5 px-2 py-1">mode: {row?.generation_mode || '-'}</span>
+                                                    </div>
+                                                </button>
+                                            );
+                                        })}
+                                        {filteredBillingRuleRows.length === 0 && (
+                                            <div className="rounded border border-white/10 px-3 py-4 text-gray-400 text-xs">{t('无匹配规则', 'No matching rules')}</div>
+                                        )}
+                                    </div>
+                                    <div className="hidden md:block overflow-x-auto max-h-[320px] border border-white/10 rounded">
                                         <table className="w-full text-xs min-w-[1480px]">
                                             <thead className="bg-white/5 text-gray-400 sticky top-0">
                                                 <tr>
@@ -6932,6 +7205,7 @@ const UserAdmin = () => {
                                             </tbody>
                                         </table>
                                     </div>
+                                    </>
                                 )}
 
                                 <div className="flex flex-wrap gap-2">

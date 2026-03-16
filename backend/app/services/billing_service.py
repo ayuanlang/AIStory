@@ -1582,9 +1582,45 @@ class BillingService:
 
         if not BillingService._in_range_int(usage.get("image_count", 1), getattr(rule, "image_count_min", None), getattr(rule, "image_count_max", None)):
             return False
-        if not BillingService._in_range_int(usage.get("width", 0), getattr(rule, "width_min", None), getattr(rule, "width_max", None)):
+        width_min = getattr(rule, "width_min", None)
+        width_max = getattr(rule, "width_max", None)
+        height_min = getattr(rule, "height_min", None)
+        height_max = getattr(rule, "height_max", None)
+
+        width_ok = BillingService._in_range_int(usage.get("width", 0), width_min, width_max)
+        height_ok = BillingService._in_range_int(usage.get("height", 0), height_min, height_max)
+
+        if (not width_ok or not height_ok) and mode in {"image", "video"}:
+            usage_w = BillingService._to_int(usage.get("width", 0), 0)
+            usage_h = BillingService._to_int(usage.get("height", 0), 0)
+
+            def _has_bound(v: Any) -> bool:
+                return v is not None and str(v).strip() != ""
+
+            has_width_bound = _has_bound(width_min) or _has_bound(width_max)
+            has_height_bound = _has_bound(height_min) or _has_bound(height_max)
+
+            if usage_w > 0 and usage_h > 0:
+                # Fallback: allow portrait/landscape equivalent matching.
+                # Rules are often authored with landscape assumptions (e.g. height<=1080).
+                short_edge = min(usage_w, usage_h)
+                swapped_width_ok = BillingService._in_range_int(usage_h, width_min, width_max)
+                swapped_height_ok = BillingService._in_range_int(usage_w, height_min, height_max)
+
+                if has_width_bound and has_height_bound:
+                    if swapped_width_ok and swapped_height_ok:
+                        width_ok = True
+                        height_ok = True
+                elif has_width_bound and not has_height_bound:
+                    if BillingService._in_range_int(short_edge, width_min, width_max):
+                        width_ok = True
+                elif has_height_bound and not has_width_bound:
+                    if BillingService._in_range_int(short_edge, height_min, height_max):
+                        height_ok = True
+
+        if not width_ok:
             return False
-        if not BillingService._in_range_int(usage.get("height", 0), getattr(rule, "height_min", None), getattr(rule, "height_max", None)):
+        if not height_ok:
             return False
         if not BillingService._in_range_int(usage.get("pixels", 0), getattr(rule, "pixels_min", None), getattr(rule, "pixels_max", None)):
             return False

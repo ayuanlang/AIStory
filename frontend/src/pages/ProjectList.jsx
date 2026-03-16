@@ -30,6 +30,7 @@ import {
     Shield,
     Share2,
     X,
+    Menu,
     Loader2,
     ChevronsLeft,
     ChevronsRight,
@@ -271,6 +272,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [shareTargetUser, setShareTargetUser] = useState('');
     const [shareLoading, setShareLoading] = useState(false);
     const [shareSubmitting, setShareSubmitting] = useState(false);
+    const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
     const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
         try {
             return localStorage.getItem('project_list.sidebar.collapsed') === '1';
@@ -286,6 +288,10 @@ const ProjectList = ({ initialTab = 'projects' }) => {
             // ignore localStorage failures
         }
     }, [isSidebarCollapsed]);
+
+    useEffect(() => {
+        setIsMobileSidebarOpen(false);
+    }, [activeTab, selectedProjectId]);
     
     useEffect(() => {
         // Fetch User Info to check admin status
@@ -656,26 +662,81 @@ const ProjectList = ({ initialTab = 'projects' }) => {
         }
     };
 
-    const SidebarItem = ({ id, icon: Icon, label, disabled }) => (
+    const activeTabTitle = activeTab === 'projects'
+        ? t('我的项目', 'My Projects')
+        : activeTab === 'assets'
+            ? t('素材库', 'Assets Library')
+            : activeTab === 'settings'
+                ? t('设置', 'Settings')
+                : activeTab === 'about'
+                    ? t('关于', 'About')
+                    : activeTab;
+
+    const activeTabDescription = activeTab === 'projects'
+        ? t('管理和编辑你的分镜脚本。', 'Manage and edit your storyboard scripts.')
+        : activeTab === 'assets'
+            ? t('管理你生成的角色和场景素材。', 'Manage your generated characters and scenes.')
+            : activeTab === 'settings'
+                ? t('管理你的账户偏好设置。', 'Manage your account preferences.')
+                : activeTab === 'about'
+                    ? t('了解产品定位与支持方式。', 'Learn about the product and support channels.')
+                    : '';
+
+    const openSettingsPage = () => {
+        trackMenuAction('project_list.sidebar.settings', t('设置', 'Settings'), () => {
+            setActiveTab('settings');
+            setSelectedProjectId(null);
+            const returnTo = encodeURIComponent(`${location.pathname}${location.search}${location.hash}`);
+            navigate(`/settings?return_to=${returnTo}`);
+        });
+    };
+
+    const openSystemLogsPage = () => {
+        trackMenuAction('project_list.admin.system_logs', t('系统日志', 'System Logs'), () => navigate('/admin/logs'));
+    };
+
+    const openUserAdminPage = () => {
+        trackMenuAction('project_list.admin.user_admin', t('管理面板', 'Admin Panel'), () => navigate('/admin/users'));
+    };
+
+    const SidebarActionItem = ({ id, icon: Icon, label, disabled, onClick, active = false, compact = false, mobile = false, iconClassName = '' }) => (
         <button 
             onClick={() => {
                 if (disabled) return;
-                trackMenuAction(`project_list.sidebar.${id}`, label, () => {
-                    setActiveTab(id);
-                    setRestoredEditorState(null);
-                    setSelectedProjectId(null); // Return to list view when switching tabs
-                });
+                onClick?.();
+                if (mobile) {
+                    setIsMobileSidebarOpen(false);
+                }
             }}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors ${
-                activeTab === id && !selectedProjectId
+            className={`w-full flex items-center ${compact ? 'justify-center px-3' : 'gap-3 px-4'} py-3 rounded-lg text-sm font-medium transition-colors ${
+                active
                 ? 'bg-primary text-primary-foreground' 
                 : 'text-muted-foreground hover:bg-secondary/50 hover:text-foreground'
             } ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
             title={label}
         >
-            <Icon className="w-5 h-5" />
-            {!isSidebarCollapsed && label}
+            <Icon className={`w-5 h-5 ${iconClassName}`.trim()} />
+            {!compact && label}
         </button>
+    );
+
+    const SidebarItem = ({ id, icon: Icon, label, disabled, compact = isSidebarCollapsed, mobile = false }) => (
+        <SidebarActionItem
+            id={id}
+            icon={Icon}
+            label={label}
+            disabled={disabled}
+            compact={compact}
+            mobile={mobile}
+            active={activeTab === id && !selectedProjectId}
+            onClick={() => {
+                trackMenuAction(`project_list.sidebar.${id}`, label, () => {
+                    setActiveTab(id);
+                    setRestoredEditorState(null);
+                    setSelectedProjectId(null);
+                });
+            }}
+        />
     );
 
     // If a project is selected, show the full-screen Editor immediately
@@ -702,8 +763,16 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                     {toast.message}
                 </div>
             )}
+            {isMobileSidebarOpen && (
+                <button
+                    type="button"
+                    aria-label={t('关闭菜单', 'Close menu')}
+                    onClick={() => setIsMobileSidebarOpen(false)}
+                    className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm md:hidden"
+                />
+            )}
             {/* Sidebar */}
-            <aside className={`${isSidebarCollapsed ? 'w-20 p-3' : 'w-64 p-6'} border-r bg-card/30 flex flex-col transition-all duration-300`}>
+            <aside className={`${isSidebarCollapsed ? 'w-20 p-3' : 'w-64 p-6'} hidden md:flex border-r bg-card/30 flex-col transition-all duration-300`}>
                 <div className={`flex items-center ${isSidebarCollapsed ? 'justify-center' : 'justify-between'} mb-6 px-1`}>
                     <div className={`flex items-center gap-2 ${isSidebarCollapsed ? 'justify-center' : ''}`}>
                     <img src="/woola-transparent.png?v=4" alt="Woola AI story" className="w-8 h-8 object-contain" />
@@ -740,39 +809,27 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                     
                     {currentUser?.is_superuser && (
                         <>
-                            <button 
-                                onClick={() => trackMenuAction('project_list.admin.system_logs', t('系统日志', 'System Logs'), () => navigate('/admin/logs'))}
-                                className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-muted-foreground hover:bg-secondary/50 hover:text-foreground`}
-                                title={t('系统日志', 'System Logs')}
-                            >
-                                <Activity className="w-5 h-5" />
-                                {!isSidebarCollapsed && t('系统日志', 'System Logs')}
-                            </button>
-                            <button 
-                                onClick={() => trackMenuAction('project_list.admin.user_admin', t('管理面板', 'Admin Panel'), () => navigate('/admin/users'))}
-                                className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-muted-foreground hover:bg-secondary/50 hover:text-foreground`}
-                                title={t('管理面板', 'Admin Panel')}
-                            >
-                                <Shield className="w-5 h-5 text-red-500" />
-                                {!isSidebarCollapsed && t('管理面板', 'Admin Panel')}
-                            </button>
+                            <SidebarActionItem
+                                icon={Activity}
+                                label={t('系统日志', 'System Logs')}
+                                compact={isSidebarCollapsed}
+                                onClick={openSystemLogsPage}
+                            />
+                            <SidebarActionItem
+                                icon={Shield}
+                                label={t('管理面板', 'Admin Panel')}
+                                compact={isSidebarCollapsed}
+                                onClick={openUserAdminPage}
+                                iconClassName="text-red-500"
+                            />
                         </>
                     )}
-                    <button
-                        onClick={() => {
-                            trackMenuAction('project_list.sidebar.settings', t('设置', 'Settings'), () => {
-                                setActiveTab('settings');
-                                setSelectedProjectId(null);
-                                const returnTo = encodeURIComponent(`${location.pathname}${location.search}${location.hash}`);
-                                navigate(`/settings?return_to=${returnTo}`);
-                            });
-                        }}
-                        className="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
-                        title={t('设置', 'Settings')}
-                    >
-                        <Settings className="w-5 h-5" />
-                        {!isSidebarCollapsed && t('设置', 'Settings')}
-                    </button>
+                    <SidebarActionItem
+                        icon={Settings}
+                        label={t('设置', 'Settings')}
+                        compact={isSidebarCollapsed}
+                        onClick={openSettingsPage}
+                    />
                     <SidebarItem id="about" icon={Info} label={t('关于', 'About')} />
                 </div>
 
@@ -806,24 +863,123 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                 </div>
             </aside>
 
+            <aside className={`fixed inset-y-0 left-0 z-50 w-[min(88vw,22rem)] border-r border-white/10 bg-card/95 backdrop-blur-xl flex flex-col p-5 transition-transform duration-300 md:hidden ${isMobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+                <div className="flex items-center justify-between mb-6 gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                        <img src="/woola-transparent.png?v=4" alt="Woola AI story" className="w-8 h-8 object-contain" />
+                        <div className="min-w-0">
+                            <div className="font-semibold truncate">Woola AI story</div>
+                            <div className="text-xs text-muted-foreground truncate">{activeTabTitle}</div>
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => setIsMobileSidebarOpen(false)}
+                        title={t('关闭菜单', 'Close menu')}
+                        className="p-2 rounded-lg text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors"
+                    >
+                        <X className="w-4 h-4" />
+                    </button>
+                </div>
+
+                <div className="space-y-2 flex-1 overflow-y-auto pr-1">
+                    <SidebarItem id="projects" icon={Folder} label={t('我的项目', 'My Projects')} compact={false} mobile />
+                    <SidebarItem id="assets" icon={Image} label={t('素材库', 'Assets Library')} compact={false} mobile />
+                    {currentUser?.is_superuser && (
+                        <>
+                            <SidebarActionItem
+                                icon={Activity}
+                                label={t('系统日志', 'System Logs')}
+                                compact={false}
+                                mobile
+                                onClick={openSystemLogsPage}
+                            />
+                            <SidebarActionItem
+                                icon={Shield}
+                                label={t('管理面板', 'Admin Panel')}
+                                compact={false}
+                                mobile
+                                onClick={openUserAdminPage}
+                                iconClassName="text-red-500"
+                            />
+                        </>
+                    )}
+                    <SidebarActionItem
+                        icon={Settings}
+                        label={t('设置', 'Settings')}
+                        compact={false}
+                        mobile
+                        onClick={openSettingsPage}
+                    />
+                    <SidebarItem id="about" icon={Info} label={t('关于', 'About')} compact={false} mobile />
+                </div>
+
+                <div className="mt-5 border-t border-white/10 pt-5">
+                    <div className="flex items-center gap-3 px-1 mb-4">
+                        <div className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center overflow-hidden">
+                            {currentUser?.avatar_url ? (
+                                <img
+                                    src={getAvatarUrl(currentUser.avatar_url)}
+                                    alt={currentUser?.full_name || currentUser?.username || 'avatar'}
+                                    className="w-10 h-10 object-cover"
+                                />
+                            ) : (
+                                <User className="w-5 h-5 text-muted-foreground" />
+                            )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium truncate">{currentUser?.full_name || currentUser?.username || t('访客用户', 'Guest User')}</p>
+                            <p className="text-xs text-muted-foreground truncate">{currentUser?.email || t('无账号', 'No Account')}</p>
+                        </div>
+                    </div>
+                    <button 
+                        onClick={() => {
+                            setIsMobileSidebarOpen(false);
+                            handleLogout();
+                        }}
+                        className="w-full flex items-center gap-2 px-2 text-sm text-muted-foreground hover:text-destructive transition-colors"
+                        title={t('退出登录', 'Sign Out')}
+                    >
+                        <LogOut className="w-4 h-4" /> {t('退出登录', 'Sign Out')}
+                    </button>
+                </div>
+            </aside>
+
             {/* Main Content */}
             <main className="flex-1 overflow-y-auto bg-background/50 relative flex flex-col">
-                <div className="max-w-7xl mx-auto w-full px-8 lg:px-12 pt-8 pb-4 relative z-40">
+                <div className="sticky top-0 z-30 border-b border-white/10 bg-background/90 backdrop-blur-xl px-4 py-3 sm:px-6 md:hidden">
+                    <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                            <div className="text-xs uppercase tracking-[0.22em] text-muted-foreground/80">{t('工作区', 'Workspace')}</div>
+                            <div className="text-base font-semibold truncate">{activeTabTitle}</div>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => setIsMobileSidebarOpen(true)}
+                            className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm font-medium"
+                        >
+                            <Menu className="w-4 h-4" />
+                            {t('菜单', 'Menu')}
+                        </button>
+                    </div>
+                    {activeTabDescription && (
+                        <p className="mt-2 text-sm text-muted-foreground line-clamp-2">{activeTabDescription}</p>
+                    )}
+                </div>
+
+                <div className="max-w-7xl mx-auto w-full px-4 pt-6 pb-4 sm:px-6 lg:px-12 md:pt-8 relative z-40">
                     {/* Header */}
-                    <header className="flex justify-between items-center">
+                    <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                         <div>
                             <h1 className="text-3xl font-bold tracking-tight capitalize">
-                                {activeTab === 'projects' ? t('我的项目', 'My Projects') : activeTab === 'assets' ? t('素材库', 'Assets Library') : activeTab === 'settings' ? t('设置', 'Settings') : activeTab === 'about' ? t('关于', 'About') : activeTab}
+                                {activeTabTitle}
                             </h1>
                             <p className="text-muted-foreground mt-1">
-                                {activeTab === 'projects' && t('管理和编辑你的分镜脚本。', 'Manage and edit your storyboard scripts.')}
-                                {activeTab === 'assets' && t('管理你生成的角色和场景素材。', 'Manage your generated characters and scenes.')}
-                                {activeTab === 'settings' && t('管理你的账户偏好设置。', 'Manage your account preferences.')}
-                                {activeTab === 'about' && t('了解产品定位与支持方式。', 'Learn about the product and support channels.')}
+                                {activeTabDescription}
                             </p>
                         </div>
                         {activeTab === 'projects' && (
-                            <div className="flex items-center gap-4">
+                            <div className="flex flex-wrap items-center gap-3 sm:gap-4">
                                 {selectedProjectId ? (
                                     <button 
                                         onClick={() => setSelectedProjectId(null)}
@@ -872,7 +1028,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                 </div>
 
                  {/* Cinematic Header Strip */}
-                 <div className="h-40 relative overflow-hidden group w-full select-none border-b border-white/5 shrink-0">
+                 <div className="h-28 sm:h-40 relative overflow-hidden group w-full select-none border-b border-white/5 shrink-0">
                     {/* Gradients to fade edges and bottom */}
                     <div className="absolute inset-0 bg-gradient-to-r from-background via-transparent to-background z-20 pointer-events-none" />
                     <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-background via-background/80 to-transparent z-20 pointer-events-none" />
@@ -892,7 +1048,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                     </motion.div>
                 </div>
 
-                <div className="max-w-7xl mx-auto w-full px-8 lg:px-12 pb-12 mt-4 relative z-30 flex-1 flex flex-col">
+                <div className="max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-12 pb-12 mt-4 relative z-30 flex-1 flex flex-col">
                     {/* Content Views */}
                     <div className="flex-1 min-h-0 flex flex-col">
                         {activeTab === 'projects' && (
