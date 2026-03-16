@@ -16891,97 +16891,6 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
     _estimated_tokens = 0
 
     try:
-        resolved_sound_for_reserve: Optional[bool] = None
-        if req.sound is not None:
-            resolved_sound_for_reserve = bool(req.sound)
-        elif req.project_id:
-            project_for_reserve = db.query(Project).filter(Project.id == req.project_id).first()
-            reserve_global_info: Dict[str, Any] = {}
-            if project_for_reserve and isinstance(project_for_reserve.global_info, dict):
-                reserve_global_info = dict(project_for_reserve.global_info)
-            elif project_for_reserve and isinstance(project_for_reserve.global_info, str):
-                try:
-                    parsed_reserve_info = json.loads(project_for_reserve.global_info)
-                    if isinstance(parsed_reserve_info, dict):
-                        reserve_global_info = parsed_reserve_info
-                except Exception:
-                    reserve_global_info = {}
-
-            reserve_defaults = (
-                reserve_global_info.get("project_generation_defaults")
-                if isinstance(reserve_global_info.get("project_generation_defaults"), dict)
-                else {}
-            )
-            reserve_candidates = [
-                reserve_defaults.get("sound"),
-                reserve_defaults.get("generate_audio"),
-                reserve_global_info.get("video_sound"),
-                reserve_global_info.get("sound"),
-                reserve_global_info.get("generate_audio"),
-            ]
-
-            reserve_tech = reserve_global_info.get("tech_params") if isinstance(reserve_global_info.get("tech_params"), dict) else {}
-            reserve_visual = reserve_tech.get("visual_standard") if isinstance(reserve_tech.get("visual_standard"), dict) else {}
-            reserve_candidates.extend([
-                reserve_visual.get("sound"),
-                reserve_visual.get("has_audio"),
-                reserve_visual.get("generate_audio"),
-            ])
-
-            for candidate in reserve_candidates:
-                if candidate is None:
-                    continue
-                resolved_sound_for_reserve = bool(_to_bool(candidate))
-                break
-
-        if _is_token_billing:
-            _video_token_cfg = billing_service.resolve_video_token_config(db, reserve_provider, reserve_model)
-            est_duration = max(5, int(req.duration or 5)) if (req.duration and req.duration > 0) else 5
-            _estimated_tokens = billing_service.estimate_video_output_tokens(
-                width=_video_token_cfg.get("default_width", 1280),
-                height=_video_token_cfg.get("default_height", 720),
-                fps=_video_token_cfg.get("default_fps", 24),
-                duration_seconds=est_duration,
-                draft_token_coefficient=_video_token_cfg.get("draft_token_coefficient", 1.0),
-            )
-            reserve_details = {
-                "output_tokens": _estimated_tokens,
-                "total_tokens": _estimated_tokens,
-                "billing_mode": "RESERVE",
-                "estimation_method": "video_token_formula",
-                "estimated_duration": est_duration,
-            }
-        else:
-            reserve_details = {
-                "duration": req.duration,
-                "duration_seconds": req.duration,
-                "billing_mode": "RESERVE",
-            }
-        if reserve_provider:
-            reserve_details["provider"] = reserve_provider
-            reserve_details["resolved_provider"] = reserve_provider
-        if reserve_model:
-            reserve_details["model"] = reserve_model
-            reserve_details["resolved_model"] = reserve_model
-        if resolved_sound_for_reserve is not None:
-            reserve_details["has_audio"] = bool(resolved_sound_for_reserve)
-        if req.mode is not None and str(req.mode).strip():
-            reserve_details["mode"] = str(req.mode).strip().lower()
-        if reserve_system_api_id is not None:
-            reserve_details["system_api_id"] = reserve_system_api_id
-            reserve_details["resolved_system_api_id"] = reserve_system_api_id
-
-        reserve_provider_arg = reserve_provider or req.provider
-        reserve_model_arg = reserve_model or req.model
-        reservation_tx = billing_service.reserve_credits(
-            db,
-            current_user.id,
-            "video_gen",
-            reserve_provider_arg,
-            reserve_model_arg,
-            reserve_details,
-        )
-
         # 1. Resolve Context for Aspect Ratio
         def _safe_json_dict(value: Any) -> Dict[str, Any]:
             if isinstance(value, dict):
@@ -17166,6 +17075,69 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
             if normalized:
                 resolved_video_image_size = normalized
                 break
+
+        if _is_token_billing:
+            _video_token_cfg = billing_service.resolve_video_token_config(db, reserve_provider, reserve_model)
+            est_duration = max(5, int(req.duration or 5)) if (req.duration and req.duration > 0) else 5
+            reserve_width = int(resolved_video_width) if resolved_video_width else int(_video_token_cfg.get("default_width", 1280))
+            reserve_height = int(resolved_video_height) if resolved_video_height else int(_video_token_cfg.get("default_height", 720))
+            reserve_fps = int(_video_token_cfg.get("default_fps", 24))
+            _estimated_tokens = billing_service.estimate_video_output_tokens(
+                width=reserve_width,
+                height=reserve_height,
+                fps=reserve_fps,
+                duration_seconds=est_duration,
+                draft_token_coefficient=_video_token_cfg.get("draft_token_coefficient", 1.0),
+            )
+            reserve_details = {
+                "output_tokens": _estimated_tokens,
+                "total_tokens": _estimated_tokens,
+                "billing_mode": "RESERVE",
+                "estimation_method": "video_token_formula",
+                "estimated_duration": est_duration,
+                "width": reserve_width,
+                "height": reserve_height,
+                "fps": reserve_fps,
+            }
+        else:
+            reserve_details = {
+                "duration": req.duration,
+                "duration_seconds": req.duration,
+                "billing_mode": "RESERVE",
+            }
+
+        if resolved_video_width:
+            reserve_details["width"] = int(resolved_video_width)
+        if resolved_video_height:
+            reserve_details["height"] = int(resolved_video_height)
+        if resolved_video_resolution:
+            reserve_details["resolution"] = str(resolved_video_resolution)
+        if resolved_video_image_size:
+            reserve_details["image_size"] = str(resolved_video_image_size)
+        if reserve_provider:
+            reserve_details["provider"] = reserve_provider
+            reserve_details["resolved_provider"] = reserve_provider
+        if reserve_model:
+            reserve_details["model"] = reserve_model
+            reserve_details["resolved_model"] = reserve_model
+        if resolved_sound is not None:
+            reserve_details["has_audio"] = bool(resolved_sound)
+        if req.mode is not None and str(req.mode).strip():
+            reserve_details["mode"] = str(req.mode).strip().lower()
+        if reserve_system_api_id is not None:
+            reserve_details["system_api_id"] = reserve_system_api_id
+            reserve_details["resolved_system_api_id"] = reserve_system_api_id
+
+        reserve_provider_arg = reserve_provider or req.provider
+        reserve_model_arg = reserve_model or req.model
+        reservation_tx = billing_service.reserve_credits(
+            db,
+            current_user.id,
+            "video_gen",
+            reserve_provider_arg,
+            reserve_model_arg,
+            reserve_details,
+        )
 
         project_seed = _ensure_project_generation_seed(db, resolved_project_id, current_user)
         explicit_seed = _normalize_seed_value(getattr(req, "seed", None))
@@ -17440,6 +17412,46 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
                     "duration_seconds": req.duration,
                     "status": "SETTLED",
                 }
+
+                raw_meta = final_meta.get("raw") if isinstance(final_meta.get("raw"), dict) else {}
+                raw_payload = raw_meta.get("payload") if isinstance(raw_meta.get("payload"), dict) else {}
+                raw_input = raw_payload.get("input") if isinstance(raw_payload.get("input"), dict) else {}
+
+                final_width = (
+                    _to_positive_int_or_none(final_meta.get("width"))
+                    or _to_positive_int_or_none(final_meta.get("output_width"))
+                    or _to_positive_int_or_none(raw_meta.get("width"))
+                    or _to_positive_int_or_none(raw_meta.get("output_width"))
+                    or _to_positive_int_or_none(raw_input.get("width"))
+                    or _to_positive_int_or_none(resolved_video_width)
+                )
+                final_height = (
+                    _to_positive_int_or_none(final_meta.get("height"))
+                    or _to_positive_int_or_none(final_meta.get("output_height"))
+                    or _to_positive_int_or_none(raw_meta.get("height"))
+                    or _to_positive_int_or_none(raw_meta.get("output_height"))
+                    or _to_positive_int_or_none(raw_input.get("height"))
+                    or _to_positive_int_or_none(resolved_video_height)
+                )
+                final_resolution = str(
+                    final_meta.get("resolution")
+                    or raw_meta.get("resolution")
+                    or raw_input.get("resolution")
+                    or (resolved_video_resolution or "")
+                ).strip()
+                if (not final_width or not final_height) and final_resolution:
+                    parsed_w, parsed_h = _parse_resolution_dims(final_resolution)
+                    if parsed_w and not final_width:
+                        final_width = int(parsed_w)
+                    if parsed_h and not final_height:
+                        final_height = int(parsed_h)
+
+                if final_width:
+                    settle_details["width"] = int(final_width)
+                if final_height:
+                    settle_details["height"] = int(final_height)
+                if final_resolution:
+                    settle_details["resolution"] = final_resolution
 
                 final_has_audio = final_meta.get("has_audio") if isinstance(final_meta, dict) else None
                 if final_has_audio is None and resolved_sound is not None:

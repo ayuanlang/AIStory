@@ -6454,7 +6454,11 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         });
 
         try {
-            const result = await waitForAsyncTask(marker.taskId, { interval: 1200, timeout: 600000 });
+            const baselineText = String(activeEpisode?.ai_scene_analysis_result || llmRawResultContent || '').trim();
+            const result = await awaitAnalyzeSceneWithRecovery(
+                () => waitForAsyncTask(marker.taskId, { interval: 1200, timeout: 600000 }),
+                { startedAt, baselineText }
+            );
             const analyzedText = extractAnalysisTextFromResult(result);
             phaseMarks.llmReturnedAt = Date.now();
 
@@ -12484,6 +12488,33 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
          await executeGenerateShots({ sceneId, promptData: data });
     };
 
+    const batchAiShotsCurrentOrdinal = (() => {
+        const total = Number(batchAiShotsProgress?.total || 0);
+        const completed = Number(batchAiShotsProgress?.completed || 0);
+        if (total <= 0) return 0;
+        if (batchAiShotsProgress?.running) {
+            return Math.max(1, Math.min(total, completed + 1));
+        }
+        return Math.max(0, Math.min(total, completed));
+    })();
+    const batchAiShotsProgressSummary = (() => {
+        const total = Number(batchAiShotsProgress?.total || 0);
+        if (total <= 0) return '';
+        const sceneSuffix = batchAiShotsProgress.currentSceneLabel
+            ? t(`（场景 ${batchAiShotsProgress.currentSceneLabel}）`, ` (Scene ${batchAiShotsProgress.currentSceneLabel})`)
+            : '';
+        if (batchAiShotsProgress?.running) {
+            return t(
+                `共 ${total} 个，正在处理第 ${batchAiShotsCurrentOrdinal} 个${sceneSuffix}`,
+                `Total ${total}, processing #${batchAiShotsCurrentOrdinal}${sceneSuffix}`
+            );
+        }
+        return t(
+            `共 ${total} 个，已处理 ${Number(batchAiShotsProgress?.completed || 0)} 个${sceneSuffix}`,
+            `Total ${total}, processed ${Number(batchAiShotsProgress?.completed || 0)}${sceneSuffix}`
+        );
+    })();
+
     if (!activeEpisode) return <div className="p-6 text-muted-foreground">{t('请选择分集以管理场景。', 'Select an episode to manage scenes.')}</div>;
 
     return (
@@ -12533,7 +12564,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                     <span>
                         {batchAiShotsProgress.message}
                         {batchAiShotsProgress.stopRequested ? ` · ${t('已请求停止', 'Stop requested')}` : ''}
-                        {batchAiShotsProgress.currentSceneLabel ? ` · ${t('当前', 'Current')}: ${batchAiShotsProgress.currentSceneLabel}` : ''}
+                        {batchAiShotsProgressSummary ? ` · ${batchAiShotsProgressSummary}` : ''}
                     </span>
                 </div>
             )}
