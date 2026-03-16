@@ -91,10 +91,13 @@
     - **Short Burst (快节奏)**: **4.0s**。仅用于极快的蒙太奇或瞬间反应。**严禁设置低于 4.0s 的时长**。
     - **Extended Shot (长镜头)**: **6s - 10s**。用于展示宏大环境、复杂调度或细腻的情感流露。
   - **密度匹配原则 (Density-Match for >5s)**：
-    - 当 Duration 设定为 **6s - 10s** 时，Video Content **必须**极其丰富。包含 Multiple Micro-Beats（多重微动作）、环境互动或复杂的运镜轨迹。
-    - **Empty Shot Warning**: 严禁设定 8s 时长却只有一个简单的 "Eye blink" 动作。若动作简单，请锁定在 4s - 5s。
+    - 当 Duration 设定为 **6s - 10s** 时，Video Content **不等于必须新增更多事件**。长时长优先通过**延展已有动作阶段**来消化时长：如 anticipation 延长、接触后的 recovery 延长、视线停留、呼吸重置、重心回收、运镜减速与落稳。
+    - **Long Duration != More Plot Rule (长时长不等于更多剧情动作, 强制)**：即使时长为 8s，也不得为了“填满时长”而凭空新增新的打击、额外位移、夸张环境反应或第二个剧情事件。允许的是**同一事件的更长展开**，不允许的是**事件数量膨胀**。
+    - **Empty Shot Warning**: 严禁设定 8s 时长却只有一个简单的 "Eye blink" 动作；但若主动作本身具备持续张力（如对峙、蓄力、缓慢逼近、受击后的回稳），则允许只保留 **1-2 个主节拍**，其余时长由持续态与镜头稳定过渡承担。
+    - **Veo-Class Minimum Duration Note (Veo 类最小时长说明, 强制兼容)**：对于最小时长为 **8s** 的模型（如 Veo 系），默认采用**低事件密度、长动作展开**策略：1-2 个主节拍 + 1 个落稳/凝视/余势保持段即可合规，禁止为了凑满 8s 自动补成 3-4 个事件。
   - **细节填充 (Content Filling)**：
-    - 若必须生成长镜头（>6s）但原剧本动作稀缺，**必须自动补充**合理的视觉细节（如：光影变化、背景动态、细微的肢体调整），确保画面在 10s 内保持鲜活，避免死寂。
+    - 若必须生成长镜头（>6s）但原剧本动作稀缺，优先补充**同一事件内部的可见延续**（如：呼吸、眼神停留、手部张力、受力后的站稳、衣摆余动、镜头减速停住），确保画面在 10s 内保持鲜活。
+    - **禁止自动补剧情 (No Auto-Invented Event, 强制)**：不得因为时长较长就自动补充新的攻击、防守回合、额外击退、额外转身、额外道具互动、额外 VFX 或新的环境事件。
 - **改编权限**：要参考经典影片风格，对原需求进行合理改编以匹配视觉逻辑（动作合理性），可设定主观镜头比例（如 30%）。
 - **Persistent Style Anchor**：每个镜头必须继承 [Global Style] 与上一镜头的光影/空间关系。
 - **人员控制 (Character Control)**：严禁在画面描述中引入剧本未提及的人物（如路人、背景板），除非场景类型（如集市、派对）有明确的“Crowd”要求。保持画面干净，仅展示 Linked Characters 列表中的角色。
@@ -305,16 +308,119 @@
   - **Rhythm Priority**：优先“节拍清晰 + 力量可读 + 空间连续”，其次才是术语丰富度；禁止为了补术语牺牲动作连贯。
   - **Dynamic Chain Length Cap**：连续使用 `Dynamic End Allowed` 的镜头最长不超过 2 个；第 3 个镜头必须收束到稳定态（Settled State）。
   - **Dynamic Handoff Contract**：凡启用 `Dynamic End Allowed`，必须在本镜或下一镜的 `Shot Logic (CN)` 显式写出：`carrier`（动势承接主体）、`vector`（screen-left/right/towards/away）、`recovery beat`（下一镜第几拍完成稳定）。缺任一项判定为不合规。
+- **Combat Intensity Classification (打斗强度分级, 强制先判定)**：在编写 `Action & Chase` 前，必须先判定当前动作属于下列哪一档，再决定是否允许“击飞/撞墙/大位移/强破坏”。
+  - **Level 1: Push/Shove / Grip Struggle (日常推搡/拉扯)**：只允许 `half-step displacement`, `torso sway`, `arm check`, `brief balance break` 这类轻后果。**禁止**写成击飞、撞墙、爆震、大片扬尘、整个人离地。
+  - **Level 2: Heavy Hit / Hard Clash (重击/硬碰)**：允许 `stagger`, `one-step knockback`, `guard broken`, `brief recoil`, `short debris lift`。适合重拳、重踢、兵器硬碰，但默认**不直接升级**为撞墙或远距离击飞。
+  - **Level 3: Decisive Impact / Launch Event (决定性重击/击飞事件)**：仅当剧本、Shot Logic、Start/End Frame 明确支持时，才允许 `launch`, `wall impact`, `ground slam`, `clear body displacement`, `major set-piece destruction`。这是**特殊事件镜头**，不是默认打斗写法。
+  - **Rule of Separation (区分规则)**：若动作本质只是争执中的推开、挣脱、拽腕、挡开、架住，就算情绪激烈，也仍按 **Level 1** 处理，不得套用“高冲击模板”。
+- **Consequence Licensing (结果授权规则, 强制)**：打斗力量感可以强，但大结果必须被授权。
+  - **默认授权**：任何近身打斗默认只授权到 **Level 2**（重击、踉跄、半步到一步失衡、短促碎屑/浮尘）。
+  - **升级条件**：只有当 **Shot Logic + Start Frame + End Frame** 三者都共同支持，才允许升级到 **Level 3**（击飞撞墙/砸地/大破坏）。缺任一项，必须回落到 Level 2。
+  - **Passion Without Chaos (激情不等于失控)**：可通过更强的节奏词、受力词、姿态词来写出力量与激情，如 `explosive`, `violent`, `bone-heavy`, `driving through centerline`, `full-body commitment`, `breath ripped out on impact`；但这些词**不能自动授权**额外剧情结果。
 - **Space Destruction**: 仅在剧情/动作本身需要冲击或破坏时才加入（例如撞击造成翻倒、追逐带起水花、开枪后烟雾）。不要为了“看起来更刺激”而凭空打碎环境物体，避免引入未定义道具与连续性错误。
 - **Action & Chase Copy-Ready Examples (可复制示例)**：
   - **Example A: Close-Combat Punch Chain (4.0s)**
     - `Start Frame`: `[Global Style]. **{Viewpoint Anchor}**: waist-height observer at corridor side in Environment Anchor. **{Viewing Direction}**: front-left 3/4 facing A and B. **{ViewpointSetup}**: Medium Full Shot, 35mm handheld, eye-level. **{Image Fidelity}**: clean digital look, low shadow noise, controlled background blur. **{Single-Canvas Guard}**: single-canvas cinematic frame, one continuous scene plane, no split-screen, no collage, no tiled duplication, no contact-sheet layout. **Layers**: {Foreground} Empty. {Midground} CHAR:[@A] guarded stance facing CHAR:[@B]; CHAR:[@B] shoulders tight, weight on rear leg. {Background} ENV:[Environment Anchor].`
-    - `Video Content`: `**{Viewpoint Movement}**: short lateral follow, micro-acceleration at impact, then brief hold. **Action**: (P1) CHAR:[@A] shifts weight backward, coils shoulders into loaded strike posture, then drives one explosive step toward CHAR:[@B] swinging across centerline with contact trajectory aligned to CHAR:[@B] head line; (P2) impact lands with readable limb silhouette and torso jolt on CHAR:[@B] causing half-step balance break — CHAR:[@A] retracts with controlled recoil while CHAR:[@B] remains in recovery motion -> resulting in carry-over momentum.`
-    - `End Frame`: `[Global Style]. **{Viewpoint Anchor}**: same lane, slightly closer by a short push. **{Viewing Direction}**: right 3/4 toward both fighters. **{Viewpoint Setup}**: Medium Shot, 35mm. **Layers**: {Foreground} light dust trail. {Midground} CHAR:[@A] guard re-formed, chest heaving; CHAR:[@B] off-balance with delayed recovery. {Background} ENV:[Environment Anchor].`
+    - `Video Content`: `**{Viewpoint Movement}**: short lateral follow, micro-acceleration at contact, then brief hold. **Action**: (P1) CHAR:[@A] shifts weight to the rear foot, coils shoulders and hips, then surges one explosive step toward CHAR:[@B] with a committed straight punch driving through centerline; (P2) contact lands with a sharp torso jolt on CHAR:[@B], forcing half-step to one-step recovery while guard opens briefly — CHAR:[@A] retracts into structure and CHAR:[@B] struggles to reset balance -> resulting in a heavy stagger, not a launch.`
+    - `End Frame`: `[Global Style]. **{Viewpoint Anchor}**: same lane, slightly closer by a short push. **{Viewing Direction}**: right 3/4 toward both fighters. **{Viewpoint Setup}**: Medium Shot, 35mm. **Layers**: {Foreground} brief dust lift near planted feet. {Midground} CHAR:[@A] guard re-formed, chest heaving; CHAR:[@B] staggered with guard reopening during recovery. {Background} ENV:[Environment Anchor].`
+    - `Rule Pairing`: `Level 2`. 这是“重拳命中但不击飞”的标准示例，力量强但后果受控。
   - **Example B: Weapon Clash and Carry-Over (5.0s)**
     - `Start Frame`: `[Global Style]. **{Viewpoint Anchor}**: shoulder-height observer near center path in Environment Anchor. **{Viewing Direction}**: side-facing across A and B. **{Viewpoint Setup}**: Full Shot, 35mm, stable handheld. **{Image Fidelity}**: crisp subject edges during fast motion, fine film grain, avoid heavy chroma noise. **{Single-Canvas Guard}**: single-canvas cinematic frame, one continuous scene plane, no split-screen, no collage, no tiled duplication, no contact-sheet layout. **Layers**: {Foreground} Empty. {Midground} CHAR:[@A] blade lifted chest-to-eye line; CHAR:[@B] compact guard. {Background} ENV:[Environment Anchor].`
-    - `Video Content`: `**{Viewpoint Movement}**: low-to-mid tracking with slight push at clash. **Action**: (P1) CHAR:[@A] advances one step with urgent forward pressure compressing distance, diagonal strike accelerates from shoulder rotation toward imminent impact; (P2) CHAR:[@B] hard parry meets strike with visible wrist recoil and spark/debris response causing two-body rebound — CHAR:[@B] quarter-turn counter and CHAR:[@A] outward slip keep both silhouettes readable -> resulting in momentum carry-over to next shot.`
-    - `End Frame`: `[Global Style]. **{Viewpoint Anchor}**: same axis side, slight pull-back to preserve distance map. **{Viewing Direction}**: profile-right on both subjects. **{Viewpoint Setup}**: Full Shot, 35mm. **Layers**: {Foreground} minor debris drift. {Midground} CHAR:[@A] defensive lane reset; CHAR:[@B] counter posture finishing. {Background} ENV:[Environment Anchor].`
+    - `Video Content`: `**{Viewpoint Movement}**: low-to-mid tracking with slight push at the clash, then stabilize to preserve spacing. **Action**: (P1) CHAR:[@A] advances one step with urgent forward pressure, diagonal blade line accelerating from shoulder rotation into a committed cut; (P2) CHAR:[@B] meets the strike with a hard parry, wrists recoiling on contact as a short spark burst and tight debris flick register at the weapon edge — both bodies rebound only enough to reopen guard structure, with CHAR:[@B] quarter-turning into counter-ready alignment while CHAR:[@A] slips outward to keep silhouettes clear -> resulting in controlled carry-over, not a chaotic flurry.`
+    - `End Frame`: `[Global Style]. **{Viewpoint Anchor}**: same axis side, slight pull-back to preserve distance map. **{Viewing Direction}**: profile-right on both subjects. **{Viewpoint Setup}**: Full Shot, 35mm. **Layers**: {Foreground} minor spark fade and dust fleck. {Midground} CHAR:[@A] defensive lane reset with blade recovered; CHAR:[@B] counter-ready posture stabilized. {Background} ENV:[Environment Anchor].`
+    - `Rule Pairing`: `Level 2`. 兵器硬碰允许强冲击与火花，但不默认升级成击飞、断裂、大片破坏。
+  - **Common Fight Safe Templates (常见打斗安全模板)**：以下模板默认按“力量强、激情足、但物理结果受控”的原则书写；除非命中 Level 3 授权，否则不得擅自升级结果。
+  - **Template 1: Heavy Straight Punch, No Launch (重拳命中但不击飞, Level 2)**
+    - **Use When**: 重拳、肘击、膝撞命中，需要明显力量感，但剧情并不要求击飞。
+    - `Video Content`: `**{Viewpoint Movement}**: short reactive pull with slight impact shake, then fast settle. **Action**: (P1) CHAR:[@A] drives forward with full-body commitment, rear foot pushing hard through the floor as shoulders and hips rotate into a straight strike along centerline; (P2) contact lands clean on CHAR:[@B], chest and head snapping with a sharp torso jolt as CHAR:[@B] stumbles back half a step to one step, guard breaking open before recovery begins -> resulting in a heavy stagger, not a launch.`
+    - **Rule Pairing**: 适用 `Level 2`。允许强受力、强节奏、明显失衡；**禁止**写成冲击波、倒飞、撞墙。
+  - **Template 2: Hard Kick Creating Clear Separation (重踢拉开距离, Level 2)**
+    - **Use When**: 需要把双方拉开，但不是把人踢飞撞到场景边界。
+    - `Video Content`: `**{Viewpoint Movement}**: lateral follow with brief acceleration at extension, then hold. **Action**: (P1) CHAR:[@A] plants firmly, hips whipping through as one leg snaps out in a forceful driving kick toward CHAR:[@B] midsection; (P2) CHAR:[@B] absorbs the blow with a compressed torso fold and slides backward one to two short steps, boots scraping the ground while arms rush inward to rebuild guard -> resulting in a clearly widened fighting gap and unstable recovery.`
+    - **Rule Pairing**: 可写“明显拉开距离”，但距离应由 `one to two short steps` 或等效视觉锚定支撑；**禁止**直接升级成整个人离地或撞墙。
+  - **Template 3: Wall Impact / Launch Event (击飞撞墙, Level 3 特殊事件)**
+    - **Use When**: 剧本明确要“人被击飞撞墙”，且 Start/End Frame 已给出可达路径和撞墙后的最终状态。
+    - `Video Content`: `**{Viewpoint Movement}**: rapid pull-back to preserve the flight path, then stabilize on impact. **Action**: (P1) CHAR:[@A] commits a decisive heavy strike that drives fully through CHAR:[@B]'s center mass, sending CHAR:[@B] violently screen-right along a clean readable path with feet losing their original planting; (P2) CHAR:[@B] crashes back-first into the cave wall, loose grit and small stone fragments kicking free at the point of contact as both arms instinctively rise to shield the torso; (P3) CHAR:[@B] drops half a level along the wall and struggles to hold balance while CHAR:[@A] remains forward and dominant -> resulting in a wall-impact aftermath, not a second follow-up attack.`
+    - **Rule Pairing**: 仅限 `Level 3`。必须同时满足：`Shot Logic` 明确写击飞撞墙、`Start Frame` 给出人与墙的空间关系、`End Frame` 落到撞墙后的稳定或可承接状态。
+  - **Template 4: Throw / Slam Without Chaos (摔投/砸地但不失控, Level 3 或受控 Level 2)**
+    - **Use When**: 擒抱、过肩摔、砸地，需要重量感与身体控制。
+    - `Video Content`: `**{Viewpoint Movement}**: compact circular follow around the pivot, then downward settle. **Action**: (P1) CHAR:[@A] secures body control at CHAR:[@B]'s upper torso and hip line, loading the throw with a clear weight drop and turn through the core; (P2) CHAR:[@B] is redirected over the pivot in one continuous arc and hits the ground with a heavy back or shoulder impact, dust lifting in a short burst at contact; (P3) CHAR:[@A] stays attached only long enough to complete control, then releases into a grounded finishing stance -> resulting in a single completed slam event, not a rolling scramble.`
+    - **Rule Pairing**: 若只是摔倒到地面且位移有限，可按加强版 `Level 2`；若涉及明显抛投轨迹、砸向地面或大幅失位，则按 `Level 3`。
+  - **Template 5: Furious Exchange But Still Bounded (激情连打但受控, Level 2)**
+    - **Use When**: 要体现热血、爆发、连续压制，但不希望模型乱补太多招。
+    - `Video Content`: `**{Viewpoint Movement}**: handheld forward pressure with short rebounds on each contact beat. **Action**: (P1) CHAR:[@A] surges in with relentless forward pressure, shoulders rolling through a compact burst of two to three tightly connected strikes while keeping the centerline readable; (P2) CHAR:[@B] absorbs, blocks, and gives ground in fragments, head and torso jolting under pressure as footing breaks into staggered recovery steps; (P3) the exchange ends with both fighters still upright but breathing hard, distance partially reopened and momentum unresolved -> resulting in high passion and impact without inventing a launch or environmental destruction.`
+    - **Rule Pairing**: 适合“力量与激情”但不想失控的镜头。允许连续压制感，但必须把“2-3 tightly connected strikes”视为**同一段攻势**，不得被模型扩写成完整多回合战斗。
+  - **Weapon Combat Safe Templates (兵器战安全模板)**：兵器战默认强调“线路清晰、接触点明确、力道足但结果受控”。除非命中 `Level 3` 授权，否则兵器战也默认只到 `Level 2`。
+  - **Template 6: Sword Cut Checked by Guard (刀剑斩击受控硬碰, Level 2)**
+    - **Use When**: 单刀、长剑、双剑的强力劈斩或横斩，需要明显杀伤意图和速度感，但不需要飞人或大破坏。
+    - `Video Content`: `**{Viewpoint Movement}**: side follow with a short forward press at edge contact, then immediate settle. **Action**: (P1) CHAR:[@A] commits a forceful cut from shoulder line with hips and back driving through the blade path, edge travelling fast and clean across the centerline; (P2) CHAR:[@B] catches the attack on a reinforced guard, steel biting into steel with a tight spark snap and visible arm recoil as stance compresses under the load; (P3) both blades separate only enough to rebuild threatening distance, shoulders still tense and forward -> resulting in a powerful weapon beat, not weapon breakage or body launch.`
+    - **Rule Pairing**: 适合“狠、快、重”的刀剑交锋。允许 spark snap、arm recoil、stance compression；**禁止**默认写成断兵器、震飞对手、墙体爆裂。
+  - **Template 7: Spear Thrust Driving Opponent Back (长枪刺击逼退, Level 2)**
+    - **Use When**: 长枪、长矛、长柄兵器需要体现穿透感与压迫距离。
+    - `Video Content`: `**{Viewpoint Movement}**: straight retreat to keep the thrust line readable, then hold on recovery. **Action**: (P1) CHAR:[@A] steps in behind the rear leg and drives a long spear thrust directly through the center corridor, upper body and rear hand fully extending behind the point; (P2) CHAR:[@B] knocks the shaft slightly off-line but still gets forced backward one short step as the weapon pressure folds the torso and breaks stance shape; (P3) CHAR:[@A] checks the forward surge before overcommitting, spear line staying threatening while CHAR:[@B] rebuilds guard at the new distance -> resulting in clear pressure gain without turning the thrust into a launch event.`
+    - **Rule Pairing**: 长枪的力量感主要来自“线路压迫 + 逼退 + 控距”，不是默认来自击飞。
+  - **Template 8: Staff Sweep and Body Shock (棍棒横扫与身体震荡, Level 2 / 特殊时可升 Level 3)**
+    - **Use When**: 长棍、齐眉棍、重棒横扫，需要体现骨感重量与横向破坏力。
+    - `Video Content`: `**{Viewpoint Movement}**: waist-height lateral sweep matching the staff arc, then quick settle. **Action**: (P1) CHAR:[@A] whips the staff across with both hands locked and hips snapping hard into the swing, the strike path carrying obvious body weight rather than a loose flourish; (P2) the blow crashes into CHAR:[@B]'s guard or torso line with a bone-heavy shock that twists shoulders and knocks footing off-line, forcing a rough one-step stagger with dust scraping from the planted foot; (P3) CHAR:[@A] finishes the arc and regains grounded stance while CHAR:[@B] absorbs the aftershock and tries to square up again -> resulting in punishing impact without automatic launch.`
+    - **Rule Pairing**: 默认按 `Level 2` 写“震荡、扭身、一步踉跄”。只有当剧本明确要求“棍扫飞撞墙/砸落”时，才可升级 `Level 3`。
+  - **Multi-Person Melee Safe Templates (多人混战/围攻安全模板)**：多人动作默认优先保证“主动作主体清晰 + 次要角色不抢戏 + 空间关系不乱”。除非剧本明确要求群体失控或大规模破坏，否则多人镜头也必须把结果限制在当前主事件内。
+  - **Crowd Control Rule (多人镜头控制规则, 强制)**：同一 `Video Content` 中必须明确区分 `primary actor`、`primary receiver`、`secondary threats`。次要角色只允许提供压迫、包夹、牵制或短促反应，**不得**各自展开独立完整动作链。
+  - **Template 9: One-vs-Many Pressure Ring (一对多围压, Level 2)**
+    - **Use When**: 主角被多人围住，需要强烈压迫感和连续威胁，但不想变成所有人同时乱打。
+    - `Video Content`: `**{Viewpoint Movement}**: tight circular drift around the primary fighter, then short settle on the open lane. **Action**: (P1) CHAR:[@A] holds center while two or more opponents tighten the ring, shoulders low and weapons or fists threatening from staggered angles without all committing at once; (P2) one primary attacker breaks in and forces the main exchange, CHAR:[@A] turns sharply to meet that line while the outer attackers hesitate, feint, or check distance rather than launching separate full attacks; (P3) CHAR:[@A] creates a narrow escape lane with one decisive counter and the ring briefly loosens -> resulting in high pressure geography with only one readable primary clash.`
+    - **Rule Pairing**: 多人镜头里只允许一个“主接触事件”。其余敌人只能做 `feint`, `close in`, `check step`, `guard shift`, `hesitation` 这类二级动作。
+  - **Template 10: Sequential Gang Rush, Not Chaos (轮次围攻而非群魔乱舞, Level 2)**
+    - **Use When**: 多人连续冲上来，想要热血节奏感，但避免模型把所有人同时打成一团。
+    - `Video Content`: `**{Viewpoint Movement}**: forward-and-back pressure matching the lead attacker, then stabilize on the defended center. **Action**: (P1) the lead opponent rushes first with explosive intent while the second and third attackers stack behind on staggered timing; (P2) CHAR:[@A] intercepts the lead attack with a compact heavy counter that breaks the first wave's balance, forcing the trailing attackers to check speed and adjust lines instead of colliding all at once; (P3) the second wave begins to re-enter only as the first exchange resolves -> resulting in a sequential gang attack rhythm, not simultaneous unreadable chaos.`
+    - **Rule Pairing**: 适合“多人很凶、节奏很燃”的镜头。关键是“分波次进入”，不是所有人同一拍同时完成大动作。
+  - **Template 11: Multi-Person Knockback With Protected Focus (多人受力但焦点受控, Level 2 / Level 3 by authorization)**
+    - **Use When**: 主角一招逼退多人，想要强烈爽感，但不想让模型把所有人都炸飞。
+    - `Video Content`: `**{Viewpoint Movement}**: short pull-back to keep the front line and rear line visible, then hold on aftermath. **Action**: (P1) CHAR:[@A] releases one decisive forward burst into the nearest opponent, force travelling cleanly through the front line; (P2) the primary receiver is driven back hard while adjacent opponents recoil only by posture break, short retreat steps, or raised guards, giving the impression of shared pressure without every body launching through space; (P3) the formation opens unevenly and CHAR:[@A] stands in the created gap -> resulting in a dominant multi-person beat with one main receiver and controlled secondary reactions.`
+    - **Rule Pairing**: 默认只授权“一个主受力者 + 周围角色短促后退/抬手防御”。若要写成多人齐飞或撞飞多人，必须命中 `Level 3` 且有明确场面设定支持。
+  - **Monster / Giant Creature Safe Templates (妖兽/巨体怪物安全模板)**：妖兽与巨体攻击的力量感主要来自“体量差、惯性、压迫、接触后余势”，而不是默认每一下都造成大爆炸。只有当剧本明确给出毁墙、砸地、掀翻整片场景时，才升级到大破坏结果。
+  - **Scale Translation Rule (体量转译规则, 强制)**：怪物越大，动作越要写清 `weight`, `delay`, `follow-through`, `aftershock`。大体量不是“更乱”，而是“更重、更慢起、更难停住”。
+  - **Template 12: Beast Pounce and Near-Miss Shock (妖兽扑击与擦身压迫, Level 2)**
+    - **Use When**: 猛兽、妖兽、狼型/虎型怪物扑击，需要强压迫和惊险感，但不一定命中主角。
+    - `Video Content`: `**{Viewpoint Movement}**: rapid retreat with a downward dip as the beast crosses the frame, then immediate re-level. **Action**: (P1) the beast coils low with visible shoulder and spine compression before exploding forward in a full-body pounce; (P2) CHAR:[@A] evades by a narrow margin as claws or body mass tear through the previous space, dust and grit lifting in a tight burst under the landing weight; (P3) the creature skids half a body length and turns back with predatory momentum still carrying through the shoulders -> resulting in violent pressure and weight without inventing a direct hit.`
+    - **Rule Pairing**: 适合“怪物很猛但主角这拍没中招”。力量感来自扑击惯性和落地重量，不来自爆炸特效。
+  - **Template 13: Giant Arm Slam / Paw Smash (巨体砸击, Level 2 / Level 3 by authorization)**
+    - **Use When**: 巨兽前爪、巨臂、巨尾砸地或砸向主角，需要明显体量与震感。
+    - `Video Content`: `**{Viewpoint Movement}**: low anchored hold with a hard reactive shake at impact, then slow settle. **Action**: (P1) the giant limb rises with visible delay and immense load, gathering force through the shoulder or torso before dropping in a crushing downward arc; (P2) impact hits with massive weight, throwing up a short dense burst of dust and forcing CHAR:[@A] into a desperate guard, sidestep, or stumble as the shock travels through the ground; (P3) the creature needs a heavy recovery beat to lift or drag the limb clear again -> resulting in overwhelming mass and aftershock, not automatic area-wide destruction.`
+    - **Rule Pairing**: 默认写“重压、震动、局部扬尘、主角失衡”。若要写成地面开裂大范围、墙体坍塌、多人掀飞，必须 `Level 3` 授权。
+  - **Template 14: Monster Bite / Grab Threat (噬咬或擒抱威胁, Level 2)**
+    - **Use When**: 怪物张口咬击、爪抓、口器逼近，需要高危险感，但结果以“险中躲开/短暂制住”为主。
+    - `Video Content`: `**{Viewpoint Movement}**: short push toward the mouth or claw line, then snap sideways to preserve escape direction. **Action**: (P1) the creature surges in with jaws or claws opening wide, momentum driving straight through the target lane with predatory commitment; (P2) CHAR:[@A] barely slips or braces against the grab line, body twisting under the pressure as cloth, hair, or debris gets caught in the near-contact zone; (P3) the creature overshoots or clamps down short while CHAR:[@A] breaks free into a narrow surviving gap -> resulting in lethal threat and strong physicality without forcing a full mauling event.`
+    - **Rule Pairing**: 这类镜头重点是“死亡威胁贴脸”，不是默认把角色直接吃飞、咬断、拖走。
+  - **Template 15: Giant Tail / Sweep Sending Target Off-Line (巨尾横扫失位, Level 2 / Level 3 特殊事件)**
+    - **Use When**: 巨尾或巨型躯体横扫，需要横向破坏力和大幅失位感。
+    - `Video Content`: `**{Viewpoint Movement}**: wide lateral track matching the sweep vector, then settle on the displaced target. **Action**: (P1) the tail or body mass whips across in a broad horizontal arc, momentum clearly building through the giant torso before the sweep reaches full speed; (P2) CHAR:[@A] is forced violently off the original line, either stumbling several urgent steps or being thrown into a controlled launch path if the scene explicitly authorizes it; (P3) the tail finishes through with lingering aftershock while the target fights to recover at the new position -> resulting in a massive lateral displacement beat.`
+    - **Rule Pairing**: 默认先按“数步急退、强行站稳”处理；只有剧本明确要求，才把这一类写成 `Level 3` 的击飞撞墙或摔落事件。
+  - **Spell / Energy Attack Safe Templates (法术/能量攻击安全模板)**：法术与能量攻击默认强调“蓄势、释放、命中后的一级后果”，而不是自动生成大爆炸、全屏冲击波、场景崩塌。除非命中 `Level 3` 授权，否则法术攻击默认也只到 `Level 2`。
+  - **Magic Consequence Control (法术结果控制, 强制)**：
+    - **Level 1 equivalent**：小型术法、牵制型能量、束缚或轻击，只允许 `flash`, `stun`, `brief recoil`, `short displacement`, `temporary stagger`。
+    - **Level 2 equivalent**：强法术命中、明显冲击、能量对撞，可写 `bright impact bloom`, `torso recoil`, `guard collapse`, `one-step knockback`, `localized dust/debris lift`。
+    - **Level 3 equivalent**：只有当剧本明确要求，才允许 `wall breach`, `ground rupture`, `major magical blast radius`, `multi-body launch`, `environment-wide destruction`。
+  - **Energy Is Not Automatic Explosion (能量不等于自动爆炸, 强制)**：写了 `energy`, `spell`, `beam`, `light`, `aura`, `shock`, `magic`，并不自动授权“巨型爆炸、蘑菇云、全景冲击波、全场掀飞”。大结果必须继续受 `Consequence Licensing` 约束。
+  - **Template 16: Charged Palm / Short-Range Spell Impact (近距掌劲/短距法术命中, Level 2)**
+    - **Use When**: 近距离法术、掌劲、内力或短距能量打击，需要明显能量感，但不需要炸穿场景。
+    - `Video Content`: `**{Viewpoint Movement}**: short push into the release, then recoil slightly at impact and settle. **Action**: (P1) CHAR:[@A] gathers visible force into the striking hand or core line, breath and posture tightening as light or energy condenses without overfilling the frame; (P2) the strike or short-range spell releases directly into CHAR:[@B] with a sharp flash and dense impact bloom, folding CHAR:[@B]'s torso and breaking stance by half-step to one-step knockback; (P3) the glow dissipates quickly as CHAR:[@A] holds structure and CHAR:[@B] struggles to re-center balance -> resulting in a powerful magical hit, not a scene-wide blast.`
+    - **Rule Pairing**: 适合“法术有劲、命中有光效、角色有明显受力”。**禁止**默认升级成全屏爆炸或击飞撞墙。
+  - **Template 17: Beam / Energy Line Driving Pressure (光束/能量线压制, Level 2)**
+    - **Use When**: 光束、气劲直线输出、能量炮线，需要体现持续压迫和命中路径。
+    - `Video Content`: `**{Viewpoint Movement}**: retreat along the beam axis to keep source, target, and line readable, then hold on the strained endpoint. **Action**: (P1) CHAR:[@A] locks stance and releases a concentrated energy line straight through the target corridor, the beam staying coherent rather than blooming into a full explosion; (P2) CHAR:[@B] braces or guards against the pressure, shoulders and torso shaking under the sustained force as boots drag backward a short distance and defensive posture starts to fail; (P3) the beam thins or cuts off before total collapse, leaving CHAR:[@B] staggered and smoking or glowing at the contact zone -> resulting in line-pressure dominance, not uncontrolled detonation.`
+    - **Rule Pairing**: 光束镜头的重点是“路径清楚 + 持续压迫 + 命中区域后效”，不是默认炸开整个环境。
+  - **Template 18: Spell Clash / Energy Collision (法术对撞, Level 2 / Level 3 by authorization)**
+    - **Use When**: 双方法术或能量正面对撞，需要高张力和视觉高潮，但不想模型一律做成核爆。
+    - `Video Content`: `**{Viewpoint Movement}**: stable centered hold with slight vibration at the collision core, then controlled pull-back if pressure grows. **Action**: (P1) both casters drive force forward into a single collision point, light and energy compressing into a violently unstable knot between them; (P2) the clash spits sparks, short arcs, or debris-sized magical fragments while both bodies strain against the push, footing slipping in fragments rather than flying apart instantly; (P3) the balance tips toward one side and the losing caster is forced backward or off-line while the collision core collapses inward -> resulting in a decisive magical overpower beat, not an automatic arena-wide explosion.`
+    - **Rule Pairing**: 对撞可以很燃，但默认应是“压制分胜负”，不是“大爆炸吞没全场”。只有剧本明确要求，才升级 `Level 3` 的大范围爆裂。
+  - **Template 19: Binding / Pulling Magic Under Tension (束缚/牵引法术, Level 1 到受控 Level 2)**
+    - **Use When**: 锁链、藤蔓、灵丝、引力、念力牵制这类“控制型”法术，需要强张力但不是爆破型结果。
+    - `Video Content`: `**{Viewpoint Movement}**: slow inward pressure on the restrained body line, then hold on struggle. **Action**: (P1) the binding force snaps into place around CHAR:[@B]'s limbs, torso, or weapon line with a clear tightening pull; (P2) CHAR:[@B] strains violently against the restraint, muscles and posture fighting the drag while footing shifts and the body gets pulled partially off the original line; (P3) the restraint either holds or loosens at one key point, creating a tense near-break rather than a full explosive release -> resulting in powerful magical control without inventing a blast event.`
+    - **Rule Pairing**: 这类镜头的力量感来自“被拽、被锁、快断但未断”的张力，而不是爆炸。
+  - **Template 20: Large-Scale Magic Destruction Event (大型法术破坏事件, Level 3 特殊事件)**
+    - **Use When**: 剧本明确要求法术轰塌墙体、炸裂地面、掀翻多人或形成明显大范围破坏。
+    - `Video Content`: `**{Viewpoint Movement}**: rapid pull-back to preserve the blast radius, then stabilize on the destruction aftermath. **Action**: (P1) CHAR:[@A] finishes a fully committed large-scale spell release, energy mass expanding with clear direction and target geography rather than erupting abstractly everywhere; (P2) the spell hits and tears through the authorized structure or impact zone, blasting stone, dust, or magical debris outward while primary receivers are thrown along readable paths; (P3) the destructive wave spends itself and the frame settles on the damaged environment and displaced bodies -> resulting in a major magical destruction event with bounded geography.`
+    - **Rule Pairing**: 仅限 `Level 3`。必须同时满足：剧本明确要大破坏、`Shot Logic` 写清破坏范围与主受力者、`Start/End Frame` 明确给出被毁区域与结果状态。
 
 ### 3. 悬疑惊悚 (Suspense & Thriller)
 - **Core Logic**: "Information Control & Isolation". 让观众知道的比角色多（Tension）或少（Surprise）。
@@ -607,6 +713,10 @@
         - **非触发时**（对话、建置、氛围镜头）：效果反馈仅作为可选修饰，不强制写出。
         - **效果类型参考**：受力反馈（后坐/失衡/回弹）、二次运动（衣摆/烟尘/碎屑延迟）、环境反应（涟漪/震动/光影变化）。
         - 效果描述嵌入主节拍末尾（`-> resulting in` 前的修饰从句），不独立编号。
+        - **Effect Ceiling (效果上限, 强制)**：效果反馈只能写**由当前动作直接可见地引发**的一级后果，禁止自动升级成更夸张的新事件。
+          - `{Bad}`: 普通拳击接触被写成 `shockwave erupts`, `storm of dust`, `target is thrown several steps away`，若剧本、Start Frame、End Frame 均未明确给出这些结果，则视为过度脑补。
+          - `{Good}`: 命中后只写 `torso jolt`, `half-step balance break`, `brief dust lift at feet`, `guard destabilizes` 这类与接触强度相称的一阶反应。
+        - **Script-Bounded Consequence (结果受剧本约束, 强制)**：若 Start Frame / End Frame / Shot Logic 没有明确给出“击飞、爆震、大片扬尘、显著拉开距离、额外回合”，`Video Content` 不得擅自补出这些结果。
       *   **Primary Sustain Action (核心维持动作)**: **Critical**.
           - `{Example}: "(P1) {@Subject} eyes scanning continuously across text while finger traces lines vertically, occasional blink and slight head tilt." (Instead of just "reading").`
       *   **Continuous Flow**: 确保 `Start` 到 `End` 之间没有时间真空。
@@ -618,6 +728,7 @@
           - **模型适配参考 (Model Adaptation Reference)**：
             - **Kling 2.0+ / MiniMax Hailuo**：支持较长 prompt（~200 tokens），语义解析能力强，可使用 3 个主节拍 + 较丰富微节拍，支持 TTS 对白。
             - **Runway Gen-3 / Luma**：prompt 敏感度高，建议 2 个主节拍 + 精简微节拍，总量控向 80-120 tokens，对白文本可能被忽略。
+            - **Veo / Veo-class (8s minimum)**：更容易把“填充性细节”误判为新增动作。建议 **1-2 个主节拍 + 明确的 hold/recovery/settle 段**，总量控向 **60-110 tokens**，避免夸张后效与额外剧情动作。
             - **Sora / 通用模型**：遵循默认 2-3 主节拍 + 80-150 tokens 基线。
             - **原则**：当模型具体能力未知时，一律按保守策略（2 主节拍 + 100 tokens 以内）生成，确保核心动作不丢失。
           - **场景类型密度映射**：
@@ -625,6 +736,7 @@
             - **Action & Chase（追逐/走位）**：2-3 个主节拍（路线段），微节拍嵌入速度变化与环境响应。
             - **Dialogue/Emotion**：2 个主节拍（情绪转折点），微节拍嵌入面部与肢体细节。
             - **Atmosphere/Establishing**：1-2 个主节拍（空间揭示），微节拍嵌入光影与环境动态。
+            - **8s 打斗/对峙镜头特例**：允许采用 `P1 接触或压迫建立 -> P2 受力/回稳 -> hold` 的三段式，其中 `hold` 只负责延续余势与落稳，不得再发明新冲突。
           - 严禁为了凑数制造会改变剧情的无意义抽搐/乱动。
           - **双层示例 (5s Dialogue Shot)**：
             - `{Good}: "(P1) CHAR:[@A] leans forward, brow tightening, lips parting with a slow exhale as gaze locks onto CHAR:[@B]; (P2) CHAR:[@A] hand rises from lap to gesture at chest level, palm open, while CHAR:[@B] chin lifts slightly and eyes narrow in response; (P3) both settle — CHAR:[@A] hand lowers, CHAR:[@B] jaw sets, shared stillness with tension held in eye contact."`

@@ -160,6 +160,26 @@ function getResolutionByAspectAndImageSize(aspectRatio, imageSize) {
     return presets[key] || null;
 }
 
+const SHOT_IMAGE_CFG_MIN = 1;
+const SHOT_IMAGE_CFG_MAX = 15;
+const SHOT_IMAGE_CFG_STEP = 0.5;
+const SHOT_IMAGE_CFG_FALLBACK = 7;
+
+function clampShotImageCfg(value, fallback = SHOT_IMAGE_CFG_FALLBACK) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric <= 0) return fallback;
+    const clamped = Math.min(SHOT_IMAGE_CFG_MAX, Math.max(SHOT_IMAGE_CFG_MIN, numeric));
+    return Math.round(clamped / SHOT_IMAGE_CFG_STEP) * SHOT_IMAGE_CFG_STEP;
+}
+
+function resolveShotImageCfgDefault(preferences) {
+    const numeric = Number(preferences?.advanced_model?.cfg);
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+        return SHOT_IMAGE_CFG_FALLBACK;
+    }
+    return clampShotImageCfg(numeric);
+}
+
 function extractDialogueOnlyFromPrompt(value) {
     const raw = String(value || '').replace(/\r\n/g, '\n').trim();
     if (!raw) return '';
@@ -475,6 +495,7 @@ import {
     updateProjectCharacterProfiles,
     recordSystemLogAction,
     rebindShotMediaAssets,
+    getCachedUserPreferences,
 } from '../services/api';
 
 import RefineControl from '../components/RefineControl.jsx';
@@ -17022,12 +17043,24 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     );
 
     const [assetDetailModal, setAssetDetailModal] = useState({ open: false, type: 'start', keyframeIndex: -1 });
+    const [shotImageCfgDefault, setShotImageCfgDefault] = useState(() => resolveShotImageCfgDefault(getCachedUserPreferences()));
+    const [shotImageCfgValue, setShotImageCfgValue] = useState(() => resolveShotImageCfgDefault(getCachedUserPreferences()));
     const [shotAssetsMetaIndex, setShotAssetsMetaIndex] = useState({});
     const [shotAssetsMetaLoading, setShotAssetsMetaLoading] = useState(false);
     const [shotAssetsRefreshKey, setShotAssetsRefreshKey] = useState(0);
     const refreshShotAssetsMeta = useCallback(() => setShotAssetsRefreshKey(k => k + 1), []);
 
+    const syncShotImageCfgFromSettings = useCallback(() => {
+        const nextDefault = resolveShotImageCfgDefault(getCachedUserPreferences());
+        setShotImageCfgDefault(nextDefault);
+        setShotImageCfgValue(nextDefault);
+        return nextDefault;
+    }, []);
+
     const openAssetDetailModal = (type, keyframeIndex = -1) => {
+        if (type === 'start' || type === 'end' || type === 'keyframe') {
+            syncShotImageCfgFromSettings();
+        }
         setAssetDetailModal({ open: true, type, keyframeIndex });
     };
 
@@ -18952,18 +18985,22 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
          // Or rely on the fact that we are editing 'localKeyframes' state for text, and only syncing on Blur?
     };
 
-    const generateAssetWithLang = async (assetType, keyframeIndex = -1) => {
+    const generateAssetWithLang = async (assetType, keyframeIndex = -1, options = {}) => {
         if (!editingShot) return;
+        const cfgOverride = Number(options?.cfg);
+        const normalizedCfgOverride = Number.isFinite(cfgOverride) && cfgOverride > 0
+            ? clampShotImageCfg(cfgOverride)
+            : null;
 
         if (assetType === 'start') {
             setShotGeneratingState(editingShot.id, 'start', true);
-            await handleGenerateStartFrame();
+            await handleGenerateStartFrame(null, normalizedCfgOverride);
             return;
         }
 
         if (assetType === 'end') {
             setShotGeneratingState(editingShot.id, 'end', true);
-            await handleGenerateEndFrame();
+            await handleGenerateEndFrame(null, normalizedCfgOverride);
             return;
         }
 
@@ -18976,12 +19013,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         if (assetType === 'keyframe') {
             const kf = localKeyframes[keyframeIndex];
             if (!kf) return;
-            await handleGenerateKeyframe(keyframeIndex);
+            await handleGenerateKeyframe(keyframeIndex, null, normalizedCfgOverride);
         }
     };
 
     // Helper for Generating Keyframe
-    const handleGenerateKeyframe = async (kfIndex, promptOverride = null) => {
+    const handleGenerateKeyframe = async (kfIndex, promptOverride = null, cfgOverride = null) => {
         const kf = localKeyframes[kfIndex];
         if (!kf) return;
         const tech = getEditingShotTech();
@@ -19015,6 +19052,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 shot_name: editingShot.shot_name,
                 prompt_language: resolvedPromptSubmitLang,
                 asset_type: 'keyframe',
+                ...(cfgOverride ? { cfg: cfgOverride } : {}),
                 ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
                 negative_prompt: buildEntityNegativePrompt(promptToUse, null, entities)
             });
@@ -19192,7 +19230,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     }, [editingShot?.id, editingShot?.start_frame, editingShot?.image_url, shots, onUpdateShot, setEditingShot]);
 
     // --- Generation Handlers ---
-    const handleGenerateStartFrame = async (promptOverride = null) => {
+    const handleGenerateStartFrame = async (promptOverride = null, cfgOverride = null) => {
         if (!editingShot) return;
         const targetShotId = editingShot.id;
         let createdImageJobId = '';
@@ -19303,6 +19341,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     shot_name: editingShot.shot_name,
                     prompt_language: resolvedPromptSubmitLang,
                     asset_type: 'start_frame',
+                        ...(cfgOverride ? { cfg: cfgOverride } : {}),
                         ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
                     negative_prompt: buildEntityNegativePrompt(rawPrompt, null, entities),
                     on_job_created: (jobId) => {
@@ -19339,7 +19378,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         setShotGeneratingState(targetShotId, 'start', false);
     };
 
-    const handleGenerateEndFrame = async (promptOverride = null) => {
+    const handleGenerateEndFrame = async (promptOverride = null, cfgOverride = null) => {
         if (!editingShot) return;
         const targetShotId = editingShot.id;
         let createdImageJobId = '';
@@ -19391,6 +19430,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     shot_name: editingShot.shot_name,
                     prompt_language: resolvedPromptSubmitLang,
                     asset_type: 'end_frame',
+                    ...(cfgOverride ? { cfg: cfgOverride } : {}),
                     ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
                     negative_prompt: buildEntityNegativePrompt(rawPrompt, null, entities),
                     on_job_created: (jobId) => {
@@ -21580,6 +21620,51 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 const modalType = assetDetailModal.type;
                                                 const keyframe = modalType === 'keyframe' ? localKeyframes[assetDetailModal.keyframeIndex] : null;
                                                 const endFrameUrl = String(tech.end_frame_url || '');
+                                                const showImageCfgControl = modalType === 'start' || modalType === 'end' || modalType === 'keyframe';
+                                                const currentImageCfgValue = clampShotImageCfg(shotImageCfgValue, shotImageCfgDefault);
+                                                const imageCfgControl = showImageCfgControl ? (
+                                                    <div className="space-y-3 rounded-lg border border-amber-400/20 bg-amber-500/5 p-4">
+                                                        <div className="flex items-center justify-between gap-3">
+                                                            <div>
+                                                                <div className="text-[11px] text-amber-200 uppercase font-bold">{t('本次生图强度', 'Image Prompt Strength')}</div>
+                                                                <div className="text-xs text-gray-300 mt-1">
+                                                                    {t('只影响当前这次生图，不会改动你的全局 Settings。', 'This only affects the current image generation and will not change your global Settings.')}
+                                                                </div>
+                                                            </div>
+                                                            <div className="px-2 py-1 rounded bg-black/30 border border-white/10 text-sm font-mono text-amber-100">
+                                                                {currentImageCfgValue.toFixed(1)}
+                                                            </div>
+                                                        </div>
+                                                        <input
+                                                            type="range"
+                                                            min={SHOT_IMAGE_CFG_MIN}
+                                                            max={SHOT_IMAGE_CFG_MAX}
+                                                            step={SHOT_IMAGE_CFG_STEP}
+                                                            value={currentImageCfgValue}
+                                                            onChange={(e) => setShotImageCfgValue(clampShotImageCfg(e.target.value, shotImageCfgDefault))}
+                                                            className="w-full accent-amber-400"
+                                                        />
+                                                        <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                                                            <span>{t('更自由，更容易出氛围', 'Looser, more atmospheric')}</span>
+                                                            <span>{t('更贴近提示词，但可能更硬', 'Closer to prompt, but can feel stiffer')}</span>
+                                                        </div>
+                                                        <div className="text-xs text-gray-300 leading-6">
+                                                            {t(
+                                                                `默认值 ${shotImageCfgDefault.toFixed(1)} 来自你的 Settings。想临时提高细节贴合度时，可以往右拖一点；如果画面开始发硬、过度堆细节，就往左收回。`,
+                                                                `Default ${shotImageCfgDefault.toFixed(1)} comes from your Settings. Drag right when you want tighter prompt adherence; drag left if the image starts to feel rigid or over-detailed.`
+                                                            )}
+                                                        </div>
+                                                        <div className="flex justify-end">
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => setShotImageCfgValue(shotImageCfgDefault)}
+                                                                className="text-xs px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-white/80"
+                                                            >
+                                                                {t('恢复默认', 'Reset to Default')}
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                ) : null;
 
                                                 let detailUrl = '';
                                                 let detailType = 'image';
@@ -21684,9 +21769,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                 {renderAssetMetaPanel()}
                                                             </div>
                                                             <div className="space-y-3">
+                                                                {imageCfgControl}
                                                                 <div className="flex items-center gap-2">
                                                                     <button 
-                                                                        onClick={() => generateAssetWithLang('start')} 
+                                                                        onClick={() => generateAssetWithLang('start', -1, { cfg: currentImageCfgValue })} 
                                                                         disabled={currentGeneratingState.start}
                                                                         className={`text-xs px-2 py-1 rounded ${currentGeneratingState.start ? 'bg-sky-500/10 text-sky-300/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30'}`}
                                                                     >
@@ -21760,9 +21846,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                 {renderAssetMetaPanel()}
                                                             </div>
                                                             <div className="space-y-3">
+                                                                {imageCfgControl}
                                                                 <div className="flex items-center gap-2">
                                                                     <button 
-                                                                        onClick={() => generateAssetWithLang('end')} 
+                                                                        onClick={() => generateAssetWithLang('end', -1, { cfg: currentImageCfgValue })} 
                                                                         disabled={currentGeneratingState.end}
                                                                         className={`text-xs px-2 py-1 rounded ${currentGeneratingState.end ? 'bg-sky-500/10 text-sky-300/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30'}`}
                                                                     >
@@ -21994,6 +22081,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                             {renderAssetMetaPanel()}
                                                         </div>
                                                         <div className="space-y-3">
+                                                            {imageCfgControl}
                                                             <div className="flex items-center gap-2">
                                                                 <input className="bg-black/30 border border-white/10 rounded px-2 py-1 text-xs w-20" value={keyframe?.time || ''} onChange={(e) => {
                                                                     const updated = [...localKeyframes];
@@ -22002,7 +22090,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                     setLocalKeyframes(updated);
                                                                 }} />
                                                                 <button 
-                                                                    onClick={() => generateAssetWithLang('keyframe', assetDetailModal.keyframeIndex)} 
+                                                                    onClick={() => generateAssetWithLang('keyframe', assetDetailModal.keyframeIndex, { cfg: currentImageCfgValue })} 
                                                                     disabled={!!keyframe?.loading}
                                                                     className={`text-xs px-2 py-1 rounded ${keyframe?.loading ? 'bg-sky-500/10 text-sky-300/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30'}`}
                                                                 >

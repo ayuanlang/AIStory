@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, load_only
 from sqlalchemy import cast, String, func, inspect, or_, and_, text, Table, MetaData, bindparam
+from sqlalchemy.exc import OperationalError
 import logging
 import csv
 import io
@@ -1518,6 +1519,8 @@ def _get_provider_key_pool_record(db: Session, provider: str):
     provider_name = _normalize_system_provider_name(provider)
     if not provider_name:
         return None
+    if not _db_has_table(db, "provider_key_pool"):
+        return None
     return db.query(ProviderKeyPool).filter(ProviderKeyPool.provider == provider_name).first()
 
 
@@ -1580,33 +1583,51 @@ def _apply_system_provider_key_pool(db: Session, provider: str, keys: List[str])
         row.api_key = primary_key
 
 
-def _apply_provider_key_bundle_to_rows(db: Session, provider_name: str, keys: List[str], strategy: str, weights: List[float]) -> None:
-    """Write full key pool bundle (keys + strategy + weights) to provider_key_pool table and sync api_key on rows."""
+def _apply_provider_key_bundle_to_rows(
+    db: Session,
+    provider_name: str,
+    keys: List[str],
+    strategy: str,
+    weights: List[float],
+    *,
+    provider_alias: Optional[str] = None,
+    intro_url: Optional[str] = None,
+    created_at: Optional[str] = None,
+    updated_at: Optional[str] = None,
+) -> None:
+    """Write full key pool bundle to provider_key_pool and sync api_key on system_api_settings rows."""
     normalized = _normalize_api_keys(keys)
     provider_name = _normalize_system_provider_name(provider_name)
 
-    # SQL-level upsert avoids StaleDataError in replace_all transaction scopes.
-    now_iso = now_bj_iso()
-    updated_rows = db.query(ProviderKeyPool).filter(
-        ProviderKeyPool.provider == provider_name,
-    ).update(
-        {
-            "api_keys": normalized,
-            "strategy": strategy,
-            "weights": weights,
-            "updated_at": now_iso,
-        },
-        synchronize_session=False,
-    )
-    if int(updated_rows or 0) == 0:
-        db.add(ProviderKeyPool(
-            provider=provider_name,
-            api_keys=normalized,
-            strategy=strategy,
-            weights=weights,
-            created_at=now_iso,
-            updated_at=now_iso,
-        ))
+    if _db_has_table(db, "provider_key_pool"):
+        # SQL-level upsert avoids StaleDataError in replace_all transaction scopes.
+        now_iso = str(updated_at or now_bj_iso())
+        updated_rows = db.query(ProviderKeyPool).filter(
+            ProviderKeyPool.provider == provider_name,
+        ).update(
+            {
+                "api_keys": normalized,
+                "strategy": strategy,
+                "weights": weights,
+                "provider_alias": str(provider_alias or "").strip() or None,
+                "intro_url": _normalize_optional_http_url(intro_url),
+                "updated_at": now_iso,
+            },
+            synchronize_session=False,
+        )
+        if int(updated_rows or 0) == 0:
+            db.add(ProviderKeyPool(
+                provider=provider_name,
+                api_keys=normalized,
+                strategy=strategy,
+                weights=weights,
+                provider_alias=str(provider_alias or "").strip() or None,
+                intro_url=_normalize_optional_http_url(intro_url),
+                created_at=str(created_at or now_iso),
+                updated_at=now_iso,
+            ))
+    else:
+        logger.warning("Skip provider_key_pool sync for provider=%s: table provider_key_pool not found", provider_name)
 
     primary_key = normalized[0] if normalized else ""
     rows = db.query(SystemAPISetting).filter(
@@ -4417,6 +4438,15 @@ def list_system_api_billing_rules_batch(
     if not _can_manage_system_settings(current_user):
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
+    if not _require_billing_rules_table(db, allow_missing=True):
+        grouped: Dict[str, List[SystemAPIBillingRuleOut]] = {}
+        if system_api_ids:
+            for token in str(system_api_ids).split(","):
+                text = str(token or "").strip()
+                if text.isdigit() and int(text) > 0:
+                    grouped.setdefault(str(int(text)), [])
+        return grouped
+
     ids: List[int] = []
     if system_api_ids:
         for token in str(system_api_ids).split(","):
@@ -5575,6 +5605,9 @@ def list_system_api_billing_rules(
     if not target:
         raise HTTPException(status_code=404, detail="System API setting not found")
 
+    if not _require_billing_rules_table(db, allow_missing=True):
+        return []
+
     rows = db.query(SystemAPIBillingRule).filter(
         SystemAPIBillingRule.system_api_id == system_api_id,
     ).order_by(SystemAPIBillingRule.is_active.desc(), SystemAPIBillingRule.priority.desc(), SystemAPIBillingRule.id.desc()).all()
@@ -5590,6 +5623,7 @@ def create_system_api_billing_rule(
 ):
     if not _can_manage_system_settings(current_user):
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+    _require_billing_rules_table(db)
     if int(payload.system_api_id) != int(system_api_id):
         raise HTTPException(status_code=400, detail="path system_api_id must match payload.system_api_id")
 
@@ -5620,6 +5654,7 @@ def update_system_api_billing_rule(
 ):
     if not _can_manage_system_settings(current_user):
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+    _require_billing_rules_table(db)
 
     rule = db.query(SystemAPIBillingRule).filter(SystemAPIBillingRule.id == rule_id).first()
     if not rule:
@@ -5651,6 +5686,7 @@ def delete_system_api_billing_rule(
 ):
     if not _can_manage_system_settings(current_user):
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+    _require_billing_rules_table(db)
 
     rule = db.query(SystemAPIBillingRule).filter(SystemAPIBillingRule.id == rule_id).first()
     if not rule:
@@ -5674,6 +5710,7 @@ def batch_delete_system_api_billing_rules(
 ):
     if not _can_manage_system_settings(current_user):
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
+    _require_billing_rules_table(db)
 
     raw_ids = [token.strip() for token in str(rule_ids or "").split(",") if token.strip()]
     parsed_ids: List[int] = []
@@ -7981,9 +8018,45 @@ def _db_has_table(db: Session, table_name: str) -> bool:
         return False
 
 
+_SQLITE_LOCK_RETRY_DELAYS = (0.35, 0.8, 1.5)
+
+
+def _is_sqlite_locked_error(exc: Exception) -> bool:
+    text = str(exc or "").lower()
+    return "sqlite" in text and "database is locked" in text
+
+
+def _run_sqlite_lock_retry(db: Session, label: str, operation):
+    for attempt, delay in enumerate((0.0, *_SQLITE_LOCK_RETRY_DELAYS), start=1):
+        try:
+            with db.begin_nested():
+                return operation()
+        except OperationalError as exc:
+            if not _is_sqlite_locked_error(exc) or attempt > len(_SQLITE_LOCK_RETRY_DELAYS):
+                raise
+            logger.warning(
+                "Retrying %s after SQLite lock (%s/%s) in %.2fs",
+                label,
+                attempt,
+                len(_SQLITE_LOCK_RETRY_DELAYS) + 1,
+                delay,
+            )
+            time.sleep(delay)
+
+
+def _require_billing_rules_table(db: Session, *, allow_missing: bool = False) -> bool:
+    has_table = _db_has_table(db, "system_api_billing_rules")
+    if has_table:
+        return True
+    if allow_missing:
+        return False
+    raise HTTPException(status_code=409, detail="system_api_billing_rules table not found in current database schema")
+
+
 def _rebuild_sync_config_tables_for_replace_all(db: Session) -> Dict[str, bool]:
     """Drop and recreate sync-config tables to enforce strict schema/data consistency."""
     rebuilt = {
+        "system_api_settings": False,
         "system_api_billing_rules": False,
         "provider_key_pool": False,
         "smtp_system_configs": False,
@@ -7991,28 +8064,57 @@ def _rebuild_sync_config_tables_for_replace_all(db: Session) -> Dict[str, bool]:
         "system_task_default_apis": False,
     }
 
-    table_specs = [
+    drop_table_specs = [
+        ("system_api_billing_rules", SystemAPIBillingRule),
+        ("system_task_default_apis", TaskDefaultSystemAPI),
+        ("system_api_settings", SystemAPISetting),
+        ("provider_key_pool", ProviderKeyPool),
+        ("smtp_system_configs", SMTPSystemConfig),
+        ("wechat_pay_configs", WechatPayConfig),
+    ]
+
+    create_table_specs = [
+        ("system_api_settings", SystemAPISetting),
         ("system_api_billing_rules", SystemAPIBillingRule),
         ("provider_key_pool", ProviderKeyPool),
         ("smtp_system_configs", SMTPSystemConfig),
         ("wechat_pay_configs", WechatPayConfig),
     ]
     if HAS_TASK_DEFAULT_SYSTEM_API_MODEL:
-        table_specs.append(("system_task_default_apis", TaskDefaultSystemAPI))
+        drop_table_specs = [spec for spec in drop_table_specs if spec[0] != "system_task_default_apis"] + [("system_task_default_apis", TaskDefaultSystemAPI)]
+        create_table_specs.append(("system_task_default_apis", TaskDefaultSystemAPI))
+    else:
+        drop_table_specs = [spec for spec in drop_table_specs if spec[0] != "system_task_default_apis"]
 
     bind = db.get_bind()
     dialect_name = str(getattr(getattr(bind, "dialect", None), "name", "") or "").lower()
     use_cascade = dialect_name == "postgresql"
 
-    for table_name, model_cls in table_specs:
-        try:
-            if _db_has_table(db, table_name):
-                drop_sql = f"DROP TABLE IF EXISTS {table_name} CASCADE" if use_cascade else f"DROP TABLE IF EXISTS {table_name}"
-                db.execute(text(drop_sql))
-            model_cls.__table__.create(bind=bind, checkfirst=True)
-            rebuilt[table_name] = True
-        except Exception as exc:
-            logger.warning("Failed to rebuild table %s during sync replace_all: %s", table_name, exc)
+    with bind.begin() as conn:
+        inspector = inspect(conn)
+
+        for table_name, _model_cls in drop_table_specs:
+            try:
+                if inspector.has_table(table_name):
+                    drop_sql = f"DROP TABLE IF EXISTS {table_name} CASCADE" if use_cascade else f"DROP TABLE IF EXISTS {table_name}"
+                    conn.execute(text(drop_sql))
+            except Exception as exc:
+                logger.warning("Failed to rebuild table %s during sync replace_all: %s", table_name, exc)
+
+        for table_name, model_cls in create_table_specs:
+            try:
+                model_cls.__table__.create(bind=conn, checkfirst=True)
+            except Exception as exc:
+                logger.warning("Failed to rebuild table %s during sync replace_all: %s", table_name, exc)
+
+        inspector = inspect(conn)
+        for table_name, _model_cls in create_table_specs:
+            rebuilt[table_name] = bool(inspector.has_table(table_name))
+
+    db.expire_all()
+
+    if not rebuilt.get("system_api_settings"):
+        raise RuntimeError("replace_all rebuild failed: system_api_settings table was not recreated")
 
     return rebuilt
 
@@ -8022,9 +8124,7 @@ def _safe_clear_transaction_action_rule_links(db: Session, *, clear_system_api_i
     if not _db_has_table(db, "transaction_action"):
         return
     try:
-        # Isolate legacy-schema failures so PostgreSQL transactions are not left
-        # in aborted state (InFailedSqlTransaction) for subsequent queries.
-        with db.begin_nested():
+        def _cleanup() -> None:
             if clear_system_api_ids:
                 db.query(TransactionAction).filter(
                     TransactionAction.system_api_id.in_(clear_system_api_ids),
@@ -8033,6 +8133,9 @@ def _safe_clear_transaction_action_rule_links(db: Session, *, clear_system_api_i
                 db.query(TransactionAction).filter(
                     TransactionAction.matched_rule_id.in_(clear_rule_ids),
                 ).update({"matched_rule_id": None}, synchronize_session=False)
+        # Isolate legacy-schema failures so PostgreSQL transactions are not left
+        # in aborted state (InFailedSqlTransaction) for subsequent queries.
+        _run_sqlite_lock_retry(db, "transaction_action cleanup", _cleanup)
     except Exception as exc:
         logger.warning("Skip transaction_action cleanup due to schema mismatch: %s", exc)
 
@@ -8107,18 +8210,60 @@ def _clear_non_system_settings_for_replace_all(db: Session) -> None:
     )
 
     if has_billing_rules_table:
-        db.query(SystemAPIBillingRule).filter(
-            SystemAPIBillingRule.system_api_id.in_(target_ids),
-        ).delete(synchronize_session=False)
+        _run_sqlite_lock_retry(
+            db,
+            "replace_all delete billing rules",
+            lambda: db.query(SystemAPIBillingRule).filter(
+                SystemAPIBillingRule.system_api_id.in_(target_ids),
+            ).delete(synchronize_session=False),
+        )
 
-    db.query(SystemAPISetting).filter(
-        SystemAPISetting.id.in_(target_ids),
-    ).delete(synchronize_session=False)
+    _run_sqlite_lock_retry(
+        db,
+        "replace_all delete system_api_settings",
+        lambda: db.query(SystemAPISetting).filter(
+            SystemAPISetting.id.in_(target_ids),
+        ).delete(synchronize_session=False),
+    )
 
-    db.flush()
+    _run_sqlite_lock_retry(db, "replace_all flush non-system settings", db.flush)
 
 
-def _import_provider_bundle_no_commit(db: Session, providers: List[Any], replace_all: bool) -> Dict[str, int]:
+def _prepare_sync_replace_all_state(db: Session) -> Dict[str, bool]:
+    target_ids = [
+        int(row_id)
+        for row_id, in db.query(SystemAPISetting.id).all()
+    ]
+
+    if target_ids:
+        rule_ids: List[int] = []
+        if _db_has_table(db, "system_api_billing_rules"):
+            rule_ids = [
+                int(rule_id)
+                for rule_id, in db.query(SystemAPIBillingRule.id).filter(
+                    SystemAPIBillingRule.system_api_id.in_(target_ids),
+                ).all()
+            ]
+
+        _safe_clear_transaction_action_rule_links(
+            db,
+            clear_system_api_ids=target_ids,
+            clear_rule_ids=rule_ids,
+        )
+
+    db.commit()
+
+    return _rebuild_sync_config_tables_for_replace_all(db)
+
+
+def _import_provider_bundle_no_commit(
+    db: Session,
+    providers: List[Any],
+    replace_all: bool,
+    *,
+    sync_base_billing_rules: bool = True,
+    sync_provider_keys: bool = True,
+) -> Dict[str, int]:
     if replace_all:
         _clear_non_system_settings_for_replace_all(db)
 
@@ -8184,7 +8329,7 @@ def _import_provider_bundle_no_commit(db: Session, providers: List[Any], replace
                 target.deprecated = _is_setting_deprecated(target.config, getattr(model_item, "deprecated", None))
                 target.is_active = bool(target.is_active)
                 _clear_row_billing_columns(target)
-                if _is_system_api_auto_billing_sync_enabled():
+                if sync_base_billing_rules and _is_system_api_auto_billing_sync_enabled():
                     _upsert_base_billing_rule(db, target.id, target.category, model_billing, activate=True)
                     _refresh_has_granular_billing_rules_flag(db, target.id)
                 updated += 1
@@ -8220,7 +8365,7 @@ def _import_provider_bundle_no_commit(db: Session, providers: List[Any], replace
                     _clear_row_billing_columns(target)
                     db.add(target)
                     db.flush()
-                if _is_system_api_auto_billing_sync_enabled():
+                if sync_base_billing_rules and _is_system_api_auto_billing_sync_enabled():
                     _upsert_base_billing_rule(db, target.id, target.category, model_billing, activate=True)
                     _refresh_has_granular_billing_rules_flag(db, target.id)
                 created += 1
@@ -8250,7 +8395,7 @@ def _import_provider_bundle_no_commit(db: Session, providers: List[Any], replace
             SystemAPISetting.provider == provider_name,
             ~SystemAPISetting.category.like("System_%"),
         ).all()
-        if provider_rows:
+        if sync_provider_keys and provider_rows:
             _apply_provider_key_bundle_to_rows(db, provider_name, keys, strategy, weights)
             key_updated_providers += 1
 
@@ -8279,78 +8424,92 @@ def export_system_config_sync_bundle_for_manage(
     system_map = {int(row.id): row for row in system_rows}
 
     billing_rules_payload: List[Dict[str, Any]] = []
-    rule_rows = db.query(SystemAPIBillingRule).order_by(
-        SystemAPIBillingRule.system_api_id.asc(),
-        SystemAPIBillingRule.id.asc(),
-    ).all()
-    for rule in rule_rows:
-        api_row = system_map.get(int(rule.system_api_id))
-        entry = {
-            "system_api_ref": {
-                "provider": api_row.provider if api_row else None,
-                "category": api_row.category if api_row else None,
-                "model": api_row.model if api_row else None,
-            },
-            "created_at": rule.created_at,
-            "updated_at": rule.updated_at,
-        }
-        for field_name in _SYNC_BILLING_RULE_FIELDS:
-            entry[field_name] = getattr(rule, field_name)
-        billing_rules_payload.append(entry)
+    if _db_has_table(db, "system_api_billing_rules"):
+        rule_rows = db.query(SystemAPIBillingRule).order_by(
+            SystemAPIBillingRule.system_api_id.asc(),
+            SystemAPIBillingRule.id.asc(),
+        ).all()
+        for rule in rule_rows:
+            api_row = system_map.get(int(rule.system_api_id))
+            entry = {
+                "system_api_ref": {
+                    "provider": api_row.provider if api_row else None,
+                    "category": api_row.category if api_row else None,
+                    "model": api_row.model if api_row else None,
+                },
+                "created_at": rule.created_at,
+                "updated_at": rule.updated_at,
+            }
+            for field_name in _SYNC_BILLING_RULE_FIELDS:
+                entry[field_name] = getattr(rule, field_name)
+            billing_rules_payload.append(entry)
+    else:
+        logger.warning("Skip sync export billing rules: table system_api_billing_rules not found")
 
-    provider_key_pool_rows = db.query(ProviderKeyPool).order_by(ProviderKeyPool.provider.asc(), ProviderKeyPool.id.asc()).all()
-    provider_key_pools_payload = [
-        {
-            "provider": row.provider,
-            "provider_alias": str(getattr(row, "provider_alias", "") or "").strip() or None,
-            "api_keys": _normalize_api_keys(row.api_keys),
-            "strategy": _normalize_key_strategy(row.strategy),
-            "weights": row.weights if row.weights else [],
-            "intro_url": _normalize_optional_http_url(getattr(row, "intro_url", None)),
-            "created_at": row.created_at,
-            "updated_at": row.updated_at,
-        }
-        for row in provider_key_pool_rows
-    ]
+    provider_key_pools_payload = []
+    if _db_has_table(db, "provider_key_pool"):
+        provider_key_pool_rows = db.query(ProviderKeyPool).order_by(ProviderKeyPool.provider.asc(), ProviderKeyPool.id.asc()).all()
+        provider_key_pools_payload = [
+            {
+                "provider": row.provider,
+                "provider_alias": str(getattr(row, "provider_alias", "") or "").strip() or None,
+                "api_keys": _normalize_api_keys(row.api_keys),
+                "strategy": _normalize_key_strategy(row.strategy),
+                "weights": row.weights if row.weights else [],
+                "intro_url": _normalize_optional_http_url(getattr(row, "intro_url", None)),
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+            }
+            for row in provider_key_pool_rows
+        ]
+    else:
+        logger.warning("Skip sync export provider key pools: table provider_key_pool not found")
 
-    smtp_rows = db.query(SMTPSystemConfig).order_by(SMTPSystemConfig.id.asc()).all()
-    smtp_payload = [
-        {
-            "host": str(row.host or "").strip(),
-            "port": int(row.port or 587),
-            "username": str(row.username or "").strip(),
-            "password": str(row.password or ""),
-            "use_ssl": bool(row.use_ssl),
-            "use_tls": bool(row.use_tls),
-            "from_email": str(row.from_email or "").strip(),
-            "frontend_base_url": str(row.frontend_base_url or "").strip(),
-            # SMTP config is not a SystemAPISetting and has no category field.
-            "is_active": bool(getattr(row, "is_active", True)),
-            "created_at": row.created_at,
-            "updated_at": row.updated_at,
-        }
-        for row in smtp_rows
-    ]
+    smtp_payload = []
+    if _db_has_table(db, "smtp_system_configs"):
+        smtp_rows = db.query(SMTPSystemConfig).order_by(SMTPSystemConfig.id.asc()).all()
+        smtp_payload = [
+            {
+                "host": str(row.host or "").strip(),
+                "port": int(row.port or 587),
+                "username": str(row.username or "").strip(),
+                "password": str(row.password or ""),
+                "use_ssl": bool(row.use_ssl),
+                "use_tls": bool(row.use_tls),
+                "from_email": str(row.from_email or "").strip(),
+                "frontend_base_url": str(row.frontend_base_url or "").strip(),
+                "is_active": bool(getattr(row, "is_active", True)),
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+            }
+            for row in smtp_rows
+        ]
+    else:
+        logger.warning("Skip sync export SMTP configs: table smtp_system_configs not found")
 
-    wechat_rows = db.query(WechatPayConfig).order_by(WechatPayConfig.id.asc()).all()
-    wechat_payload = [
-        {
-            "mchid": str(row.mchid or "").strip(),
-            "appid": str(row.appid or "").strip(),
-            "api_v3_key": str(row.api_v3_key or "").strip(),
-            "cert_serial_no": str(row.cert_serial_no or "").strip(),
-            "private_key": str(row.private_key or ""),
-            "notify_url": str(row.notify_url or "").strip(),
-            "use_mock": bool(row.use_mock),
-            "is_active": bool(row.is_active),
-            "created_at": row.created_at,
-            "updated_at": row.updated_at,
-        }
-        for row in wechat_rows
-    ]
+    wechat_payload = []
+    if _db_has_table(db, "wechat_pay_configs"):
+        wechat_rows = db.query(WechatPayConfig).order_by(WechatPayConfig.id.asc()).all()
+        wechat_payload = [
+            {
+                "mchid": str(row.mchid or "").strip(),
+                "appid": str(row.appid or "").strip(),
+                "api_v3_key": str(row.api_v3_key or "").strip(),
+                "cert_serial_no": str(row.cert_serial_no or "").strip(),
+                "private_key": str(row.private_key or ""),
+                "notify_url": str(row.notify_url or "").strip(),
+                "use_mock": bool(row.use_mock),
+                "is_active": bool(row.is_active),
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+            }
+            for row in wechat_rows
+        ]
+    else:
+        logger.warning("Skip sync export WeChat pay configs: table wechat_pay_configs not found")
 
     task_default_payload: List[Dict[str, Any]] = []
-    if HAS_TASK_DEFAULT_SYSTEM_API_MODEL:
+    if HAS_TASK_DEFAULT_SYSTEM_API_MODEL and _db_has_table(db, "system_task_default_apis"):
         task_default_rows = db.query(TaskDefaultSystemAPI).order_by(TaskDefaultSystemAPI.task_category.asc()).all()
         for row in task_default_rows:
             api_row = system_map.get(int(getattr(row, "system_api_id", 0) or 0))
@@ -8366,6 +8525,8 @@ def export_system_config_sync_bundle_for_manage(
                 "updated_at": getattr(row, "updated_at", None),
             })
     else:
+        if HAS_TASK_DEFAULT_SYSTEM_API_MODEL:
+            logger.warning("Skip sync export dedicated task defaults table: table system_task_default_apis not found, fallback to SystemAPISetting.is_active")
         # Legacy fallback: export inferred defaults from active settings.
         active_rows = db.query(SystemAPISetting).filter(
             SystemAPISetting.is_active == True,
@@ -8454,15 +8615,18 @@ def import_system_config_sync_bundle_for_manage(
         has_task_default_table = HAS_TASK_DEFAULT_SYSTEM_API_MODEL and _db_has_table(db, "system_task_default_apis")
         rebuilt_tables: Dict[str, bool] = {}
 
+        if replace_all:
+            rebuilt_tables = _prepare_sync_replace_all_state(db)
+            _ensure_builtin_system_settings(db)
+            _ensure_settings_system_indexes(db)
+            has_billing_rules_table = _db_has_table(db, "system_api_billing_rules")
+            has_provider_key_pool_table = _db_has_table(db, "provider_key_pool")
+            has_smtp_table = _db_has_table(db, "smtp_system_configs")
+            has_wechat_table = _db_has_table(db, "wechat_pay_configs")
+            has_task_default_table = HAS_TASK_DEFAULT_SYSTEM_API_MODEL and _db_has_table(db, "system_task_default_apis")
+
         tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
         with tx_ctx:
-            if replace_all:
-                rebuilt_tables = _rebuild_sync_config_tables_for_replace_all(db)
-                has_billing_rules_table = _db_has_table(db, "system_api_billing_rules")
-                has_provider_key_pool_table = _db_has_table(db, "provider_key_pool")
-                has_smtp_table = _db_has_table(db, "smtp_system_configs")
-                has_wechat_table = _db_has_table(db, "wechat_pay_configs")
-                has_task_default_table = HAS_TASK_DEFAULT_SYSTEM_API_MODEL and _db_has_table(db, "system_task_default_apis")
 
             provider_items = []
             for raw in providers:
@@ -8477,22 +8641,15 @@ def import_system_config_sync_bundle_for_manage(
                 logger.warning("Provider bundle parse warning, fallback to permissive import: %s", parse_exc)
             provider_result = None
             try:
-                provider_result = _import_provider_bundle_no_commit(db, provider_import_items, replace_all)
+                provider_result = _import_provider_bundle_no_commit(
+                    db,
+                    provider_import_items,
+                    False,
+                    sync_base_billing_rules=not replace_all,
+                    sync_provider_keys=False,
+                )
             except Exception:
                 raise
-
-            if replace_all:
-                if _db_has_table(db, "transaction_action"):
-                    try:
-                        db.query(TransactionAction).filter(
-                            TransactionAction.matched_rule_id.isnot(None),
-                        ).update({"matched_rule_id": None}, synchronize_session=False)
-                    except Exception as exc:
-                        logger.warning("Skip matched_rule_id reset due to schema mismatch: %s", exc)
-                if has_billing_rules_table:
-                    db.query(SystemAPIBillingRule).delete(synchronize_session=False)
-                elif billing_rules:
-                    logger.warning("Skip billing rules replace_all cleanup: table system_api_billing_rules not found")
 
             system_index: Dict[Tuple[str, str, str], int] = {}
             system_rows = db.execute(text("""
@@ -8549,62 +8706,43 @@ def import_system_config_sync_bundle_for_manage(
 
             provider_pool_created = 0
             provider_pool_updated = 0
-            if has_provider_key_pool_table:
-                if replace_all:
-                    db.query(ProviderKeyPool).delete(synchronize_session=False)
+            for raw_pool in provider_key_pools:
+                if not isinstance(raw_pool, dict):
+                    continue
+                provider_name = _normalize_system_provider_name(raw_pool.get("provider"))
+                if not provider_name:
+                    continue
+                keys = _normalize_api_keys(raw_pool.get("api_keys"))
+                strategy = _normalize_key_strategy(raw_pool.get("strategy"))
+                weights = _normalize_key_weights(raw_pool.get("weights"), keys)
+                provider_alias = str(raw_pool.get("provider_alias") or "").strip() or None
+                intro_url = _normalize_optional_http_url(raw_pool.get("intro_url"))
+                updated_at = str(raw_pool.get("updated_at") or now_bj_iso())
+                created_at = str(raw_pool.get("created_at") or updated_at)
+                existed_before = bool(_get_provider_key_pool_record(db, provider_name)) if has_provider_key_pool_table else False
 
-                for raw_pool in provider_key_pools:
-                    if not isinstance(raw_pool, dict):
-                        continue
-                    provider_name = _normalize_system_provider_name(raw_pool.get("provider"))
-                    if not provider_name:
-                        continue
-                    keys = _normalize_api_keys(raw_pool.get("api_keys"))
-                    strategy = _normalize_key_strategy(raw_pool.get("strategy"))
-                    weights = _normalize_key_weights(raw_pool.get("weights"), keys)
-                    provider_alias = str(raw_pool.get("provider_alias") or "").strip() or None
-                    intro_url = _normalize_optional_http_url(raw_pool.get("intro_url"))
-                    updated_at = str(raw_pool.get("updated_at") or now_bj_iso())
+                _apply_provider_key_bundle_to_rows(
+                    db,
+                    provider_name,
+                    keys,
+                    strategy,
+                    weights,
+                    provider_alias=provider_alias,
+                    intro_url=intro_url,
+                    created_at=created_at,
+                    updated_at=updated_at,
+                )
 
-                    # Use SQL-level update first to avoid stale ORM instance updates
-                    # when replace_all bulk delete has occurred in the same session.
-                    updated_rows = db.query(ProviderKeyPool).filter(
-                        ProviderKeyPool.provider == provider_name,
-                    ).update(
-                        {
-                            "api_keys": keys,
-                            "strategy": strategy,
-                            "weights": weights,
-                            "provider_alias": provider_alias,
-                            "intro_url": intro_url,
-                            "updated_at": updated_at,
-                        },
-                        synchronize_session=False,
-                    )
-
-                    if int(updated_rows or 0) > 0:
+                if has_provider_key_pool_table:
+                    if existed_before:
                         provider_pool_updated += 1
-                        continue
-
-                    created_at = str(raw_pool.get("created_at") or now_bj_iso())
-                    db.add(ProviderKeyPool(
-                        provider=provider_name,
-                        provider_alias=provider_alias,
-                        api_keys=keys,
-                        strategy=strategy,
-                        weights=weights,
-                        intro_url=intro_url,
-                        created_at=created_at,
-                        updated_at=str(raw_pool.get("updated_at") or created_at),
-                    ))
-                    provider_pool_created += 1
-            elif provider_key_pools:
-                logger.warning("Skip provider key pool import: table provider_key_pool not found")
+                    else:
+                        provider_pool_created += 1
+            if not has_provider_key_pool_table and provider_key_pools:
+                logger.warning("provider_key_pool table not found during sync import; applied primary api_key fallback to system_api_settings only")
 
             smtp_created = 0
             if has_smtp_table:
-                if replace_all:
-                    db.query(SMTPSystemConfig).delete(synchronize_session=False)
                 for raw_smtp in smtp_configs:
                     if not isinstance(raw_smtp, dict):
                         continue
@@ -8629,8 +8767,6 @@ def import_system_config_sync_bundle_for_manage(
 
             wechat_created = 0
             if has_wechat_table:
-                if replace_all:
-                    db.query(WechatPayConfig).delete(synchronize_session=False)
                 for raw_wechat in wechat_pay_configs:
                     if not isinstance(raw_wechat, dict):
                         continue
@@ -8651,15 +8787,6 @@ def import_system_config_sync_bundle_for_manage(
                     wechat_created += 1
             elif wechat_pay_configs:
                 logger.warning("Skip WeChat pay import: table wechat_pay_configs not found")
-
-            if replace_all:
-                if has_task_default_table:
-                    db.query(TaskDefaultSystemAPI).delete(synchronize_session=False)
-                else:
-                    db.query(SystemAPISetting).filter(~SystemAPISetting.category.like("System_%")).update(
-                        {"is_active": False},
-                        synchronize_session=False,
-                    )
 
             resolved_task_default_targets: Dict[str, int] = {}
             for raw_default in task_default_apis:
@@ -8696,6 +8823,8 @@ def import_system_config_sync_bundle_for_manage(
 
         # Ensure changes are durably committed for this request scope.
         db.commit()
+        _invalidate_system_api_runtime_cache(refresh=True)
+        _invalidate_provider_pool_cache()
         return {
             "ok": True,
             "replace_all": replace_all,

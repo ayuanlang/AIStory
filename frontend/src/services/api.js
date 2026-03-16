@@ -1019,7 +1019,7 @@ export const normalizeUserPreferences = (value) => {
     };
 };
 
-const getCachedUserPreferences = () => {
+export const getCachedUserPreferences = () => {
     try {
         const raw = localStorage.getItem(userPreferencesStorageKey());
         if (!raw) return null;

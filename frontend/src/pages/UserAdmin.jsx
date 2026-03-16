@@ -917,8 +917,56 @@ const UserAdmin = () => {
         }
     };
 
+    const pauseAdminRefresh = (ms = 180) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    const refreshSystemApiAdminViews = async ({ includeSystemApi = true, includeProviderPools = false, includeTaskDefaults = false, includeKie = false, includePayment = false, includeSmtp = false, includeBillingRules = false } = {}) => {
+        if (includeSystemApi) {
+            await fetchSystemApiManageRows();
+            await pauseAdminRefresh();
+        }
+        if (includeProviderPools) {
+            await fetchProviderKeyPools();
+            await pauseAdminRefresh();
+        }
+        if (includeTaskDefaults) {
+            await fetchTaskDefaultApis();
+            await pauseAdminRefresh();
+        }
+        if (includeKie) {
+            await fetchKieStandardMappingsAndValues();
+            await pauseAdminRefresh();
+        }
+        if (includePayment) {
+            await fetchPaymentConfig();
+            await pauseAdminRefresh();
+        }
+        if (includeSmtp) {
+            await fetchSmtpConfig();
+            await pauseAdminRefresh();
+        }
+        if (includeBillingRules && Number(selectedSystemApiId || 0) > 0) {
+            await fetchBillingRulesForSystemApi(Number(selectedSystemApiId));
+        }
+    };
+
     useEffect(() => {
         if (activeTab === 'system_api' || activeTab === 'pricing_rules' || activeTab === 'supplier_ops') {
+            if (activeTab === 'system_api') {
+                refreshSystemApiAdminViews({
+                    includeSystemApi: true,
+                    includeProviderPools: true,
+                    includeTaskDefaults: true,
+                    includeKie: true,
+                });
+                return;
+            }
+            if (activeTab === 'supplier_ops') {
+                refreshSystemApiAdminViews({
+                    includeSystemApi: true,
+                    includeProviderPools: true,
+                });
+                return;
+            }
             fetchSystemApiManageRows();
         }
     }, [activeTab]);
@@ -2520,11 +2568,7 @@ const UserAdmin = () => {
 
     useEffect(() => {
         if (activeTab === 'system_api' || activeTab === 'supplier_ops') {
-            fetchProviderKeyPools();
-            if (activeTab === 'system_api') {
-                fetchTaskDefaultApis();
-                fetchKieStandardMappingsAndValues();
-            }
+            // Loaded by refreshSystemApiAdminViews to avoid request bursts on admin page entry.
         }
     }, [activeTab]);
 
@@ -2717,7 +2761,7 @@ const UserAdmin = () => {
         }
         try {
             await createTaskDefaultApiManage({ task_category: taskCategory, system_api_id: systemApiId });
-            await Promise.all([fetchTaskDefaultApis(), fetchSystemApiManageRows()]);
+            await refreshSystemApiAdminViews({ includeSystemApi: true, includeTaskDefaults: true });
             setSelectedTaskDefaultCategory(taskCategory.toUpperCase());
             alert(t('默认 API 映射已创建', 'Default API mapping created'));
         } catch (e) {
@@ -2738,7 +2782,7 @@ const UserAdmin = () => {
         }
         try {
             await updateTaskDefaultApiManage(taskCategory, { system_api_id: systemApiId });
-            await Promise.all([fetchTaskDefaultApis(), fetchSystemApiManageRows()]);
+            await refreshSystemApiAdminViews({ includeSystemApi: true, includeTaskDefaults: true });
             setSelectedTaskDefaultCategory(taskCategory.toUpperCase());
             alert(t('默认 API 映射已更新', 'Default API mapping updated'));
         } catch (e) {
@@ -2757,7 +2801,7 @@ const UserAdmin = () => {
         }
         try {
             await deleteTaskDefaultApiManage(taskCategory);
-            await Promise.all([fetchTaskDefaultApis(), fetchSystemApiManageRows()]);
+            await refreshSystemApiAdminViews({ includeSystemApi: true, includeTaskDefaults: true });
             setSelectedTaskDefaultCategory('');
             alert(t('默认 API 映射已删除', 'Default API mapping deleted'));
         } catch (e) {
@@ -3473,15 +3517,15 @@ const UserAdmin = () => {
                 replace_all: true,
                 confirm_clear_existing: true,
             });
-            await Promise.all([
-                fetchSystemApiManageRows(),
-                fetchProviderKeyPools(),
-                fetchPaymentConfig(),
-                fetchSmtpConfig(),
-            ]);
-            if (Number(selectedSystemApiId || 0) > 0) {
-                await fetchBillingRulesForSystemApi(Number(selectedSystemApiId));
-            }
+            await refreshSystemApiAdminViews({
+                includeSystemApi: true,
+                includeProviderPools: true,
+                includeTaskDefaults: true,
+                includeKie: true,
+                includePayment: true,
+                includeSmtp: true,
+                includeBillingRules: true,
+            });
             alert(`Full sync import finished. Providers: ${result?.provider_result?.providers || 0}, Billing Rules: ${result?.billing_rules?.created || 0}`);
         } catch (e) {
             alert(e?.response?.data?.detail || e.message || 'Failed to import system config sync bundle');
@@ -5399,29 +5443,29 @@ const UserAdmin = () => {
                                 </div>
                              </div>
                              <div className="md:hidden space-y-3">
-                                {transactions.map(t => (
-                                    <div key={`txn-card-${t.id}`} className="rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-3">
+                                    {transactions.map(txn => (
+                                        <div key={`txn-card-${txn.id}`} className="rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-3">
                                         <div className="flex items-start justify-between gap-3">
                                             <div className="min-w-0">
-                                                <div className="text-sm font-semibold text-white">{formatAdminDateTime(t.created_at)}</div>
-                                                <div className="text-xs text-gray-400 mt-1">User #{t.user_id}</div>
+                                                    <div className="text-sm font-semibold text-white">{formatAdminDateTime(txn.created_at)}</div>
+                                                    <div className="text-xs text-gray-400 mt-1">User #{txn.user_id}</div>
                                             </div>
-                                            <span className="bg-gray-800 px-2 py-0.5 rounded text-xs uppercase text-gray-300 shrink-0">{t.task_type}</span>
+                                                <span className="bg-gray-800 px-2 py-0.5 rounded text-xs uppercase text-gray-300 shrink-0">{txn.task_type}</span>
                                         </div>
                                         <div className="grid grid-cols-2 gap-3 text-sm">
                                             <div className="rounded-lg bg-black/20 border border-white/5 px-3 py-2">
                                                 <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">{t('金额', 'Amount')}</div>
-                                                <div className={`font-mono ${t.amount < 0 ? 'text-red-400' : 'text-green-400'}`}>{t.amount > 0 ? '+' : ''}{t.amount}</div>
+                                                    <div className={`font-mono ${txn.amount < 0 ? 'text-red-400' : 'text-green-400'}`}>{txn.amount > 0 ? '+' : ''}{txn.amount}</div>
                                             </div>
                                             <div className="rounded-lg bg-black/20 border border-white/5 px-3 py-2">
                                                 <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">{t('余额', 'Balance')}</div>
-                                                <div className="font-mono text-gray-300">{t.balance_after}</div>
+                                                    <div className="font-mono text-gray-300">{txn.balance_after}</div>
                                             </div>
                                         </div>
                                         <div>
                                             <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">{t('详情', 'Details')}</div>
                                             <div className="max-h-[180px] overflow-y-auto whitespace-pre-wrap break-all rounded-lg bg-gray-900/50 p-2 border border-gray-800 font-mono text-[11px] text-gray-400">
-                                                {JSON.stringify(t.details, null, 2)}
+                                                    {JSON.stringify(txn.details, null, 2)}
                                             </div>
                                         </div>
                                     </div>
@@ -5440,22 +5484,22 @@ const UserAdmin = () => {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {transactions.map(t => (
-                                            <tr key={t.id} className="border-b border-gray-800/50 hover:bg-gray-800/50">
+                                        {transactions.map(txn => (
+                                            <tr key={txn.id} className="border-b border-gray-800/50 hover:bg-gray-800/50">
                                                 <td className="p-3 text-gray-400">
-                                                    {formatAdminDateTime(t.created_at)}
+                                                    {formatAdminDateTime(txn.created_at)}
                                                 </td>
-                                                <td className="p-3">{t.user_id}</td>
-                                                <td className="p-3"><span className="bg-gray-800 px-2 py-0.5 rounded text-xs uppercase text-gray-300">{t.task_type}</span></td>
+                                                <td className="p-3">{txn.user_id}</td>
+                                                <td className="p-3"><span className="bg-gray-800 px-2 py-0.5 rounded text-xs uppercase text-gray-300">{txn.task_type}</span></td>
                                                 <td className="p-3 text-xs text-gray-500">
                                                     <div className="max-h-[150px] overflow-y-auto whitespace-pre-wrap break-all w-[350px] bg-gray-900/50 p-1 rounded border border-gray-800 font-mono">
-                                                        {JSON.stringify(t.details, null, 2)}
+                                                        {JSON.stringify(txn.details, null, 2)}
                                                     </div>
                                                 </td>
-                                                <td className={`p-3 text-right font-mono ${t.amount < 0 ? 'text-red-400' : 'text-green-400'}`}>
-                                                    {t.amount > 0 ? '+' : ''}{t.amount}
+                                                <td className={`p-3 text-right font-mono ${txn.amount < 0 ? 'text-red-400' : 'text-green-400'}`}>
+                                                    {txn.amount > 0 ? '+' : ''}{txn.amount}
                                                 </td>
-                                                <td className="p-3 text-right font-mono text-gray-400">{t.balance_after}</td>
+                                                <td className="p-3 text-right font-mono text-gray-400">{txn.balance_after}</td>
                                             </tr>
                                         ))}
                                     </tbody>

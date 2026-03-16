@@ -111,7 +111,7 @@ if is_sqlite:
     def _set_sqlite_wal(dbapi_conn, connection_record):
         cursor = dbapi_conn.cursor()
         cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA busy_timeout=5000")
+        cursor.execute("PRAGMA busy_timeout=30000")
         cursor.close()
 
 # Invalidate connections on disconnect errors so the pool discards them

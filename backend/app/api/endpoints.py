@@ -6,7 +6,7 @@ import smtplib
 from email.message import EmailMessage
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError, TimeoutError as SQLAlchemyTimeoutError
-from sqlalchemy import or_, and_, text
+from sqlalchemy import or_, and_, text, inspect
 from app.db.session import get_db, SessionLocal
 from app.models.all_models import Project, ProjectShare, User, Episode, Scene, Shot, Entity, Asset, APISetting, SystemAPISetting, ScriptSegment, TransactionHistory, SMTPSystemConfig, WechatPayConfig, ProviderKeyPool
 from app.schemas.agent import AgentRequest, AgentResponse, AnalyzeSceneRequest
@@ -3455,12 +3455,12 @@ async def _sse_event_generator(events_gen):
 async def stream_agent_command(
     request: AgentRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
 ):
     print(f"[STREAM-DEBUG] === stream_agent_command entered === query={request.query[:80] if request.query else 'N/A'}, user={current_user.id}")
     project_id = request.project_id or request.context.get("projectId")
     if project_id:
-        _require_project_access(db, int(project_id), current_user)
+        with SessionLocal() as auth_db:
+            _require_project_access(auth_db, int(project_id), current_user)
 
     resolved_llm_config = agent_service.get_active_llm_config(current_user.id, category="LLM")
     if not resolved_llm_config or not resolved_llm_config.get("api_key"):
@@ -3484,24 +3484,36 @@ async def stream_agent_command(
     })
 
     # Billing: simple deduction (streaming cannot easily do reservation/settlement)
-    billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+    with SessionLocal() as billing_db:
+        billing_service.check_balance(billing_db, current_user.id, "llm_chat", provider, model)
     print(f"[STREAM-DEBUG] endpoint: billing OK, calling stream_process_command, provider={provider}, model={model}")
 
     async def _generate():
         print(f"[STREAM-DEBUG] _generate() started iterating stream_process_command")
         try:
-            async for event in agent_service.stream_process_command(request_for_agent, db, current_user):
+            async for event in agent_service.stream_process_command(request_for_agent, current_user):
                 if event.get("type") == "heartbeat":
                     yield event
                     continue
                 print(f"[STREAM-DEBUG] endpoint yielding event: type={event.get('type')}, content_len={len(str(event.get('content','')))}, keys={list(event.keys())}")
                 yield event
             # Billing deduction after successful completion
-            billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model,
-                                           {"item": "agent_intent_stream", "query": (request.query or "")[:80]})
+            with SessionLocal() as billing_db:
+                billing_service.deduct_credits(
+                    billing_db,
+                    current_user.id,
+                    "llm_chat",
+                    provider,
+                    model,
+                    {"item": "agent_intent_stream", "query": (request.query or "")[:80]},
+                )
         except Exception as e:
             logger.error("stream_agent_command error: %s", e)
-            billing_service.log_failed_transaction(db, current_user.id, "llm_chat", provider, model, str(e))
+            try:
+                with SessionLocal() as billing_db:
+                    billing_service.log_failed_transaction(billing_db, current_user.id, "llm_chat", provider, model, str(e))
+            except Exception:
+                logger.warning("stream_agent_command failed to record billing failure", exc_info=True)
             yield {"type": "error", "message": str(e)}
 
     return StreamingResponse(
@@ -3515,7 +3527,6 @@ async def stream_agent_command(
 async def stream_system_management_agent_command(
     request: AgentRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
 ):
     if not bool(getattr(current_user, "is_superuser", False)):
         raise HTTPException(status_code=403, detail="Only superuser can use system management AI agent")
@@ -3527,17 +3538,29 @@ async def stream_system_management_agent_command(
     provider = resolved_llm_config.get("provider")
     model = resolved_llm_config.get("model")
 
-    billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+    with SessionLocal() as billing_db:
+        billing_service.check_balance(billing_db, current_user.id, "llm_chat", provider, model)
 
     async def _generate():
         try:
-            async for event in agent_service.stream_process_system_management_command(request, db, current_user):
+            async for event in agent_service.stream_process_system_management_command(request, current_user):
                 yield event
-            billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model,
-                                           {"item": "system_agent_intent_stream", "query": (request.query or "")[:80]})
+            with SessionLocal() as billing_db:
+                billing_service.deduct_credits(
+                    billing_db,
+                    current_user.id,
+                    "llm_chat",
+                    provider,
+                    model,
+                    {"item": "system_agent_intent_stream", "query": (request.query or "")[:80]},
+                )
         except Exception as e:
             logger.error("stream_system_management_agent_command error: %s", e)
-            billing_service.log_failed_transaction(db, current_user.id, "llm_chat", provider, model, str(e))
+            try:
+                with SessionLocal() as billing_db:
+                    billing_service.log_failed_transaction(billing_db, current_user.id, "llm_chat", provider, model, str(e))
+            except Exception:
+                logger.warning("stream_system_management_agent_command failed to record billing failure", exc_info=True)
             yield {"type": "error", "message": str(e)}
 
     return StreamingResponse(
@@ -10908,6 +10931,8 @@ def _resolve_runtime_smtp_config() -> Dict[str, Any]:
 
     db = SessionLocal()
     try:
+        if not inspect(db.connection()).has_table("smtp_system_configs"):
+            return config
         setting = db.query(SMTPSystemConfig).filter(
             SMTPSystemConfig.is_active == True,
         ).order_by(SMTPSystemConfig.id.desc()).first()
@@ -12848,6 +12873,18 @@ def get_smtp_config(
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Not authorized")
 
+    if not inspect(db.connection()).has_table("smtp_system_configs"):
+        return SMTPConfig(
+            host=str(settings.SMTP_HOST or "").strip(),
+            port=int(settings.SMTP_PORT or 587),
+            username=str(settings.SMTP_USERNAME or "").strip(),
+            password="",
+            use_ssl=os.getenv("SMTP_USE_SSL", "0") in {"1", "true", "True"},
+            use_tls=bool(settings.SMTP_USE_TLS),
+            from_email=str(settings.SMTP_FROM_EMAIL or "").strip(),
+            frontend_base_url=str(settings.FRONTEND_BASE_URL or "").strip(),
+        )
+
     setting = db.query(SMTPSystemConfig).filter(
         SMTPSystemConfig.is_active == True,
     ).order_by(SMTPSystemConfig.id.desc()).first()
@@ -12884,6 +12921,9 @@ def update_smtp_config(
 ):
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Not authorized")
+
+    if not inspect(db.connection()).has_table("smtp_system_configs"):
+        SMTPSystemConfig.__table__.create(bind=db.get_bind(), checkfirst=True)
 
     setting = db.query(SMTPSystemConfig).filter(
         SMTPSystemConfig.is_active == True,
@@ -17405,6 +17445,56 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
             pass
 
         video_provider_options = _build_video_provider_options(req)
+        resolved_video_provider = str(reserve_provider or req.provider or "").strip().lower()
+        resolved_video_model = str(reserve_model or req.model or "").strip().lower()
+        is_kie_kling3_video = bool(
+            resolved_video_provider == "kie"
+            and resolved_video_model in {"kling-3.0/video", "kling3", "kling-3.0", "kling-3-0"}
+        )
+
+        if is_kie_kling3_video and resolved_project_id:
+            entity_lookup = _build_project_entity_lookup(db, int(resolved_project_id))
+            kling_prompt_candidates: List[str] = [prompt_text]
+            if isinstance(req.multi_prompt, list):
+                for item in req.multi_prompt:
+                    if not isinstance(item, dict):
+                        continue
+                    shot_prompt = str(item.get("prompt") or "").strip()
+                    if shot_prompt:
+                        kling_prompt_candidates.append(shot_prompt)
+
+            if context_shot:
+                kling_prompt_candidates.extend([
+                    str(context_shot.start_frame or "").strip(),
+                    str(context_shot.end_frame or "").strip(),
+                ])
+                shot_tech = _parse_shot_tech(context_shot)
+                if isinstance(shot_tech, dict):
+                    kling_prompt_candidates.extend([
+                        str(shot_tech.get("video_prompt_cn") or "").strip(),
+                        str(shot_tech.get("start_frame_cn") or "").strip(),
+                        str(shot_tech.get("end_frame_cn") or "").strip(),
+                    ])
+
+            auto_kling_elements = _build_auto_kling_elements(kling_prompt_candidates, entity_lookup)
+            explicit_kling_count = len(video_provider_options.get("kling_elements") or []) if isinstance(video_provider_options.get("kling_elements"), list) else 0
+            merged_kling_elements = _merge_kling_elements(
+                video_provider_options.get("kling_elements"),
+                auto_kling_elements,
+            )
+            if merged_kling_elements:
+                video_provider_options["kling_elements"] = merged_kling_elements
+
+            logger.info(
+                "[GenerateVideo] Kling3 elements | shot_id=%s project_id=%s explicit=%s auto=%s merged=%s prompt_at_count=%s",
+                req.shot_id,
+                resolved_project_id,
+                explicit_kling_count,
+                len(auto_kling_elements),
+                len(merged_kling_elements),
+                str(prompt_text or "").count("@"),
+            )
+
         if aspect_ratio and "aspect_ratio" not in video_provider_options:
             video_provider_options["aspect_ratio"] = str(aspect_ratio).strip()
         if resolved_video_width and resolved_video_height:
@@ -19173,11 +19263,20 @@ def _build_project_entity_lookup(db: Session, project_id: int) -> Dict[str, Dict
     rows = db.query(Entity).filter(Entity.project_id == project_id).all()
     lookup: Dict[str, Dict[str, Any]] = {}
     for row in rows:
-        anchor = str(row.anchor_description or row.description or "").strip()
+        canonical_name = str(row.name or row.name_en or "").strip()
+        anchor = str(
+            row.anchor_description
+            or row.narrative_description
+            or row.description
+            or canonical_name
+            or ""
+        ).strip()
         image_url = str(row.image_url or "").strip()
         entity_type = str(row.type or "").strip().lower()
         payload = {
+            "name": canonical_name,
             "anchor": anchor,
+            "description": str(row.description or row.narrative_description or anchor or "").strip(),
             "image_url": image_url,
             "entity_id": row.id,
             "entity_type": entity_type,
@@ -19191,6 +19290,109 @@ def _build_project_entity_lookup(db: Session, project_id: int) -> Dict[str, Dict
                 continue
             lookup[key] = payload
     return lookup
+
+
+def _extract_kling_character_mentions(prompt: Any) -> List[str]:
+    text = str(prompt or "")
+    if not text:
+        return []
+
+    mentions: List[str] = []
+    seen: set[str] = set()
+    for match in re.finditer(r"CHAR\s*:\s*\[@([^\]]+)\]", text, flags=re.IGNORECASE):
+        raw_name = str(match.group(1) or "").strip()
+        normalized = _normalize_entity_anchor_token(raw_name)
+        if not raw_name or not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        mentions.append(raw_name)
+    return mentions
+
+
+def _build_auto_kling_elements(
+    prompt_candidates: List[str],
+    entity_lookup: Dict[str, Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    mentions: List[str] = []
+    seen_mentions: set[str] = set()
+    allowed_types = {"subject", "character", "char"}
+
+    for candidate in prompt_candidates:
+        for raw_name in _extract_kling_character_mentions(candidate):
+            normalized = _normalize_entity_anchor_token(raw_name)
+            if not normalized or normalized in seen_mentions:
+                continue
+            seen_mentions.add(normalized)
+            mentions.append(raw_name)
+
+    elements: List[Dict[str, Any]] = []
+    for raw_name in mentions:
+        row = entity_lookup.get(_normalize_entity_anchor_token(raw_name)) or {}
+        entity_type = str(row.get("entity_type") or "").strip().lower()
+        if entity_type not in allowed_types:
+            continue
+
+        name = str(row.get("name") or raw_name or "").strip().lstrip("@").strip()
+        if not name:
+            continue
+
+        description = str(row.get("anchor") or row.get("description") or name).strip() or name
+        element: Dict[str, Any] = {
+            "name": name,
+            "description": description,
+        }
+
+        image_url = str(row.get("image_url") or "").strip()
+        if image_url:
+            element["element_input_urls"] = [image_url]
+
+        elements.append(element)
+
+    return elements
+
+
+def _merge_kling_elements(explicit_elements: Any, auto_elements: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    merged: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def _push(candidate: Any) -> None:
+        if not isinstance(candidate, dict):
+            return
+
+        name = str(candidate.get("name") or "").strip()
+        normalized = _normalize_entity_anchor_token(name)
+        description = str(candidate.get("description") or "").strip()
+        if not name or not normalized or normalized in seen or not description:
+            return
+
+        item: Dict[str, Any] = {
+            "name": name,
+            "description": description,
+        }
+
+        image_inputs = candidate.get("element_input_urls")
+        if isinstance(image_inputs, list):
+            urls = [str(url).strip() for url in image_inputs if str(url).strip()]
+            if urls:
+                item["element_input_urls"] = urls
+
+        video_inputs = candidate.get("element_input_video_urls")
+        if isinstance(video_inputs, list):
+            urls = [str(url).strip() for url in video_inputs if str(url).strip()]
+            if urls:
+                item["element_input_video_urls"] = urls
+
+        seen.add(normalized)
+        merged.append(item)
+
+    if isinstance(explicit_elements, list):
+        for element in explicit_elements:
+            _push(element)
+
+    for element in auto_elements:
+        _push(element)
+
+    return merged
 
 
 def _inject_shot_prompt_anchors(

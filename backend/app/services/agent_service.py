@@ -2656,18 +2656,20 @@ Output ONLY the JSON object now."""
                         and params.get("supplier_price_output") is None
                     ):
                         continue
-                    existing_row = self._find_existing_system_api_setting(
-                        db,
-                        params["provider"],
-                        params["category"],
-                        params["model"],
-                    )
+                    with SessionLocal() as session:
+                        existing_row = self._find_existing_system_api_setting(
+                            session,
+                            params["provider"],
+                            params["category"],
+                            params["model"],
+                        )
                     if not existing_row:
                         continue
 
                     preview = self._normalize_system_upsert_preview(params)
                     preview["provider_alias"] = self._resolve_provider_alias(preview.get("provider"), provider_alias_lookup)
-                    preview = self._annotate_system_upsert_preview_with_rule_action(db, params, preview, existing_row)
+                    with SessionLocal() as session:
+                        preview = self._annotate_system_upsert_preview_with_rule_action(session, params, preview, existing_row)
                     pending_write_previews.append(preview)
                     auto_blocked_actions.append(AgentAction(
                         tool="upsert_system_api_pricing",
@@ -2740,7 +2742,7 @@ Output ONLY the JSON object now."""
     # ── Streaming command processors (SSE) ────────────────────────────────
 
     async def stream_process_command(
-        self, request: AgentRequest, db: Session, user: User
+        self, request: AgentRequest, user: User
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Streaming version of process_command. Yields SSE event dicts."""
         import asyncio as _asyncio
@@ -2751,11 +2753,11 @@ Output ONLY the JSON object now."""
         # Run synchronous DB work in a thread so it doesn't block the event loop
         llm_config = await _asyncio.to_thread(self.get_active_llm_config, user_id=user_id, category="LLM")
 
-        # Inject user's active API settings into context
-        # NOTE: _build_user_active_settings_summary uses the endpoint's db session,
-        # so it must run on the event loop thread (not asyncio.to_thread).
+        # Inject user's active API settings into context using a short-lived session
+        # so streaming requests don't pin a pooled DB connection.
         try:
-            active_settings = self._build_user_active_settings_summary(db, user_id)
+            with SessionLocal() as session:
+                active_settings = self._build_user_active_settings_summary(session, user_id)
             if active_settings:
                 merged_ctx = dict(request.context or {})
                 merged_ctx["my_active_api_settings"] = active_settings
@@ -2811,7 +2813,8 @@ Output ONLY the JSON object now."""
         actions: List[AgentAction] = []
         updated_data = None
         last_tool_result = None
-        tool_policy = self._get_agent_tool_policy(db)
+        with SessionLocal() as session:
+            tool_policy = self._get_agent_tool_policy(session)
         merged_context_mode = str((request.context or {}).get("agent_mode") or "project").strip() or "project"
 
         for plan_item in llm_result.get("plan", []):
@@ -2843,9 +2846,10 @@ Output ONLY the JSON object now."""
             yield {"type": "tool_start", "tool": tool_name, "parameters": params}
 
             action = AgentAction(tool=tool_name, parameters=params)
-            execution_result = await self._execute_tool(
-                action, db, user, project_id, llm_config, request.context, tool_policy=tool_policy
-            )
+            with SessionLocal() as tool_db:
+                execution_result = await self._execute_tool(
+                    action, tool_db, user, project_id, llm_config, request.context, tool_policy=tool_policy
+                )
             action.result = execution_result["result"]
             action.status = execution_result["status"]
             if action.status == "completed":
@@ -2871,7 +2875,7 @@ Output ONLY the JSON object now."""
         }
 
     async def stream_process_system_management_command(
-        self, request: AgentRequest, db: Session, user: User
+        self, request: AgentRequest, user: User
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Streaming version of process_system_management_command. Yields SSE event dicts."""
         import asyncio as _asyncio
@@ -2888,7 +2892,8 @@ Output ONLY the JSON object now."""
         merged_context["agent_mode"] = "system_management"
         merged_context["query"] = request.query
         merged_context["history"] = request.history or []
-        merged_context["system_api_model_catalog"] = self._build_system_api_model_catalog_for_llm(db)
+        with SessionLocal() as session:
+            merged_context["system_api_model_catalog"] = self._build_system_api_model_catalog_for_llm(session)
         merged_context["auth"] = {
             "user_id": user.id,
             "is_superuser": True,
@@ -2964,8 +2969,9 @@ Output ONLY the JSON object now."""
         actions: List[AgentAction] = []
         updated_data = None
         pending_write_previews: List[Dict[str, Any]] = []
-        provider_alias_lookup = self._build_provider_alias_lookup(db)
-        tool_policy = self._get_agent_tool_policy(db)
+        with SessionLocal() as session:
+            provider_alias_lookup = self._build_provider_alias_lookup(session)
+            tool_policy = self._get_agent_tool_policy(session)
 
         for plan_item in llm_result.get("plan", []):
             normalized = self._extract_plan_item_tool_and_params(plan_item)
@@ -2981,17 +2987,19 @@ Output ONLY the JSON object now."""
                 continue
 
             if tool_name == "upsert_system_api_pricing":
-                params = self._hydrate_upsert_system_api_target(db, params, request.query)
-                existing_row = self._find_existing_system_api_setting(
-                    db,
-                    str(params.get("provider") or "").strip(),
-                    str(params.get("category") or "LLM").strip() or "LLM",
-                    str(params.get("model") or "").strip(),
-                )
+                with SessionLocal() as session:
+                    params = self._hydrate_upsert_system_api_target(session, params, request.query)
+                    existing_row = self._find_existing_system_api_setting(
+                        session,
+                        str(params.get("provider") or "").strip(),
+                        str(params.get("category") or "LLM").strip() or "LLM",
+                        str(params.get("model") or "").strip(),
+                    )
                 if not self._is_system_write_confirmation(request.query, request.history or [], params):
                     preview = self._normalize_system_upsert_preview(params)
                     preview["provider_alias"] = self._resolve_provider_alias(preview.get("provider"), provider_alias_lookup)
-                    preview = self._annotate_system_upsert_preview_with_rule_action(db, params, preview, existing_row)
+                    with SessionLocal() as session:
+                        preview = self._annotate_system_upsert_preview_with_rule_action(session, params, preview, existing_row)
                     pending_write_previews.append(preview)
                     pending_msg = "Write confirmation required. Please explicitly confirm before applying pricing updates."
                     if not existing_row:
@@ -3009,9 +3017,10 @@ Output ONLY the JSON object now."""
             yield {"type": "tool_start", "tool": tool_name, "parameters": params}
 
             action = AgentAction(tool=tool_name, parameters=params)
-            execution_result = await self._execute_tool(
-                action, db, user, None, llm_config, merged_context, tool_policy=tool_policy
-            )
+            with SessionLocal() as tool_db:
+                execution_result = await self._execute_tool(
+                    action, tool_db, user, None, llm_config, merged_context, tool_policy=tool_policy
+                )
             action.result = execution_result["result"]
             action.status = execution_result["status"]
             if execution_result.get("data_update"):
@@ -3050,18 +3059,20 @@ Output ONLY the JSON object now."""
                         and params.get("supplier_price_output") is None
                     ):
                         continue
-                    existing_row = self._find_existing_system_api_setting(
-                        db,
-                        params["provider"],
-                        params["category"],
-                        params["model"],
-                    )
+                    with SessionLocal() as session:
+                        existing_row = self._find_existing_system_api_setting(
+                            session,
+                            params["provider"],
+                            params["category"],
+                            params["model"],
+                        )
                     if not existing_row:
                         continue
 
                     preview = self._normalize_system_upsert_preview(params)
                     preview["provider_alias"] = self._resolve_provider_alias(preview.get("provider"), provider_alias_lookup)
-                    preview = self._annotate_system_upsert_preview_with_rule_action(db, params, preview, existing_row)
+                    with SessionLocal() as session:
+                        preview = self._annotate_system_upsert_preview_with_rule_action(session, params, preview, existing_row)
                     pending_write_previews.append(preview)
                     auto_blocked_actions.append(AgentAction(
                         tool="upsert_system_api_pricing",
