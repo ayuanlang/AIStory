@@ -891,27 +891,36 @@ const UserAdmin = () => {
         }
     }, [activeTab]);
 
+    const resolveSystemApiSelection = (rows, preferredId, { allowEmpty = false } = {}) => {
+        const normalizedRows = Array.isArray(rows) ? rows : [];
+        if (normalizedRows.length === 0) return '';
+        const matched = normalizedRows.find((row) => String(row.id) === String(preferredId));
+        if (matched) return String(matched.id);
+        return allowEmpty ? '' : String(normalizedRows[0].id);
+    };
+
     const fetchSystemApiManageRows = async () => {
         setIsSystemApiLoading(true);
         try {
             const rows = await getSystemSettingsManage();
             const normalized = Array.isArray(rows) ? rows : [];
             setSystemApiRows(normalized);
-            if (normalized.length > 0) {
-                if (activeTab === 'pricing_rules') {
-                    const current = normalized.find((row) => String(row.id) === String(selectedSystemApiId));
-                    setSelectedSystemApiId(current ? String(current.id) : '');
-                } else {
-                    const current = normalized.find((row) => String(row.id) === String(selectedSystemApiId)) || normalized[0];
-                    setSelectedSystemApiId(String(current.id));
-                }
-            } else {
-                setSelectedSystemApiId('');
-            }
+            const nextSelectedId = resolveSystemApiSelection(normalized, selectedSystemApiId, {
+                allowEmpty: activeTab === 'pricing_rules',
+            });
+            setSelectedSystemApiId(nextSelectedId);
+            return {
+                rows: normalized,
+                selectedSystemApiId: nextSelectedId,
+            };
         } catch (e) {
             console.error('Failed to load system API manage rows', e);
             setSystemApiRows([]);
             setSelectedSystemApiId('');
+            return {
+                rows: [],
+                selectedSystemApiId: '',
+            };
         } finally {
             setIsSystemApiLoading(false);
         }
@@ -920,8 +929,10 @@ const UserAdmin = () => {
     const pauseAdminRefresh = (ms = 180) => new Promise((resolve) => setTimeout(resolve, ms));
 
     const refreshSystemApiAdminViews = async ({ includeSystemApi = true, includeProviderPools = false, includeTaskDefaults = false, includeKie = false, includePayment = false, includeSmtp = false, includeBillingRules = false } = {}) => {
+        let refreshedSelectedSystemApiId = selectedSystemApiId;
         if (includeSystemApi) {
-            await fetchSystemApiManageRows();
+            const result = await fetchSystemApiManageRows();
+            refreshedSelectedSystemApiId = String(result?.selectedSystemApiId || '');
             await pauseAdminRefresh();
         }
         if (includeProviderPools) {
@@ -944,8 +955,8 @@ const UserAdmin = () => {
             await fetchSmtpConfig();
             await pauseAdminRefresh();
         }
-        if (includeBillingRules && Number(selectedSystemApiId || 0) > 0) {
-            await fetchBillingRulesForSystemApi(Number(selectedSystemApiId));
+        if (includeBillingRules) {
+            await fetchBillingRulesForSystemApi(refreshedSelectedSystemApiId);
         }
     };
 
@@ -1270,7 +1281,15 @@ const UserAdmin = () => {
     };
 
     const fetchBillingRulesForSystemApi = async (systemApiId) => {
-        const targetId = Number(systemApiId || 0);
+        const requestedId = Number(systemApiId || 0);
+        const hasRequestedId = requestedId > 0;
+        const targetExists = !hasRequestedId || (systemApiRows || []).some((row) => Number(row?.id || 0) === requestedId);
+        const targetId = targetExists ? requestedId : 0;
+
+        if (hasRequestedId && !targetExists) {
+            setSelectedSystemApiId('');
+        }
+
         setIsBillingRuleLoading(true);
         try {
             let normalized = [];

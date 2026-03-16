@@ -23,6 +23,85 @@ const getFullUrl = (url) => {
     return url;
 };
 
+const LazyHoverVideo = ({
+    src,
+    poster = '',
+    className = '',
+    playOnHover = false,
+    resetOnLeave = false,
+    preload = 'metadata',
+    ...videoProps
+}) => {
+    const containerRef = useRef(null);
+    const videoRef = useRef(null);
+    const [shouldLoad, setShouldLoad] = useState(false);
+
+    useEffect(() => {
+        const node = containerRef.current;
+        if (!node || shouldLoad || !src) return undefined;
+
+        const observer = new IntersectionObserver(
+            (entries) => {
+                entries.forEach((entry) => {
+                    if (entry.isIntersecting) {
+                        setShouldLoad(true);
+                    }
+                });
+            },
+            {
+                rootMargin: '240px 0px',
+                threshold: 0.01,
+            }
+        );
+
+        observer.observe(node);
+        return () => observer.disconnect();
+    }, [shouldLoad, src]);
+
+    const handleMouseEnter = async () => {
+        if (!playOnHover) return;
+        if (!shouldLoad) {
+            setShouldLoad(true);
+            return;
+        }
+        const video = videoRef.current;
+        if (!video) return;
+        try {
+            await video.play();
+        } catch {
+            // Ignore autoplay blocking for hover previews.
+        }
+    };
+
+    const handleMouseLeave = () => {
+        if (!playOnHover) return;
+        const video = videoRef.current;
+        if (!video) return;
+        video.pause();
+        if (resetOnLeave) {
+            video.currentTime = 0;
+        }
+    };
+
+    return (
+        <div
+            ref={containerRef}
+            className={className}
+            onMouseEnter={handleMouseEnter}
+            onMouseLeave={handleMouseLeave}
+        >
+            <video
+                ref={videoRef}
+                src={shouldLoad ? getFullUrl(src) : undefined}
+                poster={poster ? getFullUrl(poster) : undefined}
+                preload={shouldLoad ? preload : 'none'}
+                className="w-full h-full object-cover"
+                {...videoProps}
+            />
+        </div>
+    );
+};
+
 const parseEpisodeNumberFromText = (value) => {
     const text = String(value || '').trim();
     if (!text) return null;
@@ -10038,7 +10117,15 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
                     {activeRefs.map((url, idx) => (
                         <div key={url + idx} className="relative group shrink-0 w-[140px] aspect-video bg-black/40 rounded border border-primary/50 overflow-hidden shadow-[0_0_10px_rgba(0,0,0,0.5)] cursor-zoom-in" onClick={() => setSelectedImage(url)}>
                             {(url.toLowerCase().endsWith('.mp4') || url.toLowerCase().endsWith('.webm')) ? (
-                                <video src={getFullUrl(url)} className="w-full h-full object-cover" muted loop onMouseEnter={e=>e.target.play()} onMouseLeave={e=>{e.target.pause();e.target.currentTime=0;}} />
+                                <LazyHoverVideo
+                                    src={url}
+                                    className="w-full h-full"
+                                    muted
+                                    loop
+                                    playsInline
+                                    playOnHover
+                                    resetOnLeave
+                                />
                             ) : (
                                 <img src={getFullUrl(url)} className="w-full h-full object-cover" alt="ref" />
                             )}
@@ -20624,16 +20711,16 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                 {/* Image / Thumbnail */}
                                 <div className="aspect-video bg-black/60 flex items-center justify-center text-muted-foreground relative group-hover:bg-black/40 transition-colors overflow-hidden">
                                     {shot.video_url ? (
-                                        <video 
+                                        <LazyHoverVideo
                                             key={shot.video_url}
-                                            src={getFullUrl(shot.video_url)} 
-                                            className="w-full h-full object-cover" 
-                                            muted 
+                                            src={shot.video_url}
+                                            poster={shot.image_url}
+                                            className="w-full h-full"
+                                            muted
                                             loop
                                             playsInline
-                                            poster={getFullUrl(shot.image_url)}
-                                            onMouseEnter={e => e.target.play().catch(() => {})}
-                                            onMouseLeave={e => { e.target.pause(); e.target.currentTime = 0; }}
+                                            playOnHover
+                                            resetOnLeave
                                         />
                                     ) : shot.image_url ? (
                                         <img src={getFullUrl(shot.image_url)} alt={shot.shot_name} className="w-full h-full object-cover" />
