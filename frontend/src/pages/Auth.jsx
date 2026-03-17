@@ -142,8 +142,8 @@ const Auth = () => {
                         <div className="relative z-20 p-10 flex flex-col h-full justify-between">
                             <div>
                                 <div className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-black/30 px-3 py-1 text-xs text-white backdrop-blur-md">
-                                    <img src="/woola-transparent.png?v=4" alt="Woola AI story" className="h-3.5 w-3.5 object-contain" />
-                                    Woola AI story
+                                    <img src="/woola-transparent.png?v=4" alt="Woola Story" className="h-3.5 w-3.5 object-contain" />
+                                    Woola Story
                                 </div>
                                 <h2 className="mt-6 text-3xl font-semibold tracking-tight text-white drop-shadow-md">
                                     {t('智能分镜创作，从登录开始。', 'Build cinematic stories, starting here.')}
@@ -176,7 +176,7 @@ const Auth = () => {
                                     </h1>
                                     <p className="mt-2 text-sm text-muted-foreground">
                         {mode === 'login' && t('输入账号信息以访问你的项目。', 'Enter your credentials to access your projects.')}
-                        {mode === 'register' && t('开启你的 Woola AI story 创作之旅。', 'Start your journey with Woola AI story.')}
+                        {mode === 'register' && t('开启你的 Woola Story 创作之旅。', 'Start your journey with Woola Story.')}
                         {mode === 'verify' && t('输入邮箱收到的 6 位验证码。', 'Enter the 6-digit code sent to your email.')}
                         {mode === 'forgot' && t('输入注册邮箱，我们会发送重置链接。', 'Enter your email and we will send a reset link.')}
                         {mode === 'reset' && t('输入重置令牌与新密码。', 'Enter your reset token and new password.')}

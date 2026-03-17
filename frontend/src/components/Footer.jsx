@@ -9,7 +9,7 @@ const Footer = () => {
         <footer className="bg-muted/30 border-t py-12">
             <div className="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-4 gap-8">
                 <div className="col-span-1 md:col-span-1">
-                    <h3 className="font-bold text-lg mb-4 text-primary">Woola AI story</h3>
+                    <h3 className="font-bold text-lg mb-4 text-primary">Woola Story</h3>
                     <p className="text-sm text-muted-foreground">
                         {t('用 AI 驱动的可视化工具赋能创作者。', 'Empowering storytellers with AI-driven visualization tools.')}
                         {t('从剧本到画面，只需几分钟。', 'From script to screen in minutes.')}
@@ -40,7 +40,7 @@ const Footer = () => {
                 </div>
             </div>
             <div className="max-w-7xl mx-auto px-4 mt-12 pt-8 border-t text-center text-sm text-muted-foreground">
-                {t('© 2026 Woola AI story 保留所有权利。', '© 2026 Woola AI story. All rights reserved.')}
+                {t('© 2026 Woola Story 保留所有权利。', '© 2026 Woola Story. All rights reserved.')}
             </div>
         </footer>
     );

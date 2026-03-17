@@ -775,8 +775,8 @@ const ProjectList = ({ initialTab = 'projects' }) => {
             <aside className={`${isSidebarCollapsed ? 'w-20 p-3' : 'w-64 p-6'} hidden md:flex border-r bg-card/30 flex-col transition-all duration-300`}>
                 <div className={`flex items-center ${isSidebarCollapsed ? 'justify-center' : 'justify-between'} mb-6 px-1`}>
                     <div className={`flex items-center gap-2 ${isSidebarCollapsed ? 'justify-center' : ''}`}>
-                    <img src="/woola-transparent.png?v=4" alt="Woola AI story" className="w-8 h-8 object-contain" />
-                        {!isSidebarCollapsed && <span className="text-xl font-bold tracking-tight">Woola AI story</span>}
+                    <img src="/woola-transparent.png?v=4" alt="Woola Story" className="w-8 h-8 object-contain" />
+                        {!isSidebarCollapsed && <span className="text-xl font-bold tracking-tight">Woola Story</span>}
                     </div>
                     {!isSidebarCollapsed && (
                         <button
@@ -866,9 +866,9 @@ const ProjectList = ({ initialTab = 'projects' }) => {
             <aside className={`fixed inset-y-0 left-0 z-50 w-[min(88vw,22rem)] border-r border-white/10 bg-card/95 backdrop-blur-xl flex flex-col p-5 transition-transform duration-300 md:hidden ${isMobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
                 <div className="flex items-center justify-between mb-6 gap-3">
                     <div className="flex items-center gap-3 min-w-0">
-                        <img src="/woola-transparent.png?v=4" alt="Woola AI story" className="w-8 h-8 object-contain" />
+                        <img src="/woola-transparent.png?v=4" alt="Woola Story" className="w-8 h-8 object-contain" />
                         <div className="min-w-0">
-                            <div className="font-semibold truncate">Woola AI story</div>
+                            <div className="font-semibold truncate">Woola Story</div>
                             <div className="text-xs text-muted-foreground truncate">{activeTabTitle}</div>
                         </div>
                     </div>
@@ -1283,11 +1283,11 @@ const ProjectList = ({ initialTab = 'projects' }) => {
 
                         {activeTab === 'about' && (
                             <div className="bg-card/30 rounded-3xl border border-white/5 p-8 md:p-10">
-                                <h2 className="text-2xl font-bold mb-4">{t('关于 Woola AI story', 'About Woola AI story')}</h2>
+                                <h2 className="text-2xl font-bold mb-4">{t('关于 Woola Story', 'About Woola Story')}</h2>
                                 <p className="text-muted-foreground leading-relaxed mb-4">
                                     {t(
-                                        'Woola AI story 是一款面向影视与广告创作团队的 AI 分镜协作平台，帮助你把剧本、角色、场景与镜头计划串联为可执行的制作流程。',
-                                        'Woola AI story is an AI storyboard collaboration platform for film and creative teams, turning scripts, characters, scenes, and shot plans into an executable production workflow.'
+                                        'Woola Story 是一款面向影视与广告创作团队的 AI 分镜协作平台，帮助你把剧本、角色、场景与镜头计划串联为可执行的制作流程。',
+                                        'Woola Story is an AI storyboard collaboration platform for film and creative teams, turning scripts, characters, scenes, and shot plans into an executable production workflow.'
                                     )}
                                 </p>
                                 <p className="text-muted-foreground leading-relaxed mb-6">
