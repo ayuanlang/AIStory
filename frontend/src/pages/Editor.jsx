@@ -10897,7 +10897,6 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         'Keyframes (CN)',
         'End Frame (CN)',
         'Associated Entities',
-        'Prompt (CN)',
     ];
 
     const getAiShotColumnLabel = (columnKey) => {
@@ -10918,7 +10917,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
             keyframes_cn: 'Keyframes (CN)',
             end_frame_cn: 'End Frame (CN)',
             associated_entities: 'Associated Entities',
-            prompt_cn: 'Prompt (CN)',
+            prompt_cn: 'Prompt (CN) [Legacy]',
         };
         return map[key] || key;
     };
@@ -13165,16 +13164,16 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                                                 }}
                                                                 placeholder={t('镜头内容', 'Video content')}
                                                             />
-                                                            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{t('中文提示词', 'Prompt (CN)')}</div>
+                                                            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{t('视频内容（中文）', 'Video Content (CN)')}</div>
                                                             <textarea
                                                                 className="w-full bg-black/30 border border-white/10 rounded-md px-2.5 py-2.5 text-[13px] min-h-[88px]"
-                                                                value={shot['Prompt (CN)'] || shot.prompt_cn || ''}
+                                                                value={shot['Video Content (CN)'] || shot.video_content_cn || shot.video_prompt_cn || shot['Prompt (CN)'] || shot.prompt_cn || ''}
                                                                 onChange={e => {
                                                                     const newData = [...(aiShotsStaging.content || [])];
-                                                                    newData[idx] = { ...shot, 'Prompt (CN)': e.target.value };
+                                                                    newData[idx] = { ...shot, 'Video Content (CN)': e.target.value, video_prompt_cn: e.target.value };
                                                                     setAiShotsStaging(prev => ({ ...prev, content: newData }));
                                                                 }}
-                                                                placeholder={t('图片+视频中文提示词（可合并）', 'Chinese prompts for image + video (combined allowed)')}
+                                                                placeholder={t('视频内容中文提示词', 'Chinese video content prompt')}
                                                             />
                                                             <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{t('基础字段', 'Basic Fields')}</div>
                                                             <div className="grid grid-cols-2 gap-2">
@@ -16566,14 +16565,14 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             tech.video_prompt_cn,
             shot.prompt_cn,
             shot.video_content_cn,
-            shot.prompt,
             shot.video_content,
+            shot.prompt,
             shot.start_frame,
             shot.end_frame,
         ];
         const enCandidates = [
-            shot.prompt,
             shot.video_content,
+            shot.prompt,
             shot.start_frame,
             shot.end_frame,
             tech.video_prompt_cn,
@@ -17324,6 +17323,68 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         });
     }, []);
 
+    const getShotVideoPromptEn = useCallback((shot) => {
+        if (!shot || typeof shot !== 'object') return '';
+        const primary = shot.video_content;
+        if (primary !== undefined && primary !== null && String(primary) !== '') return String(primary);
+        const legacy = shot.prompt;
+        if (legacy !== undefined && legacy !== null) return String(legacy);
+        return '';
+    }, []);
+
+    const buildVideoPromptEnUpdates = useCallback((value, extra = {}) => {
+        const nextValue = String(value ?? '');
+        return { video_content: nextValue, prompt: nextValue, ...extra };
+    }, []);
+
+    const parseTechnicalNotesSafe = useCallback((rawValue) => {
+        try {
+            const parsed = JSON.parse(rawValue || '{}');
+            return parsed && typeof parsed === 'object' ? parsed : {};
+        } catch (e) {
+            return {};
+        }
+    }, []);
+
+    const mergeLiveSyncTechnicalNotes = useCallback((currentRaw, latestRaw) => {
+        const currentNotes = parseTechnicalNotesSafe(currentRaw);
+        const latestNotes = parseTechnicalNotesSafe(latestRaw);
+        const syncedKeys = [
+            'end_frame_url',
+            'end_frame_reused_from_start',
+            'keyframes',
+            'keyframe_images',
+            'voiceover_url',
+            'voiceover_metadata',
+            'voiceover_plan',
+            'voiceover_plan_prompts',
+        ];
+
+        let changed = false;
+        const nextNotes = { ...currentNotes };
+
+        syncedKeys.forEach((key) => {
+            const nextValue = latestNotes[key];
+            const prevValue = currentNotes[key];
+            if (nextValue === undefined) {
+                if (Object.prototype.hasOwnProperty.call(nextNotes, key)) {
+                    delete nextNotes[key];
+                    changed = true;
+                }
+                return;
+            }
+            if (JSON.stringify(prevValue) !== JSON.stringify(nextValue)) {
+                nextNotes[key] = nextValue;
+                changed = true;
+            }
+        });
+
+        return {
+            changed,
+            value: changed ? JSON.stringify(nextNotes) : String(currentRaw || '{}'),
+        };
+    }, [parseTechnicalNotesSafe]);
+
     const overwriteKeyframeCnMap = useCallback((timeKey, value) => {
         if (!timeKey) return;
         const nextValue = String(value ?? '');
@@ -17381,16 +17442,50 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     }, [focusRequest?.nonce]);
 
     // Helper: Construct Global Context String from Episode Info
-    const getGlobalContextStr = () => {
+    const getShotGlobalStyleText = () => {
+        const info = activeEpisode?.episode_info?.e_global_info;
+        const projectInfo = project?.global_info;
+        return String(
+            info?.Global_Style
+            || info?.global_style
+            || projectInfo?.Global_Style
+            || projectInfo?.global_style
+            || ''
+        ).trim();
+    };
+
+    const getGlobalContextStr = (options = {}) => {
         const info = activeEpisode?.episode_info?.e_global_info;
         if (!info) return "";
+        const { includeStyle = true } = options || {};
         const parts = [];
         // Append explicit labels so the model understands the context
-        if (info.Global_Style) parts.push(`Style: ${info.Global_Style}`);
+        const globalStyle = getShotGlobalStyleText();
+        if (includeStyle && globalStyle) parts.push(`Style: ${globalStyle}`);
         if (info.tone) parts.push(`Tone: ${info.tone}`);
         
         return parts.length > 0 ? " | " + parts.join(", ") : "";
     };
+
+    const applyGlobalStyleToPrompt = useCallback((text, options = {}) => {
+        const rawText = String(text || '').trim();
+        if (!rawText) return rawText;
+
+        const { injectIfMissing = true } = options || {};
+        const globalStyle = getShotGlobalStyleText();
+        if (!globalStyle) return rawText;
+
+        const tokenPattern = /[\[【]\s*(global style|global_style)\s*[\]】]/ig;
+        let nextText = rawText.replace(tokenPattern, `[Global Style](${globalStyle})`);
+
+        if (nextText !== rawText) return nextText;
+        if (!injectIfMissing) return rawText;
+
+        if (/\[Global Style\]\s*\(/i.test(rawText)) return rawText;
+        if (rawText.toLowerCase().startsWith(globalStyle.toLowerCase())) return rawText;
+
+        return `[Global Style](${globalStyle}). ${rawText}`;
+    }, [activeEpisode?.episode_info?.e_global_info, project?.global_info]);
 
     const openMediaPicker = (callback, context = {}) => {
         setPickerConfig({ isOpen: true, callback, context });
@@ -17963,69 +18058,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         }
     }, [editingShot]);
 
-    const translatePromptToChinese = useCallback(async (field) => {
-        if (!editingShot) return;
-        const map = {
-            start: { enKey: 'start_frame', cnKey: 'start_frame_cn' },
-            end: { enKey: 'end_frame', cnKey: 'end_frame_cn' },
-            video: { enKey: 'prompt', cnKey: 'video_prompt_cn' },
-        };
-        const cfg = map[field];
-        if (!cfg) return;
-
-        const source = String(editingShot[cfg.enKey] || (field === 'video' ? editingShot.video_content || '' : '')).trim();
-        if (!source) {
-            onLog?.(t('请先填写英文提示词', 'Please enter the prompt text first'), 'warning');
-            return;
-        }
-
-        setTranslatingPromptField(`${field}:to-cn`);
-        try {
-            const res = await translateText(source, 'auto', 'zh');
-            const translated = String(res?.translated_text || '').trim();
-            if (!translated) throw new Error('empty translation');
-            setEditingShotTechField(cfg.cnKey, translated);
-            onLog?.(t('已翻译为中文', 'Translated to Chinese'), 'success');
-        } catch (e) {
-            onLog?.(`${t('翻译失败', 'Translation failed')}: ${e?.response?.data?.detail || e?.message || 'unknown error'}`, 'error');
-        } finally {
-            setTranslatingPromptField('');
-        }
-    }, [editingShot, onLog, setEditingShotTechField, t]);
-
-    const translatePromptToEnglish = useCallback(async (field) => {
-        if (!editingShot) return;
-        const map = {
-            start: { enKey: 'start_frame', cnKey: 'start_frame_cn' },
-            end: { enKey: 'end_frame', cnKey: 'end_frame_cn' },
-            video: { enKey: 'prompt', cnKey: 'video_prompt_cn' },
-        };
-        const cfg = map[field];
-        if (!cfg) return;
-
-        const tech = getEditingShotTech();
-        const cnText = String(tech[cfg.cnKey] || '').trim();
-
-        if (!cnText) {
-            onLog?.(t('请先填写中文提示词', 'Please enter Chinese prompt first'), 'warning');
-            return;
-        }
-
-        setTranslatingPromptField(`${field}:to-en`);
-        try {
-            const res = await translateText(cnText, 'zh', 'en');
-            const translated = String(res?.translated_text || '').trim();
-            if (!translated) throw new Error('empty translation');
-
-            setEditingShot((prev) => (prev ? { ...prev, [cfg.enKey]: translated } : prev));
-            onLog?.(t('已翻译为英文', 'Translated to English'), 'success');
-        } catch (e) {
-            onLog?.(`${t('翻译失败', 'Translation failed')}: ${e?.response?.data?.detail || e?.message || 'unknown error'}`, 'error');
-        } finally {
-            setTranslatingPromptField('');
-        }
-    }, [editingShot, getEditingShotTech, onLog, setEditingShot, t]);
-
     const translateKeyframeToChinese = useCallback(async (index) => {
         if (!editingShot || index < 0) return;
         const keyframe = localKeyframes[index];
@@ -18224,20 +18256,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         setEditingShot((prev) => {
             if (!prev || String(prev.id) !== String(latest.id)) return prev;
 
-            let prevEndFrameUrl = '';
-            let latestEndFrameUrl = '';
-            try {
-                prevEndFrameUrl = JSON.parse(prev.technical_notes || '{}')?.end_frame_url || '';
-            } catch (e) {}
-            try {
-                latestEndFrameUrl = JSON.parse(latest.technical_notes || '{}')?.end_frame_url || '';
-            } catch (e) {}
+            const nextTechnicalNotes = mergeLiveSyncTechnicalNotes(prev.technical_notes, latest.technical_notes);
 
             const mediaChanged =
                 String(prev.image_url || '') !== String(latest.image_url || '') ||
                 String(prev.video_url || '') !== String(latest.video_url || '') ||
-                String(prevEndFrameUrl || '') !== String(latestEndFrameUrl || '') ||
-                String(prev.technical_notes || '') !== String(latest.technical_notes || '');
+                nextTechnicalNotes.changed;
 
             if (!mediaChanged) return prev;
 
@@ -18245,10 +18269,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 ...prev,
                 image_url: latest.image_url || '',
                 video_url: latest.video_url || '',
-                technical_notes: latest.technical_notes || prev.technical_notes || '{}',
+                technical_notes: nextTechnicalNotes.value,
             };
         });
-    }, [shots, editingShot?.id, setEditingShot]);
+    }, [editingShot?.id, mergeLiveSyncTechnicalNotes, setEditingShot, shots]);
 
     useEffect(() => {
         if (!restoreEditingShotId) return;
@@ -19124,10 +19148,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         
         try {
             // Prompt Construction
-            const globalCtx = getGlobalContextStr();
             const promptToUse = promptOverride
                 || (resolvedPromptSubmitLang === 'cn' ? (cnPrompt || kf.prompt) : (kf.prompt || cnPrompt));
-            const fullPrompt = promptToUse + globalCtx;
+            const styledPrompt = applyGlobalStyleToPrompt(promptToUse, { injectIfMissing: true });
+            const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(styledPrompt) });
+            const fullPrompt = styledPrompt + globalCtx;
             const preferredImageSize = getEpisodePreferredImageSize(activeEpisode?.episode_info);
             
             // Generate
@@ -19141,7 +19166,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 asset_type: 'keyframe',
                 ...(cfgOverride ? { cfg: cfgOverride } : {}),
                 ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
-                negative_prompt: buildEntityNegativePrompt(promptToUse, null, entities)
+                negative_prompt: buildEntityNegativePrompt(styledPrompt, null, entities)
             });
             
             if (res && res.url) {
@@ -19169,11 +19194,13 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     // Injects anchor description while keeping original entity token shape.
     const injectEntityFeatures = (text, isUserEdited = false) => {
         if (!text) return { text, modified: false };
+
+        const styleAdjustedText = applyGlobalStyleToPrompt(text, { injectIfMissing: true });
         
         // If the user has manually edited the prompt, we DO NOT inject entity features automatically.
         // We respect the user's exact prompt.
         if (isUserEdited) {
-            return { text, modified: false };
+            return { text: styleAdjustedText, modified: styleAdjustedText !== text };
         }
         
         // In ShotsView, 'entities' contains ALL entities.
@@ -19220,11 +19247,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             return indexMap;
         };
 
-        const subjectRefIndexMap = computeSubjectRefIndexMap(text);
+        const subjectRefIndexMap = computeSubjectRefIndexMap(styleAdjustedText);
 
         const regex = /[\[【](.*?)[\]】]/g;
-        let newText = text;
-        let modified = false;
+        let newText = styleAdjustedText;
+        let modified = styleAdjustedText !== text;
 
         newText = newText.replace(regex, (match, name, offset, string) => {
             const cleanKey = normalizeEntityToken(name);
@@ -19242,7 +19269,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 return match;
             }
 
-            // 1. Keep [Global Style] token unchanged in shot prompt body.
+            // 1. [Global Style] is injected before entity pass.
             if (cleanKey === 'global style' || cleanKey === 'global_style') {
                 return match; 
             }
@@ -19416,7 +19443,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 refs = refs.filter(Boolean);
 
                 // NEW: Inject Global Context
-                const globalCtx = getGlobalContextStr();
+                const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(submitPrompt) });
                 const finalPrompt = isManual ? submitPrompt : (submitPrompt + globalCtx);
                    const preferredImageSize = getEpisodePreferredImageSize(activeEpisode?.episode_info);
 
@@ -19505,7 +19532,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 const uniqueRefs = getEndFrameVisibleRefs(editingShot, rawPrompt);
                 
                 // NEW: Inject Global Context
-                const globalCtx = getGlobalContextStr();
+                const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(submitPrompt) });
                 const finalPrompt = isManual ? submitPrompt : (submitPrompt + globalCtx);
                 const preferredImageSize = getEpisodePreferredImageSize(activeEpisode?.episode_info);
 
@@ -19746,11 +19773,13 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         const cnVideoPrompt = String(tech.video_prompt_cn || '').trim();
         const rawPrompt = basePromptOverride
             || (resolvedPromptSubmitLang === 'cn'
-                ? (cnVideoPrompt || shot.prompt || shot.video_content || 'Video motion')
-                : (shot.prompt || shot.video_content || cnVideoPrompt || 'Video motion'));
+                ? (cnVideoPrompt || getShotVideoPromptEn(shot) || 'Video motion')
+                : (getShotVideoPromptEn(shot) || cnVideoPrompt || 'Video motion'));
         const isManual = tech.manual_video_prompt === true;
         const { text: submitPrompt } = injectEntityFeatures(rawPrompt, isManual);
-        const finalPrompt = isManual ? submitPrompt : (submitPrompt + getGlobalContextStr());
+        const finalPrompt = isManual
+            ? submitPrompt
+            : (submitPrompt + getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(submitPrompt) }));
 
         const projectLanguage = String(
             activeEpisode?.episode_info?.e_global_info?.language
@@ -19904,8 +19933,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         const cnVideoPrompt = String(techNotes.video_prompt_cn || '').trim();
         const rawPrompt = promptOverride
             || (resolvedPromptSubmitLang === 'cn'
-                ? (cnVideoPrompt || editingShot.prompt || editingShot.video_content || "Video motion")
-                : (editingShot.prompt || editingShot.video_content || cnVideoPrompt || "Video motion"));
+                ? (cnVideoPrompt || getShotVideoPromptEn(editingShot) || "Video motion")
+                : (getShotVideoPromptEn(editingShot) || cnVideoPrompt || "Video motion"));
         const isManual = techNotes.manual_video_prompt === true;
 
         const { text: submitPrompt } = injectEntityFeatures(rawPrompt, isManual);
@@ -20030,7 +20059,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             const durParam = parseFloat(editingShot.duration) || 5;
 
             // NEW: Inject Global Context
-            const globalCtx = getGlobalContextStr();
+            const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(submitPrompt) });
             const finalPrompt = isManual ? submitPrompt : (submitPrompt + globalCtx);
 
             onLog?.(
@@ -21299,11 +21328,15 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                         <textarea
                                             className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[60px]"
                                             placeholder={t('动作 / 运动提示词...', 'Action / Motion Prompt...')}
-                                            value={editingShot.prompt || editingShot.video_content || ''}
+                                            value={getShotVideoPromptEn(editingShot)}
                                             onChange={(e) => {
                                                 const tech = JSON.parse(editingShot.technical_notes || '{}');
                                                 tech.manual_video_prompt = true;
-                                                setEditingShot({...editingShot, prompt: e.target.value, technical_notes: JSON.stringify(tech)});
+                                                setEditingShot({
+                                                    ...editingShot,
+                                                    ...buildVideoPromptEnUpdates(e.target.value),
+                                                    technical_notes: JSON.stringify(tech),
+                                                });
                                             }}
                                         />
                                         <ReferenceManager 
@@ -21311,7 +21344,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                             entities={entities} 
                                             onUpdate={(updates) => { persistEditingShotUpdates(updates); }} 
                                             title={t('参考图（视频）', 'Refs (Video)')}
-                                            promptText={editingShot.prompt || editingShot.video_content || ''}
+                                            promptText={getShotVideoPromptEn(editingShot)}
                                             uiLang={uiLang}
                                             onPickMedia={openMediaPicker}
                                             storageKey="video_ref_image_urls"
@@ -21703,7 +21736,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 const showCnPrompt = shotPromptDisplayLang === 'cn';
                                                 const startPromptText = showCnPrompt ? String(tech.start_frame_cn || '') : String(editingShot.start_frame || '');
                                                 const endPromptText = showCnPrompt ? String(tech.end_frame_cn || '') : String(editingShot.end_frame || '');
-                                                const videoPromptText = showCnPrompt ? String(tech.video_prompt_cn || '') : String(editingShot.prompt || editingShot.video_content || '');
+                                                const videoPromptText = showCnPrompt ? String(tech.video_prompt_cn || '') : getShotVideoPromptEn(editingShot);
                                                 const modalType = assetDetailModal.type;
                                                 const keyframe = modalType === 'keyframe' ? localKeyframes[assetDetailModal.keyframeIndex] : null;
                                                 const endFrameUrl = String(tech.end_frame_url || '');
@@ -21881,22 +21914,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                             setEditingShot({...editingShot, start_frame: e.target.value});
                                                                         }}
                                                                     />
-                                                                    <div className="flex items-center justify-center gap-2">
-                                                                        <button
-                                                                            onClick={() => translatePromptToChinese('start')}
-                                                                            disabled={translatingPromptField.startsWith('start:')}
-                                                                            className={`text-xs px-2 py-1 rounded ${translatingPromptField.startsWith('start:') ? 'bg-purple-500/10 text-purple-300/50 cursor-wait' : 'bg-purple-500/20 text-purple-200 hover:bg-purple-500/30'}`}
-                                                                        >
-                                                                            {translatingPromptField === 'start:to-cn' ? t('翻译中...', 'Translating...') : t('翻译成中文', 'To Chinese')}
-                                                                        </button>
-                                                                        <button
-                                                                            onClick={() => translatePromptToEnglish('start')}
-                                                                            disabled={translatingPromptField.startsWith('start:')}
-                                                                            className={`text-xs px-2 py-1 rounded ${translatingPromptField.startsWith('start:') ? 'bg-white/10 text-white/50 cursor-wait' : 'bg-white/10 text-white hover:bg-white/20'}`}
-                                                                        >
-                                                                            {translatingPromptField === 'start:to-en' ? t('翻译中...', 'Translating...') : t('翻译成英文', 'To English')}
-                                                                        </button>
-                                                                    </div>
                                                                     <RefineControl originalText={startPromptText} onUpdate={(v) => {
                                                                         if (showCnPrompt) {
                                                                             updateTechField('start_frame_cn', v);
@@ -21965,22 +21982,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                         handleManualEndFrameInputChange(e.target.value);
                                                                     }}
                                                                 />
-                                                                <div className="flex items-center justify-center gap-2">
-                                                                    <button
-                                                                        onClick={() => translatePromptToChinese('end')}
-                                                                        disabled={translatingPromptField.startsWith('end:')}
-                                                                        className={`text-xs px-2 py-1 rounded ${translatingPromptField.startsWith('end:') ? 'bg-purple-500/10 text-purple-300/50 cursor-wait' : 'bg-purple-500/20 text-purple-200 hover:bg-purple-500/30'}`}
-                                                                    >
-                                                                        {translatingPromptField === 'end:to-cn' ? t('翻译中...', 'Translating...') : t('翻译成中文', 'To Chinese')}
-                                                                    </button>
-                                                                    <button
-                                                                        onClick={() => translatePromptToEnglish('end')}
-                                                                        disabled={translatingPromptField.startsWith('end:')}
-                                                                        className={`text-xs px-2 py-1 rounded ${translatingPromptField.startsWith('end:') ? 'bg-white/10 text-white/50 cursor-wait' : 'bg-white/10 text-white hover:bg-white/20'}`}
-                                                                    >
-                                                                        {translatingPromptField === 'end:to-en' ? t('翻译中...', 'Translating...') : t('翻译成英文', 'To English')}
-                                                                    </button>
-                                                                </div>
                                                                 <RefineControl originalText={endPromptText} onUpdate={(v) => {
                                                                     if (showCnPrompt) {
                                                                         updateTechField('end_frame_cn', v);
@@ -22126,33 +22127,17 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                             updateTechField('video_prompt_cn', e.target.value);
                                                                             return;
                                                                         }
-                                                                        setEditingShot({...editingShot, prompt: e.target.value});
+                                                                        setEditingShot({ ...editingShot, ...buildVideoPromptEnUpdates(e.target.value) });
                                                                     }}
                                                                 />
-                                                                <div className="flex items-center justify-center gap-2">
-                                                                    <button
-                                                                        onClick={() => translatePromptToChinese('video')}
-                                                                        disabled={translatingPromptField.startsWith('video:')}
-                                                                        className={`text-xs px-2 py-1 rounded ${translatingPromptField.startsWith('video:') ? 'bg-purple-500/10 text-purple-300/50 cursor-wait' : 'bg-purple-500/20 text-purple-200 hover:bg-purple-500/30'}`}
-                                                                    >
-                                                                        {translatingPromptField === 'video:to-cn' ? t('翻译中...', 'Translating...') : t('翻译成中文', 'To Chinese')}
-                                                                    </button>
-                                                                    <button
-                                                                        onClick={() => translatePromptToEnglish('video')}
-                                                                        disabled={translatingPromptField.startsWith('video:')}
-                                                                        className={`text-xs px-2 py-1 rounded ${translatingPromptField.startsWith('video:') ? 'bg-white/10 text-white/50 cursor-wait' : 'bg-white/10 text-white hover:bg-white/20'}`}
-                                                                    >
-                                                                        {translatingPromptField === 'video:to-en' ? t('翻译中...', 'Translating...') : t('翻译成英文', 'To English')}
-                                                                    </button>
-                                                                </div>
                                                                 <RefineControl originalText={videoPromptText} onUpdate={(v) => {
                                                                     if (showCnPrompt) {
                                                                         updateTechField('video_prompt_cn', v);
                                                                         return;
                                                                     }
-                                                                    setEditingShot({...editingShot, prompt: v});
+                                                                    setEditingShot({ ...editingShot, ...buildVideoPromptEnUpdates(v) });
                                                                 }} type="video" />
-                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（视频）', 'Refs (Video)')} promptText={editingShot.prompt || editingShot.video_content || ''} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="video_ref_image_urls" strictPromptOnly={true} />
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（视频）', 'Refs (Video)')} promptText={getShotVideoPromptEn(editingShot)} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="video_ref_image_urls" strictPromptOnly={true} />
                                                             </div>
                                                         </div>
                                                     );

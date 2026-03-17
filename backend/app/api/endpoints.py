@@ -8626,55 +8626,86 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
     if isinstance(project_info, str):
         try: project_info = json.loads(project_info)
         except: project_info = {}
+    if not isinstance(project_info, dict):
+        project_info = {}
+
+    basic_info_nested = project_info.get("basic_information") if isinstance(project_info.get("basic_information"), dict) else {}
+    e_global_info = project_info.get("e_global_info") if isinstance(project_info.get("e_global_info"), dict) else {}
+    story_input = project_info.get("story_generator_global_input") if isinstance(project_info.get("story_generator_global_input"), dict) else {}
         
     episode_info = {}
-    
+
     # 3. Robust Data Normalization (Handle case/space sensitivity)
-    def normalize_dict_keys(d):
-        if not isinstance(d, dict): return {}
-        new_d = {}
-        for k, v in d.items():
-            # Standardize to "key_name" (lowercase, underscore)
-            clean_k = str(k).lower().replace(" ", "_").strip()
-            new_d[clean_k] = v
-        return new_d
+    def _norm_key(key: Any) -> str:
+        return str(key or "").strip().lower().replace("-", "_").replace(" ", "_")
 
-    episode_info_norm = normalize_dict_keys(episode_info)
-    project_info_norm = normalize_dict_keys(project_info)
+    def normalize_dict_keys(d: Any) -> Dict[str, Any]:
+        if not isinstance(d, dict):
+            return {}
+        return {
+            _norm_key(k): v for k, v in d.items()
+        }
 
-    # Helper to find value from Episode -> Project (using normalized keys)
-    def get_context_val(keys):
-        if isinstance(keys, str): keys = [keys]
-        # Search List
-        search_keys = [k.lower().replace(" ", "_").strip() for k in keys]
-        
-        # 1. Episode (Priority)
+    context_sources = [episode_info, project_info, basic_info_nested, e_global_info, story_input]
+    context_sources_norm = [normalize_dict_keys(src) for src in context_sources]
+
+    def _clean_text(value: Any) -> str:
+        return str(value or "").strip()
+
+    def get_context_val(keys, allow_structured: bool = False):
+        if isinstance(keys, str):
+            keys = [keys]
+        search_keys = [_norm_key(k) for k in keys]
+        for src_norm in context_sources_norm:
+            for sk in search_keys:
+                if sk not in src_norm:
+                    continue
+                value = src_norm.get(sk)
+                if allow_structured:
+                    if isinstance(value, (dict, list)) and value:
+                        return value
+                    text = _clean_text(value)
+                    if text:
+                        return value
+                else:
+                    if isinstance(value, (dict, list)):
+                        continue
+                    text = _clean_text(value)
+                    if text:
+                        return text
+        return {} if allow_structured else ""
+
+    def get_context_list(keys) -> List[str]:
+        value = get_context_val(keys, allow_structured=True)
+        if isinstance(value, list):
+            return [str(v or "").strip() for v in value if str(v or "").strip()]
+        if isinstance(value, str):
+            return [p.strip() for p in re.split(r"[,，;；\n]", value) if p and p.strip()]
+        return []
+
+    tech_params = get_context_val(["tech_params"], allow_structured=True)
+    if not isinstance(tech_params, dict):
+        tech_params = {}
+    visual_standard = tech_params.get("visual_standard") or tech_params.get("visual standard") or {}
+    if not isinstance(visual_standard, dict):
+        visual_standard = {}
+    visual_standard_norm = normalize_dict_keys(visual_standard)
+
+    def get_visual_val(keys) -> str:
+        if isinstance(keys, str):
+            keys = [keys]
+        search_keys = [_norm_key(k) for k in keys]
         for sk in search_keys:
-            if sk in episode_info_norm and episode_info_norm[sk]:
-                return episode_info_norm[sk]
-        
-        # 2. Project (Fallback)
-        for sk in search_keys:
-            if sk in project_info_norm and project_info_norm[sk]:
-                return project_info_norm[sk]
-        
-        return None
-    def get_context_val(keys):
-        if isinstance(keys, str): keys = [keys]
-        # 1. Episode
-        for k in keys:
-            if episode_info.get(k): return episode_info[k]
-            # Try lowercase/variations
-            if episode_info.get(k.lower()): return episode_info[k.lower()]
-            if episode_info.get(k.replace(" ", "_")): return episode_info[k.replace(" ", "_")]
-        # 2. Project
-        for k in keys:
-            if project_info.get(k): return project_info[k]
-            if project_info.get(k.lower()): return project_info[k.lower()]
-            if project_info.get(k.replace(" ", "_")): return project_info[k.replace(" ", "_")]
-        return None
+            if sk in visual_standard_norm:
+                value = visual_standard_norm.get(sk)
+                if isinstance(value, (dict, list)):
+                    continue
+                text = _clean_text(value)
+                if text:
+                    return text
+        return get_context_val(keys)
 
-    global_style = get_context_val(["Global_Style", "Global Style", "Style"]) or "Cinematic"
+    global_style = get_context_val(["Global_Style", "Global Style", "global_style", "Style"]) or "Cinematic"
     
     # Extract additional fields
     # Mappings: Field Name -> Possible Keys
@@ -8696,6 +8727,71 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
     
     if context_lines:
         additional_context = "\n".join(context_lines)
+
+    borrowed_films = get_context_list(["borrowed_films", "borrowedFilms", "reference_films", "referenceFilms"])
+    project_context_lines = [
+        "# Project Context",
+        "Treat this project metadata as first-class constraints when generating the shot list.",
+        "[Basic Info]",
+    ]
+
+    title = get_context_val(["script_title", "title"])
+    episode_label = get_context_val(["series_episode", "episode"])
+    project_type = get_context_val(["type", "genre", "category", "film_type"])
+    base_positioning = get_context_val(["base_positioning"])
+    project_language = get_context_val(["language", "project_language", "lang"])
+    tone = get_context_val(["tone", "mood", "atmosphere"])
+    lighting = get_context_val(["lighting", "light_style", "light"])
+    character_relationships = get_context_val(["character_relationships"])
+    project_notes = get_context_val(["notes"])
+
+    if title:
+        project_context_lines.append(f"Title: {title}")
+    if episode_label:
+        project_context_lines.append(f"Episode: {episode_label}")
+    if project_type:
+        project_context_lines.append(f"Type: {project_type}")
+    if base_positioning:
+        project_context_lines.append(f"Base Positioning: {base_positioning}")
+    if project_language:
+        project_context_lines.append(f"Language: {project_language}")
+    if global_style:
+        project_context_lines.append(f"Global Style: {global_style}")
+    if tone:
+        project_context_lines.append(f"Tone: {tone}")
+    if lighting:
+        project_context_lines.append(f"Lighting: {lighting}")
+    if borrowed_films:
+        project_context_lines.append(f"Borrowed Films: {', '.join(borrowed_films)}")
+    if character_relationships:
+        project_context_lines.append(f"Character Relationships: {character_relationships}")
+    if project_notes:
+        project_context_lines.append(f"Project Notes: {project_notes}")
+
+    project_context_lines.append("[Technical & Visual Parameters]")
+    aspect_ratio = get_visual_val(["aspect_ratio", "aspectRatio"])
+    image_size = get_visual_val(["image_size", "imageSize"])
+    horizontal_resolution = get_visual_val(["horizontal_resolution", "horizontalResolution", "h_resolution", "width"])
+    vertical_resolution = get_visual_val(["vertical_resolution", "verticalResolution", "v_resolution", "height"])
+    frame_rate = get_visual_val(["frame_rate", "frameRate", "fps"])
+    quality = get_visual_val(["quality"])
+
+    if aspect_ratio:
+        project_context_lines.append(f"Aspect Ratio: {aspect_ratio}")
+    if image_size:
+        project_context_lines.append(f"Image Size: {image_size}")
+    if horizontal_resolution:
+        project_context_lines.append(f"Horizontal Resolution: {horizontal_resolution}")
+    if vertical_resolution:
+        project_context_lines.append(f"Vertical Resolution: {vertical_resolution}")
+    if frame_rate:
+        project_context_lines.append(f"Frame Rate: {frame_rate}")
+    if quality:
+        project_context_lines.append(f"Quality: {quality}")
+
+    project_context_section = ""
+    if len(project_context_lines) > 4:
+        project_context_section = "\n".join(project_context_lines)
 
     # Scene Info
     # Entities - Fetch project entities and match with Linked Characters / Environment
@@ -8849,6 +8945,8 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
     # Environment Context is now a separate field in the table
 
     user_input = f"""{global_section}
+
+{project_context_section}
 
 # Core Scene Info
 | Field | Value |

@@ -18,7 +18,7 @@
 适用于所有场景的硬性规范，确保叙事连贯和 AI 生成的可行性。
 
 ### 1. 基本约束
-- **实体引用**：严格使用输入实体，名称必须用方括号 `[@Subject Name]` 包裹（与 `Linked Characters` 和 `Environment Anchor` 的名称完全一致，要带上（）里的内容，不能插入任何字符及切换全半角等），严禁创造新主体（如有未定义角色请用泛指如 `[Unidentified Man]`）。**每个 Shot 的 Start Frame / Video Content / End Frame 必须显式包含 `[Environment Anchor]`**。
+- **实体引用**：严格使用输入实体，实体名必须与 `Linked Characters`、`Key Props`、`Environment Anchor` 完全一致（含括号内容、大小写、分隔符、全半角），严禁创造新主体（如有未定义角色请用泛指如 `[Unidentified Man]`）。在英文提示词中引用实体时，统一使用后文定义的类型化写法：角色写 `CHAR:[@Name]`，环境写 `ENV:[Name]`，道具写 `PROP:[Name]`。**每个 Shot 的 `Video Content` 与 `End Frame` 必须显式包含 `[Environment Anchor]`；`Start Frame` 默认也必须显式包含，只有命中 `SAP Start Frame Protocol` 时允许以 `SAP` 受控复用上一镜尾帧的环境锚点。**
 - **实体名称冻结 (Entity Name Freeze, 强制)**：本阶段只允许“引用”上游已提供实体名（来自 Scene Analysis / 输入字段）。禁止任何名称改写或归一化：不得改变大小写、下划线/连字符/空格、括号、全半角、拼写与分隔符。
 - **角色/道具同权规则 (Character/Prop Parity, 强制)**：角色与道具与环境执行完全相同的名称继承规则；不得使用别名、同义词、翻译名或简写替代上游规范名。
 - **环境继承权威 (Scene-to-Shot Environment Inheritance, 强制)**：环境在 Scene 阶段已定稿（名称/视角语义/Entry-Exit 连续性）。Shot 阶段只能继承，不得重命名、重定义或新建环境。
@@ -79,6 +79,12 @@
   - **合规示例**：`CHAR:[@A] pushes PROP:[Door] until the latch clicks; shoulders stay low, breath held, then gaze fixes on the corridor.`
 
 - **视频时序可执行性 (Temporal Executability, 强制)**：`Video Content` 必须给出可执行的连续动作链（起始条件、过程变化、结束状态），避免“仅氛围词无动作”。
+- **多角色反应强制 (Multi-Character Mutual Reaction, 强制)**：凡同一 Shot 的 `Video Content` 中出现 2 个及以上可见角色，**每个可见角色都必须有可见反应或状态变化**，不得只让一人动作、另一人像静止摆拍。
+  - **双人镜头硬规则**：若镜头中有 2 名角色同框，双方都必须写出各自的反应链。可以是一方主动动作、另一方接招/闪避/回看/后退/僵住/抬手防御/表情变化，但**不能**只有主动作角色在动。
+  - **多人镜头硬规则**：若镜头中有 3 名及以上角色，主动作主体可以最完整，但其余可见角色至少要有短促且可见的响应（如 `flinch`, `guard shift`, `eye-line turn`, `half-step retreat`, `hesitation`, `recoil`），不得整排人物无反应。
+  - **反应必须可见**：反应只能写可被镜头直接看到的变化，如姿态、视线、步伐、防御、受力、停顿、表情；禁止用纯心理描述替代。
+  - **不合规示例**：`CHAR:[@A] speaks angrily while CHAR:[@B] remains present.`
+  - **合规示例**：`CHAR:[@A] leans in and presses the question; CHAR:[@B] jaw tightens, gaze breaks for a beat, then shoulders stiffen as one foot shifts back.`
 - **冲突约束 (No Contradictory Directives)**：同一镜头文本中禁止给出互斥动作/光照/景别指令（例如同时要求 static lock-off 与 fast handheld shake）。
 - **负向约束继承 (Negative Constraint Inheritance)**：当上游实体提供 `negative_prompt_en` 时，本镜头描述需避免触发对应风险（身份漂移、塑料感、时代错置、文字水印等），并在必要时显式重申关键排除项。
 - **主角美化布光优先 (Protagonist Beauty-Light Priority, 强制)**：主角镜头（尤其 Medium Close-up / Close-up）默认优先采用 `butterfly light` / `clamshell` / 软正面主光 + 温和补光 + 清晰眼神光（catchlight）；仅当剧情明确要求反美化时才降级。
@@ -126,8 +132,7 @@
   - **Combat Cut Exception (打斗切分例外, 强制)**：当场景类型为 `Action & Chase` 且存在近身交互（挥击/格挡/摔投/冲撞/夺取）时，允许为“冲击节拍”提前切镜，不受“必须合并到稳定点”的默认约束。该例外仅用于保留动势与打击重拍，不得破坏空间可读性与轴线连续性。
 - **拆分规则 (The Cut Triggers)**
   - **Must Cut**: 时间跳跃、空间瞬移、视角剧烈反转 (Reverse Angle)。
-  - **Must Cut (OTS)**: 任何 OTS 主体切换（A→B 或 B→A）都必须切镜；连续对话至少输出一组可审计的 OTS 正反打镜头对。
-    - **OTS 审计标注（强制）**：该正反打镜头对必须可被一眼审计，至少包含 `视角_01/视角_02`、`Front/Reverse`、`Axis Side`。
+  - **Must Cut (OTS)**: 任何 OTS 主体切换（A→B 或 B→A）都必须切镜；其拆分、分场触发与审计字段要求统一以后文已定义的 **OTS Split Mandate** 与 **OTS Scene-Split Trigger** 为唯一权威，禁止在此处另立口径。
 - **景别递进**：同一 Scene 内遵循 Master → Medium → Close/Detail → Insert 的视觉呼吸感，避免单调重复。
 - **人物塑造与景变 (Character Shaping & Scale Rules)**
   - **强制特写 (Mandatory Character Shot)**: 每个 Scene 的分镜序列中，**必须至少包含一次**针对主要人物 (Lead Character) 的 Close-up 或 Medium Close-up 级别分镜，以强化人物形象与面部细节。
@@ -274,18 +279,14 @@
 
 ### 0. 独立描述原则 (Principle of Independent Description)
 **Rule: 绝对独立性 (Absolute Independence)**
-- **严禁依赖上下文 (No Context Dependency)**：每一个 Shot 的 `Start Frame`, `Video Content`, `End Frame` 都必须是**完全独立、自包含**的描述。
-  - **环境隔离 (Environment Isolation)**：仅使用当前 Scene 指定的 `[Environment Anchor]` 信息。**严禁混淆**其他 Scene 的环境特征。
-  - **信息封闭 (Information Closure)**：假设阅读者（AI或制作人员）只看当前这一行的信息。**绝对禁止**引用“上一个镜头”或“场景开头”的信息。必须将当前时刻所需的所有视觉细节（环境、光影、人物状态）完整复述。
-- **禁止省略 (No Shortcuts)**：**严禁使用** "Same as above", "Continued from previous shot", "Same setting", "Unchanged", "See previous" 等指代性词汇。如果不写清楚，生图AI将无法生成画面。
-- **全量重写 (Full Rewrite)**：即使当前镜头接续上一镜头（Continuity），也必须**重新完整描写**所有的视觉元素。不能假设 AI 会“记得”刚才站在哪里，必须在每一个 Shot 中重新定义。
-- **唯一例外 (Only Exception)**：仅当命中 **一-6 SAP Start Frame Protocol** 的可复用条件时，`Start Frame` 允许只写 `SAP`；除此之外，任何省略写法一律禁止。
+- **严禁依赖上下文 (No Context Dependency)**：每一个 Shot 的 `Video Content` 与 `End Frame` 都必须完全独立、自包含；`Start Frame` 同样遵循该原则，唯一例外是命中 `SAP Start Frame Protocol` 时允许只写 `SAP` 作为上一镜 `End Frame` 的受控复用标记。仅使用当前 Scene 的 `[Environment Anchor]`，严禁混入其他 Scene 环境特征，也严禁引用“上一个镜头”或“场景开头”的信息。
+- **禁止省略 (No Shortcuts)**：除 `SAP` 外，严禁使用 "Same as above", "Continued from previous shot", "Same setting", "Unchanged", "See previous" 等省略写法；所有非 `SAP` 字段都必须重新完整描写当前时刻所需的视觉元素。
 
 ### 1. 情感对话 (Dialogue & Emotion)
 - **Core Logic**: "Relation & Reaction". 重点往往不在说话的人，而在听话的人（反应）。
+- **双人对话反应闭环 (Dialogue Mutual Response Loop, 强制)**：只要对话镜头里同时看见说话者与听者，就必须把两人的反应都写进 `Video Content`：说话者有发言/逼近/停顿/视线压力，听者必须有同步可见回应（眼神躲闪、呼吸停顿、嘴角收紧、身体后仰、抬手、沉默僵住等）。禁止把听者写成无变化的人形背景板。
 - **Audio-Ready Rule (有声视频硬规则)**：当镜头涉及对话/旁白/画外音时，台词格式、口型策略、语气标注、听者反应与音效规则统一按 **Section C.5「对白与声音」** 执行。此处仅强调对话场景的特异要点：
   - 对话镜头中，听者**反应**往往比说话者更重要（Core Logic 的直接体现），须确保听者反应在台词同一或紧邻主节拍内可见。
-  - `{Bad}: "(1) A turns -> (2) Dialogue (A): 'Where were you?' -> resulting in jaw tightening -> (3) A eyes narrow -> ..."` (逐步分拆，token 冗余且模型无法逐条执行)
 - **Sequence Logic (Revised)**:
   - **Prioritize OTS (Over-the-Shoulder)**: 对于对话场景（尤其是带有肢体动作或物体交互时），**必须优先采用过肩镜头 (Over-the-Shoulder Shot)** 及其正反打 (Reverse Shot) 结构。相比于单人特写，OTS 能更好呈现角色间的空间关系与动作互动。
   - **Structure**: Establishing (Optional) -> Master/Two-shot -> **OTS Pattern (A over B's shoulder -> B over A's shoulder)** -> ECU (Climax).
@@ -317,85 +318,92 @@
   - **默认授权**：任何近身打斗默认只授权到 **Level 2**（重击、踉跄、半步到一步失衡、短促碎屑/浮尘）。
   - **升级条件**：只有当 **Shot Logic + Start Frame + End Frame** 三者都共同支持，才允许升级到 **Level 3**（击飞撞墙/砸地/大破坏）。缺任一项，必须回落到 Level 2。
   - **Passion Without Chaos (激情不等于失控)**：可通过更强的节奏词、受力词、姿态词来写出力量与激情，如 `explosive`, `violent`, `bone-heavy`, `driving through centerline`, `full-body commitment`, `breath ripped out on impact`；但这些词**不能自动授权**额外剧情结果。
+- **Impact Accent Permission (冲击视觉强化许可, 强制说明)**：在打斗或法术镜头中，允许使用风格化的一阶冲击强化，如 `visible shockwave`, `air distortion`, `heavy dust burst`, `violent floor scrape`, `dense debris kick-up`，只要它们仍被写成“当前接触点直接引发的可见后果”，而不是借机偷带新的剧情事件。
+  - 允许：把冲击波、气浪、重扬尘作为命中感或压迫感的视觉证据。
+  - 不允许：因为写了冲击波或重扬尘，就自动补出 `wall breach`, `multi-body launch`, `extra attack round`, `arena-wide destruction` 等二级结果，除非命中 `Level 3` 授权。
+- **Camera-Motion Pairing Rule (机位-位移匹配规则, 强制)**：`{Viewpoint Movement}` 必须和主体位移类型严格匹配。
+  - 若动作结果是 `stagger`, `recovery steps`, `guard break`, `distance reopening`，优先使用 `short reactive pull`, `brief retreat`, `lateral follow`, `hold on recovery`。
+  - 若动作结果是明确的 `launch`, `wall impact`, `clear flight path`, `slam arc`，才允许使用 `rapid pull-back to preserve the flight path`, `launch-preserving retreat`, `impact-path tracking`。
+  - 禁止“只是后退几步/踉跄失衡”的动作，却搭配 `flight path` 一类会暗示击飞事件的机位描述。
 - **Space Destruction**: 仅在剧情/动作本身需要冲击或破坏时才加入（例如撞击造成翻倒、追逐带起水花、开枪后烟雾）。不要为了“看起来更刺激”而凭空打碎环境物体，避免引入未定义道具与连续性错误。
 - **Action & Chase Copy-Ready Examples (可复制示例)**：
   - **Example A: Close-Combat Punch Chain (4.0s)**
     - `Start Frame`: `[Global Style]. **{Viewpoint Anchor}**: waist-height observer at corridor side in Environment Anchor. **{Viewing Direction}**: front-left 3/4 facing A and B. **{ViewpointSetup}**: Medium Full Shot, 35mm handheld, eye-level. **{Image Fidelity}**: clean digital look, low shadow noise, controlled background blur. **{Single-Canvas Guard}**: single-canvas cinematic frame, one continuous scene plane, no split-screen, no collage, no tiled duplication, no contact-sheet layout. **Layers**: {Foreground} Empty. {Midground} CHAR:[@A] guarded stance facing CHAR:[@B]; CHAR:[@B] shoulders tight, weight on rear leg. {Background} ENV:[Environment Anchor].`
     - `Video Content`: `**{Viewpoint Movement}**: short lateral follow, micro-acceleration at contact, then brief hold. **Action**: (P1) CHAR:[@A] shifts weight to the rear foot, coils shoulders and hips, then surges one explosive step toward CHAR:[@B] with a committed straight punch driving through centerline; (P2) contact lands with a sharp torso jolt on CHAR:[@B], forcing half-step to one-step recovery while guard opens briefly — CHAR:[@A] retracts into structure and CHAR:[@B] struggles to reset balance -> resulting in a heavy stagger, not a launch.`
     - `End Frame`: `[Global Style]. **{Viewpoint Anchor}**: same lane, slightly closer by a short push. **{Viewing Direction}**: right 3/4 toward both fighters. **{Viewpoint Setup}**: Medium Shot, 35mm. **Layers**: {Foreground} brief dust lift near planted feet. {Midground} CHAR:[@A] guard re-formed, chest heaving; CHAR:[@B] staggered with guard reopening during recovery. {Background} ENV:[Environment Anchor].`
-    - `Rule Pairing`: `Level 2`. 这是“重拳命中但不击飞”的标准示例，力量强但后果受控。
   - **Example B: Weapon Clash and Carry-Over (5.0s)**
     - `Start Frame`: `[Global Style]. **{Viewpoint Anchor}**: shoulder-height observer near center path in Environment Anchor. **{Viewing Direction}**: side-facing across A and B. **{Viewpoint Setup}**: Full Shot, 35mm, stable handheld. **{Image Fidelity}**: crisp subject edges during fast motion, fine film grain, avoid heavy chroma noise. **{Single-Canvas Guard}**: single-canvas cinematic frame, one continuous scene plane, no split-screen, no collage, no tiled duplication, no contact-sheet layout. **Layers**: {Foreground} Empty. {Midground} CHAR:[@A] blade lifted chest-to-eye line; CHAR:[@B] compact guard. {Background} ENV:[Environment Anchor].`
     - `Video Content`: `**{Viewpoint Movement}**: low-to-mid tracking with slight push at the clash, then stabilize to preserve spacing. **Action**: (P1) CHAR:[@A] advances one step with urgent forward pressure, diagonal blade line accelerating from shoulder rotation into a committed cut; (P2) CHAR:[@B] meets the strike with a hard parry, wrists recoiling on contact as a short spark burst and tight debris flick register at the weapon edge — both bodies rebound only enough to reopen guard structure, with CHAR:[@B] quarter-turning into counter-ready alignment while CHAR:[@A] slips outward to keep silhouettes clear -> resulting in controlled carry-over, not a chaotic flurry.`
     - `End Frame`: `[Global Style]. **{Viewpoint Anchor}**: same axis side, slight pull-back to preserve distance map. **{Viewing Direction}**: profile-right on both subjects. **{Viewpoint Setup}**: Full Shot, 35mm. **Layers**: {Foreground} minor spark fade and dust fleck. {Midground} CHAR:[@A] defensive lane reset with blade recovered; CHAR:[@B] counter-ready posture stabilized. {Background} ENV:[Environment Anchor].`
-    - `Rule Pairing`: `Level 2`. 兵器硬碰允许强冲击与火花，但不默认升级成击飞、断裂、大片破坏。
-  - **Common Fight Safe Templates (常见打斗安全模板)**：以下模板默认按“力量强、激情足、但物理结果受控”的原则书写；除非命中 Level 3 授权，否则不得擅自升级结果。
+  - **Common Fight Safe Templates (常见打斗安全模板)**：默认写强冲击、强节奏、受控结果；未命中 `Level 3` 授权时不得升级后果。
   - **Template 1: Heavy Straight Punch, No Launch (重拳命中但不击飞, Level 2)**
-    - **Use When**: 重拳、肘击、膝撞命中，需要明显力量感，但剧情并不要求击飞。
+    - **Use When**: 重拳、肘击、膝撞命中，需要重击感但不要求击飞。
     - `Video Content`: `**{Viewpoint Movement}**: short reactive pull with slight impact shake, then fast settle. **Action**: (P1) CHAR:[@A] drives forward with full-body commitment, rear foot pushing hard through the floor as shoulders and hips rotate into a straight strike along centerline; (P2) contact lands clean on CHAR:[@B], chest and head snapping with a sharp torso jolt as CHAR:[@B] stumbles back half a step to one step, guard breaking open before recovery begins -> resulting in a heavy stagger, not a launch.`
-    - **Rule Pairing**: 适用 `Level 2`。允许强受力、强节奏、明显失衡；**禁止**写成冲击波、倒飞、撞墙。
+    - **Rule Pairing**: `Level 2`；可写强受力与局部冲击反馈，但不得升级成撞墙、离地或额外破坏。
   - **Template 2: Hard Kick Creating Clear Separation (重踢拉开距离, Level 2)**
-    - **Use When**: 需要把双方拉开，但不是把人踢飞撞到场景边界。
+    - **Use When**: 需要明确拉开距离，但不是踢飞撞墙。
     - `Video Content`: `**{Viewpoint Movement}**: lateral follow with brief acceleration at extension, then hold. **Action**: (P1) CHAR:[@A] plants firmly, hips whipping through as one leg snaps out in a forceful driving kick toward CHAR:[@B] midsection; (P2) CHAR:[@B] absorbs the blow with a compressed torso fold and slides backward one to two short steps, boots scraping the ground while arms rush inward to rebuild guard -> resulting in a clearly widened fighting gap and unstable recovery.`
-    - **Rule Pairing**: 可写“明显拉开距离”，但距离应由 `one to two short steps` 或等效视觉锚定支撑；**禁止**直接升级成整个人离地或撞墙。
+    - **Rule Pairing**: 可写“明显拉开距离”，但须由 `one to two short steps` 或等效视觉锚定支撑；禁止升级成离地或撞墙。
   - **Template 3: Wall Impact / Launch Event (击飞撞墙, Level 3 特殊事件)**
-    - **Use When**: 剧本明确要“人被击飞撞墙”，且 Start/End Frame 已给出可达路径和撞墙后的最终状态。
+    - **Use When**: 剧本明确要求“击飞撞墙”，且 Start/End Frame 已给出路径与落点状态。
     - `Video Content`: `**{Viewpoint Movement}**: rapid pull-back to preserve the flight path, then stabilize on impact. **Action**: (P1) CHAR:[@A] commits a decisive heavy strike that drives fully through CHAR:[@B]'s center mass, sending CHAR:[@B] violently screen-right along a clean readable path with feet losing their original planting; (P2) CHAR:[@B] crashes back-first into the cave wall, loose grit and small stone fragments kicking free at the point of contact as both arms instinctively rise to shield the torso; (P3) CHAR:[@B] drops half a level along the wall and struggles to hold balance while CHAR:[@A] remains forward and dominant -> resulting in a wall-impact aftermath, not a second follow-up attack.`
-    - **Rule Pairing**: 仅限 `Level 3`。必须同时满足：`Shot Logic` 明确写击飞撞墙、`Start Frame` 给出人与墙的空间关系、`End Frame` 落到撞墙后的稳定或可承接状态。
+    - **Rule Pairing**: 仅限 `Level 3`；必须同时满足 `Shot Logic` 写清撞墙事件、`Start Frame` 写清人与墙关系、`End Frame` 落到可承接状态。
   - **Template 4: Throw / Slam Without Chaos (摔投/砸地但不失控, Level 3 或受控 Level 2)**
-    - **Use When**: 擒抱、过肩摔、砸地，需要重量感与身体控制。
+    - **Use When**: 擒抱、过肩摔、砸地，需要重量感和控制感。
     - `Video Content`: `**{Viewpoint Movement}**: compact circular follow around the pivot, then downward settle. **Action**: (P1) CHAR:[@A] secures body control at CHAR:[@B]'s upper torso and hip line, loading the throw with a clear weight drop and turn through the core; (P2) CHAR:[@B] is redirected over the pivot in one continuous arc and hits the ground with a heavy back or shoulder impact, dust lifting in a short burst at contact; (P3) CHAR:[@A] stays attached only long enough to complete control, then releases into a grounded finishing stance -> resulting in a single completed slam event, not a rolling scramble.`
-    - **Rule Pairing**: 若只是摔倒到地面且位移有限，可按加强版 `Level 2`；若涉及明显抛投轨迹、砸向地面或大幅失位，则按 `Level 3`。
+    - **Rule Pairing**: 位移有限的摔倒可按加强版 `Level 2`；明显抛投、砸地或大幅失位按 `Level 3`。
   - **Template 5: Furious Exchange But Still Bounded (激情连打但受控, Level 2)**
-    - **Use When**: 要体现热血、爆发、连续压制，但不希望模型乱补太多招。
+    - **Use When**: 要体现热血爆发和连续压制，但不希望扩写成多回合乱战。
     - `Video Content`: `**{Viewpoint Movement}**: handheld forward pressure with short rebounds on each contact beat. **Action**: (P1) CHAR:[@A] surges in with relentless forward pressure, shoulders rolling through a compact burst of two to three tightly connected strikes while keeping the centerline readable; (P2) CHAR:[@B] absorbs, blocks, and gives ground in fragments, head and torso jolting under pressure as footing breaks into staggered recovery steps; (P3) the exchange ends with both fighters still upright but breathing hard, distance partially reopened and momentum unresolved -> resulting in high passion and impact without inventing a launch or environmental destruction.`
-    - **Rule Pairing**: 适合“力量与激情”但不想失控的镜头。允许连续压制感，但必须把“2-3 tightly connected strikes”视为**同一段攻势**，不得被模型扩写成完整多回合战斗。
-  - **Weapon Combat Safe Templates (兵器战安全模板)**：兵器战默认强调“线路清晰、接触点明确、力道足但结果受控”。除非命中 `Level 3` 授权，否则兵器战也默认只到 `Level 2`。
+    - **Rule Pairing**: 归入 `Level 2`；`2-3 tightly connected strikes` 视为同一段攻势，不得扩写成完整多回合战斗。
+  - **Weapon Combat Safe Templates (兵器战安全模板)**：默认强调线路清晰、接触点明确、力道足但结果受控；未命中 `Level 3` 时默认只到 `Level 2`。
   - **Template 6: Sword Cut Checked by Guard (刀剑斩击受控硬碰, Level 2)**
-    - **Use When**: 单刀、长剑、双剑的强力劈斩或横斩，需要明显杀伤意图和速度感，但不需要飞人或大破坏。
+    - **Use When**: 刀剑强力劈斩或横斩，需要狠、快、重，但不需要飞人或大破坏。
     - `Video Content`: `**{Viewpoint Movement}**: side follow with a short forward press at edge contact, then immediate settle. **Action**: (P1) CHAR:[@A] commits a forceful cut from shoulder line with hips and back driving through the blade path, edge travelling fast and clean across the centerline; (P2) CHAR:[@B] catches the attack on a reinforced guard, steel biting into steel with a tight spark snap and visible arm recoil as stance compresses under the load; (P3) both blades separate only enough to rebuild threatening distance, shoulders still tense and forward -> resulting in a powerful weapon beat, not weapon breakage or body launch.`
-    - **Rule Pairing**: 适合“狠、快、重”的刀剑交锋。允许 spark snap、arm recoil、stance compression；**禁止**默认写成断兵器、震飞对手、墙体爆裂。
+    - **Rule Pairing**: 可写 `spark snap`、`arm recoil`、`stance compression`；禁止默认写成断兵器、震飞对手或墙体爆裂。
   - **Template 7: Spear Thrust Driving Opponent Back (长枪刺击逼退, Level 2)**
-    - **Use When**: 长枪、长矛、长柄兵器需要体现穿透感与压迫距离。
+    - **Use When**: 长枪、长矛、长柄兵器需要体现穿透感与控距压迫。
     - `Video Content`: `**{Viewpoint Movement}**: straight retreat to keep the thrust line readable, then hold on recovery. **Action**: (P1) CHAR:[@A] steps in behind the rear leg and drives a long spear thrust directly through the center corridor, upper body and rear hand fully extending behind the point; (P2) CHAR:[@B] knocks the shaft slightly off-line but still gets forced backward one short step as the weapon pressure folds the torso and breaks stance shape; (P3) CHAR:[@A] checks the forward surge before overcommitting, spear line staying threatening while CHAR:[@B] rebuilds guard at the new distance -> resulting in clear pressure gain without turning the thrust into a launch event.`
-    - **Rule Pairing**: 长枪的力量感主要来自“线路压迫 + 逼退 + 控距”，不是默认来自击飞。
+    - **Rule Pairing**: 力量感来自“线路压迫 + 逼退 + 控距”，不是默认击飞。
   - **Template 8: Staff Sweep and Body Shock (棍棒横扫与身体震荡, Level 2 / 特殊时可升 Level 3)**
-    - **Use When**: 长棍、齐眉棍、重棒横扫，需要体现骨感重量与横向破坏力。
+    - **Use When**: 长棍、齐眉棍、重棒横扫，需要体现骨感重量与横向冲击。
     - `Video Content`: `**{Viewpoint Movement}**: waist-height lateral sweep matching the staff arc, then quick settle. **Action**: (P1) CHAR:[@A] whips the staff across with both hands locked and hips snapping hard into the swing, the strike path carrying obvious body weight rather than a loose flourish; (P2) the blow crashes into CHAR:[@B]'s guard or torso line with a bone-heavy shock that twists shoulders and knocks footing off-line, forcing a rough one-step stagger with dust scraping from the planted foot; (P3) CHAR:[@A] finishes the arc and regains grounded stance while CHAR:[@B] absorbs the aftershock and tries to square up again -> resulting in punishing impact without automatic launch.`
-    - **Rule Pairing**: 默认按 `Level 2` 写“震荡、扭身、一步踉跄”。只有当剧本明确要求“棍扫飞撞墙/砸落”时，才可升级 `Level 3`。
-  - **Multi-Person Melee Safe Templates (多人混战/围攻安全模板)**：多人动作默认优先保证“主动作主体清晰 + 次要角色不抢戏 + 空间关系不乱”。除非剧本明确要求群体失控或大规模破坏，否则多人镜头也必须把结果限制在当前主事件内。
+    - **Rule Pairing**: 默认按 `Level 2` 写“震荡、扭身、一步踉跄”；只有剧本明确要求“棍扫飞撞墙/砸落”时才可升 `Level 3`。
+  - **Multi-Person Melee Safe Templates (多人混战/围攻安全模板)**：默认保证主动作主体清晰、次要角色不抢戏、空间关系不乱；未被剧本明确授权时，结果必须限制在当前主事件内。
   - **Crowd Control Rule (多人镜头控制规则, 强制)**：同一 `Video Content` 中必须明确区分 `primary actor`、`primary receiver`、`secondary threats`。次要角色只允许提供压迫、包夹、牵制或短促反应，**不得**各自展开独立完整动作链。
+  - **Dual-Response Combat Rule (双人动作双响应, 强制)**：如果镜头里是两人近身交互，不论谁是主攻方，另一方都必须给出明确的受力、格挡、闪避、后撤、反压或重心变化；禁止出现“一人打一套，另一人只是站着被看见”的写法。
+  - **Attacker Aftermath Rule (施力者收势强制, 强制)**：双人交互中，除了受力方的反应链，施力方也必须写出命中后的收势、前压、重心回收、继续逼近、架势重组或停顿观察之一；禁止只写受击方后退，而施力方在命中后从描述中消失。
   - **Template 9: One-vs-Many Pressure Ring (一对多围压, Level 2)**
-    - **Use When**: 主角被多人围住，需要强烈压迫感和连续威胁，但不想变成所有人同时乱打。
+    - **Use When**: 主角被多人围住，需要强压迫和连续威胁，但不想变成所有人同时乱打。
     - `Video Content`: `**{Viewpoint Movement}**: tight circular drift around the primary fighter, then short settle on the open lane. **Action**: (P1) CHAR:[@A] holds center while two or more opponents tighten the ring, shoulders low and weapons or fists threatening from staggered angles without all committing at once; (P2) one primary attacker breaks in and forces the main exchange, CHAR:[@A] turns sharply to meet that line while the outer attackers hesitate, feint, or check distance rather than launching separate full attacks; (P3) CHAR:[@A] creates a narrow escape lane with one decisive counter and the ring briefly loosens -> resulting in high pressure geography with only one readable primary clash.`
-    - **Rule Pairing**: 多人镜头里只允许一个“主接触事件”。其余敌人只能做 `feint`, `close in`, `check step`, `guard shift`, `hesitation` 这类二级动作。
+    - **Rule Pairing**: 多人镜头只允许一个“主接触事件”；其余敌人只能做 `feint`、`close in`、`check step`、`guard shift`、`hesitation` 等二级动作。
   - **Template 10: Sequential Gang Rush, Not Chaos (轮次围攻而非群魔乱舞, Level 2)**
-    - **Use When**: 多人连续冲上来，想要热血节奏感，但避免模型把所有人同时打成一团。
+    - **Use When**: 多人连续冲上来，要热血节奏，但避免所有人同时打成一团。
     - `Video Content`: `**{Viewpoint Movement}**: forward-and-back pressure matching the lead attacker, then stabilize on the defended center. **Action**: (P1) the lead opponent rushes first with explosive intent while the second and third attackers stack behind on staggered timing; (P2) CHAR:[@A] intercepts the lead attack with a compact heavy counter that breaks the first wave's balance, forcing the trailing attackers to check speed and adjust lines instead of colliding all at once; (P3) the second wave begins to re-enter only as the first exchange resolves -> resulting in a sequential gang attack rhythm, not simultaneous unreadable chaos.`
-    - **Rule Pairing**: 适合“多人很凶、节奏很燃”的镜头。关键是“分波次进入”，不是所有人同一拍同时完成大动作。
+    - **Rule Pairing**: 关键是“分波次进入”，不是所有人同一拍同时完成大动作。
   - **Template 11: Multi-Person Knockback With Protected Focus (多人受力但焦点受控, Level 2 / Level 3 by authorization)**
-    - **Use When**: 主角一招逼退多人，想要强烈爽感，但不想让模型把所有人都炸飞。
+    - **Use When**: 主角一招逼退多人，要爽感，但不想把所有人都炸飞。
     - `Video Content`: `**{Viewpoint Movement}**: short pull-back to keep the front line and rear line visible, then hold on aftermath. **Action**: (P1) CHAR:[@A] releases one decisive forward burst into the nearest opponent, force travelling cleanly through the front line; (P2) the primary receiver is driven back hard while adjacent opponents recoil only by posture break, short retreat steps, or raised guards, giving the impression of shared pressure without every body launching through space; (P3) the formation opens unevenly and CHAR:[@A] stands in the created gap -> resulting in a dominant multi-person beat with one main receiver and controlled secondary reactions.`
-    - **Rule Pairing**: 默认只授权“一个主受力者 + 周围角色短促后退/抬手防御”。若要写成多人齐飞或撞飞多人，必须命中 `Level 3` 且有明确场面设定支持。
-  - **Monster / Giant Creature Safe Templates (妖兽/巨体怪物安全模板)**：妖兽与巨体攻击的力量感主要来自“体量差、惯性、压迫、接触后余势”，而不是默认每一下都造成大爆炸。只有当剧本明确给出毁墙、砸地、掀翻整片场景时，才升级到大破坏结果。
+    - **Rule Pairing**: 默认只授权“一个主受力者 + 周围角色短促后退/抬手防御”；多人齐飞或撞飞多人必须命中 `Level 3` 且有明确场面设定支持。
+  - **Monster / Giant Creature Safe Templates (妖兽/巨体怪物安全模板)**：力量感主要来自体量差、惯性、压迫和接触后余势，而不是默认每一下都大爆炸；只有剧本明确授权时才升级到大破坏。
   - **Scale Translation Rule (体量转译规则, 强制)**：怪物越大，动作越要写清 `weight`, `delay`, `follow-through`, `aftershock`。大体量不是“更乱”，而是“更重、更慢起、更难停住”。
   - **Template 12: Beast Pounce and Near-Miss Shock (妖兽扑击与擦身压迫, Level 2)**
-    - **Use When**: 猛兽、妖兽、狼型/虎型怪物扑击，需要强压迫和惊险感，但不一定命中主角。
+    - **Use When**: 猛兽、妖兽、狼虎型怪物扑击，需要强压迫和惊险感，但不一定命中主角。
     - `Video Content`: `**{Viewpoint Movement}**: rapid retreat with a downward dip as the beast crosses the frame, then immediate re-level. **Action**: (P1) the beast coils low with visible shoulder and spine compression before exploding forward in a full-body pounce; (P2) CHAR:[@A] evades by a narrow margin as claws or body mass tear through the previous space, dust and grit lifting in a tight burst under the landing weight; (P3) the creature skids half a body length and turns back with predatory momentum still carrying through the shoulders -> resulting in violent pressure and weight without inventing a direct hit.`
-    - **Rule Pairing**: 适合“怪物很猛但主角这拍没中招”。力量感来自扑击惯性和落地重量，不来自爆炸特效。
+    - **Rule Pairing**: 力量感来自扑击惯性和落地重量，不来自爆炸特效。
   - **Template 13: Giant Arm Slam / Paw Smash (巨体砸击, Level 2 / Level 3 by authorization)**
     - **Use When**: 巨兽前爪、巨臂、巨尾砸地或砸向主角，需要明显体量与震感。
     - `Video Content`: `**{Viewpoint Movement}**: low anchored hold with a hard reactive shake at impact, then slow settle. **Action**: (P1) the giant limb rises with visible delay and immense load, gathering force through the shoulder or torso before dropping in a crushing downward arc; (P2) impact hits with massive weight, throwing up a short dense burst of dust and forcing CHAR:[@A] into a desperate guard, sidestep, or stumble as the shock travels through the ground; (P3) the creature needs a heavy recovery beat to lift or drag the limb clear again -> resulting in overwhelming mass and aftershock, not automatic area-wide destruction.`
-    - **Rule Pairing**: 默认写“重压、震动、局部扬尘、主角失衡”。若要写成地面开裂大范围、墙体坍塌、多人掀飞，必须 `Level 3` 授权。
+    - **Rule Pairing**: 默认写“重压、震动、局部扬尘、主角失衡”；地面大范围开裂、墙体坍塌、多人掀飞必须 `Level 3` 授权。
   - **Template 14: Monster Bite / Grab Threat (噬咬或擒抱威胁, Level 2)**
     - **Use When**: 怪物张口咬击、爪抓、口器逼近，需要高危险感，但结果以“险中躲开/短暂制住”为主。
     - `Video Content`: `**{Viewpoint Movement}**: short push toward the mouth or claw line, then snap sideways to preserve escape direction. **Action**: (P1) the creature surges in with jaws or claws opening wide, momentum driving straight through the target lane with predatory commitment; (P2) CHAR:[@A] barely slips or braces against the grab line, body twisting under the pressure as cloth, hair, or debris gets caught in the near-contact zone; (P3) the creature overshoots or clamps down short while CHAR:[@A] breaks free into a narrow surviving gap -> resulting in lethal threat and strong physicality without forcing a full mauling event.`
-    - **Rule Pairing**: 这类镜头重点是“死亡威胁贴脸”，不是默认把角色直接吃飞、咬断、拖走。
+    - **Rule Pairing**: 重点是“死亡威胁贴脸”，不是默认把角色直接吃飞、咬断或拖走。
   - **Template 15: Giant Tail / Sweep Sending Target Off-Line (巨尾横扫失位, Level 2 / Level 3 特殊事件)**
     - **Use When**: 巨尾或巨型躯体横扫，需要横向破坏力和大幅失位感。
     - `Video Content`: `**{Viewpoint Movement}**: wide lateral track matching the sweep vector, then settle on the displaced target. **Action**: (P1) the tail or body mass whips across in a broad horizontal arc, momentum clearly building through the giant torso before the sweep reaches full speed; (P2) CHAR:[@A] is forced violently off the original line, either stumbling several urgent steps or being thrown into a controlled launch path if the scene explicitly authorizes it; (P3) the tail finishes through with lingering aftershock while the target fights to recover at the new position -> resulting in a massive lateral displacement beat.`
-    - **Rule Pairing**: 默认先按“数步急退、强行站稳”处理；只有剧本明确要求，才把这一类写成 `Level 3` 的击飞撞墙或摔落事件。
-  - **Spell / Energy Attack Safe Templates (法术/能量攻击安全模板)**：法术与能量攻击默认强调“蓄势、释放、命中后的一级后果”，而不是自动生成大爆炸、全屏冲击波、场景崩塌。除非命中 `Level 3` 授权，否则法术攻击默认也只到 `Level 2`。
+    - **Rule Pairing**: 默认按“数步急退、强行站稳”处理；只有剧本明确要求时才写成 `Level 3` 的击飞撞墙或摔落事件。
+  - **Spell / Energy Attack Safe Templates (法术/能量攻击安全模板)**：默认强调蓄势、释放和命中后的一级后果，而不是自动生成大爆炸、全屏冲击波或场景崩塌；未命中 `Level 3` 时默认只到 `Level 2`。
   - **Magic Consequence Control (法术结果控制, 强制)**：
     - **Level 1 equivalent**：小型术法、牵制型能量、束缚或轻击，只允许 `flash`, `stun`, `brief recoil`, `short displacement`, `temporary stagger`。
     - **Level 2 equivalent**：强法术命中、明显冲击、能量对撞，可写 `bright impact bloom`, `torso recoil`, `guard collapse`, `one-step knockback`, `localized dust/debris lift`。
@@ -404,54 +412,54 @@
   - **Template 16: Charged Palm / Short-Range Spell Impact (近距掌劲/短距法术命中, Level 2)**
     - **Use When**: 近距离法术、掌劲、内力或短距能量打击，需要明显能量感，但不需要炸穿场景。
     - `Video Content`: `**{Viewpoint Movement}**: short push into the release, then recoil slightly at impact and settle. **Action**: (P1) CHAR:[@A] gathers visible force into the striking hand or core line, breath and posture tightening as light or energy condenses without overfilling the frame; (P2) the strike or short-range spell releases directly into CHAR:[@B] with a sharp flash and dense impact bloom, folding CHAR:[@B]'s torso and breaking stance by half-step to one-step knockback; (P3) the glow dissipates quickly as CHAR:[@A] holds structure and CHAR:[@B] struggles to re-center balance -> resulting in a powerful magical hit, not a scene-wide blast.`
-    - **Rule Pairing**: 适合“法术有劲、命中有光效、角色有明显受力”。**禁止**默认升级成全屏爆炸或击飞撞墙。
+    - **Rule Pairing**: 可写“法术有劲、命中有光效、角色有明显受力”；禁止默认升级成全屏爆炸或击飞撞墙。
   - **Template 17: Beam / Energy Line Driving Pressure (光束/能量线压制, Level 2)**
     - **Use When**: 光束、气劲直线输出、能量炮线，需要体现持续压迫和命中路径。
     - `Video Content`: `**{Viewpoint Movement}**: retreat along the beam axis to keep source, target, and line readable, then hold on the strained endpoint. **Action**: (P1) CHAR:[@A] locks stance and releases a concentrated energy line straight through the target corridor, the beam staying coherent rather than blooming into a full explosion; (P2) CHAR:[@B] braces or guards against the pressure, shoulders and torso shaking under the sustained force as boots drag backward a short distance and defensive posture starts to fail; (P3) the beam thins or cuts off before total collapse, leaving CHAR:[@B] staggered and smoking or glowing at the contact zone -> resulting in line-pressure dominance, not uncontrolled detonation.`
-    - **Rule Pairing**: 光束镜头的重点是“路径清楚 + 持续压迫 + 命中区域后效”，不是默认炸开整个环境。
+    - **Rule Pairing**: 重点是“路径清楚 + 持续压迫 + 命中区域后效”，不是默认炸开整个环境。
   - **Template 18: Spell Clash / Energy Collision (法术对撞, Level 2 / Level 3 by authorization)**
-    - **Use When**: 双方法术或能量正面对撞，需要高张力和视觉高潮，但不想模型一律做成核爆。
+    - **Use When**: 双方法术或能量正面对撞，需要高张力和视觉高潮，但不想一律做成核爆。
     - `Video Content`: `**{Viewpoint Movement}**: stable centered hold with slight vibration at the collision core, then controlled pull-back if pressure grows. **Action**: (P1) both casters drive force forward into a single collision point, light and energy compressing into a violently unstable knot between them; (P2) the clash spits sparks, short arcs, or debris-sized magical fragments while both bodies strain against the push, footing slipping in fragments rather than flying apart instantly; (P3) the balance tips toward one side and the losing caster is forced backward or off-line while the collision core collapses inward -> resulting in a decisive magical overpower beat, not an automatic arena-wide explosion.`
-    - **Rule Pairing**: 对撞可以很燃，但默认应是“压制分胜负”，不是“大爆炸吞没全场”。只有剧本明确要求，才升级 `Level 3` 的大范围爆裂。
+    - **Rule Pairing**: 默认应是“压制分胜负”，不是“大爆炸吞没全场”；只有剧本明确要求时才升级 `Level 3` 的大范围爆裂。
   - **Template 19: Binding / Pulling Magic Under Tension (束缚/牵引法术, Level 1 到受控 Level 2)**
-    - **Use When**: 锁链、藤蔓、灵丝、引力、念力牵制这类“控制型”法术，需要强张力但不是爆破型结果。
+    - **Use When**: 锁链、藤蔓、灵丝、引力、念力牵制这类控制型法术，需要强张力但不是爆破型结果。
     - `Video Content`: `**{Viewpoint Movement}**: slow inward pressure on the restrained body line, then hold on struggle. **Action**: (P1) the binding force snaps into place around CHAR:[@B]'s limbs, torso, or weapon line with a clear tightening pull; (P2) CHAR:[@B] strains violently against the restraint, muscles and posture fighting the drag while footing shifts and the body gets pulled partially off the original line; (P3) the restraint either holds or loosens at one key point, creating a tense near-break rather than a full explosive release -> resulting in powerful magical control without inventing a blast event.`
-    - **Rule Pairing**: 这类镜头的力量感来自“被拽、被锁、快断但未断”的张力，而不是爆炸。
+    - **Rule Pairing**: 力量感来自“被拽、被锁、快断但未断”的张力，而不是爆炸。
   - **Template 20: Large-Scale Magic Destruction Event (大型法术破坏事件, Level 3 特殊事件)**
     - **Use When**: 剧本明确要求法术轰塌墙体、炸裂地面、掀翻多人或形成明显大范围破坏。
     - `Video Content`: `**{Viewpoint Movement}**: rapid pull-back to preserve the blast radius, then stabilize on the destruction aftermath. **Action**: (P1) CHAR:[@A] finishes a fully committed large-scale spell release, energy mass expanding with clear direction and target geography rather than erupting abstractly everywhere; (P2) the spell hits and tears through the authorized structure or impact zone, blasting stone, dust, or magical debris outward while primary receivers are thrown along readable paths; (P3) the destructive wave spends itself and the frame settles on the damaged environment and displaced bodies -> resulting in a major magical destruction event with bounded geography.`
-    - **Rule Pairing**: 仅限 `Level 3`。必须同时满足：剧本明确要大破坏、`Shot Logic` 写清破坏范围与主受力者、`Start/End Frame` 明确给出被毁区域与结果状态。
+    - **Rule Pairing**: 仅限 `Level 3`；必须同时满足剧本明确要大破坏、`Shot Logic` 写清破坏范围与主受力者、`Start/End Frame` 给出被毁区域与结果状态。
 
 ### 3. 悬疑惊悚 (Suspense & Thriller)
-- **Core Logic**: "Information Control & Isolation". 让观众知道的比角色多（Tension）或少（Surprise）。
+- **Core Logic**: "Information Control & Isolation". 通过信息差制造紧张或惊吓。
 - **Advanced Technical Planning (高级规划)**:
-  - **Dolly Zoom (Vertigo)**: 当角色意识到恐怖真相时使用。Video Content 描述 "Move viewpoint back while zooming in -> Background compresses while Subject scale stays constant".
-  - **Orbit / Arc (Perspective)**: 角色被包围或困惑时。Viewpoint 做 full-circle 环绕，缓慢揭示周围环境的暗处威胁。
-  - **POV (Perspective)**: 采用第一人称主观视角从遮挡后观察主角（只描述视角位置与观察方向，不标注观察者身份名称）。
+  - **Dolly Zoom (Vertigo)**: 角色意识到恐怖真相时使用；Video Content 写 `Move viewpoint back while zooming in -> Background compresses while Subject scale stays constant`.
+  - **Orbit / Arc (Perspective)**: 角色被包围或困惑时使用 full-circle 环绕，缓慢揭示周围暗处威胁。
+  - **POV (Perspective)**: 用第一人称主观视角从遮挡后观察主角，只描述视角位置与观察方向，不标注观察者身份名称。
 - **Visual Style**: 强调负空间 (Negative Space) 与极端光比 (Chiaroscuro)。
 
 ### 4. 史诗场景 (Epic & Scale)
-- **Core Logic**: "Scale & Contrast". 巨大环境 vs 渺小个体。
+- **Core Logic**: "Scale & Contrast". 用巨大环境与渺小个体的反差建立尺度感。
 - **Advanced Technical Planning (高级规划)**:
-  - **Crane / Jib (Perspective)**: 展示宏大。Start Frame 为上帝视角 (God's Eye)，Video Content 描述相机垂直下降 (Crane Down) 从高位到视平线 (Eye Level)；或反之。
-  - **Z-Axis Blocking**: 利用纵深。让军队或人群从地平线深处涌向镜头极近处，最大化利用 Z 轴空间。
+  - **Crane / Jib (Perspective)**: 用于展示宏大；Start Frame 可为上帝视角，Video Content 描述 `Crane Down` 从高位到视平线，或反向上升。
+  - **Z-Axis Blocking**: 利用纵深，让军队或人群从地平线深处涌向镜头近处，最大化使用 Z 轴空间。
   
 ### 5. 蒙太奇与心理 (Montage & Psychological)
-- **Core Logic**: "Rhythm & Distortion". 表现非现实状态。
+- **Core Logic**: "Rhythm & Distortion". 用节奏与形变表现非现实状态。
 - **Advanced Technical Planning (高级规划)**:
-  - **Snorricam Style**: 描述 "Viewpoint rigged to character body, background rotates violently while face remains static".
-  - **Graphic Match**: 上一镜的 End Frame 形状（如圆形时钟）必须与本镜的 Start Frame 形状（如圆形盘子）在几何构图上重合 (Match)。
+  - **Snorricam Style**: 描述 `Viewpoint rigged to character body, background rotates violently while face remains static`.
+  - **Graphic Match**: 上一镜 End Frame 的几何形状必须与本镜 Start Frame 的几何形状重合。
   - **Double Exposure**: 叠化两个异质元素。
 
 ### 6. 复杂调度 (Complex Blocking)
-- **Core Logic**: "Inner Montage". 长镜头，以调度代剪辑。
-- **Planning**: 在一个镜头内完成 Wide -> Close -> Two-shot 的变化。Video Content 必须精准描述 "Subject walks into Close-up" 或 "Viewpoint Pulls Back to reveal Environment".
+- **Core Logic**: "Inner Montage". 用长镜头调度代替剪辑。
+- **Planning**: 在一个镜头内完成 `Wide -> Close -> Two-shot` 的变化；Video Content 必须精准描述 `Subject walks into Close-up` 或 `Viewpoint Pulls Back to reveal Environment`.
 
 ### 7. 视觉转场 (Visual Transition Focus)
-- **Core Logic**: "Seamless Connection". 场景连接处的平滑过渡。
+- **Core Logic**: "Seamless Connection". 强调场景连接处的平滑过渡。
 - **Advanced Technical Planning (高级规划)**:
-  - **Match Cut (Graphic/Action)**: 几何形状或动作方向的匹配。**Rule**: 本镜 End Frame 的视觉重心必须与下一镜 Start Frame 重合。
-  - **Object Wipe (Foreground)**: 利用前景物体遮挡实现自然转场。Video Content 必须描述 "Object passes foreground completely obscuring lens for 0.5s -> Cut point".
+  - **Match Cut (Graphic/Action)**: 匹配几何形状或动作方向；本镜 End Frame 的视觉重心必须与下一镜 Start Frame 重合。
+  - **Object Wipe (Foreground)**: 利用前景物体遮挡实现自然转场；Video Content 必须描述 `Object passes foreground completely obscuring lens for 0.5s -> Cut point`.
 
 ## 三、镜头输出规范 (Shot Output Rules)
 表格字段定义、画面描述规范与粒度控制。
@@ -469,6 +477,7 @@
   - **中文提示词四列强制（4 CN Columns, 强制）**：必须输出四个独立中文列：`Start Frame (CN)` / `Video Content (CN)` / `Keyframes (CN)` / `End Frame (CN)`；禁止再使用单列 `Prompt (CN)` 汇总。
   - **关键帧显式化（Keyframes Explicit, 强制）**：`Keyframes (CN)` 列必须始终出现；若 `Keyframes` 列为 `NO`，则 `Keyframes (CN)` 必须写 `NO`；若 `Keyframes` 列存在内容，则中文必须逐条翻译该列内容，不得省略。
   - **中英一致性强约束（Translation-Only, 强制）**：四个中文列必须严格对应英文四字段内容，仅做翻译，不得新增、删减、改写或重排语义。
+  - **主体命名锁定（Subject Name Lock, 强制）**：中文四列中凡出现 `subjects` / 角色主体名 / 说话主体名时，必须严格沿用输入提供的原始名字与写法，不得中文化、音译、意译、起别名，也不得替换成“甲/乙/主角/男主/女主”等泛称；若英文列使用 `CHAR:[@Name]`，中文列中该主体名也必须保持同一 `Name`。
   - **结构一致性（Structure Lock, 强制）**：四个中文列必须与 `Start Frame -> Video Content -> Keyframes -> End Frame` 一一对应；英文中的镜头语法标签、层次关系、实体集合、动作阶段、镜头运动与时序在中文中必须逐项对应。
   - **信息守恒（Content Parity, 强制）**：英文中出现的关键约束（如镜头方向、景别、机位、光效、构图、动作数量/阶段、实体引用）在中文列中必须完整保留；中文禁止加入英文中不存在的新创意描述。
   - **翻译过程声明（Translation Process, 强制）**：先完成英文四字段（`Start Frame` / `Video Content` / `Keyframes` / `End Frame`），再对这四字段分别翻译填入四个中文列；禁止先写中文再反推英文。
@@ -511,26 +520,22 @@
     - **Rule: Entity List Closure**：完成整行输出前，执行 **三-1 Associated Entities 闭环 (Entity Closure)** 的清单核对（以该段为唯一权威标准）。
 
 #### A. 分镜类型判别 (Shot Type Classification)
-- **定义**：在生成具体的画面描述前，必须先评估动作复杂度，决定采用何种生成模式。这直接决定了 **Keyframes** 字段的填写方式。
 - **1. Single Frame (Keyframe Only)**:
-  - **适用范围**：极短、完全静止或强调瞬间状态的镜头。
-  - **Keyframes 输出**：填写 "NO"。
+  - 极短、完全静止或强调瞬间状态的镜头；`Keyframes` 填写 `NO`。
 - **2. Standard Video (Start/End)**:
-  - **适用范围**：**默认类型**。适用于大多数线性动作 (Linear Action) 的镜头。
-  - **Keyframes 输出**：填写 "NO"。
+  - 默认类型，适用于大多数线性动作镜头；`Keyframes` 填写 `NO`。
 - **3. Multi-Keyframe Video (Complex Action)**:
-  - **适用范围**：长镜头或包含**多阶段转折** (Multi-stage Action) 的动作。例如：角色先坐下，再喝水，最后站起。
-  - **Keyframes 输出**：必须生成中间的关键帧描述。
+  - 适用于长镜头或包含多阶段转折的动作；必须生成中间关键帧描述。
   - **Keyframe Full Description Logic (关键帧全量描述逻辑)**：
-  - **核心原则**：同 **二-0 独立描述原则**：每个 Keyframe 都必须是**自包含、完整的视觉描述** (Self-Contained Full Description)，严禁任何增量/差分写法 (No Delta Description)。
+  - 同 **二-0 独立描述原则**：每个 Keyframe 都必须是自包含、完整的视觉描述，严禁增量/差分写法。
       - **Format**: `{Time: XXs} [Global Style]... **{Viewpoint Anchor}**: ... **{Viewing Direction}**: ... **{Viewpoint Setup}**: ...`
       - **Separator**: Multiple keyframes must be separated by a double newline `\n\n`.
-      - **Requirements**: 必须完整定义该时刻的构图、机位、图层及角色状态，确保单帧生图质量独立于其他帧。格式必须与 **Start Frame** 完全一致。
+      - **Requirements**: 必须完整定义该时刻的构图、机位、图层及角色状态，格式与 **Start Frame** 保持一致。
 
 #### B. 静态维度 (Start Frame 描述)
 - **定义**：明示动作开始瞬间的机位、焦段、构图与主体状态。此部分**仅描述起始状态 (T=0s)**，不包含任何动作或结果。
 - **SAP 特殊输出规则（高优先级覆盖）**：
-  - 若根据 **一-6 SAP Start Frame Protocol** 判定可复用上一镜尾帧，则本镜 `Start Frame` 只输出 `SAP`。
+  - 若根据 **SAP Start Frame Protocol（首帧复用协议）** 判定可复用上一镜尾帧，则本镜 `Start Frame` 只输出 `SAP`。
   - `SAP` 仅可用于同一 Scene 的第 2 镜及之后；该 Scene 第 1 镜禁止使用 `SAP`。
   - 一旦使用 `SAP`，本节其余 Start Frame 描述要求对该镜头不再展开（无需重复写机位/构图/层级文本）。
 - **非SAP严禁 "Same as" (Strictly Forbidden)**：同 **二-0 独立描述原则**，禁止任何 “Same as/Continued/Unchanged/See previous” 之类的省略写法。
@@ -542,9 +547,6 @@
     - **{Viewpoint Setup}**：只描述镜头形态（景别/角度/构图稳定性），不承载位置或朝向。
   - **Environment-Relative (环境基准)**：机位描述必须以 **[Environment Anchor]** 为坐标系，绝对位置固定（如 "Near the north window"），严禁仅使用 "Behind character" 等相对描述。即使是跟拍，也要说明 "Tracking character along the corridor walls"。
   - **格式**：`{Viewpoint Anchor}: Placed at {Specific Location in Env}. {Viewing Direction}: Facing {Cardinal Direction/Target}. {Viewpoint Setup}: {Shot Size/Angle/Framing}.`
-  - **例如**：
-    - GOOD: `{Viewpoint Anchor}: At the alley entrance in Dark Alley. {Viewing Direction}: Front-facing toward Kael. {Viewpoint Setup}: Medium Shot, Eye-level, Rule of Thirds.`
-    - BAD: `Placed behind {@Subject}.`
   - **初始锚定原则**：此处定义的是**动作开始时**的机位。Video Content 的运镜必须由此出发。
 - **必须包含 (Mandatory Elements)**：
   - **[Global Style]**：所有描述必须以 `[Global Style]` 开头。
@@ -555,13 +557,9 @@
     - 禁止模糊词：如 `facing sideways`、`turned a bit`、`angled`、`partially facing` 等不可判定表达。
   - **{Shot Description}**: 必须包含 **Focal Length** (焦距), **Framing** (景别) 和 **Angle** (角度)。
   - **{Image Fidelity}**: 必须包含 **Noise/Grain 控制** 与 **Anti-Copy 约束**（继承 reference 的身份锚点，但重构构图/光线/姿态，禁止复制粘贴参考图构图）。
-  - **{Single-Canvas Guard}**: 必须显式或等效表达“single-canvas, no split-screen, no collage, no tiled duplication”。  - **主体引用单一性 (Subject Reference Singularity, 强制 — 防二宫格核心规则)**：
-    - **原理**：系统会对提示词中**每一个** `CHAR:[@Name]` / `ENV:[Name]` / `PROP:[Name]` 方括号引用自动注入该实体的完整外观锚点描述。若同一角色在提示词中出现多次方括号引用，虽然系统已在代码层做了去重保护（同一实体只注入一次完整描述），但方括号引用本身的文本重复仍会增加 token 噪声并占用 prompt 空间，降低生图质量。
-    - **硬规则**：每个实体的 `CHAR:[@Name]` / `ENV:[Name]` / `PROP:[Name]` **在同一个生图提示词**（Start Frame / End Frame / Keyframe）中**只能出现一次方括号引用**，且该次出现必须在 **Layers 层级描述区**（即 `{Midground}` / `{Foreground}` / `{Background}` 内的主体描述处）。
-    - **Viewpoint Anchor / Viewing Direction 中禁用方括号引用**：在 `{Viewpoint Anchor}` 和 `{Viewing Direction}` 字段中提及实体时，**必须使用纯文本名称**（不加方括号、不加 `CHAR:` / `ENV:` 前缀），避免触发重复注入。
-      - `{Good}`: `**{Viewpoint Anchor}**: About two strides from Kael, at the alley entrance inside Dark Alley`
-      - `{Bad}`: `**{Viewpoint Anchor}**: About two strides from CHAR:[@Kael], at the alley entrance inside ENV:[Dark Alley]` ← 导致 Kael 和 Dark Alley 各多注入一次外观描述
-    - **唯一例外**：`[Global Style]` 不触发实体注入，可正常使用。  - **{Style Mapping Note}**：必须声明该镜头采用的风格映射（至少 1 句），说明为何使用当前光照/焦距/颗粒组合；真人剧需强调写实质感控制。
+  - **{Single-Canvas Guard}**: 必须显式或等效表达“single-canvas, no split-screen, no collage, no tiled duplication”。
+  - **主体引用单一性 (Subject Reference Singularity, 强制 — 防二宫格核心规则)**：每个实体的 `CHAR:[@Name]` / `ENV:[Name]` / `PROP:[Name]` 在同一个生图提示词（Start Frame / End Frame / Keyframe）中只能出现一次方括号引用，且必须放在 **Layers** 区；`{Viewpoint Anchor}` 与 `{Viewing Direction}` 中提及实体时必须使用纯文本名称，不加方括号或类型前缀。唯一例外是 `[Global Style]`。
+  - **{Style Mapping Note}**：必须声明该镜头采用的风格映射（至少 1 句），说明为何使用当前光照/焦距/颗粒组合；真人剧需强调写实质感控制。
   - **主角布光加权 (Lead Lighting Weighting)**：当主叙事主体为主角时，按「一-1 主角美化布光优先」规则执行。
   - **光影与色调 (Lighting & Color)**：严格继承 `[Global Style]` 的视觉基调。必须明确描述**光源性质**（Hard/Soft）、**光影对比度**（High key/Low key/Chiaroscuro）以及**主色调**（Color Palette）。例如：若风格为 "Neon Noir"，则描述 "Harsh neon side lighting, deep shadows, wet pavement reflections, cyan and magenta contrast"。
   - **构图法则 (Composition Technique)**：必须指定一种经典的构图方式以增强形式感。可选技法包括：**Symmetrical Composition** (对称), **Rule of Thirds** (三分法), **Leading Lines** (引导线), **Center Framed** (中心), **Frame within a Frame** (框中框), **Triangular** (三角), **Negative Space** (留白)。
@@ -571,9 +569,6 @@
       - `Human Reference`: 同句补充人类尺度（如 `about 6-7 adult strides` / `roughly 2.5 body-lengths`）。
       - `Screen Space`: 补充屏幕占比或占画幅关系（如 `both subjects fit in a Full Shot with clear gap between torsos` / `subject occupies about one-third frame height`）。
       - `Layer Relation`: 明确位于同层或跨层（如 `both in Midground` / `A in Midground, B in Background`）。
-    - **5m 推荐写法 (Copy-Ready, 用于 Layers 区内)**：
-      - `CHAR:[@A] and CHAR:[@B] remain about 5 meters apart, roughly 6-7 adult strides, both kept in Midground Full Shot with a clearly readable gap between their torsos.`
-      - `CHAR:[@A] occupies center-left midground while CHAR:[@B] is center-right midground, separated by about 5 meters (around 2.5 body-lengths).`
     - **Depth Layering (景深分层)**：强制将画面拆解为三层。
       - `{Foreground} (前景)`: 任何靠近镜头、产生虚化或遮挡的物体（e.g., "Blurred shoulder", "Raindrops", "Leaves"）。若无，填 "Empty".
       - `{Midground} (中景)`: **主要叙事区域**。主体通常在此层。
@@ -588,16 +583,12 @@
         - `Facing`: **Must be Viewer-Relative**. (e.g., "Facing Viewer", "Profile Left", "Back to Lens", "3/4 View Right").
         - `Static Pose`: Physical state at T=0. (e.g., "Arms crossed", "Leaning on wall", "Mid-stride").
         - `Expression`: Micro-expression at T=0. (e.g., "Gritted teeth", "Eyes narrowed").
-    - **Spatial Relation (相对关系)**: 
-      - 若有多主体，严禁使用坐标 (X,Y)。必须描述**视觉遮挡或相对位**。
-      - Valid: "CHAR:[@Character A] stands **slightly behind** CHAR:[@Character B]", "CHAR:[@Character A] towers over CHAR:[@Character B]", "CHAR:[@Character A] and CHAR:[@Character B] stand **shoulder to shoulder**".
-    - **Example**: `Layers: {Foreground} Out-of-focus rain. {Midground} CHAR:[@Kael] {Subject Info: Cowboy Shot (Thigh up); Rule of Thirds Left; Profile Right; Hand on holster; Gritted teeth}. {Background} ENV:[Neon signs].`
+    - **Spatial Relation (相对关系)**: 若有多主体，严禁使用坐标 (X,Y)；必须描述视觉遮挡或相对位。
   - **Sentence Structure Optimization (首帧标准句式)**:
     - **Global Formula**: `[Global Style]. **{Viewpoint Anchor}**: {plain-text position, entity names without brackets} ... **{Viewing Direction}**: {plain-text direction, entity names without brackets} ... **{Viewpoint Setup}**: ... **{Lighting}**: ... **{Composition}**: ... **Layers**: {Foreground} ... {Midground} CHAR:[@Subject Name] {Subject Info: ...} {Background} ENV:[Name] ...`
     - **方括号仅限 Layers 区**：`{Viewpoint Anchor}` 与 `{Viewing Direction}` 中的实体名称一律使用纯文本（不加 `CHAR:`/`ENV:`/`PROP:`、不加方括号）。所有方括号引用集中在 **Layers** 区，确保每个实体仅被注入一次外观描述（详见「主体引用单一性」规则）。
     - **Narrative Integration**: In the **Layers** section, enforce the "Subject IS State" sentence flow for clarity.
     - **Multi-Subject Logic**: If multiple characters act in the same layer, use explicit **Spatial Connectors** (e.g., "standing next to", "looming behind", "face-to-face with") to link their `{Subject Info}` blocks.
-    - **Example**: `[Global Style]. **{Viewpoint Anchor}**: At the alley entrance, about two strides from Kael. **{Viewing Direction}**: Front-facing toward Kael. **{Viewpoint Setup}**: Medium Shot, Eye-level. ... **Layers**: {Foreground} Empty. {Midground} CHAR:[@Kael] {Subject Info: Medium Shot; Right; Profile Left} aiming gun at CHAR:[@Ren] {Subject Info: Medium Shot; Left; Profile Right; Hands raised}. {Background} ENV:[Dark Alley].`
 - **禁止项（仅限 Start Frame 静态描述） (Strict Prohibitions, Start Frame Only)**：
   - **Rule 1 (无动作动词)**：严禁使用 run, jump, fight 等动作动词。仅能使用名词短语或状态分词描述静态画面（如 "Man in running pose" 而非 "Man runs"）。
   - **Rule 2 (禁止抽象)**：严禁 angry, messy, beautiful 等抽象形容词。必须转化为可视物理特征（如 "Furrowed brows", "Overturned chairs"）。
@@ -690,6 +681,9 @@
       *   **Writing Strategy (写作策略)**:
           - **Anticipation & Release**: Use primary beats to build cycles: `(P1) Prep phase with embedded tension details -> resulting in loaded state; (P2) Execute with micro-detail overlay -> resulting in impact/change; (P3) Recover/settle`.
           - **Natural Embedding**: Weave micro-beats as participial/subordinate clauses within primary beats instead of separate numbered items.
+          - **Impact Entry Constraint (命中切入约束, 强制)**：允许某个 Shot 以 `at the moment of impact / on contact / as the strike lands` 作为主节拍开端，但不能只写结果本身；必须在同一 Shot 内补齐“接触前最后半拍的动势来源”与“接触后承接/回收/落稳”。
+          - 若以命中瞬间切入，后文必须同时覆盖：谁的力量仍在穿透或收束、谁在吸收/后撤/防御、以及双方如何进入新的稳定或可承接状态。
+          - 禁止“从命中瞬间直接跳到结果”，中间没有施力延续与受力承接。
       *   **Examples**:
           - `{Bad}`: "(1) He runs back." (Pronoun, no speed, no ref-frame, no quant, no result).
           - `{Bad}`: "(1) A raises hand -> resulting in hand at shoulder. (2) A aims -> resulting in aim locked. (3) A fires -> resulting in recoil." (每步都写 Result，冗余且浪费 token).
@@ -714,11 +708,11 @@
         - **效果类型参考**：受力反馈（后坐/失衡/回弹）、二次运动（衣摆/烟尘/碎屑延迟）、环境反应（涟漪/震动/光影变化）。
         - 效果描述嵌入主节拍末尾（`-> resulting in` 前的修饰从句），不独立编号。
         - **Effect Ceiling (效果上限, 强制)**：效果反馈只能写**由当前动作直接可见地引发**的一级后果，禁止自动升级成更夸张的新事件。
-          - `{Bad}`: 普通拳击接触被写成 `shockwave erupts`, `storm of dust`, `target is thrown several steps away`，若剧本、Start Frame、End Frame 均未明确给出这些结果，则视为过度脑补。
-          - `{Good}`: 命中后只写 `torso jolt`, `half-step balance break`, `brief dust lift at feet`, `guard destabilizes` 这类与接触强度相称的一阶反应。
+          - `{Allowed}`: 普通拳击、掌击或能量命中可写成 `shockwave erupts`, `air distorts`, `heavy dust burst`, `target is driven back several heavy steps`，只要这些仍然属于单次接触的一阶可见后果，且首尾帧与 Shot Logic 能承接该结果。
+          - `{Bad}`: 在已有 `shockwave` 或 `heavy dust burst` 的基础上，又自动补出 `wall breach`, `chain explosion`, `multiple targets launched`, `second impact event`, `new attack round` 等未经授权的二级结果。
+          - `{Good}`: 命中后可写 `shockwave ripples through the air`, `dust tears upward from the cave floor`, `target is driven back several heavy steps`，同时把施力方收势与双方新对峙位置写清，确保结果被当前镜头闭环吸收。
         - **Script-Bounded Consequence (结果受剧本约束, 强制)**：若 Start Frame / End Frame / Shot Logic 没有明确给出“击飞、爆震、大片扬尘、显著拉开距离、额外回合”，`Video Content` 不得擅自补出这些结果。
       *   **Primary Sustain Action (核心维持动作)**: **Critical**.
-          - `{Example}: "(P1) {@Subject} eyes scanning continuously across text while finger traces lines vertically, occasional blink and slight head tilt." (Instead of just "reading").`
       *   **Continuous Flow**: 确保 `Start` 到 `End` 之间没有时间真空。
         *   **Density Guideline — Two-Tier Beat Budget (密度建议 — 双层节拍预算, 强制)**：
           - **核心认知**：当前主流视频生成模型（Kling / Runway / MiniMax / Sora 等）在 5s 内实际能可靠区分的**独立动作阶段**为 **2-3 个**。模型对全文做整体语义理解后在首尾帧间做插值，**不是按编号逐条精确执行**。因此必须采用"主节拍优先 + 微节拍补充"的双层预算。
@@ -739,8 +733,7 @@
             - **8s 打斗/对峙镜头特例**：允许采用 `P1 接触或压迫建立 -> P2 受力/回稳 -> hold` 的三段式，其中 `hold` 只负责延续余势与落稳，不得再发明新冲突。
           - 严禁为了凑数制造会改变剧情的无意义抽搐/乱动。
           - **双层示例 (5s Dialogue Shot)**：
-            - `{Good}: "(P1) CHAR:[@A] leans forward, brow tightening, lips parting with a slow exhale as gaze locks onto CHAR:[@B]; (P2) CHAR:[@A] hand rises from lap to gesture at chest level, palm open, while CHAR:[@B] chin lifts slightly and eyes narrow in response; (P3) both settle — CHAR:[@A] hand lowers, CHAR:[@B] jaw sets, shared stillness with tension held in eye contact."`
-            - 上例中 P1/P2/P3 为三个可靠执行的主阶段；面部/呼吸/手势等微节拍作为自然语言嵌入其中。
+            - 主节拍承担故事推进，面部/呼吸/手势等微节拍作为自然语言嵌入其中，不再拆成独立编号。
           - **超限裁剪优先级 (Over-Budget Trim Priority, 强制)**：当 Video Content 超过 150 tokens 或模型 token 上限时，按以下优先级**从底部开始裁剪**（序号越大越先删除）：
             1. **Core Action (核心动作)** — 主节拍的核心动词 + 主体 → **永不裁剪**
             2. **Viewpoint Movement (运镜声明)** — 服务叙事的运镜指令 → **永不裁剪**
@@ -774,8 +767,7 @@
       *   **语言适配**：台词内容严格遵循 `{Global Context}` 的语言设定。
       *   **音效 (SFX)**：注明环境音或特定的动作音效（e.g., "Sound of glass shattering"）。
       *   **紧凑示例 (Compact Example)**：
-          - `{Good}: "(P1) CHAR:[@A] leans toward CHAR:[@B], brow tight, hand gripping chair arm — Dialogue (CHAR:[@A]) (tense): 'Where were you?'; CHAR:[@B] flinches, gaze drops; (P2) CHAR:[@B] steadies, chin lifting — Dialogue (CHAR:[@B]) (restrained): 'I had no choice.' — CHAR:[@A] jaw sets, fingers curl on table edge -> resulting in shared tense stillness."`
-          - 上例将两段对话压缩在两个主节拍内，台词驱动口型，手动只写表情/肢体/听者反应。
+          - 多句对话应压缩在少量主节拍内，由台词驱动口型，手动只写表情、肢体与听者反应。
       *   **背景音乐 (BGM Consideration)**：
           - **Mood & Tempo (情绪与节奏)**：明确该镜头段落的音乐基调（e.g., "Eerie high-pitched strings", "Fast-paced drum beats", "Complete Silence"）。
           - **Audio-Visual Sync (音画同步)**：若画面包含强冲击力动作（Impact），必须注明其与音乐重音的假定同步关系（e.g., "Punch connects on the bass drop"）。
@@ -786,7 +778,7 @@
 - **完全一致简化 (Identical Frame)**：仅当 Video Content 为完全静止（无任何运镜与动作）导致 End Frame 与 Start Frame 像素级一致时，填写 **NO**。否则必须完整填写。
 - **核心原则：独立全量重绘 (Independent Full Redraw)**
   - **禁止差分描述 (No Delta)**：同 **二-0 独立描述原则**，严禁任何引用/差分写法；End Frame 必须自包含、可独立生图。
-    - **逻辑推演 (Simulation Outcome)**：End Frame 必须是 `Start Frame` 叠加 `Video Content` 后的**物理结果快照**。必须在脑海中运行完动作，然后描述最后一帧的画面。
+    - **逻辑推演 (Simulation Outcome)**：End Frame 必须是 `Start Frame` 叠加 `Video Content` 后的物理结果快照。
 - **必须包含要素 (Mandatory Elements)**：
     1.  **[Global Style] & {Lighting} & {Composition}**: 完整复述，确保单帧生图风格统一。
   2.  **{Viewpoint Anchor} + {Viewing Direction} + {Viewpoint Setup} (Final State)**：分别明确动作结束时的最终观察位置、观察方向与景别/角度。若 Video Content 包含运镜（如 Dolly In），End Frame 的景别与角度必须体现运动后的结果（如从 Medium 变 Close-up）。
@@ -803,11 +795,8 @@
     - **Global Formula**: `[Global Style]. **{Viewpoint Anchor}**: {plain-text position} ... **{Viewing Direction}**: {plain-text direction} ... **{Viewpoint Setup}**: ... **{Lighting}**: ... **{Composition}**: ... **Layers**: {Foreground} ... {Midground} CHAR:[@Subject A] {Subject Info: ...} {Spatial Connector} CHAR:[@Subject B] {Subject Info: ...} {Background} ENV:[Name] ...`
     - **方括号仅限 Layers 区**：同 Start Frame「主体引用单一性」规则——Viewpoint Anchor / Viewing Direction 中实体名纯文本，方括号集中 Layers。
     - **Integration**: In the **Layers** section, incorporate the `Visual Evidence` of the completed action and the **final spatial relationship** between characters.
-    - **Example**: `[Global Style]. **{Viewpoint Anchor}**: About one arm's length from Kael in Dark Alley. **{Viewing Direction}**: Front-right 3/4 facing Kael. ... **Layers**: {Foreground} Vapor mist. {Midground} CHAR:[@Kael] {Subject Info: Close Up; Right; Kneeling} looming over CHAR:[@Defeated Enemy] {Subject Info: High Angle; Left; Sprawled on ground}. {Background} ENV:[Dark Alley] blurred.`
 - **稳定性收尾 (End Frame Stability Mandate)**：
   - **Rule 1: Action Completion (动作完结原则)**: End Frame 默认应捕捉动作完成后的 **"Settled State" (落定态)**，而非动作进行中的瞬间 (Mid-action)；当镜头命中 `Combat Override` 时，允许以“可承接的动态态”收尾，但必须明确后续承接方向。
-      - *Bad*: 拳头挥在半空模糊不清。
-      - *Good*: 拳头已经击中目标或收势，姿态清晰定格。
     - **Rule 2: Physics Stability (物理落地)**: 所有的物体和角色必须有稳固的物理支撑。严禁以违背重力的状态（如跳跃至最高点悬停且无动势线）收尾，除非剧情特定需求（如定格画面）。
     - **Rule 3: Multi-Person Focus Shift (多人受力原则)**:
       - 若 Shot 涉及多人动作/交互（如打斗、争吵、施法），End Frame 的视觉重心**必须转移**至：
@@ -815,7 +804,6 @@
         2. **施力者结果 (Aftermath of the Doer)**：若强调发力方，则必须给予施力结束后的**特写 (Close-up)** 或 **近景 (Medium Close-up)**，展示其最终定格状态（如落拳后的喘息、收剑后的冷峻），严禁停留在原本的全景或中远景。
     - **Rule 4: Motion Zeroing (动态归零)**: 默认不要在剧烈的 Motion Blur (动态模糊) 中结束。Video Content 的最后 0.5s 应隐含一个 "Slow down to hold" 的趋势，确保 End Frame 清晰锐利；当镜头命中 `Combat Override` 时，可保留轻度运动残影，但主体轮廓与受力关系必须可判读。
     - **Rule 5: Mandatory Close-Range Convergence (原则性近景收束)**: 默认运镜轨迹应结束于 **Medium Shot** 或 **Close-up**。
-      - **Rationale**: 相比于远景，近景/特写 End Frame 具有极高的像素稳定性与细节控制力，是下一镜头生成连贯性 (Consistency) 的最佳视觉锚点。
       - **Exception**: 当镜头命中 `Combat Override`，或剧情明确要求 "Reveal Logic" (拉远揭示环境) / "Exit" (角色远离消失) 时，允许以 Full/Wide Shot 结束以维持空间关系与动势传递。否则，默认采取 "Push In to End" 近景收束策略。
 - **逻辑校验 (Consistency Check)**：
     - **位移闭环**: 若 Video Content 描述 "Viewpoint tracks backward"，End Frame 的 `Shot Size` 必须变宽 (Wider) 或 `Position` 距离变远。
@@ -842,13 +830,15 @@
 
 
 
-### 3. 表格输出模板（示例）
+### 3. 表格输出模板
+- 仅按上一节字段定义输出最终 Markdown 表格；除下方**唯一保留**的完整合规示例外，不再附带其他示例表或占位剧本尾巴，以免旧示例口径覆盖正式规则。
+
+### 4. 唯一完整合规示例（必须保留）
+- **作用**：仅用于校对字段顺序、语言约束、实体闭环、英中对照与 Markdown 表格格式；真实输出时必须替换为当前 Scene 的实体、环境、剧情与时长，不得照抄示例内容。
+- **范围**：只保留这一个完整示例，前文其他规则仍为最高约束；若示例与规则冲突，以规则为准，并应先修正规则再修正示例，确保两者长期一致。
+
 | Shot ID | Shot Name | Scene ID | Shot Logic (CN) | Start Frame | Video Content | Duration (s) | Keyframes | End Frame | Start Frame (CN) | Video Content (CN) | Keyframes (CN) | End Frame (CN) | Associated Entities |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| EP01_SC01_SH01 | Kael Hesitates | EP01_SC01 | **预估**：时长 5.0s，主节拍 3 个。<br>**动态**：方向{Z轴推近}，速率{极慢}，量化{推近一臂距离/动作幅度微小}。<br>**首帧**：CHAR:[@Kael] 侧身站立，举枪瞄准，神情凝重；机位距主体约两步远。<br>**过程**：(P1) 镜头Z轴缓慢推近，CHAR:[@Kael] 瞄准姿态微颤，眉头紧锁、呼吸可见起伏；(P2) 枪口开始下移，眼神从瞄准焦点转向犹豫的空视；(P3) 枪口完全垂下，肩膀放松，神情释然。<br>**尾帧**：镜头推进至特写（约一臂距离），CHAR:[@Kael] 垂下枪口，神情释然。{稳定态: 是}，{近景收束: 是}。 | [Global Style] Cyberpunk. **{Viewpoint Anchor}**: About two strides from Kael, at the alley entrance inside Dark Alley; subject occupies left third of Medium Shot frame, fully within Midground. **{Viewing Direction}**: Front-facing toward Kael. **{Viewpoint Setup}**: Medium Shot, Eye-level. **{Lighting}**: High contrast neon blue. **{Composition}**: Rule of Thirds. **{Single-Canvas Guard}**: single-canvas cinematic frame, no split-screen, no collage, no tiled duplication. **Layers**: {Foreground} Empty. {Midground} CHAR:[@Kael] {Subject Info: Medium Shot; Rule of Thirds Left; Profile Right; Aiming gun forward; Tense frown}. {Background} ENV:[Dark Alley]. | **{Viewpoint Movement}**: Slow Dolly In with facing direction unchanged. **Action**: (P1) CHAR:[@Kael] holds tense aim, brow furrowed, breath visible in neon haze, gun barrel trembling with micro-adjustment; (P2) gun muzzle dips as gaze shifts from target to unfocused middle distance, exhale softening jaw; (P3) gun lowers fully, shoulders drop, eyes ease into quiet relief -> resulting in static close-up hold. | 5.0 | NO | [Global Style] Cyberpunk. **{Viewpoint Anchor}**: About one arm's length from Kael, mid-corridor in Dark Alley; subject fills center frame in Close Up. **{Viewing Direction}**: Front-right 3/4 facing Kael. **{Viewpoint Setup}**: Close Up, Eye-level. **{Lighting}**: High contrast neon blue. **{Composition}**: Center Framed. **Layers**: {Foreground} Vapor mist. {Midground} CHAR:[@Kael] {Subject Info: Close Up; Center; Profile Right; Gun lowered; Relieved eyes}. {Background} ENV:[Dark Alley] blurred. | 赛博朋克风格下，机位距 CHAR:[@Kael] 约两步，位于 ENV:[Dark Alley] 巷口内，正向观察；中景平视，冷蓝霓虹高反差照明，三分构图，CHAR:[@Kael] 处于中景层左侧、右侧身举枪警戒。 | 镜头以朝向不变的慢速推进完成微节拍动作链，CHAR:[@Kael] 从紧绷瞄准逐步过渡到放下枪口的稳定状态。 | NO | 赛博朋克风格下，机位距 CHAR:[@Kael] 约一臂，位于 ENV:[Dark Alley] 中段并以右前三分之一定向观察；近景平视、中心构图，前景有蒸汽薄雾，CHAR:[@Kael] 枪口下垂、神情释然，背景 ENV:[Dark Alley] 虚化。 | ENV:[Dark Alley], CHAR:[@Kael], PROP:[Plasma Revolver] |
-| EP01_SC01_SH02 | Combat Roll | EP01_SC01 | **预估**：时长 4.0s，主节拍 2 个。<br>**动态**：方向{水平横移}，速率{极快}，量化{横移一车身/翻滚整圈}。<br>**首帧**：机位贴地约半步距 CHAR:[@Kael]，CHAR:[@Kael] 蹲伏准备闪避。<br>**过程**：(P1) CHAR:[@Kael] 爆发启动翻滚，速度急促，衣摆与水花随惯性飞溅；(P2) 落地单膝着地，重心下沉缓冲，枪口迅速抬起指向前方 -> 跪姿稳定。<br>**尾帧**：CHAR:[@Kael] 单膝跪地，枪口指向前方，机位距其约一步半。{稳定态: 是}，{近景收束: 否(需展示全身落地姿态)}。 | [Global Style] Cyberpunk. **{Viewpoint Anchor}**: Low observer about half a stride from Kael, near ground line in Rainy Alley; subject fills full frame vertically. **{Viewing Direction}**: Facing Kael with rightward tracking intention. **{Viewpoint Setup}**: Low Angle, Tracking Mode. **Layers**: {Foreground} Wet pavement reflection. {Midground} CHAR:[@Kael] {Subject Info: Full Body; Center; Facing Viewer; Crouched in start stance; Alert}. {Background} ENV:[Rainy Alley]. | **{Viewpoint Movement}**: Tracking right rapidly, then easing to stable hold. **Action**: (P1) CHAR:[@Kael] launches explosively into a fast combat roll, coat flaring with momentum, water splashing from wet pavement; (P2) landing phase — knee impacts ground with heavy recoil absorption, gun sweeps up to aim forward as body stabilizes into kneeling hold. | 4.0 | {Time: 1.5s} [Global Style] Cyberpunk. **{Viewpoint Anchor}**: Low observer about one stride from Kael in Rainy Alley; subject fills center frame during mid-roll. **{Viewing Direction}**: Facing Kael during mid-roll phase. **{Viewpoint Setup}**: Low Angle, Tilted angle. **Layers**: {Foreground} Water droplets. {Midground} CHAR:[@Kael] {Subject Info: Full Body; Center; Upside down mid-roll}. {Background} ENV:[Rainy Alley]. | [Global Style] Cyberpunk. **{Viewpoint Anchor}**: Low observer about one and a half strides from Kael, fixed in Rainy Alley; subject occupies right third of frame in Full Body. **{Viewing Direction}**: Front-facing toward Kael in final kneeling state. **{Viewpoint Setup}**: Low Angle. **Layers**: {Foreground} Puddle ripples. {Midground} CHAR:[@Kael] {Subject Info: Full Body (Kneeling); Rule of Thirds Right; Facing Viewer; gun raised}. {Background} ENV:[Rainy Alley]. | 赛博朋克风格下，低角度跟拍机位距 CHAR:[@Kael] 约半步，贴近地面建立于 ENV:[Rainy Alley]；前景为湿地反光，中景 CHAR:[@Kael] 全身居中、正对镜头、蹲伏待发。 | 镜头先快速向右跟移后稳住，CHAR:[@Kael] 以爆发节奏启动翻滚，中段保持急促动势，落地时呈现沉重缓冲与后坐吸收，最终进入可稳定承接的跪姿举枪落位。 | {Time: 1.5s} 赛博朋克风格，低角度倾斜机位距 CHAR:[@Kael] 约一步；前景水滴，中景 CHAR:[@Kael] 全身居中处于翻滚中段，背景 ENV:[Rainy Alley]。 | 赛博朋克风格下，低角度机位距 CHAR:[@Kael] 约一步半，定格于 ENV:[Rainy Alley]；前景水洼涟漪，中景 CHAR:[@Kael] 全身单膝跪地、位于右三分构图并正对镜头举枪警戒，动作收束清晰。 | ENV:[Rainy Alley], CHAR:[@Kael] |
-| EP01_SC02_SH01 | Tense Standoff | EP01_SC02 | **场景类型分析**：Dialogue & Emotion — 双人对峙，情绪张力为主。<br>**预估**：时长 5.0s，主节拍 2 个。<br>**动态**：方向{无运镜}，速率{静止}，量化{人物微动幅度在半肩宽内}。<br>**首帧**：CHAR:[@Kael] 与 CHAR:[@Lyra] 相距约三大步（均在中景层），机位于侧面约四步外。<br>**过程**：(P1) CHAR:[@Kael] 微微前倾质问，CHAR:[@Lyra] 下巴抬起、目光回避后重新对视；(P2) CHAR:[@Lyra] 双手握拳垂于体侧，CHAR:[@Kael] 视线下移至拳头后回到面部 -> 双方僵持凝视。<br>**尾帧**：两人距离不变，CHAR:[@Lyra] 握拳姿态定格，CHAR:[@Kael] 凝视。{稳定态: 是}，{近景收束: 否(双人全身构图需保持)}。<br>**校验**：{实体完整性: 通过}。 | [Global Style] Cyberpunk. **{Viewpoint Anchor}**: Side observer about four strides from the pair, at hip height in Rooftop Platform; both subjects fit in a Full Shot with a clear one-body-width gap between them, both in Midground. **{Viewing Direction}**: Profile-right across Kael (screen-left) and Lyra (screen-right). **{Viewpoint Setup}**: Full Shot, Eye-level. **{Lighting}**: Warm amber backlight from city glow, cool fill from overhead signage. **{Composition}**: Rule of Thirds — Kael on left third, Lyra on right third. **{Image Fidelity}**: Clean digital look, low shadow noise, moderate background blur. **{Single-Canvas Guard}**: single-canvas cinematic frame, no split-screen, no collage, no tiled duplication. **Layers**: {Foreground} Empty. {Midground} CHAR:[@Kael] {Subject Info: Full Body; Rule of Thirds Left; Profile Right; arms at sides, jaw set, wary gaze} — separated by about three full strides, roughly 1.5 body-lengths — CHAR:[@Lyra] {Subject Info: Full Body; Rule of Thirds Right; Profile Left; chin raised, defiant stance}. {Background} ENV:[Rooftop Platform] night skyline. | **{Viewpoint Movement}**: Static hold, no movement. **Action**: (P1) CHAR:[@Kael] leans forward half a shoulder-width, brow creasing hard — Dialogue (CHAR:[@Kael]) (low, tense): "You knew, didn't you?" — CHAR:[@Lyra] chin lifts, gaze averts left then snaps back with defiant eye contact; (P2) CHAR:[@Lyra] fists clench at sides, knuckles whitening — CHAR:[@Kael] gaze drops to her fists for a beat then returns to her face -> resulting in locked mutual stare, tension held. | 5.0 | NO | [Global Style] Cyberpunk. **{Viewpoint Anchor}**: Same side observer about four strides from the pair in Rooftop Platform; subjects remain in Full Shot with unchanged gap. **{Viewing Direction}**: Profile-right across both. **{Viewpoint Setup}**: Full Shot, Eye-level. **{Lighting}**: Warm amber backlight, cool overhead fill. **{Composition}**: Rule of Thirds. **Layers**: {Foreground} Empty. {Midground} CHAR:[@Kael] {Subject Info: Full Body; Rule of Thirds Left; Profile Right; leaning slightly forward, jaw locked} — same three-stride gap — CHAR:[@Lyra] {Subject Info: Full Body; Rule of Thirds Right; Profile Left; fists clenched, chin raised}. {Background} ENV:[Rooftop Platform] night skyline. | 赛博朋克风格下，机位于 ENV:[Rooftop Platform] 侧面约四步外、髋部高度，正侧向观察两人；全身平视，CHAR:[@Kael] 在左三分、CHAR:[@Lyra] 在右三分，两人相距约三大步（约 1.5 个身位），均位于中景层，间隔足以容纳一个人身宽度。 | (P1) CHAR:[@Kael] 微微前倾半肩宽，眉头紧锁质问"You knew, didn't you?"；CHAR:[@Lyra] 下巴上扬、目光先左移后猛然回锁对视；(P2) CHAR:[@Lyra] 双拳紧握指节发白，CHAR:[@Kael] 视线下移至拳头后回到面部 -> 双方僵持凝视。 | NO | 赛博朋克风格下，机位不变，两人间距与景别不变；CHAR:[@Kael] 微前倾、下颌紧锁，CHAR:[@Lyra] 握拳扬颔，三步间隔维持张力。 | ENV:[Rooftop Platform], CHAR:[@Kael], CHAR:[@Lyra] |
+| EP01_SC03_SH01 | 逼近质问 | EP01_SC03 | 场景类型分析：Dialogue & Emotion，核心是压问与听者反应。<br>预估：时长 5s，主节拍 2 个。<br>动态：slow push in，towards lens，one short step。<br>首帧：A 在门内压近，B 贴门把防守。<br>过程：(P1) A 前压发问，B 移开视线并握紧门把；(P2) B 半身后倾回应，A 不退，走廊张力锁住。<br>尾帧：两人近距对峙落稳；稳定态：是，近景收束：是。<br>校验：实体完整性通过。 | [Global Style]. **{Viewpoint Anchor}**: chest-height observer one short stride inside the doorway lane of Environment Anchor. **{Viewing Direction}**: facing screen-right toward the narrow gap between Character A and Character B. **{Viewpoint Setup}**: Medium Shot, 50mm, eye-level, stable slight over-shoulder compression. **{Image Fidelity}**: controlled fine grain, low shadow noise, preserve identity anchor from references while rebuilding framing and pose. **{Lighting}**: soft window spill from screen-left, low-key interior contrast, desaturated blue-gray palette. **{Composition}**: Rule of Thirds with shallow depth layering. **{Single-Canvas Guard}**: single-canvas cinematic frame, no split-screen, no collage, no tiled duplication. **{Style Mapping Note}**: realistic drama mapping using a restrained 50mm perspective, soft spill lighting, and fine grain to keep facial tension readable without stylization drift. **Layers**: {Foreground} Empty. {Midground} CHAR:[@Character A] Medium Shot, Rule of Thirds Left, 3/4 View Right, shoulders angled forward, jaw tight; standing face-to-face with CHAR:[@Character B] Medium Shot, Rule of Thirds Right, 3/4 View Left, back near the doorframe, fingers resting on PROP:[Door] handle, lips pressed thin. {Background} ENV:[Environment Anchor] narrow corridor wall and dim doorway depth. | **{Viewpoint Movement}**: Starting from the doorway-side medium setup, slowly pushing in one short step while facing direction remains unchanged. **Action**: (P1) As the viewpoint pushes in, CHAR:[@Character A] leans forward **firmly** **towards CHAR:[@Character B]** **one short step**, chin lowered — Dialogue (CHAR:[@Character A]) (low, controlled): "You knew the key was missing before anyone opened the drawer." — CHAR:[@Character B] gaze breaks screen-right, fingers tighten on PROP:[Door], shoulders drawing back -> resulting in pressure closing the gap; (P2) CHAR:[@Character B] inhales **sharply** **away from viewer** **half a body lean**, grip fixed on PROP:[Door] handle as if choosing between retreat and denial — Dialogue (CHAR:[@Character B]) (tight, unsteady): "I heard the latch move, nothing more." — CHAR:[@Character A] holds position without retreat, coat edge settling as tension locks the space in ENV:[Environment Anchor] -> resulting in a contained standoff, not a physical clash. | 5 | NO | [Global Style]. **{Viewpoint Anchor}**: chest-height observer now one short step closer inside the doorway lane of Environment Anchor. **{Viewing Direction}**: facing screen-right at the tightened line between Character A and Character B. **{Viewpoint Setup}**: Medium Close-up, 50mm, eye-level, stable pressure framing. **{Image Fidelity}**: controlled fine grain, low shadow noise, preserve identity anchor from references while rebuilding final pose and spacing. **{Lighting}**: soft window spill still shaping both faces, low-key contrast holding, desaturated blue-gray palette. **{Composition}**: Rule of Thirds with compressed negative space behind Character B. **{Single-Canvas Guard}**: single-canvas cinematic frame, no split-screen, no collage, no tiled duplication. **{Style Mapping Note}**: realistic drama mapping stays consistent so the push-in ends on readable facial tension rather than stylized distortion. **Layers**: {Foreground} faint coat edge blur near frame-left. {Midground} CHAR:[@Character A] Medium Close-up, Rule of Thirds Left, 3/4 View Right, weight settled forward, eyes fixed and unblinking; standing close to CHAR:[@Character B] Medium Close-up, Rule of Thirds Right, 3/4 View Left, shoulders compressed toward the doorframe, hand still locked on PROP:[Door] handle, breath held after speaking. {Background} ENV:[Environment Anchor] dim corridor wall and narrowed doorway depth with still air. | [Global Style]. **{Viewpoint Anchor}**: 观察者位于 Environment Anchor 门道内一小步的胸口高度位置。 **{Viewing Direction}**: 面向画面右侧，观察 Character A 与 Character B 之间收紧的缝隙。 **{Viewpoint Setup}**: 中景，50mm，平视，稳定的轻微过肩压缩。 **{Image Fidelity}**: 细颗粒受控、阴影噪点低，继承参考图身份锚点但重构构图与姿态。 **{Lighting}**: 来自画面左侧的柔和窗光，低调室内反差，去饱和蓝灰色调。 **{Composition}**: 三分法，浅层景深分层。 **{Single-Canvas Guard}**: 单画布电影画面，无分屏、无拼贴、无平铺复制。 **{Style Mapping Note}**: 采用写实剧情映射，以克制的 50mm 视角、柔和侧光与细颗粒保持面部紧张感可读，避免风格漂移。 **Layers**: {Foreground} 空。 {Midground} CHAR:[@Character A] 中景，位于左三分，3/4 View Right，肩线前压，下颌绷紧；与 CHAR:[@Character B] 正面对峙，后者为中景，位于右三分，3/4 View Left，背靠门框，手指搭在 PROP:[Door] 把手上，嘴唇紧抿。 {Background} ENV:[Environment Anchor] 狭窄走廊墙面与昏暗门道纵深。 | **{Viewpoint Movement}**: 从门侧中景机位开始，缓慢推进一小步，观察方向保持不变。 **Action**: (P1) 随着机位推进，CHAR:[@Character A] 稳定地向 CHAR:[@Character B] 前压一小步，下巴压低 —— Dialogue (CHAR:[@Character A]) (低声，克制): "你在任何人打开抽屉之前，就知道钥匙不见了。" —— CHAR:[@Character B] 视线偏向画面右侧，握住 PROP:[Door] 的手指收紧，肩线后缩 -> resulting in 压迫距离收紧；(P2) CHAR:[@Character B] 急促吸气，半个身位向后倾，把手仍锁在 PROP:[Door] 上，像是在撤退与否认之间选择 —— Dialogue (CHAR:[@Character B]) (紧绷，发虚): "我只听见门闩响了一下，仅此而已。" —— CHAR:[@Character A] 保持原位不退，衣摆边缘回落，ENV:[Environment Anchor] 内的张力被锁住 -> resulting in 受控对峙，而非肢体冲突。 | NO | [Global Style]. **{Viewpoint Anchor}**: 观察者现在位于 Environment Anchor 门道内更近一小步的胸口高度位置。 **{Viewing Direction}**: 面向画面右侧，观察 Character A 与 Character B 之间已经收紧的对峙线。 **{Viewpoint Setup}**: 中近景，50mm，平视，稳定压迫式构图。 **{Image Fidelity}**: 细颗粒受控、阴影噪点低，继承参考图身份锚点但重构最终姿态与间距。 **{Lighting}**: 柔和窗光仍勾勒两人面部，低调反差保持不变，去饱和蓝灰色调延续。 **{Composition}**: 三分法，Character B 身后负空间被压缩。 **{Single-Canvas Guard}**: 单画布电影画面，无分屏、无拼贴、无平铺复制。 **{Style Mapping Note}**: 写实剧情映射保持一致，使推进后的收尾落在清晰可读的面部紧张感上，而不是风格化失真。 **Layers**: {Foreground} 画面左侧近处有轻微衣摆虚化。 {Midground} CHAR:[@Character A] 中近景，位于左三分，3/4 View Right，重心前落，目光固定不眨；贴近 CHAR:[@Character B]，后者为中近景，位于右三分，3/4 View Left，肩线压向门框，手仍锁在 PROP:[Door] 把手上，说话后屏住呼吸。 {Background} ENV:[Environment Anchor] 昏暗走廊墙面与被压窄的门道纵深，空气静止。 | [@Character A], [@Character B], [Environment Anchor], [Door] |
 
-
-
-****************************************************************剧本如下：*******
+*******************请按以上规则，对以下完整剧本分析，要完整分析：
