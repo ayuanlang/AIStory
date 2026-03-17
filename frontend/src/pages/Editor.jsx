@@ -9736,6 +9736,11 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
 
     let activeRefs = [];
     const tech = JSON.parse(shot.technical_notes || '{}');
+    const resolvedVideoMode = (() => {
+        if (tech?.video_mode_unified) return tech.video_mode_unified;
+        if (tech?.video_ref_submit_mode === 'refs_video') return 'refs_video';
+        return tech?.video_gen_mode || 'start';
+    })();
     
     // Normal Mode vs Sequence Mode
     if (useSequenceLogic) {
@@ -9958,11 +9963,11 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
              // Let's keep logic simple: If Video Mode, we assume strict structural refs.
              // But if user manually added strict refs, we keep them?
              // Reverting to previous strict logic for video mode seems safer to avoid "entity pollution".
-                 if (!tech[storageKey] && !isLockedManual) {
+                      if (!tech[storageKey] && !isLockedManual) {
                 activeRefs = [];
                 if (shot.image_url) activeRefs.push(shot.image_url);
                 if (tech.keyframes && Array.isArray(tech.keyframes)) activeRefs.push(...tech.keyframes);
-                if (tech.end_frame_url) activeRefs.push(tech.end_frame_url);
+                     if (tech.end_frame_url && resolvedVideoMode !== 'start') activeRefs.push(tech.end_frame_url);
              }
         }
         
@@ -20033,15 +20038,52 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 // refs.push(...entityRefs);
             }
             
-            const uniqueRefs = [...new Set(refs)].filter(Boolean);
-
             const effectiveVideoMode = videoMode === 'refs_video' ? 'refs_video' : (shotMode || 'start');
+            const endFrameUrlToken = String(tech.end_frame_url || '').trim();
+            const uniqueRefs = [...new Set(refs)].filter((item) => {
+                const raw = String(item || '').trim();
+                if (!raw) return false;
+                if (effectiveVideoMode === 'start' && endFrameUrlToken && raw === endFrameUrlToken) {
+                    return false;
+                }
+                return true;
+            });
+
+            const splitReferenceMediaUrls = (urls) => {
+                const imageRefs = [];
+                const videoRefs = [];
+
+                (Array.isArray(urls) ? urls : []).forEach((item) => {
+                    const rawUrl = String(item || '').trim();
+                    if (!rawUrl) return;
+
+                    let pathname = rawUrl;
+                    try {
+                        pathname = new URL(rawUrl, window.location.origin).pathname || rawUrl;
+                    } catch {
+                        pathname = rawUrl.split('?')[0].split('#')[0];
+                    }
+
+                    const normalizedPath = String(pathname || '').toLowerCase();
+                    if (/\.(mp4|webm|mov|m4v|avi|mkv)$/i.test(normalizedPath)) {
+                        videoRefs.push(rawUrl);
+                    } else {
+                        imageRefs.push(rawUrl);
+                    }
+                });
+
+                return { imageRefs, videoRefs };
+            };
+
             let apiRefImageUrl = null;
+            let apiRefVideoUrls = null;
             let apiLastFrameUrl;
             let apiKeyframes = [];
 
             if (effectiveVideoMode === 'refs_video') {
-                apiRefImageUrl = uniqueRefs.length > 0 ? uniqueRefs : null;
+                const { imageRefs, videoRefs } = splitReferenceMediaUrls(uniqueRefs);
+                apiRefImageUrl = imageRefs.length > 0 ? imageRefs : null;
+                apiRefVideoUrls = videoRefs.length > 0 ? videoRefs : null;
                 apiLastFrameUrl = undefined;
                 apiKeyframes = Array.isArray(keyframes) ? keyframes.filter(Boolean) : [];
             } else if (effectiveVideoMode === 'start_end') {
@@ -20063,13 +20105,13 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             const finalPrompt = isManual ? submitPrompt : (submitPrompt + globalCtx);
 
             onLog?.(
-                `Video API payload mode=${effectiveVideoMode}, ref=${Array.isArray(apiRefImageUrl) ? `list(${apiRefImageUrl.length})` : (apiRefImageUrl ? 'single' : 'none')}, last_frame=${apiLastFrameUrl ? 'yes' : 'no'}, keyframes=${Array.isArray(apiKeyframes) ? apiKeyframes.length : 0}, duration=${durParam}`,
+                `Video API payload mode=${effectiveVideoMode}, ref=${Array.isArray(apiRefImageUrl) ? `list(${apiRefImageUrl.length})` : (apiRefImageUrl ? 'single' : 'none')}, ref_videos=${Array.isArray(apiRefVideoUrls) ? apiRefVideoUrls.length : 0}, last_frame=${apiLastFrameUrl ? 'yes' : 'no'}, keyframes=${Array.isArray(apiKeyframes) ? apiKeyframes.length : 0}, duration=${durParam}`,
                 'info'
             );
 
             let videoTaskPromise = null;
             try {
-                videoTaskPromise = generateVideo(finalPrompt, null, apiRefImageUrl, apiLastFrameUrl, durParam, {
+                videoTaskPromise = generateVideo(finalPrompt, null, apiRefImageUrl, apiRefVideoUrls, apiLastFrameUrl, durParam, {
                     project_id: projectId,
                     shot_id: targetShotId,
                     shot_number: editingShot.shot_id,
@@ -21805,6 +21847,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 const linkedAsset = resolveShotAssetByUrl(detailUrl, detailType);
                                                 const linkedAssetDetail = buildShotAssetDetail(linkedAsset, detailType, detailUrl);
                                                 const linkedAssetMeta = linkedAssetDetail.rawMeta;
+                                                const shotConfiguredDuration = String(editingShot?.duration ?? '').trim();
 
                                                 const renderAssetMetaPanel = (assetDetail = linkedAssetDetail, rawMeta = linkedAssetMeta, titleText = t('资产元数据', 'Asset Metadata')) => (
                                                     <div className="space-y-2 rounded-lg border border-white/10 bg-black/30 p-3">
@@ -21871,6 +21914,59 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                     </div>
                                                 );
 
+                                                const renderInfoPanel = (titleText, rows = []) => (
+                                                    <div className="space-y-2 rounded-lg border border-white/10 bg-black/20 p-3">
+                                                        <div className="text-[11px] text-muted-foreground uppercase font-bold">{titleText}</div>
+                                                        <div className="grid grid-cols-1 gap-2 text-xs">
+                                                            {rows.map((row, idx) => (
+                                                                <div key={`${titleText}-${idx}`}>
+                                                                    <div className="text-[10px] text-muted-foreground uppercase">{row.label}</div>
+                                                                    <div className={`text-white/90 ${row.breakAll ? 'break-all' : ''}`}>{row.value || '-'}</div>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                );
+
+                                                const renderDetailActionButton = ({
+                                                    label,
+                                                    busyLabel,
+                                                    onClick,
+                                                    disabled = false,
+                                                    busy = false,
+                                                    variant = 'primary',
+                                                    title,
+                                                }) => {
+                                                    const variantClassMap = {
+                                                        primary: busy
+                                                            ? 'bg-sky-500/10 text-sky-300/50 cursor-wait'
+                                                            : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30',
+                                                        secondary: disabled
+                                                            ? 'bg-white/10 text-white/40 cursor-not-allowed'
+                                                            : 'bg-white/10 text-white/80 hover:bg-white/20',
+                                                        success: busy
+                                                            ? 'bg-emerald-500/10 text-emerald-300/50 cursor-wait'
+                                                            : 'bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/30',
+                                                        warning: disabled
+                                                            ? 'bg-amber-500/10 text-amber-300/50 cursor-not-allowed'
+                                                            : 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/30',
+                                                        danger: disabled
+                                                            ? 'bg-red-500/10 text-red-300/50 cursor-not-allowed'
+                                                            : 'bg-red-500/20 text-red-200 hover:bg-red-500/30',
+                                                    };
+
+                                                    return (
+                                                        <button
+                                                            onClick={onClick}
+                                                            disabled={disabled}
+                                                            title={title}
+                                                            className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${variantClassMap[variant] || variantClassMap.primary}`}
+                                                        >
+                                                            {busy ? busyLabel : label}
+                                                        </button>
+                                                    );
+                                                };
+
                                                 if (modalType === 'start') {
                                                     return (
                                                         <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_1fr] gap-4">
@@ -21884,19 +21980,22 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                     )}
                                                                     {editingShot.image_url ? <img src={getFullUrl(editingShot.image_url)} className="max-w-full max-h-full object-contain"/> : <ImageIcon className="w-8 h-8 opacity-30" />}
                                                                 </div>
-                                                                <div className="text-xs text-muted-foreground break-all">{t('图片 URL', 'Image URL')}: {editingShot.image_url || '-'}</div>
-                                                                <div className="text-xs text-muted-foreground">{t('参考图数量', 'Ref Count')}: {(Array.isArray(tech.ref_image_urls) ? tech.ref_image_urls.length : 0)}</div>
-                                                                {renderAssetMetaPanel()}
+                                                                {renderInfoPanel(t('当前素材信息', 'Current Asset Info'), [
+                                                                    { label: t('图片 URL', 'Image URL'), value: editingShot.image_url || '-', breakAll: true },
+                                                                    { label: t('参考图数量', 'Ref Count'), value: String(Array.isArray(tech.ref_image_urls) ? tech.ref_image_urls.length : 0) },
+                                                                ])}
+                                                                {renderAssetMetaPanel(linkedAssetDetail, linkedAssetMeta, t('素材元信息', 'Asset Metadata'))}
                                                             </div>
                                                             <div className="space-y-3">
-                                                                <div className="flex items-center gap-2">
-                                                                    <button 
-                                                                        onClick={() => generateAssetWithLang('start', -1, { cfg: currentImageCfgValue })} 
-                                                                        disabled={currentGeneratingState.start}
-                                                                        className={`text-xs px-2 py-1 rounded ${currentGeneratingState.start ? 'bg-sky-500/10 text-sky-300/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30'}`}
-                                                                    >
-                                                                        {currentGeneratingState.start ? t('生成中...', 'Generating...') : t('生成', 'Generate')}
-                                                                    </button>
+                                                                <div className="flex flex-wrap items-center gap-2">
+                                                                    {renderDetailActionButton({
+                                                                        label: t('生成起始帧', 'Generate Start Frame'),
+                                                                        busyLabel: t('起始帧生成中...', 'Generating Start Frame...'),
+                                                                        onClick: () => generateAssetWithLang('start', -1, { cfg: currentImageCfgValue }),
+                                                                        disabled: currentGeneratingState.start,
+                                                                        busy: currentGeneratingState.start,
+                                                                        variant: 'primary',
+                                                                    })}
                                                                 </div>
                                                                 <div className="space-y-3 rounded-lg border border-white/10 bg-black/20 p-4">
                                                                     <div className="text-[11px] text-muted-foreground uppercase font-bold">
@@ -21945,27 +22044,30 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                     )}
                                                                     {endFrameUrl ? <img src={getFullUrl(endFrameUrl)} className="max-w-full max-h-full object-contain"/> : <ImageIcon className="w-8 h-8 opacity-30" />}
                                                                 </div>
-                                                                <div className="text-xs text-muted-foreground break-all">{t('结束帧 URL', 'End Frame URL')}: {endFrameUrl || '-'}</div>
-                                                                <div className="text-xs text-muted-foreground">{t('参考图数量', 'Ref Count')}: {(Array.isArray(tech.end_ref_image_urls) ? tech.end_ref_image_urls.length : 0)}</div>
-                                                                {renderAssetMetaPanel()}
+                                                                {renderInfoPanel(t('当前素材信息', 'Current Asset Info'), [
+                                                                    { label: t('结束帧 URL', 'End Frame URL'), value: endFrameUrl || '-', breakAll: true },
+                                                                    { label: t('参考图数量', 'Ref Count'), value: String(Array.isArray(tech.end_ref_image_urls) ? tech.end_ref_image_urls.length : 0) },
+                                                                ])}
+                                                                {renderAssetMetaPanel(linkedAssetDetail, linkedAssetMeta, t('素材元信息', 'Asset Metadata'))}
                                                             </div>
                                                             <div className="space-y-3">
-                                                                <div className="flex items-center gap-2">
-                                                                    <button 
-                                                                        onClick={() => generateAssetWithLang('end', -1, { cfg: currentImageCfgValue })} 
-                                                                        disabled={currentGeneratingState.end}
-                                                                        className={`text-xs px-2 py-1 rounded ${currentGeneratingState.end ? 'bg-sky-500/10 text-sky-300/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30'}`}
-                                                                    >
-                                                                        {currentGeneratingState.end ? t('生成中...', 'Generating...') : t('生成', 'Generate')}
-                                                                    </button>
-                                                                    <button
-                                                                        onClick={handleSetEndFrameFromVideoLastFrame}
-                                                                        disabled={!editingShot.video_url || currentGeneratingState.end}
-                                                                        className={`text-xs px-2 py-1 rounded ${(!editingShot.video_url || currentGeneratingState.end) ? 'bg-white/10 text-white/40 cursor-not-allowed' : 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/30'}`}
-                                                                        title={t('从当前视频提取最后一帧', 'Extract last frame from current video')}
-                                                                    >
-                                                                        {t('取视频尾帧', 'Last Frame')}
-                                                                    </button>
+                                                                <div className="flex flex-wrap items-center gap-2">
+                                                                    {renderDetailActionButton({
+                                                                        label: t('生成结束帧', 'Generate End Frame'),
+                                                                        busyLabel: t('结束帧生成中...', 'Generating End Frame...'),
+                                                                        onClick: () => generateAssetWithLang('end', -1, { cfg: currentImageCfgValue }),
+                                                                        disabled: currentGeneratingState.end,
+                                                                        busy: currentGeneratingState.end,
+                                                                        variant: 'primary',
+                                                                    })}
+                                                                    {renderDetailActionButton({
+                                                                        label: t('提取视频尾帧', 'Extract Video Last Frame'),
+                                                                        busyLabel: t('提取视频尾帧', 'Extract Video Last Frame'),
+                                                                        onClick: handleSetEndFrameFromVideoLastFrame,
+                                                                        disabled: !editingShot.video_url || currentGeneratingState.end,
+                                                                        variant: 'warning',
+                                                                        title: t('从当前视频提取最后一帧', 'Extract last frame from current video'),
+                                                                    })}
                                                                 </div>
                                                                 <div className="text-[11px] text-muted-foreground uppercase font-bold">
                                                                     {showCnPrompt ? t('中文提示词', 'Prompt (CN)') : t('英文提示词', 'Prompt (EN)')}
@@ -22030,7 +22132,28 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                 </div>
                                                                 <div className="text-xs text-muted-foreground break-all">{t('视频 URL', 'Video URL')}: {editingShot.video_url || '-'}</div>
                                                                 <div className="text-xs text-muted-foreground break-all">{t('配音 URL', 'Voice URL')}: {String(tech.voiceover_url || '') || '-'}</div>
-                                                                <div className="text-xs text-muted-foreground">{t('时长', 'Duration')}: {editingShot.duration || '5'}</div>
+                                                                <div className="space-y-1 rounded-lg border border-white/10 bg-black/20 p-3">
+                                                                    <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('素材实际时长', 'Asset Duration')}</div>
+                                                                    <div className="text-sm text-white">{linkedAssetDetail.duration || '-'}</div>
+                                                                    <div className="text-[11px] text-muted-foreground">
+                                                                        {t('这里显示当前视频素材元数据里的实际时长。', 'This is the actual duration read from the current video asset metadata.')}
+                                                                    </div>
+                                                                </div>
+                                                                <div className="space-y-1 rounded-lg border border-white/10 bg-black/20 p-3">
+                                                                    <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('Shot 配置时长（秒）', 'Shot Duration Setting (s)')}</div>
+                                                                    <input
+                                                                        type="number"
+                                                                        min="0"
+                                                                        step="0.1"
+                                                                        value={shotConfiguredDuration}
+                                                                        onChange={(e) => setEditingShot(prev => ({ ...(prev || {}), duration: e.target.value }))}
+                                                                        className="w-full bg-black/30 border border-white/10 rounded p-2 text-sm text-white"
+                                                                        placeholder="5"
+                                                                    />
+                                                                    <div className="text-[11px] text-muted-foreground">
+                                                                        {t('保存后会写回当前 shot 的 Duration 字段，并作为后续视频生成默认时长。', 'Saving writes back to the shot Duration field and uses it as the default for later video generation.')}
+                                                                    </div>
+                                                                </div>
                                                                 <div className="text-xs text-muted-foreground">{t('模式', 'Mode')}: {tech.video_mode_unified || tech.video_gen_mode || 'start'}</div>
                                                                 {(voiceoverUrl || llmDialogueBackfillText) && (
                                                                     <div className="space-y-2 rounded-lg border border-white/10 bg-black/30 p-3">
@@ -22064,29 +22187,32 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                 {renderAssetMetaPanel()}
                                                             </div>
                                                             <div className="space-y-3">
-                                                                <div className="flex items-center gap-2">
-                                                                    <button 
-                                                                        onClick={() => generateAssetWithLang('video')} 
-                                                                        disabled={currentGeneratingState.video}
-                                                                        className={`text-xs px-2 py-1 rounded ${currentGeneratingState.video ? 'bg-sky-500/10 text-sky-300/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30'}`}
-                                                                    >
-                                                                        {currentGeneratingState.video ? t('生成中...', 'Generating...') : t('生成', 'Generate')}
-                                                                    </button>
-                                                                    <button
-                                                                        onClick={handleGenerateVoiceoverOnly}
-                                                                        disabled={currentVoiceGenerating}
-                                                                        className={`text-xs px-2 py-1 rounded ${currentVoiceGenerating ? 'bg-emerald-500/10 text-emerald-300/50 cursor-wait' : 'bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/30'}`}
-                                                                    >
-                                                                        {currentVoiceGenerating ? t('配音生成中...', 'Generating voiceover...') : t('仅生成配音', 'Generate Voiceover Only')}
-                                                                    </button>
-                                                                    <button
-                                                                        onClick={() => handleForceStopShotVideo(editingShot?.id)}
-                                                                        disabled={!pendingVideoJobId || isStoppingCurrentVideo}
-                                                                        className={`text-xs px-2 py-1 rounded ${(!pendingVideoJobId || isStoppingCurrentVideo) ? 'bg-red-500/10 text-red-300/50 cursor-not-allowed' : 'bg-red-500/20 text-red-200 hover:bg-red-500/30'}`}
-                                                                        title={t('强制停止当前镜头的视频生成任务', 'Force stop current shot video job')}
-                                                                    >
-                                                                        {isStoppingCurrentVideo ? t('停止中...', 'Stopping...') : t('强制停止', 'Force Stop')}
-                                                                    </button>
+                                                                <div className="flex flex-wrap items-center gap-2">
+                                                                    {renderDetailActionButton({
+                                                                        label: t('生成视频', 'Generate Video'),
+                                                                        busyLabel: t('视频生成中...', 'Generating Video...'),
+                                                                        onClick: () => generateAssetWithLang('video'),
+                                                                        disabled: currentGeneratingState.video,
+                                                                        busy: currentGeneratingState.video,
+                                                                        variant: 'primary',
+                                                                    })}
+                                                                    {renderDetailActionButton({
+                                                                        label: t('生成配音', 'Generate Voiceover'),
+                                                                        busyLabel: t('配音生成中...', 'Generating Voiceover...'),
+                                                                        onClick: handleGenerateVoiceoverOnly,
+                                                                        disabled: currentVoiceGenerating,
+                                                                        busy: currentVoiceGenerating,
+                                                                        variant: 'success',
+                                                                    })}
+                                                                    {renderDetailActionButton({
+                                                                        label: t('强制停止', 'Force Stop'),
+                                                                        busyLabel: t('停止中...', 'Stopping...'),
+                                                                        onClick: () => handleForceStopShotVideo(editingShot?.id),
+                                                                        disabled: !pendingVideoJobId || isStoppingCurrentVideo,
+                                                                        busy: isStoppingCurrentVideo,
+                                                                        variant: 'danger',
+                                                                        title: t('强制停止当前镜头的视频生成任务', 'Force stop current shot video job'),
+                                                                    })}
                                                                 </div>
                                                                 <label className="inline-flex items-center gap-2 text-xs text-white/80">
                                                                     <input
@@ -22149,24 +22275,44 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                             <div className="h-[46vh] xl:h-[58vh] bg-black/40 rounded border border-white/10 overflow-hidden flex items-center justify-center">
                                                                 {keyframe?.url ? <img src={getFullUrl(keyframe.url)} className="max-w-full max-h-full object-contain"/> : <ImageIcon className="w-8 h-8 opacity-30" />}
                                                             </div>
-                                                            <div className="text-xs text-muted-foreground break-all">{t('关键帧 URL', 'Keyframe URL')}: {keyframe?.url || '-'}</div>
+                                                            {renderInfoPanel(t('当前素材信息', 'Current Asset Info'), [
+                                                                { label: t('关键帧时间', 'Keyframe Time'), value: keyframe?.time || '-' },
+                                                                { label: t('关键帧 URL', 'Keyframe URL'), value: keyframe?.url || '-', breakAll: true },
+                                                            ])}
                                                             {renderAssetMetaPanel()}
                                                         </div>
                                                         <div className="space-y-3">
-                                                            <div className="flex items-center gap-2">
+                                                            <div className="flex flex-wrap items-center gap-2">
                                                                 <input className="bg-black/30 border border-white/10 rounded px-2 py-1 text-xs w-20" value={keyframe?.time || ''} onChange={(e) => {
                                                                     const updated = [...localKeyframes];
                                                                     if (!updated[assetDetailModal.keyframeIndex]) return;
                                                                     updated[assetDetailModal.keyframeIndex].time = e.target.value;
                                                                     setLocalKeyframes(updated);
                                                                 }} />
-                                                                <button 
-                                                                    onClick={() => generateAssetWithLang('keyframe', assetDetailModal.keyframeIndex, { cfg: currentImageCfgValue })} 
-                                                                    disabled={!!keyframe?.loading}
-                                                                    className={`text-xs px-2 py-1 rounded ${keyframe?.loading ? 'bg-sky-500/10 text-sky-300/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30'}`}
-                                                                >
-                                                                    {keyframe?.loading ? t('生成中...', 'Generating...') : t('生成', 'Generate')}
-                                                                </button>
+                                                                {renderDetailActionButton({
+                                                                    label: t('生成关键帧', 'Generate Keyframe'),
+                                                                    busyLabel: t('关键帧生成中...', 'Generating Keyframe...'),
+                                                                    onClick: () => generateAssetWithLang('keyframe', assetDetailModal.keyframeIndex, { cfg: currentImageCfgValue }),
+                                                                    disabled: !!keyframe?.loading,
+                                                                    busy: !!keyframe?.loading,
+                                                                    variant: 'primary',
+                                                                })}
+                                                                {renderDetailActionButton({
+                                                                    label: t('翻译成中文', 'To Chinese'),
+                                                                    busyLabel: t('翻译中...', 'Translating...'),
+                                                                    onClick: () => translateKeyframeToChinese(assetDetailModal.keyframeIndex),
+                                                                    disabled: translatingPromptField.startsWith(`keyframe:${assetDetailModal.keyframeIndex}:`),
+                                                                    busy: translatingPromptField === `keyframe:${assetDetailModal.keyframeIndex}:to-cn`,
+                                                                    variant: 'warning',
+                                                                })}
+                                                                {renderDetailActionButton({
+                                                                    label: t('翻译成英文', 'To English'),
+                                                                    busyLabel: t('翻译中...', 'Translating...'),
+                                                                    onClick: () => translateKeyframeToEnglish(assetDetailModal.keyframeIndex),
+                                                                    disabled: translatingPromptField.startsWith(`keyframe:${assetDetailModal.keyframeIndex}:`),
+                                                                    busy: translatingPromptField === `keyframe:${assetDetailModal.keyframeIndex}:to-en`,
+                                                                    variant: 'secondary',
+                                                                })}
                                                             </div>
                                                             <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('英文提示词', 'Prompt (EN)')}</div>
                                                             <textarea className="w-full h-56 bg-black/30 border border-white/10 rounded p-3 text-sm" value={keyframe?.prompt || ''} onChange={(e) => {
@@ -22175,22 +22321,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                 updated[assetDetailModal.keyframeIndex].prompt = e.target.value;
                                                                 setLocalKeyframes(updated);
                                                             }} />
-                                                            <div className="flex items-center justify-center gap-2">
-                                                                <button
-                                                                    onClick={() => translateKeyframeToChinese(assetDetailModal.keyframeIndex)}
-                                                                    disabled={translatingPromptField.startsWith(`keyframe:${assetDetailModal.keyframeIndex}:`)}
-                                                                    className={`text-xs px-2 py-1 rounded ${translatingPromptField.startsWith(`keyframe:${assetDetailModal.keyframeIndex}:`) ? 'bg-purple-500/10 text-purple-300/50 cursor-wait' : 'bg-purple-500/20 text-purple-200 hover:bg-purple-500/30'}`}
-                                                                >
-                                                                    {translatingPromptField === `keyframe:${assetDetailModal.keyframeIndex}:to-cn` ? t('翻译中...', 'Translating...') : t('翻译成中文', 'To Chinese')}
-                                                                </button>
-                                                                <button
-                                                                    onClick={() => translateKeyframeToEnglish(assetDetailModal.keyframeIndex)}
-                                                                    disabled={translatingPromptField.startsWith(`keyframe:${assetDetailModal.keyframeIndex}:`)}
-                                                                    className={`text-xs px-2 py-1 rounded ${translatingPromptField.startsWith(`keyframe:${assetDetailModal.keyframeIndex}:`) ? 'bg-white/10 text-white/50 cursor-wait' : 'bg-white/10 text-white hover:bg-white/20'}`}
-                                                                >
-                                                                    {translatingPromptField === `keyframe:${assetDetailModal.keyframeIndex}:to-en` ? t('翻译中...', 'Translating...') : t('翻译成英文', 'To English')}
-                                                                </button>
-                                                            </div>
                                                             <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('中文对照提示词', 'Prompt (CN)')}</div>
                                                             <textarea
                                                                 className="w-full h-48 bg-black/30 border border-white/10 rounded p-3 text-sm"

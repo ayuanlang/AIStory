@@ -1,0 +1,1035 @@
+{
+  "replace_all": false,
+  "items": [
+    {
+      "name": "RunningHub 全能视频S-图生视频-支持真人-官方稳定版",
+      "category": "Video",
+      "provider": "runninghub",
+      "base_url": "https://www.runninghub.cn",
+      "model": "rhart-video-s-official-image-to-video-realistic",
+      "base_model": "rhart-video-s-official",
+      "modality": {
+        "generation_modes": [
+          "i2v"
+        ],
+        "output_format": "video",
+        "durations_seconds": [
+          4,
+          8,
+          12
+        ],
+        "max_duration": 12
+      },
+      "tags": [
+        "runninghub",
+        "auto-import",
+        "deprecated-default"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://www.runninghub.cn/runninghub-api-doc-cn/llms.txt",
+          "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766677.md"
+        ],
+        "runninghub": {
+          "title": "全能视频S-图生视频-支持真人-官方稳定版",
+          "model_slug": "rhart-video-s-official-image-to-video-realistic",
+          "base_model": "rhart-video-s-official",
+          "api_id": "api-425766677",
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed_html",
+          "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766677.html",
+          "endpoint": "/openapi/v2/rhart-video-s-official/image-to-video-realistic",
+          "method": "post",
+          "sku_id": null,
+          "async_protocol": "task_submit_query"
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "runninghub": {
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed_html",
+          "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766677.html",
+          "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766677.md",
+          "sku_id": null,
+          "method": "post"
+        },
+        "endpoint": "/openapi/v2/rhart-video-s-official/image-to-video-realistic"
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "RunningHub 全能视频S-图生视频-官方稳定版",
+      "category": "Video",
+      "provider": "runninghub",
+      "base_url": "https://www.runninghub.cn",
+      "model": "rhart-video-s-official-image-to-video",
+      "base_model": "rhart-video-s-official",
+      "modality": {
+        "generation_modes": [
+          "i2v"
+        ],
+        "output_format": "video",
+        "durations_seconds": [
+          4,
+          8,
+          12
+        ],
+        "max_duration": 12
+      },
+      "tags": [
+        "runninghub",
+        "auto-import",
+        "deprecated-default"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://www.runninghub.cn/runninghub-api-doc-cn/llms.txt",
+          "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766678.md"
+        ],
+        "runninghub": {
+          "title": "全能视频S-图生视频-官方稳定版",
+          "model_slug": "rhart-video-s-official-image-to-video",
+          "base_model": "rhart-video-s-official",
+          "api_id": "api-425766678",
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed_html",
+          "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766678.html",
+          "endpoint": "/openapi/v2/rhart-video-s-official/image-to-video",
+          "method": "post",
+          "sku_id": null,
+          "async_protocol": "task_submit_query"
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "runninghub": {
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed_html",
+          "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766678.html",
+          "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766678.md",
+          "sku_id": null,
+          "method": "post"
+        },
+        "endpoint": "/openapi/v2/rhart-video-s-official/image-to-video"
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "RunningHub 全能视频S-文生视频-pro-官方稳定版",
+      "category": "Video",
+      "provider": "runninghub",
+      "base_url": "https://www.runninghub.cn",
+      "model": "rhart-video-s-official-text-to-video-pro",
+      "base_model": "rhart-video-s-official",
+      "modality": {
+        "generation_modes": [
+          "t2v",
+          "i2v"
+        ],
+        "output_format": "video",
+        "supported_resolutions": [
+          "720x1280",
+          "1280x720",
+          "1024x1792",
+          "1792x1024"
+        ],
+        "durations_seconds": [
+          4,
+          8,
+          12
+        ],
+        "max_duration": 12
+      },
+      "tags": [
+        "runninghub",
+        "auto-import",
+        "deprecated-default"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://www.runninghub.cn/runninghub-api-doc-cn/llms.txt",
+          "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766679.md"
+        ],
+        "runninghub": {
+          "title": "全能视频S-文生视频-pro-官方稳定版",
+          "model_slug": "rhart-video-s-official-text-to-video-pro",
+          "base_model": "rhart-video-s-official",
+          "api_id": "api-425766679",
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed_html",
+          "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766679.html",
+          "endpoint": "/openapi/v2/rhart-video-s-official/text-to-video-pro",
+          "method": "post",
+          "sku_id": null,
+          "async_protocol": "task_submit_query"
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "runninghub": {
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed_html",
+          "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766679.html",
+          "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766679.md",
+          "sku_id": null,
+          "method": "post"
+        },
+        "endpoint": "/openapi/v2/rhart-video-s-official/text-to-video-pro"
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "RunningHub 全能视频S-图生视频-pro-官方稳定版",
+      "category": "Video",
+      "provider": "runninghub",
+      "base_url": "https://www.runninghub.cn",
+      "model": "rhart-video-s-official-image-to-video-pro",
+      "base_model": "rhart-video-s-official",
+      "modality": {
+        "generation_modes": [
+          "i2v"
+        ],
+        "output_format": "video",
+        "supported_resolutions": [
+          "720p",
+          "1080p"
+        ],
+        "durations_seconds": [
+          4,
+          8,
+          12
+        ],
+        "max_duration": 12
+      },
+      "tags": [
+        "runninghub",
+        "auto-import",
+        "deprecated-default"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://www.runninghub.cn/runninghub-api-doc-cn/llms.txt",
+          "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766680.md"
+        ],
+        "runninghub": {
+          "title": "全能视频S-图生视频-pro-官方稳定版",
+          "model_slug": "rhart-video-s-official-image-to-video-pro",
+          "base_model": "rhart-video-s-official",
+          "api_id": "api-425766680",
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed_html",
+          "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766680.html",
+          "endpoint": "/openapi/v2/rhart-video-s-official/image-to-video-pro",
+          "method": "post",
+          "sku_id": null,
+          "async_protocol": "task_submit_query"
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "runninghub": {
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed_html",
+          "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766680.html",
+          "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766680.md",
+          "sku_id": null,
+          "method": "post"
+        },
+        "endpoint": "/openapi/v2/rhart-video-s-official/image-to-video-pro"
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "RunningHub 全能视频X-图生视频-官方稳定版",
+      "category": "Video",
+      "provider": "runninghub",
+      "base_url": "https://www.runninghub.cn",
+      "model": "rhart-video-g-official-image-to-video",
+      "base_model": "rhart-video-g-official",
+      "modality": {
+        "generation_modes": [
+          "i2v"
+        ],
+        "output_format": "video",
+        "supported_resolutions": [
+          "720p",
+          "480p"
+        ],
+        "durations_seconds": [
+          6,
+          10
+        ],
+        "max_duration": 10
+      },
+      "tags": [
+        "runninghub",
+        "auto-import",
+        "deprecated-default"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://www.runninghub.cn/runninghub-api-doc-cn/llms.txt",
+          "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766682.md"
+        ],
+        "runninghub": {
+          "title": "全能视频X-图生视频-官方稳定版",
+          "model_slug": "rhart-video-g-official-image-to-video",
+          "base_model": "rhart-video-g-official",
+          "api_id": "api-425766682",
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed_html",
+          "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766682.html",
+          "endpoint": "/openapi/v2/rhart-video-g-official/image-to-video",
+          "method": "post",
+          "sku_id": null,
+          "async_protocol": "task_submit_query"
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "runninghub": {
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed_html",
+          "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766682.html",
+          "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766682.md",
+          "sku_id": null,
+          "method": "post"
+        },
+        "endpoint": "/openapi/v2/rhart-video-g-official/image-to-video"
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "RunningHub 全能视频V3.1-fast-图生视频-官方稳定版",
+      "category": "Video",
+      "provider": "runninghub",
+      "base_url": "https://www.runninghub.cn",
+      "model": "rhart-video-v3-1-fast-official-image-to-video",
+      "base_model": "rhart-video-v3-1-fast-official",
+      "modality": {
+        "generation_modes": [
+          "i2v"
+        ],
+        "output_format": "video",
+        "aspect_ratios": [
+          "16:9",
+          "9:16"
+        ],
+        "supported_resolutions": [
+          "720p",
+          "1080p",
+          "4k"
+        ],
+        "durations_seconds": [
+          4,
+          6,
+          8
+        ],
+        "max_duration": 8
+      },
+      "tags": [
+        "runninghub",
+        "auto-import",
+        "deprecated-default"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://www.runninghub.cn/runninghub-api-doc-cn/llms.txt",
+          "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766688.md"
+        ],
+        "runninghub": {
+          "title": "全能视频V3.1-fast-图生视频-官方稳定版",
+          "model_slug": "rhart-video-v3-1-fast-official-image-to-video",
+          "base_model": "rhart-video-v3-1-fast-official",
+          "api_id": "api-425766688",
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed_html",
+          "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766688.html",
+          "endpoint": "/openapi/v2/rhart-video-v3.1-fast-official/image-to-video",
+          "method": "post",
+          "sku_id": null,
+          "async_protocol": "task_submit_query"
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "runninghub": {
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed_html",
+          "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766688.html",
+          "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766688.md",
+          "sku_id": null,
+          "method": "post"
+        },
+        "endpoint": "/openapi/v2/rhart-video-v3.1-fast-official/image-to-video"
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "RunningHub 全能视频V3.1-pro-图生视频-官方稳定版",
+      "category": "Video",
+      "provider": "runninghub",
+      "base_url": "https://www.runninghub.cn",
+      "model": "rhart-video-v3-1-pro-official-image-to-video",
+      "base_model": "rhart-video-v3-1-pro-official",
+      "modality": {
+        "generation_modes": [
+          "i2v"
+        ],
+        "output_format": "video",
+        "aspect_ratios": [
+          "16:9",
+          "9:16"
+        ],
+        "supported_resolutions": [
+          "720p",
+          "1080p",
+          "4k"
+        ],
+        "durations_seconds": [
+          4,
+          6,
+          8
+        ],
+        "max_duration": 8
+      },
+      "tags": [
+        "runninghub",
+        "auto-import",
+        "deprecated-default"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://www.runninghub.cn/runninghub-api-doc-cn/llms.txt",
+          "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766684.md"
+        ],
+        "runninghub": {
+          "title": "全能视频V3.1-pro-图生视频-官方稳定版",
+          "model_slug": "rhart-video-v3-1-pro-official-image-to-video",
+          "base_model": "rhart-video-v3-1-pro-official",
+          "api_id": "api-425766684",
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed_html",
+          "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766684.html",
+          "endpoint": "/openapi/v2/rhart-video-v3.1-pro-official/image-to-video",
+          "method": "post",
+          "sku_id": null,
+          "async_protocol": "task_submit_query"
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "runninghub": {
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed_html",
+          "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766684.html",
+          "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766684.md",
+          "sku_id": null,
+          "method": "post"
+        },
+        "endpoint": "/openapi/v2/rhart-video-v3.1-pro-official/image-to-video"
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "RunningHub 全能视频V3.1-pro-参考生视频-官方稳定版",
+      "category": "Video",
+      "provider": "runninghub",
+      "base_url": "https://www.runninghub.cn",
+      "model": "rhart-video-v3-1-pro-official-reference-to-video",
+      "base_model": "rhart-video-v3-1-pro-official",
+      "modality": {
+        "generation_modes": [
+          "i2v"
+        ],
+        "output_format": "video",
+        "supported_resolutions": [
+          "720p",
+          "1080p",
+          "4k"
+        ]
+      },
+      "tags": [
+        "runninghub",
+        "auto-import",
+        "deprecated-default"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://www.runninghub.cn/runninghub-api-doc-cn/llms.txt",
+          "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766685.md"
+        ],
+        "runninghub": {
+          "title": "全能视频V3.1-pro-参考生视频-官方稳定版",
+          "model_slug": "rhart-video-v3-1-pro-official-reference-to-video",
+          "base_model": "rhart-video-v3-1-pro-official",
+          "api_id": "api-425766685",
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed_html",
+          "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766685.html",
+          "endpoint": "/openapi/v2/rhart-video-v3.1-pro-official/reference-to-video",
+          "method": "post",
+          "sku_id": null,
+          "async_protocol": "task_submit_query"
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "runninghub": {
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed_html",
+          "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766685.html",
+          "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766685.md",
+          "sku_id": null,
+          "method": "post"
+        },
+        "endpoint": "/openapi/v2/rhart-video-v3.1-pro-official/reference-to-video"
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "RunningHub 全能视频S-文生视频-官方稳定版",
+      "category": "Video",
+      "provider": "runninghub",
+      "base_url": "https://www.runninghub.cn",
+      "model": "rhart-video-s-official-text-to-video",
+      "base_model": "rhart-video-s-official",
+      "modality": {
+        "generation_modes": [
+          "t2v"
+        ],
+        "output_format": "video",
+        "supported_resolutions": [
+          "720x1280",
+          "1280x720"
+        ],
+        "durations_seconds": [
+          4,
+          8,
+          12
+        ],
+        "max_duration": 12
+      },
+      "tags": [
+        "runninghub",
+        "auto-import",
+        "deprecated-default"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://www.runninghub.cn/runninghub-api-doc-cn/llms.txt",
+          "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766712.md"
+        ],
+        "runninghub": {
+          "title": "全能视频S-文生视频-官方稳定版",
+          "model_slug": "rhart-video-s-official-text-to-video",
+          "base_model": "rhart-video-s-official",
+          "api_id": "api-425766712",
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed_html",
+          "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766712.html",
+          "endpoint": "/openapi/v2/rhart-video-s-official/text-to-video",
+          "method": "post",
+          "sku_id": null,
+          "async_protocol": "task_submit_query"
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "runninghub": {
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed_html",
+          "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766712.html",
+          "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766712.md",
+          "sku_id": null,
+          "method": "post"
+        },
+        "endpoint": "/openapi/v2/rhart-video-s-official/text-to-video"
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "RunningHub 全能视频X-文生视频-官方稳定版",
+      "category": "Video",
+      "provider": "runninghub",
+      "base_url": "https://www.runninghub.cn",
+      "model": "rhart-video-g-official-text-to-video",
+      "base_model": "rhart-video-g-official",
+      "modality": {
+        "generation_modes": [
+          "t2v"
+        ],
+        "output_format": "video",
+        "aspect_ratios": [
+          "16:9",
+          "9:16",
+          "1:1"
+        ],
+        "supported_resolutions": [
+          "720p",
+          "480p"
+        ],
+        "durations_seconds": [
+          6,
+          10
+        ],
+        "max_duration": 10
+      },
+      "tags": [
+        "runninghub",
+        "auto-import",
+        "deprecated-default"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://www.runninghub.cn/runninghub-api-doc-cn/llms.txt",
+          "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766714.md"
+        ],
+        "runninghub": {
+          "title": "全能视频X-文生视频-官方稳定版",
+          "model_slug": "rhart-video-g-official-text-to-video",
+          "base_model": "rhart-video-g-official",
+          "api_id": "api-425766714",
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed_html",
+          "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766714.html",
+          "endpoint": "/openapi/v2/rhart-video-g-official/text-to-video",
+          "method": "post",
+          "sku_id": null,
+          "async_protocol": "task_submit_query"
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "runninghub": {
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed_html",
+          "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766714.html",
+          "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766714.md",
+          "sku_id": null,
+          "method": "post"
+        },
+        "endpoint": "/openapi/v2/rhart-video-g-official/text-to-video"
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "RunningHub 全能视频V3.1-pro-文生视频-官方稳定版",
+      "category": "Video",
+      "provider": "runninghub",
+      "base_url": "https://www.runninghub.cn",
+      "model": "rhart-video-v3-1-pro-official-text-to-video",
+      "base_model": "rhart-video-v3-1-pro-official",
+      "modality": {
+        "generation_modes": [
+          "t2v"
+        ],
+        "output_format": "video",
+        "aspect_ratios": [
+          "16:9",
+          "9:16"
+        ],
+        "supported_resolutions": [
+          "720p",
+          "1080p",
+          "4k"
+        ],
+        "durations_seconds": [
+          4,
+          6,
+          8
+        ],
+        "max_duration": 8
+      },
+      "tags": [
+        "runninghub",
+        "auto-import",
+        "deprecated-default"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://www.runninghub.cn/runninghub-api-doc-cn/llms.txt",
+          "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766716.md"
+        ],
+        "runninghub": {
+          "title": "全能视频V3.1-pro-文生视频-官方稳定版",
+          "model_slug": "rhart-video-v3-1-pro-official-text-to-video",
+          "base_model": "rhart-video-v3-1-pro-official",
+          "api_id": "api-425766716",
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed_html",
+          "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766716.html",
+          "endpoint": "/openapi/v2/rhart-video-v3.1-pro-official/text-to-video",
+          "method": "post",
+          "sku_id": null,
+          "async_protocol": "task_submit_query"
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "runninghub": {
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed_html",
+          "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766716.html",
+          "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766716.md",
+          "sku_id": null,
+          "method": "post"
+        },
+        "endpoint": "/openapi/v2/rhart-video-v3.1-pro-official/text-to-video"
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "RunningHub 全能视频V3.1-fast-视频扩展-官方稳定版",
+      "category": "Video",
+      "provider": "runninghub",
+      "base_url": "https://www.runninghub.cn",
+      "model": "rhart-video-v3-1-fast-official-video-extend",
+      "base_model": "rhart-video-v3-1-fast-official",
+      "modality": {
+        "generation_modes": [
+          "t2v"
+        ],
+        "output_format": "video",
+        "supported_resolutions": [
+          "720p",
+          "1080p"
+        ]
+      },
+      "tags": [
+        "runninghub",
+        "auto-import",
+        "deprecated-default"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://www.runninghub.cn/runninghub-api-doc-cn/llms.txt",
+          "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766717.md"
+        ],
+        "runninghub": {
+          "title": "全能视频V3.1-fast-视频扩展-官方稳定版",
+          "model_slug": "rhart-video-v3-1-fast-official-video-extend",
+          "base_model": "rhart-video-v3-1-fast-official",
+          "api_id": "api-425766717",
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed_html",
+          "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766717.html",
+          "endpoint": "/openapi/v2/rhart-video-v3.1-fast-official/video-extend",
+          "method": "post",
+          "sku_id": null,
+          "async_protocol": "task_submit_query"
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "runninghub": {
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed_html",
+          "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766717.html",
+          "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766717.md",
+          "sku_id": null,
+          "method": "post"
+        },
+        "endpoint": "/openapi/v2/rhart-video-v3.1-fast-official/video-extend"
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "RunningHub 全能视频V3.1-pro-视频扩展-官方稳定版",
+      "category": "Video",
+      "provider": "runninghub",
+      "base_url": "https://www.runninghub.cn",
+      "model": "rhart-video-v3-1-pro-official-video-extend",
+      "base_model": "rhart-video-v3-1-pro-official",
+      "modality": {
+        "generation_modes": [
+          "t2v"
+        ],
+        "output_format": "video",
+        "supported_resolutions": [
+          "720p",
+          "1080p"
+        ]
+      },
+      "tags": [
+        "runninghub",
+        "auto-import",
+        "deprecated-default"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://www.runninghub.cn/runninghub-api-doc-cn/llms.txt",
+          "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766718.md"
+        ],
+        "runninghub": {
+          "title": "全能视频V3.1-pro-视频扩展-官方稳定版",
+          "model_slug": "rhart-video-v3-1-pro-official-video-extend",
+          "base_model": "rhart-video-v3-1-pro-official",
+          "api_id": "api-425766718",
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed_html",
+          "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766718.html",
+          "endpoint": "/openapi/v2/rhart-video-v3.1-pro-official/video-extend",
+          "method": "post",
+          "sku_id": null,
+          "async_protocol": "task_submit_query"
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "runninghub": {
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed_html",
+          "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766718.html",
+          "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766718.md",
+          "sku_id": null,
+          "method": "post"
+        },
+        "endpoint": "/openapi/v2/rhart-video-v3.1-pro-official/video-extend"
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "RunningHub 全能视频V3.1-fast-文生视频-官方稳定版",
+      "category": "Video",
+      "provider": "runninghub",
+      "base_url": "https://www.runninghub.cn",
+      "model": "rhart-video-v3-1-fast-official-text-to-video",
+      "base_model": "rhart-video-v3-1-fast-official",
+      "modality": {
+        "generation_modes": [
+          "t2v"
+        ],
+        "output_format": "video",
+        "aspect_ratios": [
+          "16:9",
+          "9:16"
+        ],
+        "supported_resolutions": [
+          "720p",
+          "1080p",
+          "4k"
+        ],
+        "durations_seconds": [
+          4,
+          6,
+          8
+        ],
+        "max_duration": 8
+      },
+      "tags": [
+        "runninghub",
+        "auto-import",
+        "deprecated-default"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://www.runninghub.cn/runninghub-api-doc-cn/llms.txt",
+          "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766720.md"
+        ],
+        "runninghub": {
+          "title": "全能视频V3.1-fast-文生视频-官方稳定版",
+          "model_slug": "rhart-video-v3-1-fast-official-text-to-video",
+          "base_model": "rhart-video-v3-1-fast-official",
+          "api_id": "api-425766720",
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed_html",
+          "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766720.html",
+          "endpoint": "/openapi/v2/rhart-video-v3.1-fast-official/text-to-video",
+          "method": "post",
+          "sku_id": null,
+          "async_protocol": "task_submit_query"
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "runninghub": {
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed_html",
+          "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766720.html",
+          "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766720.md",
+          "sku_id": null,
+          "method": "post"
+        },
+        "endpoint": "/openapi/v2/rhart-video-v3.1-fast-official/text-to-video"
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "RunningHub 全能视频X-编辑视频-官方稳定版",
+      "category": "Video",
+      "provider": "runninghub",
+      "base_url": "https://www.runninghub.cn",
+      "model": "rhart-video-g-official-edit-video",
+      "base_model": "rhart-video-g-official",
+      "modality": {
+        "generation_modes": [
+          "video_edit"
+        ],
+        "output_format": "video",
+        "supported_resolutions": [
+          "720p",
+          "480p"
+        ]
+      },
+      "tags": [
+        "runninghub",
+        "auto-import",
+        "deprecated-default"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://www.runninghub.cn/runninghub-api-doc-cn/llms.txt",
+          "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766722.md"
+        ],
+        "runninghub": {
+          "title": "全能视频X-编辑视频-官方稳定版",
+          "model_slug": "rhart-video-g-official-edit-video",
+          "base_model": "rhart-video-g-official",
+          "api_id": "api-425766722",
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed_html",
+          "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766722.html",
+          "endpoint": "/openapi/v2/rhart-video-g-official/edit-video",
+          "method": "post",
+          "sku_id": null,
+          "async_protocol": "task_submit_query"
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "runninghub": {
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed_html",
+          "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766722.html",
+          "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766722.md",
+          "sku_id": null,
+          "method": "post"
+        },
+        "endpoint": "/openapi/v2/rhart-video-g-official/edit-video"
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    }
+  ]
+}

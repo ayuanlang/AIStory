@@ -1,0 +1,1784 @@
+{
+  "provider": "runninghub",
+  "source_url": "https://www.runninghub.cn/runninghub-api-doc-cn/llms.txt",
+  "generated_at": "2026-03-17T09:30:55.012598+00:00",
+  "api_count": 15,
+  "apis": [
+    {
+      "section": "标准模型API > 视频生成与处理 > image-to-video > 全能视频S",
+      "title": "全能视频S-图生视频-支持真人-官方稳定版",
+      "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766677.md",
+      "summary": "",
+      "category": "Video",
+      "generation_modes": [
+        "i2v"
+      ],
+      "service_tier": "official_stable",
+      "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766677.html",
+      "detail_parse_status": "parsed_html",
+      "endpoint": "/openapi/v2/rhart-video-s-official/image-to-video-realistic",
+      "method": "post",
+      "sku_id": null,
+      "request_fields": [
+        {
+          "name": "prompt",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [],
+          "default_value": "生成一段视频",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "duration",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [
+            "4",
+            "8",
+            "12"
+          ],
+          "default_value": "4",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "imageUrl",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [],
+          "default_value": "https://www.runninghub.cn/view?filename=310765645fa209c394a6a673da7c69da23acdd8e0de199ae35f1bfc25b461fa9.png&type=input&subfolder=&Rh-Comfy-Auth=eyJ1c2VySWQiOiIzZjY1MTNlNWEwNjY1N2I4OGYyNjU5NTEzYmU3ZDM0YyIsInNpZ25FeHBpcmUiOjE3Njg5MTk3ODAxMzksInRzIjoxNzY4MzE0OTgwMTM5LCJzaWduIjoiYmM2Zjg3MWJjMDIzMDMxNWRmYTJlZWZmODVjMDFmNDAifQ==&Rh-Identify=3f6513e5a06657b88f2659513be7d34c&rand=0.8120873731053279",
+          "data_format": "uri",
+          "description": "支持的文件格式：JPG, PNG."
+        }
+      ],
+      "response_contract": {
+        "top_level_fields": [
+          "taskId",
+          "status",
+          "errorCode",
+          "errorMessage",
+          "results",
+          "clientId",
+          "promptTips"
+        ],
+        "status_enum": [
+          "QUEUED",
+          "RUNNING",
+          "SUCCESS",
+          "FAILED"
+        ],
+        "async_protocol": "task_submit_query"
+      },
+      "standard_mapping_candidates": [
+        {
+          "source_field": "duration",
+          "standard_dimension": "DURATION_SECONDS",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "imageUrl",
+          "standard_dimension": "REFERENCE_IMAGE_URL",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "__derived_generation_mode",
+          "standard_dimension": "GENERATION_MODE",
+          "standard_value": "i2v",
+          "confidence": "HIGH",
+          "note": "derived_from_breadcrumb"
+        },
+        {
+          "source_field": "__derived_service_tier",
+          "standard_dimension": "SERVICE_TIER",
+          "standard_value": "official_stable",
+          "confidence": "HIGH",
+          "note": "derived_from_title_summary"
+        }
+      ]
+    },
+    {
+      "section": "标准模型API > 视频生成与处理 > image-to-video > 全能视频S",
+      "title": "全能视频S-图生视频-官方稳定版",
+      "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766678.md",
+      "summary": "",
+      "category": "Video",
+      "generation_modes": [
+        "i2v"
+      ],
+      "service_tier": "official_stable",
+      "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766678.html",
+      "detail_parse_status": "parsed_html",
+      "endpoint": "/openapi/v2/rhart-video-s-official/image-to-video",
+      "method": "post",
+      "sku_id": null,
+      "request_fields": [
+        {
+          "name": "prompt",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [],
+          "default_value": "动作描述： 小狗突然冲向地上的橡胶球，兴奋地用前爪猛拍，接着翻滚扑咬，叼起球后甩头狂摇，最后仰躺在地，四爪紧抱球，欢快地用后腿蹬踹，尾巴高速拍打地板。 环境音效： 小狗发出一连串激动的“汪汪！”（短促、高亢、充满活力）；前爪拍打地板和球的“啪嗒-啪嗒”声；橡胶球被滚动时发出的轻微“咕噜噜”摩擦声；远处壁炉旁老式座钟清晰而规律的“滴答…滴答…”声。 角色发声： （无人类语言，仅包含狗狗的完整声音表现）：兴奋的“嗷呜！嗷呜！”、成功抢到球后喉咙里发出的满足低吼“嗯～～～”，以及用力蹬腿时伴随的一声短促呼气“哈！”",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "duration",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [
+            "4",
+            "8",
+            "12"
+          ],
+          "default_value": "4",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "imageUrl",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [],
+          "default_value": "https://www.runninghub.cn/view?filename=0682559f66cd5fa000f407e6d2cab812381f59fec230618331b8a810f2fe6be3.png&type=input&subfolder=&Rh-Comfy-Auth=eyJ1c2VySWQiOiIzZjY1MTNlNWEwNjY1N2I4OGYyNjU5NTEzYmU3ZDM0YyIsInNpZ25FeHBpcmUiOjE3NjkxNzI5NjYwMTYsInRzIjoxNzY4NTY4MTY2MDE2LCJzaWduIjoiYWJkMTE5MzkzZGRmZmRkYzFlNWZhZTgwMDNkNDgzYzEifQ==&Rh-Identify=3f6513e5a06657b88f2659513be7d34c&rand=0.5705546834574976",
+          "data_format": "uri",
+          "description": "图像尺寸须与模型生成视频长宽比一致（允许的值：720x1280，1280x720） 支持的文件格式：JPG, PNG."
+        }
+      ],
+      "response_contract": {
+        "top_level_fields": [
+          "taskId",
+          "status",
+          "errorCode",
+          "errorMessage",
+          "results",
+          "clientId",
+          "promptTips"
+        ],
+        "status_enum": [
+          "QUEUED",
+          "RUNNING",
+          "SUCCESS",
+          "FAILED"
+        ],
+        "async_protocol": "task_submit_query"
+      },
+      "standard_mapping_candidates": [
+        {
+          "source_field": "duration",
+          "standard_dimension": "DURATION_SECONDS",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "imageUrl",
+          "standard_dimension": "REFERENCE_IMAGE_URL",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "__derived_generation_mode",
+          "standard_dimension": "GENERATION_MODE",
+          "standard_value": "i2v",
+          "confidence": "HIGH",
+          "note": "derived_from_breadcrumb"
+        },
+        {
+          "source_field": "__derived_service_tier",
+          "standard_dimension": "SERVICE_TIER",
+          "standard_value": "official_stable",
+          "confidence": "HIGH",
+          "note": "derived_from_title_summary"
+        }
+      ]
+    },
+    {
+      "section": "标准模型API > 视频生成与处理 > image-to-video > 全能视频S",
+      "title": "全能视频S-文生视频-pro-官方稳定版",
+      "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766679.md",
+      "summary": "",
+      "category": "Video",
+      "generation_modes": [
+        "t2v",
+        "i2v"
+      ],
+      "service_tier": "official_stable",
+      "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766679.html",
+      "detail_parse_status": "parsed_html",
+      "endpoint": "/openapi/v2/rhart-video-s-official/text-to-video-pro",
+      "method": "post",
+      "sku_id": null,
+      "request_fields": [
+        {
+          "name": "prompt",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [],
+          "default_value": "在极其写实的手工艺工作室中，一位老工匠向吹管吹气，塑造一个发光的熔融玻璃花瓶。花瓶意外在石桌上碎裂，成百上千的碎片以真实的惯性飞溅碰撞，并伴有清脆的玻璃撞击声。玻璃破碎的声音和工匠沉重的叹息声与画面完美同步。摄像机执行缓慢的推近镜头，捕捉工匠饱经风霜的皮肤细节和围裙复杂的织物纹理。专业光影，丰富的环境回声。",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "size",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [
+            "720x1280",
+            "1280x720",
+            "1024x1792",
+            "1792x1024"
+          ],
+          "default_value": "720x1280",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "duration",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [
+            "4",
+            "8",
+            "12"
+          ],
+          "default_value": "12",
+          "data_format": null,
+          "description": null
+        }
+      ],
+      "response_contract": {
+        "top_level_fields": [
+          "taskId",
+          "status",
+          "errorCode",
+          "errorMessage",
+          "results",
+          "clientId",
+          "promptTips"
+        ],
+        "status_enum": [
+          "QUEUED",
+          "RUNNING",
+          "SUCCESS",
+          "FAILED"
+        ],
+        "async_protocol": "task_submit_query"
+      },
+      "standard_mapping_candidates": [
+        {
+          "source_field": "size",
+          "standard_dimension": "FRAME_SIZE",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "duration",
+          "standard_dimension": "DURATION_SECONDS",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "__derived_generation_mode",
+          "standard_dimension": "GENERATION_MODE",
+          "standard_value": "t2v",
+          "confidence": "HIGH",
+          "note": "derived_from_breadcrumb"
+        },
+        {
+          "source_field": "__derived_service_tier",
+          "standard_dimension": "SERVICE_TIER",
+          "standard_value": "official_stable",
+          "confidence": "HIGH",
+          "note": "derived_from_title_summary"
+        }
+      ]
+    },
+    {
+      "section": "标准模型API > 视频生成与处理 > image-to-video > 全能视频S",
+      "title": "全能视频S-图生视频-pro-官方稳定版",
+      "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766680.md",
+      "summary": "",
+      "category": "Video",
+      "generation_modes": [
+        "i2v"
+      ],
+      "service_tier": "official_stable",
+      "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766680.html",
+      "detail_parse_status": "parsed_html",
+      "endpoint": "/openapi/v2/rhart-video-s-official/image-to-video-pro",
+      "method": "post",
+      "sku_id": null,
+      "request_fields": [
+        {
+          "name": "prompt",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [],
+          "default_value": "基于参考图，以高保真电影级动态激活场景。一阵强风吹过，使人物的丝绸衣物和散开的发丝随真实的物理规律摆动。人物转身看向摄像机，面部特征和皮肤纹理与原图保持完美一致。",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "resolution",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [
+            "720p",
+            "1080p"
+          ],
+          "default_value": "720p",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "duration",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [
+            "4",
+            "8",
+            "12"
+          ],
+          "default_value": "4",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "imageUrl",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [],
+          "default_value": "https://www.runninghub.cn/view?filename=ce2d58341555d5e4ee0c5ba481c94964b0f0315dc6f39df77d9a45e1aa9cb055.png&type=input&subfolder=&Rh-Comfy-Auth=eyJ1c2VySWQiOiIzZjY1MTNlNWEwNjY1N2I4OGYyNjU5NTEzYmU3ZDM0YyIsInNpZ25FeHBpcmUiOjE3NjkxNzQyMzA5NzQsInRzIjoxNzY4NTY5NDMwOTc0LCJzaWduIjoiYzBjMjQxYjI0MjAzY2YzNzM0ZTE3ZTQ3M2ZhYjNiYWEifQ==&Rh-Identify=3f6513e5a06657b88f2659513be7d34c&rand=0.22377442581455298",
+          "data_format": "uri",
+          "description": "图像尺寸须与模型生成视频长宽比一致（允许的值：720x1280，1280x720，1024x1792，1792x1024） 支持的文件格式：JPG, PNG."
+        }
+      ],
+      "response_contract": {
+        "top_level_fields": [
+          "taskId",
+          "status",
+          "errorCode",
+          "errorMessage",
+          "results",
+          "clientId",
+          "promptTips"
+        ],
+        "status_enum": [
+          "QUEUED",
+          "RUNNING",
+          "SUCCESS",
+          "FAILED"
+        ],
+        "async_protocol": "task_submit_query"
+      },
+      "standard_mapping_candidates": [
+        {
+          "source_field": "resolution",
+          "standard_dimension": "RESOLUTION_TIER",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "duration",
+          "standard_dimension": "DURATION_SECONDS",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "imageUrl",
+          "standard_dimension": "REFERENCE_IMAGE_URL",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "__derived_generation_mode",
+          "standard_dimension": "GENERATION_MODE",
+          "standard_value": "i2v",
+          "confidence": "HIGH",
+          "note": "derived_from_breadcrumb"
+        },
+        {
+          "source_field": "__derived_service_tier",
+          "standard_dimension": "SERVICE_TIER",
+          "standard_value": "official_stable",
+          "confidence": "HIGH",
+          "note": "derived_from_title_summary"
+        }
+      ]
+    },
+    {
+      "section": "标准模型API > 视频生成与处理 > image-to-video > 全能视频G",
+      "title": "全能视频X-图生视频-官方稳定版",
+      "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766682.md",
+      "summary": "",
+      "category": "Video",
+      "generation_modes": [
+        "i2v"
+      ],
+      "service_tier": "official_stable",
+      "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766682.html",
+      "detail_parse_status": "parsed_html",
+      "endpoint": "/openapi/v2/rhart-video-g-official/image-to-video",
+      "method": "post",
+      "sku_id": null,
+      "request_fields": [
+        {
+          "name": "prompt",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [],
+          "default_value": "电影级环绕运镜。镜头缓慢而平滑地绕着这辆红色复古跑车移动。下方的海浪动态地拍打着礁石，激起自然真实的水花。随着太阳逐渐沉入地平线，天空光影自然过渡，跑车的车头灯平滑地自动亮起。画面需配有海浪猛烈拍打岸边以及微凉海风呼啸的同步音效。",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "imageUrl",
+          "field_type": "string",
+          "required": false,
+          "enum_values": [],
+          "default_value": "https://www.runninghub.cn/view?filename=6b05df1302072b51fabe7aee9ab3fe39508a7ca51629768ab521a05eaf93bbf9.jpg&type=input&subfolder=&Rh-Comfy-Auth=eyJ1c2VySWQiOiIzZjY1MTNlNWEwNjY1N2I4OGYyNjU5NTEzYmU3ZDM0YyIsInNpZ25FeHBpcmUiOjE3NzMwMjg5MTYzNzEsInRzIjoxNzcyNDI0MTE2MzcxLCJzaWduIjoiZGZkZDhjMTdhNDA4ZmYzYTI5NWNjYzA1YjhlNDhhZTYifQ==&Rh-Identify=3f6513e5a06657b88f2659513be7d34c&rand=0.9413883407292518",
+          "data_format": "uri",
+          "description": "支持的文件格式：JPG, PNG."
+        },
+        {
+          "name": "resolution",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [
+            "720p",
+            "480p"
+          ],
+          "default_value": "720p",
+          "data_format": null,
+          "description": "resolution（仅15s支持1080p）"
+        },
+        {
+          "name": "duration",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [
+            "6",
+            "10"
+          ],
+          "default_value": "6",
+          "data_format": null,
+          "description": null
+        }
+      ],
+      "response_contract": {
+        "top_level_fields": [
+          "taskId",
+          "status",
+          "errorCode",
+          "errorMessage",
+          "results",
+          "clientId",
+          "promptTips"
+        ],
+        "status_enum": [
+          "QUEUED",
+          "RUNNING",
+          "SUCCESS",
+          "FAILED"
+        ],
+        "async_protocol": "task_submit_query"
+      },
+      "standard_mapping_candidates": [
+        {
+          "source_field": "imageUrl",
+          "standard_dimension": "REFERENCE_IMAGE_URL",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "resolution",
+          "standard_dimension": "RESOLUTION_TIER",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "duration",
+          "standard_dimension": "DURATION_SECONDS",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "__derived_generation_mode",
+          "standard_dimension": "GENERATION_MODE",
+          "standard_value": "i2v",
+          "confidence": "HIGH",
+          "note": "derived_from_breadcrumb"
+        },
+        {
+          "source_field": "__derived_service_tier",
+          "standard_dimension": "SERVICE_TIER",
+          "standard_value": "official_stable",
+          "confidence": "HIGH",
+          "note": "derived_from_title_summary"
+        }
+      ]
+    },
+    {
+      "section": "标准模型API > 视频生成与处理 > image-to-video > 全能视频V3.1",
+      "title": "全能视频V3.1-fast-图生视频-官方稳定版",
+      "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766688.md",
+      "summary": "",
+      "category": "Video",
+      "generation_modes": [
+        "i2v"
+      ],
+      "service_tier": "official_stable",
+      "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766688.html",
+      "detail_parse_status": "parsed_html",
+      "endpoint": "/openapi/v2/rhart-video-v3.1-fast-official/image-to-video",
+      "method": "post",
+      "sku_id": null,
+      "request_fields": [
+        {
+          "name": "prompt",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [],
+          "default_value": "侦探抬起头，雨水从他的帽檐滴落。他带着严肃的表情直视镜头说道：“嫌疑人往这边走了。” 背景中的煤气灯在风中闪烁。音频：大雨声，远处的马车轮声，以及他低沉沙哑的嗓音。",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "imageUrl",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [],
+          "default_value": "https://www.runninghub.cn/view?filename=4f4be1133649ee1288ccde6ccf98487b8f22c9c26a0459c29f8b5ddf796cdafd.jpg&type=input&subfolder=&Rh-Comfy-Auth=eyJ1c2VySWQiOiIzZjY1MTNlNWEwNjY1N2I4OGYyNjU5NTEzYmU3ZDM0YyIsInNpZ25FeHBpcmUiOjE3NzE1Nzk0MTg3ODgsInRzIjoxNzcwOTc0NjE4Nzg4LCJzaWduIjoiZmMxYjUyOWRkMTYxMTI0ZDhkYTNmNGIyYWYxNDFkMmQifQ==&Rh-Identify=3f6513e5a06657b88f2659513be7d34c&rand=0.13159629633496428",
+          "data_format": "uri",
+          "description": "支持的文件格式：JPG, PNG."
+        },
+        {
+          "name": "lastImageUrl",
+          "field_type": "string",
+          "required": false,
+          "enum_values": [],
+          "default_value": null,
+          "data_format": "uri",
+          "description": "支持的文件格式：JPG, PNG."
+        },
+        {
+          "name": "negativePrompt",
+          "field_type": "string",
+          "required": false,
+          "enum_values": [],
+          "default_value": null,
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "seed",
+          "field_type": "integer",
+          "required": false,
+          "enum_values": [],
+          "default_value": null,
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "aspectRatio",
+          "field_type": "string",
+          "required": false,
+          "enum_values": [
+            "16:9",
+            "9:16"
+          ],
+          "default_value": "9:16",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "resolution",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [
+            "720p",
+            "1080p",
+            "4k"
+          ],
+          "default_value": "720p",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "duration",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [
+            "4",
+            "6",
+            "8"
+          ],
+          "default_value": "8",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "generateAudio",
+          "field_type": "boolean",
+          "required": true,
+          "enum_values": [],
+          "default_value": "false",
+          "data_format": null,
+          "description": null
+        }
+      ],
+      "response_contract": {
+        "top_level_fields": [
+          "taskId",
+          "status",
+          "errorCode",
+          "errorMessage",
+          "results",
+          "clientId",
+          "promptTips"
+        ],
+        "status_enum": [
+          "QUEUED",
+          "RUNNING",
+          "SUCCESS",
+          "FAILED"
+        ],
+        "async_protocol": "task_submit_query"
+      },
+      "standard_mapping_candidates": [
+        {
+          "source_field": "imageUrl",
+          "standard_dimension": "REFERENCE_IMAGE_URL",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "aspectRatio",
+          "standard_dimension": "ASPECT_RATIO",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "resolution",
+          "standard_dimension": "RESOLUTION_TIER",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "duration",
+          "standard_dimension": "DURATION_SECONDS",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "__derived_generation_mode",
+          "standard_dimension": "GENERATION_MODE",
+          "standard_value": "i2v",
+          "confidence": "HIGH",
+          "note": "derived_from_breadcrumb"
+        },
+        {
+          "source_field": "__derived_service_tier",
+          "standard_dimension": "SERVICE_TIER",
+          "standard_value": "official_stable",
+          "confidence": "HIGH",
+          "note": "derived_from_title_summary"
+        }
+      ]
+    },
+    {
+      "section": "标准模型API > 视频生成与处理 > image-to-video > 全能视频V3.1",
+      "title": "全能视频V3.1-pro-图生视频-官方稳定版",
+      "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766684.md",
+      "summary": "",
+      "category": "Video",
+      "generation_modes": [
+        "i2v"
+      ],
+      "service_tier": "official_stable",
+      "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766684.html",
+      "detail_parse_status": "parsed_html",
+      "endpoint": "/openapi/v2/rhart-video-v3.1-pro-official/image-to-video",
+      "method": "post",
+      "sku_id": null,
+      "request_fields": [
+        {
+          "name": "prompt",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [],
+          "default_value": "镜头缓慢向前推进穿过街道。霓虹灯牌不规则地闪烁，在潮湿的路面上投射出不断变化的彩色倒影。光柱中可见大雨倾盆而下。音频：大雨击打地面的声音，远处的雷声，以及霓虹灯发出的电流嗡嗡声。",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "imageUrl",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [],
+          "default_value": "https://www.runninghub.cn/view?filename=885b405b856844d2ea8440268a633ad8fa6ef88697c57577de638e9e957c412b.jpg&type=input&subfolder=&Rh-Comfy-Auth=eyJ1c2VySWQiOiIzZjY1MTNlNWEwNjY1N2I4OGYyNjU5NTEzYmU3ZDM0YyIsInNpZ25FeHBpcmUiOjE3NzE1ODAwNDYxNTMsInRzIjoxNzcwOTc1MjQ2MTUzLCJzaWduIjoiODQwOTYwNTgwNzNiMDc2MzViMzQyMzZkMTQ4ZWE5OWQifQ==&Rh-Identify=3f6513e5a06657b88f2659513be7d34c&rand=0.4798650769176951",
+          "data_format": "uri",
+          "description": "支持的文件格式：JPG, PNG."
+        },
+        {
+          "name": "lastImageUrl",
+          "field_type": "string",
+          "required": false,
+          "enum_values": [],
+          "default_value": null,
+          "data_format": "uri",
+          "description": "支持的文件格式：JPG, PNG."
+        },
+        {
+          "name": "negativePrompt",
+          "field_type": "string",
+          "required": false,
+          "enum_values": [],
+          "default_value": null,
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "seed",
+          "field_type": "integer",
+          "required": false,
+          "enum_values": [],
+          "default_value": null,
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "aspectRatio",
+          "field_type": "string",
+          "required": false,
+          "enum_values": [
+            "16:9",
+            "9:16"
+          ],
+          "default_value": "9:16",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "resolution",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [
+            "720p",
+            "1080p",
+            "4k"
+          ],
+          "default_value": "720p",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "duration",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [
+            "4",
+            "6",
+            "8"
+          ],
+          "default_value": "8",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "generateAudio",
+          "field_type": "boolean",
+          "required": true,
+          "enum_values": [],
+          "default_value": "false",
+          "data_format": null,
+          "description": null
+        }
+      ],
+      "response_contract": {
+        "top_level_fields": [
+          "taskId",
+          "status",
+          "errorCode",
+          "errorMessage",
+          "results",
+          "clientId",
+          "promptTips"
+        ],
+        "status_enum": [
+          "QUEUED",
+          "RUNNING",
+          "SUCCESS",
+          "FAILED"
+        ],
+        "async_protocol": "task_submit_query"
+      },
+      "standard_mapping_candidates": [
+        {
+          "source_field": "imageUrl",
+          "standard_dimension": "REFERENCE_IMAGE_URL",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "aspectRatio",
+          "standard_dimension": "ASPECT_RATIO",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "resolution",
+          "standard_dimension": "RESOLUTION_TIER",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "duration",
+          "standard_dimension": "DURATION_SECONDS",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "__derived_generation_mode",
+          "standard_dimension": "GENERATION_MODE",
+          "standard_value": "i2v",
+          "confidence": "HIGH",
+          "note": "derived_from_breadcrumb"
+        },
+        {
+          "source_field": "__derived_service_tier",
+          "standard_dimension": "SERVICE_TIER",
+          "standard_value": "official_stable",
+          "confidence": "HIGH",
+          "note": "derived_from_title_summary"
+        }
+      ]
+    },
+    {
+      "section": "标准模型API > 视频生成与处理 > image-to-video > 全能视频V3.1",
+      "title": "全能视频V3.1-pro-参考生视频-官方稳定版",
+      "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766685.md",
+      "summary": "",
+      "category": "Video",
+      "generation_modes": [
+        "i2v"
+      ],
+      "service_tier": "official_stable",
+      "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766685.html",
+      "detail_parse_status": "parsed_html",
+      "endpoint": "/openapi/v2/rhart-video-v3.1-pro-official/reference-to-video",
+      "method": "post",
+      "sku_id": null,
+      "request_fields": [
+        {
+          "name": "prompt",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [],
+          "default_value": "以第一张图作为背景，第二张图和第三张图的人物在这个场景中相遇，发生一段有趣的故事",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "imageUrls",
+          "field_type": null,
+          "required": true,
+          "enum_values": [],
+          "default_value": "https://www.runninghub.cn/view?filename=840c2aa231092ba5566a675b348542a808c4acfba1c20ba0dbe8edb4dc4bc198.jpg&type=input&subfolder=&Rh-Comfy-Auth=eyJ1c2VySWQiOiIzZjY1MTNlNWEwNjY1N2I4OGYyNjU5NTEzYmU3ZDM0YyIsInNpZ25FeHBpcmUiOjE3NzE1NzY3MTY4NTgsInRzIjoxNzcwOTcxOTE2ODU4LCJzaWduIjoiNWE0MGU4ZjA4YjE3NDU0ODBlOGRhNTFhZGM1MTM0YTUifQ==&Rh-Identify=3f6513e5a06657b88f2659513be7d34c&rand=0.5563813130414209",
+          "data_format": null,
+          "description": "支持的文件格式：JPG, PNG."
+        },
+        {
+          "name": "negativePrompt",
+          "field_type": "string",
+          "required": false,
+          "enum_values": [],
+          "default_value": null,
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "seed",
+          "field_type": "integer",
+          "required": false,
+          "enum_values": [],
+          "default_value": null,
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "resolution",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [
+            "720p",
+            "1080p",
+            "4k"
+          ],
+          "default_value": "1080p",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "generateAudio",
+          "field_type": "boolean",
+          "required": true,
+          "enum_values": [],
+          "default_value": "false",
+          "data_format": null,
+          "description": null
+        }
+      ],
+      "response_contract": {
+        "top_level_fields": [
+          "taskId",
+          "status",
+          "errorCode",
+          "errorMessage",
+          "results",
+          "clientId",
+          "promptTips"
+        ],
+        "status_enum": [
+          "QUEUED",
+          "RUNNING",
+          "SUCCESS",
+          "FAILED"
+        ],
+        "async_protocol": "task_submit_query"
+      },
+      "standard_mapping_candidates": [
+        {
+          "source_field": "imageUrls",
+          "standard_dimension": "REFERENCE_IMAGE_URLS",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "resolution",
+          "standard_dimension": "RESOLUTION_TIER",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "__derived_generation_mode",
+          "standard_dimension": "GENERATION_MODE",
+          "standard_value": "i2v",
+          "confidence": "HIGH",
+          "note": "derived_from_breadcrumb"
+        },
+        {
+          "source_field": "__derived_service_tier",
+          "standard_dimension": "SERVICE_TIER",
+          "standard_value": "official_stable",
+          "confidence": "HIGH",
+          "note": "derived_from_title_summary"
+        }
+      ]
+    },
+    {
+      "section": "标准模型API > 视频生成与处理 > text-to-video > 全能视频S",
+      "title": "全能视频S-文生视频-官方稳定版",
+      "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766712.md",
+      "summary": "",
+      "category": "Video",
+      "generation_modes": [
+        "t2v"
+      ],
+      "service_tier": "official_stable",
+      "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766712.html",
+      "detail_parse_status": "parsed_html",
+      "endpoint": "/openapi/v2/rhart-video-s-official/text-to-video",
+      "method": "post",
+      "sku_id": null,
+      "request_fields": [
+        {
+          "name": "prompt",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [],
+          "default_value": "一段穿梭于繁华未来街道市场的电影级高保真追踪镜头。一名街头艺人正在敲击一套透明玻璃架子鼓，每一次敲击的声效都与鼓内跳动的荧光涟漪完美同步。一个小型机器人宠物不小心撞到了一堆金属球，球体随之散开并以真实的惯性相互碰撞，伴随着清脆的金属撞击声。摄像机执行平滑的推近镜头，捕捉路边一名观众清晰的皮肤毛孔和衣服纹理，该观众正随着环境人声同步大笑。",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "size",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [
+            "720x1280",
+            "1280x720"
+          ],
+          "default_value": "720x1280",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "duration",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [
+            "4",
+            "8",
+            "12"
+          ],
+          "default_value": "4",
+          "data_format": null,
+          "description": null
+        }
+      ],
+      "response_contract": {
+        "top_level_fields": [
+          "taskId",
+          "status",
+          "errorCode",
+          "errorMessage",
+          "results",
+          "clientId",
+          "promptTips"
+        ],
+        "status_enum": [
+          "QUEUED",
+          "RUNNING",
+          "SUCCESS",
+          "FAILED"
+        ],
+        "async_protocol": "task_submit_query"
+      },
+      "standard_mapping_candidates": [
+        {
+          "source_field": "size",
+          "standard_dimension": "FRAME_SIZE",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "duration",
+          "standard_dimension": "DURATION_SECONDS",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "__derived_generation_mode",
+          "standard_dimension": "GENERATION_MODE",
+          "standard_value": "t2v",
+          "confidence": "HIGH",
+          "note": "derived_from_breadcrumb"
+        },
+        {
+          "source_field": "__derived_service_tier",
+          "standard_dimension": "SERVICE_TIER",
+          "standard_value": "official_stable",
+          "confidence": "HIGH",
+          "note": "derived_from_title_summary"
+        }
+      ]
+    },
+    {
+      "section": "标准模型API > 视频生成与处理 > text-to-video > 全能视频G",
+      "title": "全能视频X-文生视频-官方稳定版",
+      "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766714.md",
+      "summary": "",
+      "category": "Video",
+      "generation_modes": [
+        "t2v"
+      ],
+      "service_tier": "official_stable",
+      "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766714.html",
+      "detail_parse_status": "parsed_html",
+      "endpoint": "/openapi/v2/rhart-video-g-official/text-to-video",
+      "method": "post",
+      "sku_id": null,
+      "request_fields": [
+        {
+          "name": "prompt",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [],
+          "default_value": "电影级广角跟拍镜头。在下着连绵细雨的赛博朋克城市街道上，镜头缓慢向前推进。地面上的水洼真实地倒映着上空闪烁的粉色和蓝色全息广告牌。两台流线型的飞行汽车在半空中快速交错穿梭，留下一道道光轨。一个穿着发光风衣的人影撑着透明雨伞走入画面，步伐自然平稳。整体氛围充满强烈的未来感与神秘的潮湿感。",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "aspectRatio",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [
+            "16:9",
+            "9:16",
+            "1:1"
+          ],
+          "default_value": "16:9",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "resolution",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [
+            "720p",
+            "480p"
+          ],
+          "default_value": "720p",
+          "data_format": null,
+          "description": "resolution（仅15s支持1080p）"
+        },
+        {
+          "name": "duration",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [
+            "6",
+            "10"
+          ],
+          "default_value": "6",
+          "data_format": null,
+          "description": null
+        }
+      ],
+      "response_contract": {
+        "top_level_fields": [
+          "taskId",
+          "status",
+          "errorCode",
+          "errorMessage",
+          "results",
+          "clientId",
+          "promptTips"
+        ],
+        "status_enum": [
+          "QUEUED",
+          "RUNNING",
+          "SUCCESS",
+          "FAILED"
+        ],
+        "async_protocol": "task_submit_query"
+      },
+      "standard_mapping_candidates": [
+        {
+          "source_field": "aspectRatio",
+          "standard_dimension": "ASPECT_RATIO",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "resolution",
+          "standard_dimension": "RESOLUTION_TIER",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "duration",
+          "standard_dimension": "DURATION_SECONDS",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "__derived_generation_mode",
+          "standard_dimension": "GENERATION_MODE",
+          "standard_value": "t2v",
+          "confidence": "HIGH",
+          "note": "derived_from_breadcrumb"
+        },
+        {
+          "source_field": "__derived_service_tier",
+          "standard_dimension": "SERVICE_TIER",
+          "standard_value": "official_stable",
+          "confidence": "HIGH",
+          "note": "derived_from_title_summary"
+        }
+      ]
+    },
+    {
+      "section": "标准模型API > 视频生成与处理 > text-to-video > 全能视频V3.1",
+      "title": "全能视频V3.1-pro-文生视频-官方稳定版",
+      "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766716.md",
+      "summary": "",
+      "category": "Video",
+      "generation_modes": [
+        "t2v"
+      ],
+      "service_tier": "official_stable",
+      "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766716.html",
+      "detail_parse_status": "parsed_html",
+      "endpoint": "/openapi/v2/rhart-video-v3.1-pro-official/text-to-video",
+      "method": "post",
+      "sku_id": null,
+      "request_fields": [
+        {
+          "name": "prompt",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [],
+          "default_value": "一只精力充沛的小狗在一块鲜艳的黄色冲浪板上冲浪，乘坐汹涌的蓝色波浪。快速动作，水花四溅，戏剧化的海洋喷雾，动态镜头从侧面跟随冲浪板，阳光明媚，天空晴朗，对比度高，极其细致的毛发物理效果，逼真的波浪模拟，电影般的慢动作时刻。",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "aspectRatio",
+          "field_type": "string",
+          "required": false,
+          "enum_values": [
+            "16:9",
+            "9:16"
+          ],
+          "default_value": "9:16",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "duration",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [
+            "4",
+            "6",
+            "8"
+          ],
+          "default_value": "8",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "resolution",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [
+            "720p",
+            "1080p",
+            "4k"
+          ],
+          "default_value": "720p",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "generateAudio",
+          "field_type": "boolean",
+          "required": true,
+          "enum_values": [],
+          "default_value": "false",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "negativePrompt",
+          "field_type": "string",
+          "required": false,
+          "enum_values": [],
+          "default_value": null,
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "seed",
+          "field_type": "integer",
+          "required": false,
+          "enum_values": [],
+          "default_value": null,
+          "data_format": null,
+          "description": null
+        }
+      ],
+      "response_contract": {
+        "top_level_fields": [
+          "taskId",
+          "status",
+          "errorCode",
+          "errorMessage",
+          "results",
+          "clientId",
+          "promptTips"
+        ],
+        "status_enum": [
+          "QUEUED",
+          "RUNNING",
+          "SUCCESS",
+          "FAILED"
+        ],
+        "async_protocol": "task_submit_query"
+      },
+      "standard_mapping_candidates": [
+        {
+          "source_field": "aspectRatio",
+          "standard_dimension": "ASPECT_RATIO",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "duration",
+          "standard_dimension": "DURATION_SECONDS",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "resolution",
+          "standard_dimension": "RESOLUTION_TIER",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "__derived_generation_mode",
+          "standard_dimension": "GENERATION_MODE",
+          "standard_value": "t2v",
+          "confidence": "HIGH",
+          "note": "derived_from_breadcrumb"
+        },
+        {
+          "source_field": "__derived_service_tier",
+          "standard_dimension": "SERVICE_TIER",
+          "standard_value": "official_stable",
+          "confidence": "HIGH",
+          "note": "derived_from_title_summary"
+        }
+      ]
+    },
+    {
+      "section": "标准模型API > 视频生成与处理 > text-to-video > 全能视频V3.1",
+      "title": "全能视频V3.1-fast-视频扩展-官方稳定版",
+      "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766717.md",
+      "summary": "",
+      "category": "Video",
+      "generation_modes": [
+        "t2v"
+      ],
+      "service_tier": "official_stable",
+      "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766717.html",
+      "detail_parse_status": "parsed_html",
+      "endpoint": "/openapi/v2/rhart-video-v3.1-fast-official/video-extend",
+      "method": "post",
+      "sku_id": null,
+      "request_fields": [
+        {
+          "name": "video",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [],
+          "default_value": "https://www.runninghub.cn/view?filename=66240b5f7887bc374c1770d0bf7ac1f51f3b518798513f1fb02b08f6ae0483b2.mp4&type=input&subfolder=&Rh-Comfy-Auth=eyJ1c2VySWQiOiIzZjY1MTNlNWEwNjY1N2I4OGYyNjU5NTEzYmU3ZDM0YyIsInNpZ25FeHBpcmUiOjE3NzE1Nzg3MzIyOTAsInRzIjoxNzcwOTczOTMyMjkwLCJzaWduIjoiODY1Zjc3NDg3ODkzYzk2NjA4MWE4NTM1OTYxYzg3MTUifQ==&Rh-Identify=3f6513e5a06657b88f2659513be7d34c&rand=0.08173910540910301",
+          "data_format": "uri",
+          "description": "支持的文件格式：MP4."
+        },
+        {
+          "name": "prompt",
+          "field_type": "string",
+          "required": false,
+          "enum_values": [],
+          "default_value": null,
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "resolution",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [
+            "720p",
+            "1080p"
+          ],
+          "default_value": "720p",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "negativePrompt",
+          "field_type": "string",
+          "required": false,
+          "enum_values": [],
+          "default_value": null,
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "seed",
+          "field_type": "integer",
+          "required": false,
+          "enum_values": [],
+          "default_value": null,
+          "data_format": null,
+          "description": null
+        }
+      ],
+      "response_contract": {
+        "top_level_fields": [
+          "taskId",
+          "status",
+          "errorCode",
+          "errorMessage",
+          "results",
+          "clientId",
+          "promptTips"
+        ],
+        "status_enum": [
+          "QUEUED",
+          "RUNNING",
+          "SUCCESS",
+          "FAILED"
+        ],
+        "async_protocol": "task_submit_query"
+      },
+      "standard_mapping_candidates": [
+        {
+          "source_field": "resolution",
+          "standard_dimension": "RESOLUTION_TIER",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "__derived_generation_mode",
+          "standard_dimension": "GENERATION_MODE",
+          "standard_value": "t2v",
+          "confidence": "HIGH",
+          "note": "derived_from_breadcrumb"
+        },
+        {
+          "source_field": "__derived_service_tier",
+          "standard_dimension": "SERVICE_TIER",
+          "standard_value": "official_stable",
+          "confidence": "HIGH",
+          "note": "derived_from_title_summary"
+        }
+      ]
+    },
+    {
+      "section": "标准模型API > 视频生成与处理 > text-to-video > 全能视频V3.1",
+      "title": "全能视频V3.1-pro-视频扩展-官方稳定版",
+      "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766718.md",
+      "summary": "",
+      "category": "Video",
+      "generation_modes": [
+        "t2v"
+      ],
+      "service_tier": "official_stable",
+      "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766718.html",
+      "detail_parse_status": "parsed_html",
+      "endpoint": "/openapi/v2/rhart-video-v3.1-pro-official/video-extend",
+      "method": "post",
+      "sku_id": null,
+      "request_fields": [
+        {
+          "name": "video",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [],
+          "default_value": "https://www.runninghub.cn/view?filename=7fae6a6a5dfe4b7e3ddcb71a507d6ea51e9ef73edd38fc37e723c76407e1e460.mp4&type=input&subfolder=&Rh-Comfy-Auth=eyJ1c2VySWQiOiIzZjY1MTNlNWEwNjY1N2I4OGYyNjU5NTEzYmU3ZDM0YyIsInNpZ25FeHBpcmUiOjE3NzE1Nzc1MjgxNjgsInRzIjoxNzcwOTcyNzI4MTY4LCJzaWduIjoiOGYyZmQ4Yzk3Mzc4NmQ1NDdiMGZiZjY0NGY4NWJkZWIifQ==&Rh-Identify=3f6513e5a06657b88f2659513be7d34c&rand=0.030144780692362594",
+          "data_format": "uri",
+          "description": "支持的文件格式：MP4."
+        },
+        {
+          "name": "prompt",
+          "field_type": "string",
+          "required": false,
+          "enum_values": [],
+          "default_value": null,
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "resolution",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [
+            "720p",
+            "1080p"
+          ],
+          "default_value": "720p",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "negativePrompt",
+          "field_type": "string",
+          "required": false,
+          "enum_values": [],
+          "default_value": null,
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "seed",
+          "field_type": "integer",
+          "required": false,
+          "enum_values": [],
+          "default_value": null,
+          "data_format": null,
+          "description": null
+        }
+      ],
+      "response_contract": {
+        "top_level_fields": [
+          "taskId",
+          "status",
+          "errorCode",
+          "errorMessage",
+          "results",
+          "clientId",
+          "promptTips"
+        ],
+        "status_enum": [
+          "QUEUED",
+          "RUNNING",
+          "SUCCESS",
+          "FAILED"
+        ],
+        "async_protocol": "task_submit_query"
+      },
+      "standard_mapping_candidates": [
+        {
+          "source_field": "resolution",
+          "standard_dimension": "RESOLUTION_TIER",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "__derived_generation_mode",
+          "standard_dimension": "GENERATION_MODE",
+          "standard_value": "t2v",
+          "confidence": "HIGH",
+          "note": "derived_from_breadcrumb"
+        },
+        {
+          "source_field": "__derived_service_tier",
+          "standard_dimension": "SERVICE_TIER",
+          "standard_value": "official_stable",
+          "confidence": "HIGH",
+          "note": "derived_from_title_summary"
+        }
+      ]
+    },
+    {
+      "section": "标准模型API > 视频生成与处理 > text-to-video > 全能视频V3.1",
+      "title": "全能视频V3.1-fast-文生视频-官方稳定版",
+      "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766720.md",
+      "summary": "",
+      "category": "Video",
+      "generation_modes": [
+        "t2v"
+      ],
+      "service_tier": "official_stable",
+      "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766720.html",
+      "detail_parse_status": "parsed_html",
+      "endpoint": "/openapi/v2/rhart-video-v3.1-fast-official/text-to-video",
+      "method": "post",
+      "sku_id": null,
+      "request_fields": [
+        {
+          "name": "prompt",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [],
+          "default_value": "一位粗犷的探险家身处雪山洞穴中。他直视镜头，微微颤抖，说道：“我们找到了入口。” 光线昏暗，仅由一支闪烁的火把照亮。音频：洞外呼啸的风声，火把燃烧的噼啪声，以及他在洞穴中带有轻微回音的说话声。",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "aspectRatio",
+          "field_type": "string",
+          "required": false,
+          "enum_values": [
+            "16:9",
+            "9:16"
+          ],
+          "default_value": "9:16",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "duration",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [
+            "4",
+            "6",
+            "8"
+          ],
+          "default_value": "8",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "resolution",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [
+            "720p",
+            "1080p",
+            "4k"
+          ],
+          "default_value": "720p",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "generateAudio",
+          "field_type": "boolean",
+          "required": true,
+          "enum_values": [],
+          "default_value": "true",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "negativePrompt",
+          "field_type": "string",
+          "required": false,
+          "enum_values": [],
+          "default_value": null,
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "seed",
+          "field_type": "integer",
+          "required": false,
+          "enum_values": [],
+          "default_value": null,
+          "data_format": null,
+          "description": null
+        }
+      ],
+      "response_contract": {
+        "top_level_fields": [
+          "taskId",
+          "status",
+          "errorCode",
+          "errorMessage",
+          "results",
+          "clientId",
+          "promptTips"
+        ],
+        "status_enum": [
+          "QUEUED",
+          "RUNNING",
+          "SUCCESS",
+          "FAILED"
+        ],
+        "async_protocol": "task_submit_query"
+      },
+      "standard_mapping_candidates": [
+        {
+          "source_field": "aspectRatio",
+          "standard_dimension": "ASPECT_RATIO",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "duration",
+          "standard_dimension": "DURATION_SECONDS",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "resolution",
+          "standard_dimension": "RESOLUTION_TIER",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "__derived_generation_mode",
+          "standard_dimension": "GENERATION_MODE",
+          "standard_value": "t2v",
+          "confidence": "HIGH",
+          "note": "derived_from_breadcrumb"
+        },
+        {
+          "source_field": "__derived_service_tier",
+          "standard_dimension": "SERVICE_TIER",
+          "standard_value": "official_stable",
+          "confidence": "HIGH",
+          "note": "derived_from_title_summary"
+        }
+      ]
+    },
+    {
+      "section": "标准模型API > 视频生成与处理 > video-edit",
+      "title": "全能视频X-编辑视频-官方稳定版",
+      "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766722.md",
+      "summary": "",
+      "category": "Video",
+      "generation_modes": [
+        "video_edit"
+      ],
+      "service_tier": "official_stable",
+      "detail_source": "cache:C:\\storyboard\\AIStory\\docs\\runninghub_page_cache\\official_stable_video\\api-425766722.html",
+      "detail_parse_status": "parsed_html",
+      "endpoint": "/openapi/v2/rhart-video-g-official/edit-video",
+      "method": "post",
+      "sku_id": null,
+      "request_fields": [
+        {
+          "name": "prompt",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [],
+          "default_value": "将整个视频转换为经典的吉卜力2D动漫风格。画面色彩需要变得明亮温暖，阳光呈现出柔和的丁达尔效应。人物的衣着和狗的毛发需转化为细腻的手绘水彩质感。在人物奔跑和镜头移动的过程中，必须保持极高的时空一致性，确保背景中的树叶、草地以及人物边缘的线条平滑过渡，不出现任何画面闪烁、形变或闪动噪点。",
+          "data_format": null,
+          "description": null
+        },
+        {
+          "name": "videoUrl",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [],
+          "default_value": "https://www.runninghub.cn/view?filename=ae4f3202c15cee0fc7a560dae143206ea561c7feb423759dbdbbfe291922ec6c.mp4&type=input&subfolder=&Rh-Comfy-Auth=eyJ1c2VySWQiOiIzZjY1MTNlNWEwNjY1N2I4OGYyNjU5NTEzYmU3ZDM0YyIsInNpZ25FeHBpcmUiOjE3NzMwMzM3MTcyODQsInRzIjoxNzcyNDI4OTE3Mjg0LCJzaWduIjoiNjc4MDM1MTdiMjFjZThmMmI4MmZkNjJjY2I5MGE3ODgifQ==&Rh-Identify=3f6513e5a06657b88f2659513be7d34c&rand=0.3961472487197105",
+          "data_format": "uri",
+          "description": "支持的文件格式：MP4."
+        },
+        {
+          "name": "resolution",
+          "field_type": "string",
+          "required": true,
+          "enum_values": [
+            "720p",
+            "480p"
+          ],
+          "default_value": "480p",
+          "data_format": null,
+          "description": "resolution（仅15s支持1080p）"
+        }
+      ],
+      "response_contract": {
+        "top_level_fields": [
+          "taskId",
+          "status",
+          "errorCode",
+          "errorMessage",
+          "results",
+          "clientId",
+          "promptTips"
+        ],
+        "status_enum": [
+          "QUEUED",
+          "RUNNING",
+          "SUCCESS",
+          "FAILED"
+        ],
+        "async_protocol": "task_submit_query"
+      },
+      "standard_mapping_candidates": [
+        {
+          "source_field": "resolution",
+          "standard_dimension": "RESOLUTION_TIER",
+          "confidence": "HIGH",
+          "note": "runninghub_openapi_direct"
+        },
+        {
+          "source_field": "__derived_generation_mode",
+          "standard_dimension": "GENERATION_MODE",
+          "standard_value": "video_edit",
+          "confidence": "HIGH",
+          "note": "derived_from_breadcrumb"
+        },
+        {
+          "source_field": "__derived_service_tier",
+          "standard_dimension": "SERVICE_TIER",
+          "standard_value": "official_stable",
+          "confidence": "HIGH",
+          "note": "derived_from_title_summary"
+        }
+      ]
+    }
+  ]
+}

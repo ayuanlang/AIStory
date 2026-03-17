@@ -148,6 +148,7 @@ def _build_video_dedup_key(req: "VideoGenerationRequest", user_id: int) -> str:
         "prompt": req.prompt,
         "negative_prompt": req.negative_prompt,
         "ref_image_url": req.ref_image_url,
+        "ref_video_urls": req.ref_video_urls,
         "image_urls": req.image_urls,
         "last_frame_url": req.last_frame_url,
         "duration": req.duration,
@@ -13932,6 +13933,7 @@ class VideoGenerationRequest(BaseModel):
     provider: Optional[str] = None
     model: Optional[str] = None
     ref_image_url: Optional[Union[str, List[str]]] = None
+    ref_video_urls: Optional[List[str]] = None
     image_urls: Optional[List[str]] = None
     last_frame_url: Optional[str] = None
     duration: Optional[float] = 5.0
@@ -14168,6 +14170,11 @@ def _build_video_provider_options(req: VideoGenerationRequest) -> Dict[str, Any]
         image_urls = [str(item).strip() for item in req.image_urls if str(item).strip()]
         if image_urls:
             options["image_urls"] = image_urls
+
+    if isinstance(req.ref_video_urls, list):
+        ref_video_urls = [str(item).strip() for item in req.ref_video_urls if str(item).strip()]
+        if ref_video_urls:
+            options["reference_video_urls"] = ref_video_urls
 
     if req.mode is not None:
         mode = str(req.mode).strip().lower()
@@ -17631,6 +17638,7 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
             negative_prompt=effective_negative_prompt,
             llm_config=runtime_llm_config,
             reference_image_url=req.ref_image_url,
+            reference_video_urls=req.ref_video_urls,
             last_frame_url=req.last_frame_url,
             duration=req.duration,
             aspect_ratio=aspect_ratio,

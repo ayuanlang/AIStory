@@ -1,0 +1,160 @@
+{
+  "replace_all": false,
+  "items": [
+    {
+      "name": "RunningHub 全能图片PRO-文生图-官方稳定版",
+      "category": "Image",
+      "provider": "runninghub",
+      "base_url": "https://www.runninghub.cn",
+      "model": "rhart-image-n-pro-official-text-to-image",
+      "base_model": "rhart-image-n-pro-official",
+      "modality": {
+        "generation_modes": [
+          "t2i"
+        ],
+        "output_format": "image",
+        "aspect_ratios": [
+          "1:1",
+          "3:2",
+          "2:3",
+          "3:4",
+          "4:3",
+          "4:5",
+          "5:4",
+          "9:16",
+          "16:9",
+          "21:9"
+        ],
+        "supported_resolutions": [
+          "1k",
+          "2k",
+          "4k"
+        ]
+      },
+      "tags": [
+        "runninghub",
+        "auto-import",
+        "deprecated-default"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://www.runninghub.cn/runninghub-api-doc-cn/llms.txt",
+          "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766743.md"
+        ],
+        "runninghub": {
+          "title": "全能图片PRO-文生图-官方稳定版",
+          "model_slug": "rhart-image-n-pro-official-text-to-image",
+          "base_model": "rhart-image-n-pro-official",
+          "api_id": "api-425766743",
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed",
+          "detail_source": "synthetic",
+          "endpoint": "/openapi/v2/rhart-image-n-pro-official/text-to-image",
+          "method": "post",
+          "sku_id": "2004544597055029250",
+          "async_protocol": "task_submit_query"
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "runninghub": {
+          "service_tier": "official_stable",
+          "detail_parse_status": "parsed",
+          "detail_source": "synthetic",
+          "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766743.md",
+          "sku_id": "2004544597055029250",
+          "method": "post"
+        },
+        "endpoint": "/openapi/v2/rhart-image-n-pro-official/text-to-image"
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "RunningHub minimax/speech-2.8-hd",
+      "category": "Voice",
+      "provider": "runninghub",
+      "base_url": "https://www.runninghub.cn",
+      "model": "text-to-audio-speech-2-8-hd",
+      "base_model": "text-to-audio",
+      "modality": {
+        "generation_modes": [
+          "t2a"
+        ],
+        "output_format": "audio",
+        "voice_capabilities": {
+          "supported": true,
+          "tasks": [
+            "tts"
+          ],
+          "speakers": [
+            "Wise_Woman",
+            "Friendly_Person",
+            "Elegant_Man"
+          ],
+          "emotions": [
+            "happy",
+            "sad",
+            "angry",
+            "fearful",
+            "disgusted",
+            "surprised",
+            "neutral"
+          ]
+        }
+      },
+      "tags": [
+        "runninghub",
+        "auto-import",
+        "deprecated-default"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://www.runninghub.cn/runninghub-api-doc-cn/llms.txt",
+          "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766728.md"
+        ],
+        "runninghub": {
+          "title": "minimax/speech-2.8-hd",
+          "model_slug": "text-to-audio-speech-2-8-hd",
+          "base_model": "text-to-audio",
+          "api_id": "api-425766728",
+          "service_tier": "unknown",
+          "detail_parse_status": "parsed",
+          "detail_source": "synthetic",
+          "endpoint": "/openapi/v2/rhart-audio/text-to-audio/speech-2.8-hd",
+          "method": "post",
+          "sku_id": "2018969332367036417",
+          "async_protocol": "task_submit_query"
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "runninghub": {
+          "service_tier": "unknown",
+          "detail_parse_status": "parsed",
+          "detail_source": "synthetic",
+          "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766728.md",
+          "sku_id": "2018969332367036417",
+          "method": "post"
+        },
+        "endpoint": "/openapi/v2/rhart-audio/text-to-audio/speech-2.8-hd"
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    }
+  ]
+}

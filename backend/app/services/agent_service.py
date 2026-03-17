@@ -1742,7 +1742,7 @@ Output ONLY the JSON object now."""
                 self._repair_invalid_system_config_rows(session, category=resolved_category)
 
                 def _is_endpoint_compatible(cfg: Dict[str, Any]) -> bool:
-                    endpoint = str((cfg or {}).get("endpoint") or "").strip().lower()
+                    endpoint = str((cfg or {}).get("endpoint") or (cfg or {}).get("endpoint_hint") or "").strip().lower()
                     if not endpoint:
                         return True
                     if resolved_category != "LLM":

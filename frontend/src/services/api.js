@@ -1543,7 +1543,7 @@ export const getImageGenerationJobStatus = async (jobId) => {
     return response.data;
 };
 
-export const generateVideo = async (prompt, provider = null, ref_image_url = null, last_frame_url = null, duration = 5, options = {}, keyframes = [], negative_prompt = null) => {
+export const generateVideo = async (prompt, provider = null, ref_image_url = null, ref_video_urls = null, last_frame_url = null, duration = 5, options = {}, keyframes = [], negative_prompt = null) => {
     const effectiveNegativePrompt = String(negative_prompt ?? options?.negative_prompt ?? '').trim();
     const {
         job_timeout_ms,
@@ -1563,6 +1563,7 @@ export const generateVideo = async (prompt, provider = null, ref_image_url = nul
         ...(callbackUrl ? { callback_url: callbackUrl } : {}),
         ...(provider ? { provider } : {}),
         ...(ref_image_url !== null && ref_image_url !== undefined && ref_image_url !== '' ? { ref_image_url } : {}),
+        ...(Array.isArray(ref_video_urls) && ref_video_urls.length > 0 ? { ref_video_urls } : {}),
         ...(last_frame_url !== null && last_frame_url !== undefined && last_frame_url !== '' ? { last_frame_url } : {}),
         ...(Array.isArray(keyframes) && keyframes.length > 0 ? { keyframes } : {}),
         ...(effectiveNegativePrompt ? { negative_prompt: effectiveNegativePrompt } : {}),

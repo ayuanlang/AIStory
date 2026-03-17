@@ -1,0 +1,59 @@
+{
+  "provider": "runninghub",
+  "source_url": "https://www.runninghub.cn/runninghub-api-doc-cn/llms.txt",
+  "generated_at": "2026-03-17T00:00:00+00:00",
+  "api_count": 2,
+  "apis": [
+    {
+      "section": "标准模型API > 图像生成与处理 > text-to-image > 全能图片PRO",
+      "title": "全能图片PRO-文生图-官方稳定版",
+      "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766743.md",
+      "summary": "全能图片PRO是一款前沿文本生图模型。",
+      "category": "Image",
+      "generation_modes": ["t2i"],
+      "service_tier": "official_stable",
+      "detail_source": "synthetic",
+      "detail_parse_status": "parsed",
+      "endpoint": "/openapi/v2/rhart-image-n-pro-official/text-to-image",
+      "method": "post",
+      "sku_id": "2004544597055029250",
+      "request_fields": [
+        {"name": "resolution", "field_type": "string", "required": true, "enum_values": ["1k", "2k", "4k"], "default_value": "1k", "data_format": null, "description": "resolution"},
+        {"name": "prompt", "field_type": "string", "required": true, "enum_values": [], "default_value": null, "data_format": null, "description": "prompt"},
+        {"name": "aspectRatio", "field_type": "string", "required": true, "enum_values": ["1:1", "3:2", "2:3", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"], "default_value": "3:4", "data_format": null, "description": "aspectRatio"}
+      ],
+      "response_contract": {
+        "top_level_fields": ["taskId", "status", "errorCode", "errorMessage", "results", "clientId", "promptTips", "failedReason", "usage"],
+        "status_enum": ["QUEUED", "RUNNING", "SUCCESS", "FAILED"],
+        "async_protocol": "task_submit_query"
+      },
+      "standard_mapping_candidates": []
+    },
+    {
+      "section": "标准模型API > 音频生成与处理 > text-to-audio",
+      "title": "minimax/speech-2.8-hd",
+      "doc_url": "https://www.runninghub.cn/runninghub-api-doc-cn/api-425766728.md",
+      "summary": "一款专为追求极致听感而设计的录音室级文本转语音模型。",
+      "category": "Voice",
+      "generation_modes": ["t2a"],
+      "service_tier": "unknown",
+      "detail_source": "synthetic",
+      "detail_parse_status": "parsed",
+      "endpoint": "/openapi/v2/rhart-audio/text-to-audio/speech-2.8-hd",
+      "method": "post",
+      "sku_id": "2018969332367036417",
+      "request_fields": [
+        {"name": "text", "field_type": "string", "required": true, "enum_values": [], "default_value": null, "data_format": null, "description": "text"},
+        {"name": "voice_id", "field_type": "string", "required": true, "enum_values": ["Wise_Woman", "Friendly_Person", "Elegant_Man"], "default_value": "Wise_Woman", "data_format": null, "description": "voice_id"},
+        {"name": "emotion", "field_type": "string", "required": false, "enum_values": ["happy", "sad", "angry", "fearful", "disgusted", "surprised", "neutral"], "default_value": "happy", "data_format": null, "description": "emotion"},
+        {"name": "enable_base64_output", "field_type": "boolean", "required": true, "enum_values": [], "default_value": "false", "data_format": null, "description": "enable_base64_output"}
+      ],
+      "response_contract": {
+        "top_level_fields": ["taskId", "status", "errorCode", "errorMessage", "results", "clientId", "promptTips", "failedReason", "usage"],
+        "status_enum": ["QUEUED", "RUNNING", "SUCCESS", "FAILED"],
+        "async_protocol": "task_submit_query"
+      },
+      "standard_mapping_candidates": []
+    }
+  ]
+}
