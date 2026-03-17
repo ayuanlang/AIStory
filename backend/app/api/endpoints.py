@@ -15369,9 +15369,12 @@ def _resolve_media_runtime_target(
 ) -> Dict[str, Any]:
     runtime_llm_config = _build_runtime_llm_config(provider, model, media_type=media_type)
     pre_api_cfg: Dict[str, Any] = {}
+    user_explicit_provider = bool(str(provider or "").strip())
+    user_explicit_model = bool(str(model or "").strip())
+    user_explicit_selection = bool(user_explicit_provider or user_explicit_model)
 
     try:
-        strict_provider = bool(str(provider or "").strip())
+        strict_provider = user_explicit_provider
         pre_api_cfg = media_service.get_api_config(
             provider=provider,
             user_id=user_id,
@@ -15387,6 +15390,12 @@ def _resolve_media_runtime_target(
             runtime_llm_config = {"provider": resolved_provider, "model": resolved_model}
     except Exception:
         pre_api_cfg = pre_api_cfg or {}
+
+    if not isinstance(runtime_llm_config, dict):
+        runtime_llm_config = {}
+    runtime_llm_config["__user_explicit_provider"] = user_explicit_provider
+    runtime_llm_config["__user_explicit_model"] = user_explicit_model
+    runtime_llm_config["__user_explicit_selection"] = user_explicit_selection
 
     resolved_provider = str((runtime_llm_config or {}).get("provider") or provider or "").strip() or None
     resolved_model = str((runtime_llm_config or {}).get("model") or model or "").strip() or None

@@ -528,16 +528,21 @@ def _safe_non_negative_float(value: Any) -> float:
         return 0.0
 
 
-def _multiplied_cost_to_credit(value: Any, multiplier: float) -> int:
-    """Convert supplier price (CNY/USD) to system credits.
-
-    Formula: credits = ceil(price_cny * 100 * multiplier)
-    100 = CNY to credits (1 credit = 0.01 CNY)
-    multiplier = markup multiplier (default 2.0)
-    """
+def _base_cost_to_credit(value: Any) -> int:
+    """Convert supplier price (CNY) to raw system credits before markup."""
     base = _safe_non_negative_float(value)
+    return max(0, int(math.ceil(base * 100)))
+
+
+def _apply_charge_multiplier_to_credit(base_cost: Any, multiplier: float) -> int:
+    raw_cost = _safe_non_negative_int(base_cost)
     mul = _safe_non_negative_float(multiplier)
-    return max(0, int(math.ceil(base * 100 * (mul if mul > 0 else 1.0))))
+    return max(0, int(round(raw_cost * (mul if mul > 0 else 1.0))))
+
+
+def _multiplied_cost_to_credit(value: Any, multiplier: float) -> int:
+    """Convert supplier price (CNY) to final charged credits after markup."""
+    return _apply_charge_multiplier_to_credit(_base_cost_to_credit(value), multiplier)
 
 
 def _normalize_currency_code(value: Any) -> str:
@@ -2382,6 +2387,7 @@ def _upsert_base_billing_rule(
         "cost_input": _non_negative_int(_pick_cost_value(raw_billing, "cost_input", "billing_cost_input"), 0),
         "cost_output": _non_negative_int(_pick_cost_value(raw_billing, "cost_output", "billing_cost_output"), 0),
     }
+    charge_multiplier = _normalize_rule_charge_multiplier(raw_billing.get("charge_multiplier"), default=2.0)
     flags = _category_to_mode_flags(category)
     rule = _get_base_billing_rule(db, system_api_id, include_inactive=True)
     now_iso = now_bj_iso()
@@ -2421,7 +2427,7 @@ def _upsert_base_billing_rule(
         rule.billing_cost = normalized["cost"]
         rule.billing_cost_input = normalized["cost_input"]
         rule.billing_cost_output = normalized["cost_output"]
-        rule.charge_multiplier = _normalize_rule_charge_multiplier(getattr(rule, "charge_multiplier", None), default=2.0)
+        rule.charge_multiplier = charge_multiplier
         rule.extra_conditions = extra
         if activate:
             rule.is_active = True
@@ -2445,7 +2451,7 @@ def _upsert_base_billing_rule(
         billing_cost=normalized["cost"],
         billing_cost_input=normalized["cost_input"],
         billing_cost_output=normalized["cost_output"],
-        charge_multiplier=2.0,
+        charge_multiplier=charge_multiplier,
         extra_conditions={"rule_kind": _BASE_BILLING_RULE_KIND},
         created_at=now_iso,
         updated_at=now_iso,
@@ -2884,6 +2890,18 @@ def _rule_multiplier_score_x100(rule: SystemAPIBillingRule) -> int:
     return int(round(multiplier * 100.0))
 
 
+def _rule_effective_cost_score(rule: SystemAPIBillingRule) -> int:
+    cost = _non_negative_int(getattr(rule, "billing_cost", 0), 0)
+    cost_input = _non_negative_int(getattr(rule, "billing_cost_input", 0), 0)
+    cost_output = _non_negative_int(getattr(rule, "billing_cost_output", 0), 0)
+    multiplier = _normalize_rule_charge_multiplier(getattr(rule, "charge_multiplier", None), default=2.0)
+    return int(max(
+        _apply_charge_multiplier_to_credit(cost, multiplier),
+        _apply_charge_multiplier_to_credit(cost_input, multiplier),
+        _apply_charge_multiplier_to_credit(cost_output, multiplier),
+    ))
+
+
 def _system_api_pricing_from_rules_and_audit(
     db: Session,
     system_api_id: int,
@@ -2909,7 +2927,7 @@ def _system_api_pricing_from_rules_and_audit(
     ).all()
     rule_scores: List[int] = []
     for row in rule_rows:
-        c = _rule_multiplier_score_x100(row)
+        c = _rule_effective_cost_score(row)
         if c > 0:
             rule_scores.append(int(c))
 
@@ -2923,7 +2941,7 @@ def _system_api_pricing_from_rules_and_audit(
 
     return {
         "average_cost": max(0, int(avg_cost)),
-        "source": "charge_multiplier_x100",
+        "source": "billing_cost_x_multiplier",
         "min_cost": max(0, int(range_min)),
         "max_cost": max(0, int(range_max)),
         "sample_prices": sample_prices,
@@ -2942,7 +2960,7 @@ def _batch_system_api_pricing_from_rules_and_audit(
     id_set = set(normalized_ids)
     default_value = {
         "average_cost": 0,
-        "source": "charge_multiplier_x100",
+        "source": "billing_cost_x_multiplier",
         "min_cost": 0,
         "max_cost": 0,
         "sample_prices": [],
@@ -2955,6 +2973,7 @@ def _batch_system_api_pricing_from_rules_and_audit(
         SystemAPIBillingRule.billing_cost,
         SystemAPIBillingRule.billing_cost_input,
         SystemAPIBillingRule.billing_cost_output,
+        SystemAPIBillingRule.charge_multiplier,
     ).filter(
         SystemAPIBillingRule.system_api_id.in_(normalized_ids),
         or_(SystemAPIBillingRule.is_active == True, SystemAPIBillingRule.is_active.is_(None)),
@@ -2971,7 +2990,15 @@ def _batch_system_api_pricing_from_rules_and_audit(
         if rid > 0:
             rule_ids.append(rid)
             rule_id_to_sid[rid] = sid
-        c = int(round(max(0.0, _safe_non_negative_float(getattr(row, "charge_multiplier", None) or 2.0)) * 100.0))
+        cost = _non_negative_int(getattr(row, "billing_cost", 0), 0)
+        cost_input = _non_negative_int(getattr(row, "billing_cost_input", 0), 0)
+        cost_output = _non_negative_int(getattr(row, "billing_cost_output", 0), 0)
+        multiplier = _normalize_rule_charge_multiplier(getattr(row, "charge_multiplier", None), default=2.0)
+        c = int(max(
+            _apply_charge_multiplier_to_credit(cost, multiplier),
+            _apply_charge_multiplier_to_credit(cost_input, multiplier),
+            _apply_charge_multiplier_to_credit(cost_output, multiplier),
+        ))
         if c > 0:
             rule_costs_by_sid[sid].append(int(c))
 
@@ -2988,7 +3015,7 @@ def _batch_system_api_pricing_from_rules_and_audit(
             if costs:
                 result[sid]["average_cost"] = int(round(sum(costs) / float(len(costs))))
                 result[sid]["sample_prices"] = []
-            result[sid]["source"] = "charge_multiplier_x100"
+            result[sid]["source"] = "billing_cost_x_multiplier"
         return result
 
     for sid in normalized_ids:
@@ -2996,7 +3023,7 @@ def _batch_system_api_pricing_from_rules_and_audit(
         avg_cost = int(round(sum(costs) / float(len(costs)))) if costs else 0
         result[sid]["average_cost"] = max(0, int(avg_cost))
         result[sid]["sample_prices"] = []
-        result[sid]["source"] = "charge_multiplier_x100"
+        result[sid]["source"] = "billing_cost_x_multiplier"
 
     return result
 
@@ -3176,6 +3203,15 @@ def _extract_webhook_and_price_cache(config_value: Any) -> Tuple[Optional[str], 
     }
 
 
+def _settings_price_cache_is_legacy(config_value: Any) -> bool:
+    price_cache = _read_settings_price_cache(config_value)
+    provider_cache = _read_settings_provider_price_cache(config_value)
+    return (
+        str(price_cache.get("source") or "").strip().lower() == "charge_multiplier_x100"
+        or str(provider_cache.get("source") or "").strip().lower() == "provider_range_from_rules_sample_from_audit"
+    )
+
+
 def _refresh_settings_price_cache_for_system_apis(db: Session, system_api_ids: List[int]) -> int:
     ids = sorted({_safe_int(sid, 0) for sid in (system_api_ids or []) if _safe_int(sid, 0) > 0})
     if not ids:
@@ -3324,7 +3360,7 @@ def _refresh_settings_provider_price_cache_for_system_apis(db: Session, system_a
 
         next_cmp = {
             "average_cost": max(0, int(avg_cost)),
-            "source": "provider_range_from_rules_sample_from_audit",
+            "source": "effective_provider_range_from_rules",
             "min_cost": max(0, int(min_cost)),
             "max_cost": max(0, int(max_cost)),
             "sample_prices": [int(v) for v in sample_prices if int(v) > 0],
@@ -4108,6 +4144,16 @@ def get_system_settings(
             ).all()
 
         system_settings = _query_system_settings_rows()
+        stale_price_ids = [
+            int(getattr(item, "id", 0) or 0)
+            for item in system_settings
+            if int(getattr(item, "id", 0) or 0) > 0 and _settings_price_cache_is_legacy(getattr(item, "config", None))
+        ]
+        if stale_price_ids:
+            _refresh_settings_price_cache_for_system_apis(db, stale_price_ids)
+            _refresh_settings_provider_price_cache_for_system_apis(db, stale_price_ids)
+            db.commit()
+            system_settings = _query_system_settings_rows()
         t_query_system_settings_ms = int((time.perf_counter() - t_prev) * 1000)
         t_prev = time.perf_counter()
 
@@ -6010,9 +6056,10 @@ def apply_system_ai_assistant(
 
         billing = {
             "unit_type": suggestion.unit_type,
-            "cost": suggestion.cost,
-            "cost_input": suggestion.cost_input,
-            "cost_output": suggestion.cost_output,
+            "cost": _base_cost_to_credit(suggestion.supplier_price),
+            "cost_input": _base_cost_to_credit(suggestion.supplier_price_input),
+            "cost_output": _base_cost_to_credit(suggestion.supplier_price_output),
+            "charge_multiplier": suggestion.multiplier,
         }
 
         # 构建 supplier_info: 存储原供应商API定价信息用于审计对照

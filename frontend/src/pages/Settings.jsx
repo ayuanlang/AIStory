@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useStore } from '@/lib/store';
 import { Save, Info, Upload, Download, Coins, History, Palette, CheckCircle, ArrowLeft, User, KeyRound } from 'lucide-react';
 import { API_URL } from '@/config';
-import { updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, selectSystemSetting, updateMyProfile, updateMyPassword, uploadMyAvatar, recordSystemLogAction, getAutoDownloadLocalPreference, setAutoDownloadLocalPreference, getPromptSubmitLanguagePreference, setPromptSubmitLanguagePreference, normalizePromptSubmitLanguagePreference, updateUserPreferences } from '../services/api';
+import { updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, getUserPreferences, selectSystemSetting, updateMyProfile, updateMyPassword, uploadMyAvatar, recordSystemLogAction, getAutoDownloadLocalPreference, setAutoDownloadLocalPreference, getPromptSubmitLanguagePreference, setPromptSubmitLanguagePreference, normalizePromptSubmitLanguagePreference, updateUserPreferences } from '../services/api';
 import RechargeModal from '../components/RechargeModal'; // Import RechargeModal
 import { getUiLang, setUiLang as setGlobalUiLang, tUI, UI_LANG_EVENT } from '../lib/uiLang';
 import { formatProviderLabel } from '../lib/providerLabel';
@@ -178,24 +178,22 @@ const Settings = () => {
         };
         return unitLabelMap[unit] || unit;
     };
-    const aliasifyProviderInDetails = (payload, fallbackAlias = '') => {
-        const fallback = String(fallbackAlias || '').trim();
-        const walk = (value) => {
-            if (Array.isArray(value)) return value.map(walk);
-            if (!value || typeof value !== 'object') return value;
-            const out = {};
-            Object.keys(value).forEach((k) => {
-                out[k] = walk(value[k]);
-            });
-            const providerText = String(out.provider || '').trim();
-            const aliasText = String(out.provider_alias || '').trim() || (providerText ? fallback : '');
-            if (providerText && aliasText) {
-                out.provider = aliasText;
-                out.provider_code = providerText;
-            }
-            return out;
-        };
-        return walk(payload);
+    const formatTransactionDateTime = (value) => {
+        const raw = String(value || '').trim();
+        if (!raw) return '-';
+
+        let normalized = raw.replace(' ', 'T');
+        const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(normalized);
+        if (!hasTimezone) {
+            normalized = `${normalized}Z`;
+        }
+        normalized = normalized.replace(/\.(\d{3})\d+(?=(?:Z|[+-]\d{2}:?\d{2})$)/i, '.$1');
+
+        const parsed = new Date(normalized);
+        if (Number.isNaN(parsed.getTime())) {
+            return raw;
+        }
+        return parsed.toLocaleString();
     };
     const location = useLocation();
     const navigate = useNavigate();
@@ -943,7 +941,10 @@ const Settings = () => {
     useEffect(() => {
         const fetchSettings = async () => {
              try {
-                const data = await getSettings();
+                const [data, userPreferences] = await Promise.all([
+                    getSettings(),
+                    getUserPreferences().catch(() => null),
+                ]);
                 if (data) {
                     // Find existing Baidu Translation setting
                     const baiduSetting = data.find(s => s.provider === 'baidu_translate' || s.provider === 'baidu');
@@ -958,6 +959,39 @@ const Settings = () => {
                         setAutoIntelligentApiCalling(true);
                     }
                 }
+
+                if (userPreferences && typeof userPreferences === 'object') {
+                    const generation = userPreferences.generation && typeof userPreferences.generation === 'object'
+                        ? userPreferences.generation
+                        : {};
+                    const advanced = userPreferences.advanced_model && typeof userPreferences.advanced_model === 'object'
+                        ? userPreferences.advanced_model
+                        : {};
+                    const withFallback = (value, fallbackValue) => {
+                        if (typeof value === 'string' && value.trim()) return value;
+                        return fallbackValue;
+                    };
+                    const tempNum = Number(advanced.temperature);
+                    const seedNum = Number(advanced.seed);
+                    const cfgNum = Number(advanced.cfg);
+
+                    setPromptSubmitLanguage(normalizePromptSubmitLanguagePreference(userPreferences.prompt_submit_language));
+                    setAutoDownloadLocal(!!userPreferences.auto_download_local);
+                    setCharSupplements(withFallback(generation.characterSupplements, DEFAULT_CHARACTER_SUPPLEMENTS));
+                    setSceneSupplements(withFallback(generation.sceneSupplements, DEFAULT_SCENE_SUPPLEMENTS));
+                    setPromptLanguage(generation.prompt_language || 'mixed');
+                    setAdvancedTemperature(
+                        Number.isFinite(tempNum) ? String(Math.max(0, Math.min(2, tempNum))) : '0.7'
+                    );
+                    setAdvancedSeed(Number.isFinite(seedNum) && seedNum > 0 ? String(Math.trunc(seedNum)) : '');
+                    setAdvancedCfg(Number.isFinite(cfgNum) && cfgNum > 0 ? String(cfgNum) : '');
+                    setAdvancedReasoningEffort(
+                        ['low', 'medium', 'high'].includes(String(advanced.reasoning_effort || '').toLowerCase())
+                            ? String(advanced.reasoning_effort).toLowerCase()
+                            : 'high'
+                    );
+                }
+
                 refreshActiveSettingSources();
              } catch (e) {
                  console.error("Failed to load backend settings", e);
@@ -2051,25 +2085,19 @@ const Settings = () => {
                                             <tr className="border-b border-white/10 text-muted-foreground">
                                                 <th className="p-3">{t('时间', 'Time')}</th>
                                                 <th className="p-3">{t('类型', 'Type')}</th>
-                                                <th className="p-3">{t('详情', 'Details')}</th>
                                                 <th className="p-3 text-right">{t('金额', 'Amount')}</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-white/5">
                                             {transactions.length === 0 ? (
-                                                <tr><td colSpan="4" className="text-center p-8 text-muted-foreground">{t('暂无交易记录', 'No transactions found')}</td></tr>
+                                                <tr><td colSpan="3" className="text-center p-8 text-muted-foreground">{t('暂无交易记录', 'No transactions found')}</td></tr>
                                             ) : transactions.map(t => (
                                                 <tr key={t.id} className="hover:bg-white/[0.02]">
                                                     <td className="p-3 text-muted-foreground">
-                                                        {new Date(t.created_at.endsWith('Z') ? t.created_at : t.created_at + 'Z').toLocaleString()}
+                                                        {formatTransactionDateTime(t.created_at)}
                                                     </td>
                                                     <td className="p-3">
                                                         <span className="bg-white/5 px-2 py-0.5 rounded text-xs uppercase border border-white/10">{t.task_type}</span>
-                                                    </td>
-                                                    <td className="p-3 text-xs opacity-70">
-                                                        <div className="max-h-[120px] overflow-y-auto whitespace-pre-wrap break-all w-[220px] sm:w-[300px] bg-black/20 p-2 rounded border border-white/10 font-mono text-[10px]">
-                                                            {JSON.stringify(aliasifyProviderInDetails(t.details, t.provider_alias), null, 2)}
-                                                        </div>
                                                     </td>
                                                     <td className={`p-3 text-right font-mono font-bold ${t.amount < 0 ? 'text-red-400' : 'text-green-400'}`}>
                                                         {t.amount > 0 ? '+' : ''}{t.amount}

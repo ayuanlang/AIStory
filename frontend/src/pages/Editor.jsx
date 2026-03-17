@@ -21889,7 +21889,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                 {renderAssetMetaPanel()}
                                                             </div>
                                                             <div className="space-y-3">
-                                                                {imageCfgControl}
                                                                 <div className="flex items-center gap-2">
                                                                     <button 
                                                                         onClick={() => generateAssetWithLang('start', -1, { cfg: currentImageCfgValue })} 
@@ -21927,6 +21926,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                     }} projectId={projectId} shotId={editingShot.id} assetType="start_frame" featureInjector={injectEntityFeatures} onPickMedia={openMediaPicker} />
                                                                 </div>
                                                                 <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（起始帧）', 'Refs (Start)')} promptText={editingShot.start_frame || ''} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="ref_image_urls" strictPromptOnly={true} />
+                                                                {imageCfgControl}
                                                             </div>
                                                         </div>
                                                     );
@@ -21950,7 +21950,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                 {renderAssetMetaPanel()}
                                                             </div>
                                                             <div className="space-y-3">
-                                                                {imageCfgControl}
                                                                 <div className="flex items-center gap-2">
                                                                     <button 
                                                                         onClick={() => generateAssetWithLang('end', -1, { cfg: currentImageCfgValue })} 
@@ -21995,6 +21994,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                     setEditingShot(prev => ({...prev, ...newData}));
                                                                 }} projectId={projectId} shotId={editingShot.id} assetType="end_frame" featureInjector={injectEntityFeatures} onPickMedia={openMediaPicker} />
                                                                 <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（结束帧）', 'Refs (End)')} promptText={editingShot.end_frame || ''} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="end_ref_image_urls" strictPromptOnly={true} />
+                                                                {imageCfgControl}
                                                             </div>
                                                         </div>
                                                     );
@@ -22153,7 +22153,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                             {renderAssetMetaPanel()}
                                                         </div>
                                                         <div className="space-y-3">
-                                                            {imageCfgControl}
                                                             <div className="flex items-center gap-2">
                                                                 <input className="bg-black/30 border border-white/10 rounded px-2 py-1 text-xs w-20" value={keyframe?.time || ''} onChange={(e) => {
                                                                     const updated = [...localKeyframes];
@@ -22216,6 +22215,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                 setLocalKeyframes(updated);
                                                                 reconstructKeyframes(updated);
                                                             }} projectId={projectId} shotId={editingShot.id} assetType={`keyframe_${assetDetailModal.keyframeIndex}`} featureInjector={injectEntityFeatures} onPickMedia={openMediaPicker} />
+                                                            {imageCfgControl}
                                                         </div>
                                                     </div>
                                                 );

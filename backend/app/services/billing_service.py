@@ -280,12 +280,14 @@ class BillingService:
             return None
 
         def _rule_effective_cost(rule: SystemAPIBillingRule) -> int:
-            # Rule range should reflect effective billable value of each rule.
+            # billing_cost columns store raw rule values; UI-facing ranges should reflect
+            # the final billed price after the rule multiplier is applied once.
+            pricing = BillingService._billing_from_rule(rule)
             return max(
                 0,
-                BillingService._to_int(getattr(rule, "billing_cost", 0), 0),
-                BillingService._to_int(getattr(rule, "billing_cost_input", 0), 0),
-                BillingService._to_int(getattr(rule, "billing_cost_output", 0), 0),
+                BillingService._to_int(pricing.get("cost", 0), 0),
+                BillingService._to_int(pricing.get("cost_input", 0), 0),
+                BillingService._to_int(pricing.get("cost_output", 0), 0),
             )
 
         # Price range for settings page is sourced directly from billing rules table
@@ -326,11 +328,12 @@ class BillingService:
         strict_costs: List[int] = []
         all_costs: List[int] = []
         for row in rows:
+            pricing = BillingService._billing_from_rule(row)
             cost = max(
                 0,
-                BillingService._to_int(getattr(row, "billing_cost", 0), 0),
-                BillingService._to_int(getattr(row, "billing_cost_input", 0), 0),
-                BillingService._to_int(getattr(row, "billing_cost_output", 0), 0),
+                BillingService._to_int(pricing.get("cost", 0), 0),
+                BillingService._to_int(pricing.get("cost_input", 0), 0),
+                BillingService._to_int(pricing.get("cost_output", 0), 0),
             )
             if cost <= 0:
                 continue
@@ -524,11 +527,17 @@ class BillingService:
     def _billing_from_rule(rule: Optional[SystemAPIBillingRule]) -> Dict[str, Any]:
         if not rule:
             return {"unit_type": "per_call", "cost": 0, "cost_input": 0, "cost_output": 0}
+        raw_multiplier = getattr(rule, "charge_multiplier", None)
+        try:
+            parsed_multiplier = float(raw_multiplier) if raw_multiplier is not None else 2.0
+        except Exception:
+            parsed_multiplier = 2.0
+        charge_multiplier = 2.0 if parsed_multiplier < 0 else parsed_multiplier
         return BillingService._normalize_api_pricing_config({
             "unit_type": getattr(rule, "billing_unit_type", "per_call"),
-            "cost": getattr(rule, "billing_cost", 0),
-            "cost_input": getattr(rule, "billing_cost_input", 0),
-            "cost_output": getattr(rule, "billing_cost_output", 0),
+            "cost": int(max(0, round(float(BillingService._to_int(getattr(rule, "billing_cost", 0), 0)) * float(charge_multiplier)))),
+            "cost_input": int(max(0, round(float(BillingService._to_int(getattr(rule, "billing_cost_input", 0), 0)) * float(charge_multiplier)))),
+            "cost_output": int(max(0, round(float(BillingService._to_int(getattr(rule, "billing_cost_output", 0), 0)) * float(charge_multiplier)))),
         })
 
     @staticmethod
@@ -1696,7 +1705,7 @@ class BillingService:
 
     @staticmethod
     def _estimate_rule_cost(rule: SystemAPIBillingRule, usage: Dict[str, Any]) -> Dict[str, Any]:
-        cfg = {
+        raw_cfg = {
             "unit_type": str(getattr(rule, "billing_unit_type", "per_call") or "per_call"),
             "cost": max(0, BillingService._to_int(getattr(rule, "billing_cost", 0), 0)),
             "cost_input": max(0, BillingService._to_int(getattr(rule, "billing_cost_input", 0), 0)),
@@ -1708,10 +1717,10 @@ class BillingService:
         cache_miss_input_cost = BillingService._to_int(extra.get("cache_miss_cost_input", 0), 0)
         cache_miss_output_cost = BillingService._to_int(extra.get("cache_miss_cost_output", 0), 0)
 
-        if cfg["unit_type"] in BillingService.TOKEN_UNIT_TYPES and any(
+        if raw_cfg["unit_type"] in BillingService.TOKEN_UNIT_TYPES and any(
             value > 0 for value in [cache_hit_input_cost, cache_hit_output_cost, cache_miss_input_cost, cache_miss_output_cost]
         ):
-            divisor = 1_000_000.0 if cfg["unit_type"] == "per_million_tokens" else 1_000.0 if cfg["unit_type"] == "per_1k_tokens" else 1.0
+            divisor = 1_000_000.0 if raw_cfg["unit_type"] == "per_million_tokens" else 1_000.0 if raw_cfg["unit_type"] == "per_1k_tokens" else 1.0
             cache_hit_tokens = max(0, BillingService._to_int(usage.get("cache_hit_tokens", 0), 0))
             cache_miss_tokens = max(0, BillingService._to_int(usage.get("cache_miss_tokens", 0), 0))
             input_tokens = max(0, BillingService._to_int(usage.get("input_tokens", 0), 0))
@@ -1719,8 +1728,8 @@ class BillingService:
             if cache_miss_tokens == 0:
                 cache_miss_tokens = max(0, input_tokens - cache_hit_tokens)
 
-            miss_input_rate = cache_miss_input_cost if cache_miss_input_cost > 0 else cfg["cost_input"]
-            output_rate = cache_miss_output_cost if cache_miss_output_cost > 0 else cache_hit_output_cost if cache_hit_output_cost > 0 else cfg["cost_output"]
+            miss_input_rate = cache_miss_input_cost if cache_miss_input_cost > 0 else raw_cfg["cost_input"]
+            output_rate = cache_miss_output_cost if cache_miss_output_cost > 0 else cache_hit_output_cost if cache_hit_output_cost > 0 else raw_cfg["cost_output"]
 
             computed = (
                 (float(cache_hit_tokens) * float(cache_hit_input_cost))
@@ -1729,7 +1738,7 @@ class BillingService:
             ) / divisor
             amount = max(0, int(round(computed)))
         else:
-            amount = BillingService._estimate_api_cost_from_config(cfg, usage)
+            amount = BillingService._estimate_api_cost_from_config(raw_cfg, usage)
 
         raw_multiplier = getattr(rule, "charge_multiplier", None)
         try:
@@ -1741,11 +1750,17 @@ class BillingService:
 
         base_cost = int(max(0, amount))
         charged_cost = int(max(0, round(float(base_cost) * float(charge_multiplier))))
+        effective_cfg = BillingService._normalize_api_pricing_config({
+            "unit_type": raw_cfg["unit_type"],
+            "cost": int(max(0, round(float(raw_cfg["cost"]) * float(charge_multiplier)))),
+            "cost_input": int(max(0, round(float(raw_cfg["cost_input"]) * float(charge_multiplier)))),
+            "cost_output": int(max(0, round(float(raw_cfg["cost_output"]) * float(charge_multiplier)))),
+        })
         return {
             "cost": charged_cost,
             "base_cost": base_cost,
             "charge_multiplier": float(charge_multiplier),
-            "config": cfg,
+            "config": effective_cfg,
         }
 
     @staticmethod

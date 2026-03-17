@@ -2267,6 +2267,10 @@ Output ONLY the JSON object now."""
         use_mul = mul if mul > 0 else 1.0
         return max(0, int((base * use_mul) + 0.999999))
 
+    def _base_cost_to_credit(self, value: Any) -> int:
+        base = self._safe_non_negative_float(value)
+        return max(0, int(base + 0.999999))
+
     def _safe_json_dict(self, value: Any) -> Dict[str, Any]:
         if value is None:
             return {}
@@ -2313,6 +2317,9 @@ Output ONLY the JSON object now."""
         cost = max(0, int((billing or {}).get("cost") or 0))
         cost_input = max(0, int((billing or {}).get("cost_input") or 0))
         cost_output = max(0, int((billing or {}).get("cost_output") or 0))
+        charge_multiplier = self._safe_non_negative_float((billing or {}).get("charge_multiplier") or 1.0)
+        if charge_multiplier <= 0:
+            charge_multiplier = 1.0
 
         category = str(getattr(row, "category", "") or "").strip().lower()
         applies_to_text = category not in {"image", "video"}
@@ -2333,6 +2340,7 @@ Output ONLY the JSON object now."""
             base_rule.billing_cost = cost
             base_rule.billing_cost_input = cost_input
             base_rule.billing_cost_output = cost_output
+            base_rule.charge_multiplier = charge_multiplier
             base_rule.extra_conditions = extra
             base_rule.is_active = True
             base_rule.updated_at = now_iso
@@ -2351,6 +2359,7 @@ Output ONLY the JSON object now."""
             billing_cost=cost,
             billing_cost_input=cost_input,
             billing_cost_output=cost_output,
+            charge_multiplier=charge_multiplier,
             extra_conditions={"rule_kind": self._BASE_BILLING_RULE_KIND},
             created_at=now_iso,
             updated_at=now_iso,
@@ -3471,9 +3480,9 @@ Output ONLY the JSON object now."""
             if category_lower == "image" and supplier_price is None:
                 supplier_price = self._first_non_negative_float_from_keys(params, ["cost", "cost_per_image", "image_cost"])
 
-            cost = self._multiplied_cost_to_credit(supplier_price, multiplier)
-            cost_input = self._multiplied_cost_to_credit(supplier_price_input, multiplier)
-            cost_output = self._multiplied_cost_to_credit(supplier_price_output, multiplier)
+            cost = self._base_cost_to_credit(supplier_price)
+            cost_input = self._base_cost_to_credit(supplier_price_input)
+            cost_output = self._base_cost_to_credit(supplier_price_output)
 
             row = self._find_existing_system_api_setting(db, provider, category, model)
             if not row:
@@ -3493,6 +3502,7 @@ Output ONLY the JSON object now."""
                 "cost": cost,
                 "cost_input": cost_input,
                 "cost_output": cost_output,
+                "charge_multiplier": multiplier,
             }
             patch_cfg = {
                 "supplier_pricing": {
@@ -3541,6 +3551,7 @@ Output ONLY the JSON object now."""
                     matched_rule.billing_cost = cost
                     matched_rule.billing_cost_input = cost_input
                     matched_rule.billing_cost_output = cost_output
+                    matched_rule.charge_multiplier = multiplier
                     matched_rule.extra_conditions = signature.get("extra_conditions") or {}
                     matched_rule.is_active = True if is_rule_active is None else bool(is_rule_active)
                     matched_rule.updated_at = now_rule_iso
@@ -3560,6 +3571,7 @@ Output ONLY the JSON object now."""
                         billing_cost=cost,
                         billing_cost_input=cost_input,
                         billing_cost_output=cost_output,
+                        charge_multiplier=multiplier,
                         extra_conditions=signature.get("extra_conditions") or {},
                         created_at=now_rule_iso,
                         updated_at=now_rule_iso,

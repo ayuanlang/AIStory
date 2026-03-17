@@ -23,6 +23,45 @@ from app.core.time_utils import now_bj_iso
 logger = logging.getLogger(__name__)
 
 
+def _deactivate_legacy_duplicate_base_billing_rules() -> None:
+    """Keep only the newest active base pricing rule per system API."""
+    try:
+        with SessionLocal() as session:
+            rows = session.query(SystemAPIBillingRule).filter(
+                SystemAPIBillingRule.is_active == True,
+            ).order_by(
+                SystemAPIBillingRule.system_api_id.asc(),
+                SystemAPIBillingRule.id.desc(),
+            ).all()
+
+            seen_system_api_ids = set()
+            changed = 0
+            now_iso = now_bj_iso()
+
+            for row in rows:
+                extra = row.extra_conditions if isinstance(row.extra_conditions, dict) else {}
+                if str(extra.get("rule_kind", "")).strip().lower() != "base_pricing":
+                    continue
+
+                system_api_id = int(getattr(row, "system_api_id", 0) or 0)
+                if system_api_id <= 0:
+                    continue
+
+                if system_api_id in seen_system_api_ids:
+                    row.is_active = False
+                    row.updated_at = now_iso
+                    changed += 1
+                    continue
+
+                seen_system_api_ids.add(system_api_id)
+
+            if changed:
+                session.commit()
+                logger.info("Deactivated %s legacy duplicate base billing rules", changed)
+    except Exception as exc:
+        logger.warning("Failed to deactivate duplicate base billing rules: %s", exc)
+
+
 def _ensure_core_performance_indexes() -> None:
     """Create hot-path indexes idempotently for auth/project/system-api reads."""
     ddl_statements = [
@@ -702,6 +741,8 @@ def check_and_migrate_tables():
                     logger.info("Migrated %s system_api_settings pricing rows into base billing rules", migrated)
         except Exception as e:
             logger.error(f"Failed to migrate system_api pricing into base rules: {e}")
+
+        _deactivate_legacy_duplicate_base_billing_rules()
 
         # Migrate legacy system-owned rows from api_settings into system_api_settings (opt-in only).
         if _should_manage_api_settings_on_init():

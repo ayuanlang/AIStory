@@ -173,6 +173,54 @@ class MediaGenerationService:
             return " ".join(self._flatten_text(item) for item in value)
         return str(value)
 
+    def _enforce_no_watermark_payload(self, value: Any) -> Any:
+        if isinstance(value, list):
+            return [self._enforce_no_watermark_payload(item) for item in value]
+
+        if not isinstance(value, dict):
+            return value
+
+        normalized: Dict[str, Any] = {}
+        for key, item in value.items():
+            lower_key = str(key or "").strip().lower()
+
+            if lower_key == "remove_watermark":
+                normalized[key] = True
+                continue
+
+            if lower_key in {"watermark", "water_mark"}:
+                if isinstance(item, bool) or item is None:
+                    normalized[key] = False
+                elif isinstance(item, (int, float)):
+                    normalized[key] = 0
+                else:
+                    normalized[key] = ""
+                continue
+
+            if lower_key == "watermark_text":
+                normalized[key] = ""
+                continue
+
+            if lower_key in {"logoadd", "logo_add"}:
+                normalized[key] = 0
+                continue
+
+            if lower_key == "add_logo":
+                normalized[key] = False
+                continue
+
+            if lower_key == "logo_info":
+                logo_info = item if isinstance(item, dict) else {}
+                normalized[key] = {
+                    **self._enforce_no_watermark_payload(logo_info),
+                    "add_logo": False,
+                }
+                continue
+
+            normalized[key] = self._enforce_no_watermark_payload(item)
+
+        return normalized
+
     def _merge_negative_prompt(self, prompt: Any, negative_prompt: Any) -> str:
         base_prompt = str(prompt or "").strip()
         neg_prompt = str(negative_prompt or "").strip()
@@ -2063,6 +2111,10 @@ class MediaGenerationService:
                 requested_provider = self._normalize_provider_name(str(provider or "").strip(), resolved_category)
                 requested_model_value = str(requested_model or "").strip()
                 task_default_row = get_task_default_system_setting(session, resolved_category)
+                selected_user_strategy = self._normalize_api_strategy(
+                    getattr(user_setting, "api_strategy", None),
+                    default=self.USER_API_STRATEGY_SMART_DEFAULT,
+                )
 
                 def _trace_default_vs_selected(stage: str, selected_row: Optional[SystemAPISetting], selected_source: str, note: str = "") -> None:
                     mapped_id = getattr(task_default_row, "id", None)
@@ -2200,7 +2252,7 @@ class MediaGenerationService:
                                 return _build_runtime_from_system_row(
                                     selected_by_id,
                                     resolved_source,
-                                    self.USER_API_STRATEGY_FIXED,
+                                    selected_user_strategy,
                                 )
                         if not selected_binding_deprecated:
                             logger.warning(
@@ -2221,7 +2273,7 @@ class MediaGenerationService:
                         return _build_runtime_from_system_row(
                             default_row,
                             resolved_source,
-                            self.USER_API_STRATEGY_FIXED,
+                            selected_user_strategy,
                         )
 
                 # Fallback 2: any non-deprecated system setting in category.
@@ -2232,7 +2284,7 @@ class MediaGenerationService:
                     return _build_runtime_from_system_row(
                         fallback_any,
                         resolved_source,
-                        self.USER_API_STRATEGY_FIXED,
+                        selected_user_strategy,
                     )
 
                 logger.warning(
@@ -2246,7 +2298,8 @@ class MediaGenerationService:
         return {}
 
     async def generate_image(self, prompt: str, negative_prompt: Optional[str] = None, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, width: int = None, height: int = None, image_size: Optional[str] = None, aspect_ratio: str = None, provider_options: Optional[Dict[str, Any]] = None, user_id: int = 1, user_credits: int = 0, filename_base: Optional[str] = None, asset_type: Optional[str] = None):
-        explicit_provider_selected = bool((llm_config or {}).get("provider"))
+        explicit_provider_selected = bool((llm_config or {}).get("__user_explicit_provider"))
+        explicit_selection = bool((llm_config or {}).get("__user_explicit_selection"))
         provider = self._normalize_provider_name((llm_config or {}).get("provider"), "Image")
         pre_resolved_api_config = (llm_config or {}).get("__pre_resolved_api_config")
         if isinstance(pre_resolved_api_config, dict) and pre_resolved_api_config:
@@ -2320,7 +2373,7 @@ class MediaGenerationService:
             image_size=image_size,
             aspect_ratio=aspect_ratio,
             requested_model=(llm_config or {}).get("model"),
-            explicit_selection=bool((llm_config or {}).get("provider") or (llm_config or {}).get("model")),
+            explicit_selection=explicit_selection,
             allow_priority_fallback_when_explicit=str(asset_type or "").strip().lower() in {"subject", "entity", "character", "prop", "environment"},
             fallback_candidate_limit=3,
             modality="image-to-image" if reference_image_url else "text-to-image",
@@ -2342,7 +2395,7 @@ class MediaGenerationService:
         return result
 
     async def generate_video(self, prompt: str, negative_prompt: Optional[str] = None, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, last_frame_url: Optional[str] = None, duration: int = 5, aspect_ratio: Optional[str] = None, keyframes: Optional[List[str]] = None, provider_options: Optional[Dict[str, Any]] = None, user_id: int = 1, user_credits: int = 0, filename_base: Optional[str] = None):
-        explicit_provider_selected = bool((llm_config or {}).get("provider"))
+        explicit_provider_selected = bool((llm_config or {}).get("__user_explicit_provider"))
         provider = self._normalize_provider_name((llm_config or {}).get("provider"), "Video")
         pre_resolved_api_config = (llm_config or {}).get("__pre_resolved_api_config")
         if isinstance(pre_resolved_api_config, dict) and pre_resolved_api_config:
@@ -2381,7 +2434,7 @@ class MediaGenerationService:
                     )
                 )
 
-        explicit_selection_for_video = bool((llm_config or {}).get("provider") or (llm_config or {}).get("model"))
+        explicit_selection_for_video = bool((llm_config or {}).get("__user_explicit_selection"))
         if explicit_selection_for_video and not api_config:
             _debug_log(
                 "[MediaService][VideoConfig] explicit provider/model requested but no active non-deprecated system setting matched; blocking request",
@@ -2443,7 +2496,7 @@ class MediaGenerationService:
         except Exception:
             selected_strategy = self.USER_API_STRATEGY_FIXED
 
-        if provider_locked_by_active_setting and not bool((llm_config or {}).get("provider") or (llm_config or {}).get("model")):
+        if provider_locked_by_active_setting and not explicit_selection_for_video:
             logger.info(
                 "Generate video provider lock enabled | user_id=%s provider=%s reason=active_setting_no_explicit_override fallback=enabled_on_failure",
                 user_id,
@@ -2495,7 +2548,8 @@ class MediaGenerationService:
         user_id: int = 1,
         user_credits: int = 0,
     ):
-        explicit_provider_selected = bool((llm_config or {}).get("provider"))
+        explicit_provider_selected = bool((llm_config or {}).get("__user_explicit_provider"))
+        explicit_selection = bool((llm_config or {}).get("__user_explicit_selection"))
         provider = None
         if llm_config and llm_config.get("provider"):
             provider = self._normalize_provider_name(llm_config["provider"], "Voice")
@@ -2563,7 +2617,7 @@ class MediaGenerationService:
             reference_image_url=None,
             duration=duration,
             requested_model=(llm_config or {}).get("model"),
-            explicit_selection=bool((llm_config or {}).get("provider") or (llm_config or {}).get("model")),
+            explicit_selection=explicit_selection,
             allow_priority_fallback_when_explicit=True,
             fallback_candidate_limit=3,
             modality="text-to-audio",
@@ -4706,13 +4760,7 @@ class MediaGenerationService:
                 n_frames_value = "15" if int(duration_value) >= 15 else "10"
             payload_input["n_frames"] = n_frames_value
 
-            remove_watermark_raw = tool_conf.get("remove_watermark")
-            if remove_watermark_raw is None:
-                payload_input["remove_watermark"] = True
-            elif isinstance(remove_watermark_raw, bool):
-                payload_input["remove_watermark"] = remove_watermark_raw
-            else:
-                payload_input["remove_watermark"] = str(remove_watermark_raw).strip().lower() in {"1", "true", "yes", "on", "y"}
+            payload_input["remove_watermark"] = True
 
             upload_method_value = str(tool_conf.get("upload_method") or payload_input.get("upload_method") or "s3").strip().lower()
             if upload_method_value not in {"s3", "oss"}:
@@ -5104,9 +5152,7 @@ class MediaGenerationService:
             if "enableTranslation" in tool_conf:
                 payload["enableTranslation"] = bool(tool_conf.get("enableTranslation"))
 
-            watermark_text = str(tool_conf.get("watermark") or "").strip()
-            if watermark_text:
-                payload["watermark"] = watermark_text
+            payload["watermark"] = False
 
             if callback_url and callback_url != "-1":
                 payload["callBackUrl"] = callback_url
@@ -5142,7 +5188,7 @@ class MediaGenerationService:
                 "duration": "10" if str(duration) in {"10"} else "5",
                 "quality": "1080p" if "1080" in str(tool_conf.get("resolution") or "") else "720p",
                 "aspectRatio": normalized_ar if normalized_ar in {"16:9", "4:3", "1:1", "3:4", "9:16"} else "16:9",
-                "waterMark": str(tool_conf.get("watermark") or ""),
+                "waterMark": "",
             }
             if callback_url and callback_url != "-1":
                 payload["callBackUrl"] = callback_url
@@ -5207,9 +5253,8 @@ class MediaGenerationService:
                 "safetyTolerance": int(tool_conf.get("safetyTolerance", 2)),
                 "enableTranslation": bool(tool_conf.get("enableTranslation", True)),
                 "uploadCn": bool(tool_conf.get("uploadCn")),
+                "watermark": False,
             }
-            if tool_conf.get("watermark"):
-                payload["watermark"] = str(tool_conf.get("watermark"))
             if callback_url and callback_url != "-1":
                 payload["callBackUrl"] = callback_url
             if resolved_refs:
@@ -5453,6 +5498,9 @@ class MediaGenerationService:
                 payload_input_obj["multi_shots"] = False
 
             payload["input"] = payload_input_obj
+
+        if isinstance(payload, dict):
+            payload = self._enforce_no_watermark_payload(payload)
 
         headers = {
             "Authorization": f"Bearer {api_key}",
