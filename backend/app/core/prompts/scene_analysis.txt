@@ -13,13 +13,14 @@
 9. 环境默认审美：未指定风格时，默认优美/大气/现代/优雅；若剧本指定风格，以剧本优先。
 10. 角色与道具默认审美：未限制时，角色镜头友好且可播出，道具精致可复现；必须保留锚定特征。
 11. 层级编码延续：`Episode ID=EPxx`，`Scene ID=EPxx_SCyy`，下游 `Shot ID=EPxx_SCyy_SHzz`；Scene 内状态必须形成 `Entry -> Exit` 闭环。
-12. 语言一致：自然语言跟随输入主语言；仅 `Episode/Scene/Shot ID`、固定结构键名、约定标签可保持既定格式，其余描述禁止中英混杂漂移；每个实体必须同时输出 `generation_prompt_cn` 与 `generation_prompt_en` 且语义一致，`anchor_description` 必须英文短语。
-13. 基准环境统一：同一地理场地的变体依托同一 Base Reference；变体仅写 Delta，`REUSE` 必写 `None/No visual delta`。
-14. 环境命名权威：`scene_analysis.txt` 是 Environment 最终命名唯一权威；上游若提供 `environment_name` 仅作种子参考，必须在本阶段统一定稿。
-15. 名称冻结：Environment/Character/Prop 一旦定稿，下游逐字符继承，禁止任何自动改写。
-16. 角色与道具命名权威：Character/Prop 同样以本文件为最终权威，禁止别名/翻译漂移。
-17. 锚点不可变更：`anchor_description` 与已定稿身份锚点（脸型/体态/标志物/鞋履识别点）一经确定即为只读，后续阶段仅可引用，不得增删改或语义改写。
-17. 零推理泄露：仅输出最终结果；禁止思维链、解释、`<think>`、代码围栏。若指令冲突，本条优先。
+12. 语言一致：自然语言默认跟随输入主语言；但若 `Project Context` 中明确给出 `Language`（如 `Language: 英文 / English`），则该项目语言为最高优先级，必须覆盖剧本文本原始语言。仅 `Episode/Scene/Shot ID`、固定结构键名、约定标签可保持既定格式，其余描述禁止中英混杂漂移；每个实体必须同时输出 `generation_prompt_cn` 与 `generation_prompt_en` 且语义一致，`anchor_description` 必须英文短语。
+13. 项目语言覆盖翻译（Mandatory）：当 `Project Context` 明确指定目标语言时，剧本情节中出现的对白、旁白、字幕、屏幕文字、标识语、口号、书信/消息内容、以及任何“角色正在说某种语言/切换语言”的语言事件，都必须转换并改写为目标语言后再写入分析结果；禁止把与项目语言冲突的原文直接保留为最终字段值，除非剧情明确要求“原文内容本身是关键证据/专有文本”，此时也必须在目标语言下给出可理解表达。
+14. 基准环境统一：同一地理场地的变体依托同一 Base Reference；变体仅写 Delta，`REUSE` 必写 `None/No visual delta`。
+15. 环境命名权威：`scene_analysis.txt` 是 Environment 最终命名唯一权威；上游若提供 `environment_name` 仅作种子参考，必须在本阶段统一定稿。
+16. 名称冻结：Environment/Character/Prop 一旦定稿，下游逐字符继承，禁止任何自动改写。
+17. 角色与道具命名权威：Character/Prop 同样以本文件为最终权威，禁止别名/翻译漂移。
+18. 锚点不可变更：`anchor_description` 与已定稿身份锚点（脸型/体态/标志物/鞋履识别点）一经确定即为只读，后续阶段仅可引用，不得增删改或语义改写。
+19. 零推理泄露：仅输出最终结果；禁止思维链、解释、`<think>`、代码围栏。若指令冲突，本条优先。
 
 ---
 
@@ -191,6 +192,7 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
   `1. {镜头:机位在{ }旁/朝向{ }/轴线{左侧|右侧}} + {空间:CHAR:[@角色A]在{ }相对{Stage}位于{ }} + {角色-镜头关系:CHAR:[@角色A]处于{前景|中景|后景}偏{左|右}、{正对|侧对|背对}镜头、景别{远景|全景|中景|近景|特写}、镜高/俯仰{平视|俯拍|仰拍}} + {主体关系:CHAR:[@角色A]与CHAR:[@角色B]位置{ }/朝向{ }/视线{ }/接触{ }} + {动作变化:因{触发原因}执行{动作路径与顺序}，对白/字幕/音效:{ }} -> {新状态:{位置|朝向|视线|接触|道具状态}}`。
 - 槽位缺失即无效，必须补全重写。
 - 必须写入具体对白/字幕/屏幕文字/音效（若该 Beat 存在）。
+- 若 `Project Context` 明确指定目标语言，则上述对白/字幕/屏幕文字/标识语/语言切换描述必须统一转换为该目标语言后再写入 Beat；禁止保留与项目语言冲突的原文表述作为最终结果。
 - 实体引用强制：
   - 角色：`CHAR:[@Name]`
   - 环境：`ENV:[Name]`
@@ -204,6 +206,7 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 
 #### Full Script Coverage
 - Beats 必须覆盖原剧本全部信息：动作、台词、情绪反应、字幕、屏幕文字、V.O./O.S.。
+- 若 `Project Context` 指定了项目语言，则上述所有语言性信息在覆盖时必须先翻译/转换成项目语言，再写入最终分析结果。
 
 ### 3) 实体完备性
 - `Layout` 必须明确 FG/MG/BG 层级。

@@ -463,6 +463,7 @@
   - **禁止表格外文本**：表格前后都不要输出标题、解释、步骤、注释、空行段落；最终输出必须从表头 `|` 开始，并以表格最后一行结束。
 - **排版检查 (Format Validation)**：输出前必须进行 Markdown 格式自检。确保 Markdown 表格语法严格准确，不能出现错误的换行、未闭合的竖线 `|` 或导致表格渲染失败的特殊字符。
 - **语言要求 (Language Policy, 强制)**：
+  - **项目语言优先（Project Language Override, 强制）**：若 `Project Context` / `{Global Context}` 中明确给出 `Language`（例如 `Language: 英文 / English`），则该目标语言优先于剧本原始语言；凡剧本情节中出现的对白、旁白、字幕、屏幕文字、标识语、消息内容、以及“说某种语言/切换语言”的语言事件，都必须先转换成该目标语言，再用于 `Shot Logic` 与各提示词字段。
   - **生图/生视频提示词字段必须统一英文**：`Start Frame` / `Video Content` / `End Frame` / `Keyframes` 一律使用英文，禁止夹杂中文。
   - **中文提示词四列强制（4 CN Columns, 强制）**：必须输出四个独立中文列：`Start Frame (CN)` / `Video Content (CN)` / `Keyframes (CN)` / `End Frame (CN)`；禁止再使用单列 `Prompt (CN)` 汇总。
   - **关键帧显式化（Keyframes Explicit, 强制）**：`Keyframes (CN)` 列必须始终出现；若 `Keyframes` 列为 `NO`，则 `Keyframes (CN)` 必须写 `NO`；若 `Keyframes` 列存在内容，则中文必须逐条翻译该列内容，不得省略。
@@ -471,7 +472,7 @@
   - **结构一致性（Structure Lock, 强制）**：四个中文列必须与 `Start Frame -> Video Content -> Keyframes -> End Frame` 一一对应；英文中的镜头语法标签、层次关系、实体集合、动作阶段、镜头运动与时序在中文中必须逐项对应。
   - **信息守恒（Content Parity, 强制）**：英文中出现的关键约束（如镜头方向、景别、机位、光效、构图、动作数量/阶段、实体引用）在中文列中必须完整保留；中文禁止加入英文中不存在的新创意描述。
   - **翻译过程声明（Translation Process, 强制）**：先完成英文四字段（`Start Frame` / `Video Content` / `Keyframes` / `End Frame`），再对这四字段分别翻译填入四个中文列；禁止先写中文再反推英文。
-  - `Shot Logic` 与解释性说明可跟随输入主语言，但不得污染上述提示词字段。
+  - `Shot Logic` 与解释性说明可跟随项目目标语言；若 `Project Context` 已显式指定 `Language`，则 `Shot Logic` 也必须遵循该语言，不得保留与目标语言冲突的原文台词/字幕/文字内容。
   - `Episode/Scene/Shot ID` 与固定结构标签可保留既定格式。
 - **ID 格式（层级强制）**：
   - `Scene ID` 必须使用 `EPxx_SCyy`（如 `EP01_SC03`）。

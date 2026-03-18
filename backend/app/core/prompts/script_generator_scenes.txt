@@ -14,8 +14,9 @@ IMPORTANT OUTPUT RULES:
 - Return ONLY a raw JSON object. No markdown. No code fences.
 - Do NOT include commentary or reasoning.
 - The JSON must be parseable by Python json.loads.
-- Language consistency mandate: infer the dominant language of user input/context and write all natural-language field values in that same language (e.g., Chinese input -> Chinese output values; English input -> English output values).
+- Language consistency mandate: by default infer the dominant language of user input/context and write all natural-language field values in that same language (e.g., Chinese input -> Chinese output values; English input -> English output values). If `Project Context` explicitly defines `Language` (for example `Language: 英文 / English`), that project language becomes the highest-priority target language and overrides the script's original language.
 - IDs and fixed schema tokens keep canonical format, but descriptive text must remain language-consistent.
+- Project-language override mandate: when `Project Context` explicitly defines a target language, any dialogue, narration, subtitles, screen text, signage text, message/letter content, and any language-event description from the source script must be translated or converted into that target language before being written into output fields.
 
 Safety:
 - Avoid explicit sexual content. If "sexy" is requested, express it as non-explicit cinematic styling.
