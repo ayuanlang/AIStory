@@ -2965,20 +2965,34 @@ class MediaGenerationService:
             # Note: The default 5s often causes InvalidParameter for Doubao (Seedance).
             # "Switch back to config, unless invalid" -> Validate and fallback to -1 (Auto).
             final_duration = duration
+            model_lower = str(model or "").strip().lower()
+            is_seedance_model = "seedance" in model_lower or "1-5-pro" in model_lower
             
             # Config override (User Settings)
             if tool_conf.get("duration"):
-                 final_duration = tool_conf.get("duration")
+                final_duration = tool_conf.get("duration")
 
             try:
-                 d_int = int(final_duration)
-                 # Filter out <=0 and the known-bad default 5 (unless 5 works for some models, but here it failed)
-                 if d_int <= 0 or d_int == 5: 
-                      final_duration = -1
-                 else:
-                      final_duration = d_int
+                d_int = int(final_duration)
+                if is_seedance_model:
+                    mapped_duration = self._map_duration_nearest_lower(d_int, [4, 8])
+                    if mapped_duration is not None:
+                        final_duration = int(mapped_duration)
+                    elif d_int <= 0:
+                        final_duration = 4
+                    else:
+                        final_duration = d_int
+                else:
+                    # Filter out <=0 and the known-bad default 5 (unless 5 works for some models, but here it failed)
+                    if d_int <= 0 or d_int == 5:
+                        final_duration = -1
+                    else:
+                        final_duration = d_int
             except:
-                 final_duration = -1
+                final_duration = 4 if is_seedance_model else -1
+
+            if is_seedance_model:
+                _debug_log(f"[DoubaoVideo] duration_in={duration}, duration_cfg={tool_conf.get('duration')}, duration_final={final_duration}, seedance_fallback={[4, 8]}")
 
             # Map aspect ratio for Doubao (Ark): keep adaptive when provided.
             final_ratio = self._normalize_aspect_ratio_value(aspect_ratio) or "16:9"
