@@ -32,6 +32,8 @@ class ClauseCheck:
 REQUIRED_CLAUSES: List[ClauseCheck] = [
     ClauseCheck("channel_isolation", r"通道隔离硬规则"),
     ClauseCheck("ots_leakage_guard", r"OTS\s*污染防护"),
+    ClauseCheck("ots_environment_isolation", r"OTS\s*环境隔离规则"),
+    ClauseCheck("ots_occluder_ban", r"OTS\s*前景遮挡禁令"),
     ClauseCheck("leakage_root_cause_hint", r"泄漏根因提示"),
     ClauseCheck("environment_gate_self_check", r"门禁词自检"),
     ClauseCheck("no_character_hard_rule", r"禁止角色信息（Hard Rule）"),

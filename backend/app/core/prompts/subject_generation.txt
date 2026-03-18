@@ -108,15 +108,23 @@
 ### 1) Environment Prompt Template
 - 去叙事化硬规则（Mandatory）：Environment 的 generation_prompt_cn/generation_prompt_en 仅允许描述抽象空间结构、几何关系、光照层次、材质质感、构图层级，不得涉及角色、剧情事件、动作因果、对话语义。
 - 通道隔离硬规则（Mandatory）：`Core Scene Info/{Beats}` 可以描述角色与动作，但 `Environment generation_prompt_cn/en` 必须做“角色清零”。同一 Scene 内若两处信息冲突，以“环境提示词去人物化规则”优先，必须删除环境提示词中的角色语义。
+- 情节归位规则（Mandatory）：情节发展、冲突升级、关系变化与信息揭示，必须通过 `Core Scene Info / {Observer View} / {Beats}` 以及下游 Shot 的画面动作来可视化承载；`Environment generation_prompt_cn/en` 只负责提供可供剧情发生的空间条件与调度结构，不得承担情节推进本身。
 - OTS 污染防护（Mandatory）：OTS 语义只允许出现在机位说明层（`{Observer View}` / `{Beats}`），禁止写入环境提示词正文；环境提示词中出现 `over shoulder / over-the-shoulder / A over B / B over A / shoulder silhouette / behind head / CHAR:[@...]` 任一词，判为无效并重写。
+- OTS 环境隔离规则（Mandatory）：凡服务于 OTS/正反打的 `ENV:[..._OTS_A]` / `ENV:[..._OTS_B]`（或等价 Front/Reverse 变体），一律视为该方向下专门服务剧情空间与调度结构的 **clean plate / 纯环境资产**。环境提示词只负责交付空间结构、构图层级、光照关系、材质响应与关键道具/空位状态；人物信息与剧情信息都必须与环境资产完全隔离，不得把任何角色、人体局部、人物倒影、人物影子或人物遮挡残留进环境资产。
+- OTS 前景遮挡禁令（Mandatory）：OTS 场景的 Environment prompt 中，`FG/MG/BG` 全层都不得出现 `肩膀前景虚化`、`后脑勺遮挡`、`手臂入画`、`发丝边缘`、`人物衣角`、`镜中人物反射`、`地面人物投影`、`doorway human silhouette` 等任何人物残留。即使分镜最终需要 OTS 肩部遮挡，该遮挡也只能存在于 Shot 级 `Start Frame / Video Content / End Frame`，不得回写进 Environment。
+- 环境剧情隔离硬规则（Mandatory）：Environment prompt 不得承载任何剧情可见化信息，包括但不限于“谁在逼近谁”“谁刚离开”“争执后的凌乱痕迹”“打斗后的破坏结果”“追逐路径”“偷听/躲藏/对峙状态”等。环境只描述空间可见结构与静态物理状态，不描述事件正在发生、已经发生或即将发生。
 - 泄漏根因提示（Mandatory）：高频误差来自“把 OTS 的角色关系（A/B shoulder）从分镜层串写进环境提示词”。处理顺序必须为：先完成 Scene/Beats，再单独生成 Environment prompt，最后执行角色词剔除。
+- OTS 环境生成顺序（Mandatory）：若某 Shot 计划采用 OTS，生成顺序必须固定为：先完成角色分镜与 OTS 关系，再单独抽取该视角下承载剧情空间的 **纯环境 clean plate**，最后仅在 Shot 级叠加角色肩部/头部/动作信息。禁止反向操作成“先写带人物关系或事件关系的 OTS 画面，再把人物/剧情信息回填进 Environment”。
 - 禁止角色信息（Hard Rule）：严禁出现任何角色名、角色代号、CHAR:[@...]、人称指代（如他/她/他们）及人物身份词（如警察、记者、保安、母亲等）。
 - 禁止剧情信息（Hard Rule）：严禁出现剧情推进语句（如因为所以、进入/离开/追逐/躲藏/对峙等）与时间线动作指令。
+- 剧情可视化承载规则（Mandatory）：情节必须继续通过画面体现，以便支持情节发展与剧情推进；但其承载通道只能是 `Core Scene Info / {Observer View} / {Beats}` 与下游 Shot 的 `Start Frame / Video Content / End Frame`，不能写入 Environment prompt。
 - 抽象元素约束（Mandatory）：提示词中的物体/主体只能使用无具象非生命物体表达。
 - 禁止命名污染（Hard Rule）：严禁出现任何专有名词或人物姓名；环境名仅可出现在 ENV:[...] 引用位，不得扩展为剧情化命名。
 - 具体示例（仅示范写法，不可照抄值）：
   - generation_prompt_en 示例：Cinematic abstract spatial study. Use ENV:[BaseEnv] as visual base; preserve structural proportions and material response. Environment Delta = {Viewpoint Anchor/Viewing Direction: anchor at lower-left frame origin facing central depth axis; Axis Side: left -> right; Background Set Change: Visible Set = [vertical plane cluster, tonal gradient band, reflective material block], Excluded Set = [high-frequency clutter textures]; Lighting Direction Change: key light from front-right with low-intensity cool fill; Framing Change: medium-wide, primary subject is the central plane convergence, secondary subject is the reflective gradient strip; Dynamic Parts State: None}. FG: dark matte edge band. MG: layered neutral geometry blocks. BG: soft atmospheric luminance field. No humans, no names, no narrative.
   - generation_prompt_cn 示例：电影级抽象空间表达。以 ENV:[BaseEnv] 为视觉基底，保持结构比例与材质响应一致。环境增量：机位锚点位于画面左下起点并朝向中心纵深轴；轴线由左侧切到右侧；可见集合为垂直平面簇、明度渐变带、反射材质块；排除集合为高频杂乱纹理；光照方向为前右侧主光并辅以低强度冷色补光；构图为中广景，主主体为中心平面汇聚区，次主体为反射渐变条带；动态部件状态为 None。前景为深色哑光边带，中景为分层中性几何体块，后景为柔和氛围亮度场。禁止人物、姓名与剧情信息。
+  - 不合规 OTS 环境示例：`FG: blurred shoulder edge. MG: hand touching the table. BG: mirror showing the listener face.`
+  - 合规 OTS 环境示例：`FG: doorway trim only. MG: table plane and lamp cluster. BG: reflective wall panel with no human reflection. No humans in frame.`
 - 正反环境标准示例（Mandatory, No-Human Writing）：
   - 适用范围（Mandatory）：以上正反示例同样适用于含 OTS 在内的多角度环境提示词描述；当同场存在 `..._OTS_A` / `..._OTS_B`（或等价 Front/Reverse 多机位变体）时，必须沿用同一结构骨架与 Delta 字段顺序（`CPD -> AS -> BG -> LD -> FR -> DP`），仅替换机位朝向、可见/排除集合与构图主次，不得引入任何人物信息。
   - `Front / generation_prompt_en`：`Cinematic photoreal environment study. Use ENV:[HarborOffice_Base] as visual base; keep architecture and material anchors unchanged. Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint at doorway threshold facing desk cluster and window wall; Axis Side: left -> right; Background Set Change: Visible Set = [glass partition, desk lamp row, wall clock, window mullions], Excluded Set = [rear storage corridor as dominant backdrop]; Lighting Direction Change: key from front-right practical lamp with low-intensity cool ambient fill; Framing Change: medium-wide, primary subject is desk cluster, secondary subject is window reflection band; Dynamic Parts State: None}. FG: doorway frame edge and floor trim. MG: desk plane, lamp group, chair silhouettes (no human occupancy). BG: rain-streaked window reflections and wall clock plane. No humans, no character identifiers, no narrative events.`
@@ -134,7 +142,7 @@
 - 风格表达示例（仅示范写法，不可照抄值）：Luxury style via BG only: FG keeps clean blocking lanes and action surfaces; MG retains minimal playable anchors; BG carries luxury cues through marble veining, brass trims, chandelier bokeh, and warm specular layering.
 - 风格映射必须动态，真人剧避免游戏感。
 - 环境提示词输出自检（Mandatory）：提交前必须逐条校验 No character names、No role labels、No story events、Only abstract non-living object expression；任一不满足即判无效并重写。
-- 环境提示词门禁词自检（Mandatory）：提交前必须额外扫描并确保不存在以下词或模式：CHAR:[@、over shoulder、over-the-shoulder、A over B、B over A、shoulder silhouette、behind head、he/she/they（中英代词均禁）。命中任一即整条环境提示词作废并重写。
+- 环境提示词门禁词自检（Mandatory）：提交前必须额外扫描并确保不存在以下词或模式：CHAR:[@、over shoulder、over-the-shoulder、A over B、B over A、shoulder silhouette、behind head、blurred shoulder、back-of-head、arm entering frame、hand in foreground、hair edge、mirror reflection of a person、human shadow、he/she/they（中英代词均禁）。命中任一即整条环境提示词作废并重写。
 
 ### 1.5) OTS 场景要求（Subject 相关，Mandatory）
 - OTS 切换硬规则（Mandatory）：当对话/对峙从 `A over B shoulder` 切到 `B over A shoulder` 时，必须切分为独立 Shot；可在同一 Scene 内保留该正反打，但必须同时满足：

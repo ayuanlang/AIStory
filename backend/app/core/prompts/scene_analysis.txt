@@ -41,13 +41,18 @@
 - 环境锚点禁人物（Mandatory）：Environment 的 `Primary Subject`/`Secondary Subject` 与 `Viewpoint Anchor` 必须使用固定显目物体或结构锚点（如门框、窗、舞台口、桌组、灯具、柱体、屏幕、墙面标识），禁止使用任何人物/人体部位作为锚点。
 - 环境描述去人物化（Mandatory）：Environment 的 `generation_prompt_cn/generation_prompt_en` 仅描述空间、材质、构图、光照与可变部件状态，禁止夹带人物外观、服装、姿态、表情、身份描述。
 - 通道隔离硬规则（Mandatory）：`Core Scene Info/{Beats}` 可以描述角色与动作，但 `Environment generation_prompt_cn/en` 必须做“角色清零”。同一 Scene 内若两处信息冲突，以“环境提示词去人物化规则”优先，必须删除环境提示词中的角色语义。
+- 情节归位规则（Mandatory）：情节发展、冲突升级、关系变化与信息揭示，必须通过 `Core Scene Info / {Observer View} / {Beats}` 以及下游 Shot 的画面动作来可视化承载；`Environment generation_prompt_cn/en` 只负责提供可供剧情发生的空间条件与调度结构，不得承担情节推进本身。
 - OTS 去人物化总规则（Mandatory）：凡涉及 OTS/正反方向的描述（包含 `{Observer View}`、`{Beats}`、`generation_prompt_cn/en`、`Environment Delta`），必须是**纯环境描述**，禁止出现任何人物语义。
+- OTS 环境隔离规则（Mandatory）：凡服务于 OTS/正反打的 `ENV:[..._OTS_A]` / `ENV:[..._OTS_B]`（或等价 Front/Reverse 变体），一律视为该方向下专门服务剧情空间与调度结构的 **clean plate / 纯环境资产**。环境提示词只负责交付空间结构、构图层级、光照关系、材质响应与关键道具/空位状态；人物信息与剧情信息都必须与环境资产完全隔离，不得把任何角色、人体局部、人物倒影、人物影子或人物遮挡残留进环境资产。
+- OTS 前景遮挡禁令（Mandatory）：OTS 场景的 Environment prompt 中，`FG/MG/BG` 全层都不得出现 `肩膀前景虚化`、`后脑勺遮挡`、`手臂入画`、`发丝边缘`、`人物衣角`、`镜中人物反射`、`地面人物投影`、`doorway human silhouette` 等任何人物残留。即使分镜最终需要 OTS 肩部遮挡，该遮挡也只能存在于 Shot 级 `Start Frame / Video Content / End Frame`，不得回写进 Environment。
 - OTS 污染防护（Mandatory）：上述字段中出现 `over shoulder / over-the-shoulder / A over B / B over A / shoulder silhouette / behind head / CHAR:[@...] / person / people / crowd / human / humanoid / avatar / virtual person / mannequin / silhouette of someone` 任一词，判为无效并重写。
+- 环境剧情隔离硬规则（Mandatory）：Environment prompt 不得承载任何剧情可见化信息，包括但不限于“谁在逼近谁”“谁刚离开”“争执后的凌乱痕迹”“打斗后的破坏结果”“追逐路径”“偷听/躲藏/对峙状态”等。环境只描述空间可见结构与静态物理状态，不描述事件正在发生、已经发生或即将发生。
 - 环境锚点合规示例（Mandatory）：
   - 不合规：`Primary Subject: CHAR:[@A] shoulder silhouette`、`Viewpoint Anchor: behind CHAR:[@B] head`。
   - 合规：`Primary Subject: stage portal + desk lamp cluster`、`Viewpoint Anchor: doorway threshold facing stage portal`。
   - 不合规：`environment prompt` 中出现 `a woman in red coat`、`man standing in foreground`。
   - 不合规：`environment prompt` 中出现 `virtual person in foreground`、`humanoid silhouette near doorway`、`avatar-like figure`。
+  - 不合规：`FG: blurred shoulder edge`、`MG: a hand resting on door frame`、`BG: mirror catching the listener face`。
   - 合规：`environment prompt` 仅写 `door frame / desk / lamp / wall clock / light direction / framing`，并保持 `No humans in frame`。
 - 同地不同观察方向（如门内看外/门外看内、正打/反打背景差异大）必须拆分独立 Environment，并以 `visual_dependencies` 关联。
 - 触发拆分条件（任一满足）：
@@ -283,8 +288,10 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - 硬约束优先级（Mandatory）：本小节约束高于 Environment 示例中的历史写法；若冲突，以本小节最新硬约束为准。
 - 去叙事化硬规则（Mandatory）：Environment 的 `generation_prompt_cn/generation_prompt_en` 仅允许描述“抽象空间结构、几何关系、光照层次、材质质感、构图层级”，不得涉及角色、剧情事件、动作因果、对话语义。
 - 泄漏根因提示（Mandatory）：高频误差来自“把 OTS 的角色关系（A/B shoulder）从分镜层串写进环境提示词”。处理顺序必须为：先完成 Scene/Beats，再单独生成 Environment prompt，最后执行角色词剔除。
+- OTS 环境生成顺序（Mandatory）：若某 Shot 计划采用 OTS，生成顺序必须固定为：先完成角色分镜与 OTS 关系，再单独抽取该视角下承载剧情空间的 **纯环境 clean plate**，最后仅在 Shot 级叠加角色肩部/头部/动作信息。禁止反向操作成“先写带人物关系或事件关系的 OTS 画面，再把人物/剧情信息回填进 Environment”。
 - 禁止角色信息（Hard Rule）：严禁出现任何角色名、角色代号、`CHAR:[@...]`、人称指代（如“他/她/他们”）及人物身份词（如警察、记者、保安、母亲等）。
 - 禁止剧情信息（Hard Rule）：严禁出现剧情推进语句（如“因为…所以…”、“进入/离开/追逐/躲藏/对峙”等事件描述）与时间线动作指令。
+- 剧情可视化承载规则（Mandatory）：情节必须继续通过画面体现，以便支持情节发展与剧情推进；但其承载通道只能是 `Core Scene Info / {Observer View} / {Beats}` 与下游 Shot 的 `Start Frame / Video Content / End Frame`，不能写入 Environment prompt。
 - 抽象元素约束（Mandatory）：提示词中的“物体/主体”只能使用无具象非生命物体表达。
 - 禁止命名污染（Hard Rule）：严禁出现任何专有名词或人物姓名；环境名仅可出现在 `ENV:[...]` 引用位，不得扩展为剧情化命名。
 - 具体示例（仅示范写法，不可照抄值）：
@@ -309,7 +316,7 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - 风格表达示例（仅示范写法，不可照抄值）：`Luxury style via BG only: FG keeps clean blocking lanes and action surfaces; MG retains minimal playable anchors; BG carries luxury cues through marble veining, brass trims, chandelier bokeh, and warm specular layering.`
 - 风格映射必须动态，真人剧避免“游戏感”。
 - 环境提示词输出自检（Mandatory）：提交前必须逐条校验 `No character names`、`No role labels`、`No story events`、`Only abstract non-living object expression`；任一不满足即判无效并重写。
-- 环境提示词门禁词自检（Mandatory）：提交前必须额外扫描并确保不存在以下词或模式：`CHAR:[@`、`over shoulder`、`over-the-shoulder`、`A over B`、`B over A`、`shoulder silhouette`、`behind head`、`he/she/they`（中英代词均禁）。命中任一即整条环境提示词作废并重写。
+- 环境提示词门禁词自检（Mandatory）：提交前必须额外扫描并确保不存在以下词或模式：`CHAR:[@`、`over shoulder`、`over-the-shoulder`、`A over B`、`B over A`、`shoulder silhouette`、`behind head`、`blurred shoulder`、`back-of-head`、`arm entering frame`、`hand in foreground`、`hair edge`、`mirror reflection of a person`、`human shadow`、`he/she/they`（中英代词均禁）。命中任一即整条环境提示词作废并重写。
 
 ### 2) Character Prompt Template
 - 模板已合并到本文件（Merged In-File, Authoritative）。

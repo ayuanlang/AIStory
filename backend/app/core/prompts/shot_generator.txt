@@ -265,6 +265,10 @@
   - 若仅发生 `A over B -> B over A` 视角切换且轴线/背景主集合/观察方向未重构：允许同一 Scene 下分为两个 Shot；
   - 若伴随轴线跨越/反转、背景主集合变化、观察方向重构或门内看外↔门外看内：必须中止当前 Scene 内续写，改为 `新 Scene + 新 Environment 变体` 后再继续分镜。
   - 若输入 Scene 未拆但已命中上述分场条件，必须在 `Shot Logic (CN)` 明确标注 `需要回退 Scene 层拆分`，不得强行在同一 Scene 完成正反打。
+  - **剧情承载归位规则 (Narrative Carrying Boundary, 强制)**：Shot 层必须承担“通过画面体现情节、推动剧情”的职责，但不得把这项职责回推给 Environment 提示词。
+    - `Start Frame` / `Video Content` / `End Frame` / `Shot Logic (CN)` 必须直接承载可见的剧情推进信息：谁在主导、谁在反应、关系如何变化、动作后果如何落定。
+    - 环境只作为空间、材质、布光、结构、调度约束与机位坐标系存在；不得把“门外有人逼近”“某人即将闯入”“冲突正在升级”“即将发生抓捕/告白/逃离”等事件推进语义伪装成环境描述。
+    - 若某段叙事需要靠画面推进，优先写入 `Shot Logic (CN)` 的主节拍规划，并在 `Video Content` 中落实为可见动作链、反应链与结果链；不得要求 Environment 去替镜头讲故事。
 - **DP 兜底校验 (Dynamic Parts Fallback Check)**：若上游输入的 `Environment Delta` 中 `Dynamic Parts State` 非 `None`，则本镜头生成前必须核对并显式体现 `Before -> After + reason`；若仅有结果态（如 `Door: Closed`）或缺少触发原因，判定输入不完整，先补齐后再输出 Start/Video/End。
   - **DP 合规示例**：`Dynamic Parts State: PROP:[Door](Open -> Closed, reason: CHAR:[@Character A] closes it quietly to avoid detection)`。
   - **DP 不合规示例**：`Dynamic Parts State: Door: Closed`（缺少 `Before` 与 `reason`）。

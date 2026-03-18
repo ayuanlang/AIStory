@@ -45,6 +45,9 @@
 - `3) Prop Prompt Template`：独立资产、材质与磨损可读、风格映射与稳定锚点。
 - OTS 一致性（强制）：若输入片段已体现 OTS 正反切换（`A over B` ↔ `B over A`）并标注了不同 Scene/Environment 变体，补全资产时必须保持该分场结果，不得跨场景合并命名或回写为同一环境。
 - OTS 分场触发一致性（强制）：若输入片段明确包含“轴线跨越/反转、背景主集合变化、观察方向重构、门内看外↔门外看内”等触发条件，补全阶段必须沿用其 `新 Scene + 新 Environment 变体` 结论；禁止生成会暗示“同 Scene 内硬反打”的资产描述。
+- OTS 环境隔离规则（强制）：若当前补全对象是 OTS/Front/Reverse 相关 environment 变体，必须把它当成该方向下专门服务剧情空间与调度结构的 clean plate 纯环境资产来补全，只能写背景结构、构图、材质、光照与空椅/空桌等无人物状态；人物信息与剧情信息都必须与环境提示词完全隔离，不得补入肩膀遮挡、后脑勺、手臂、镜中人脸、人物影子或任何剧情残留。
+- OTS 补全边界（强制）：若输入片段里的 OTS 分镜需要肩部遮挡或人物局部，那属于 Shot 级信息，不属于 Environment 补全范围；补全过程不得把这些人物局部回写到 environment 的 generation_prompt。
+- 剧情补全边界（强制）：若输入片段里的紧张关系、对峙状态、打斗结果、追逐方向或其他叙事进程依赖角色/事件才能成立，那属于 Scene/Shot 级信息，不属于 Environment 补全范围；补全过程不得把这些剧情信息回写到 environment 的 generation_prompt。
 
 若当前输入与以上规则冲突，以以上规则优先。
 
@@ -67,7 +70,7 @@
 ## Prompt Template（必须使用）
 
 ### 1) Environment Prompt Template
-`[Global Style]. Use 【base_env_name / reference image id】 as the visual base while keeping architecture and material anchors stable. From 【exact observer placement in/around environment】, the view faces 【Front/Reverse/Side + target/vector】 in a 【Height/Angle/Framing】 composition. FG/MG/BG must stay explicit, with Primary Subject + Secondary Subject carried by continuous space, lighting, and material detail. Add mood, grain/noise, lens baseline, and textures in natural prose. **No humans or characters present.**`
+`[Global Style]. Use 【base_env_name / reference image id】 as the visual base while keeping architecture and material anchors stable. From 【exact observer placement in/around environment】, the view faces 【Front/Reverse/Side + target/vector】 in a 【Height/Angle/Framing】 composition. FG/MG/BG must stay explicit, with Primary Subject + Secondary Subject carried by continuous space, lighting, and material detail. Treat OTS-related environment variants as clean-plate backgrounds captured with no actor remnants in frame. Add mood, grain/noise, lens baseline, and textures in natural prose. **No humans or characters present.**`
 
 ### 1.1) Base + Delta 执行增强（观察方向切换）
 - 环境构图必须显式按前景（FG）/中景（MG）/后景（BG）描述，三层均需给出可见元素与空间关系。
