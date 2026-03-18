@@ -134,9 +134,7 @@ def _default_endpoint_hint(category: str, model: str) -> str:
             return f"/v1beta/models/{model}:generateContent"
         return "/v1/images/generations"
     if category_norm == "video":
-        if model_norm in {"sora-2", "sora-2-pro"}:
-            return "/v1/videos"
-        return "/v1/chat/completions"
+        return "/v1/videos"
     return "/v1/chat/completions"
 
 
@@ -618,7 +616,7 @@ def _add_veo_overrides(models_by_id: Dict[str, Dict[str, Any]]) -> None:
             name=model.upper().replace("-FL", " Frame-to-Video").replace("-FAST", " Fast"),
             category="Video",
             doc_url=DOC_URLS["veo_overview"],
-            endpoint_hint="/v1/chat/completions",
+            endpoint_hint="/v1/videos",
             pricing={"unit_type": "per_call", "call_usd": price, "source": DOC_URLS["veo_overview"]},
             modality={
                 "generation_modes": ["i2v"] if has_frame_ref else ["t2v"],

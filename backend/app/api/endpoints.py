@@ -17472,6 +17472,13 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
 
         prompt_text = str(req.prompt or "")
         normalized_ref_mode = _normalize_video_ref_mode(getattr(req, "ref_mode", None))
+        if normalized_ref_mode == "start":
+            req.last_frame_url = None
+        elif normalized_ref_mode == "end":
+            req.last_frame_url = None
+            if isinstance(req.ref_image_url, list):
+                end_refs = [str(x).strip() for x in req.ref_image_url if str(x).strip()]
+                req.ref_image_url = end_refs[-1] if end_refs else None
         is_reference_image_mode = bool(normalized_ref_mode == "refs_video" or isinstance(req.ref_image_url, list))
 
         auto_entity_refs: List[str] = []
@@ -17539,6 +17546,16 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
         flat_refs = [x for x in dict.fromkeys([str(x).strip() for x in flat_refs if str(x).strip()]) if x]
         ref_names = _build_ref_display_names(flat_refs)
         logger.info(
+            "[GenerateVideo] ref resolution | shot_id=%s shot_number=%s ref_mode=%s start_refs=%s last_frame=%s keyframes=%s final_ref_count=%s",
+            req.shot_id,
+            req.shot_number,
+            normalized_ref_mode or "<empty>",
+            len(req.ref_image_url) if isinstance(req.ref_image_url, list) else (1 if str(req.ref_image_url or "").strip() else 0),
+            bool(str(req.last_frame_url or "").strip()),
+            len(req.keyframes or []) if isinstance(req.keyframes, list) else 0,
+            len(flat_refs),
+        )
+        logger.info(
             "[GenerateVideo] refs | shot_id=%s shot_number=%s ref_count=%s ref_names=%s",
             req.shot_id,
             req.shot_number,
@@ -17597,7 +17614,11 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
                 auto_kling_elements,
             )
             if merged_kling_elements:
-                video_provider_options["kling_elements"] = merged_kling_elements
+                video_provider_options["kling_elements"] = _align_kling_elements_to_prompt_mentions(
+                    merged_kling_elements,
+                    kling_prompt_candidates,
+                    entity_lookup,
+                )
 
             logger.info(
                 "[GenerateVideo] Kling3 elements | shot_id=%s project_id=%s explicit=%s auto=%s merged=%s prompt_at_count=%s",
@@ -19424,21 +19445,39 @@ def _extract_kling_character_mentions(prompt: Any) -> List[str]:
     return mentions
 
 
+def _collect_kling_prompt_alias_maps(
+    prompt_candidates: List[str],
+    entity_lookup: Dict[str, Dict[str, Any]],
+) -> Tuple[List[str], Dict[str, str], Dict[int, str]]:
+    mentions: List[str] = []
+    alias_by_norm: Dict[str, str] = {}
+    alias_by_entity_id: Dict[int, str] = {}
+    seen_mentions: set[str] = set()
+
+    for candidate in prompt_candidates:
+        for raw_name in _extract_kling_character_mentions(candidate):
+            alias_name = str(raw_name or "").strip().lstrip("@").strip()
+            normalized = _normalize_entity_anchor_token(raw_name)
+            if not alias_name or not normalized or normalized in seen_mentions:
+                continue
+            seen_mentions.add(normalized)
+            mentions.append(alias_name)
+            alias_by_norm[normalized] = alias_name
+
+            row = entity_lookup.get(normalized) or {}
+            entity_id = row.get("entity_id")
+            if isinstance(entity_id, int) and entity_id not in alias_by_entity_id:
+                alias_by_entity_id[entity_id] = alias_name
+
+    return mentions, alias_by_norm, alias_by_entity_id
+
+
 def _build_auto_kling_elements(
     prompt_candidates: List[str],
     entity_lookup: Dict[str, Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    mentions: List[str] = []
-    seen_mentions: set[str] = set()
     allowed_types = {"subject", "character", "char"}
-
-    for candidate in prompt_candidates:
-        for raw_name in _extract_kling_character_mentions(candidate):
-            normalized = _normalize_entity_anchor_token(raw_name)
-            if not normalized or normalized in seen_mentions:
-                continue
-            seen_mentions.add(normalized)
-            mentions.append(raw_name)
+    mentions, _, _ = _collect_kling_prompt_alias_maps(prompt_candidates, entity_lookup)
 
     elements: List[Dict[str, Any]] = []
     for raw_name in mentions:
@@ -19447,7 +19486,7 @@ def _build_auto_kling_elements(
         if entity_type not in allowed_types:
             continue
 
-        name = str(row.get("name") or raw_name or "").strip().lstrip("@").strip()
+        name = str(raw_name or "").strip().lstrip("@").strip()
         if not name:
             continue
 
@@ -19464,6 +19503,41 @@ def _build_auto_kling_elements(
         elements.append(element)
 
     return elements
+
+
+def _align_kling_elements_to_prompt_mentions(
+    elements: List[Dict[str, Any]],
+    prompt_candidates: List[str],
+    entity_lookup: Dict[str, Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    _, alias_by_norm, alias_by_entity_id = _collect_kling_prompt_alias_maps(prompt_candidates, entity_lookup)
+    if not alias_by_norm and not alias_by_entity_id:
+        return elements
+
+    aligned: List[Dict[str, Any]] = []
+    for element in elements:
+        if not isinstance(element, dict):
+            continue
+
+        name = str(element.get("name") or "").strip()
+        normalized = _normalize_entity_anchor_token(name)
+        if not name or not normalized:
+            continue
+
+        row = entity_lookup.get(normalized) or {}
+        entity_id = row.get("entity_id")
+        alias_name = alias_by_entity_id.get(entity_id) if isinstance(entity_id, int) else None
+        if not alias_name:
+            alias_name = alias_by_norm.get(normalized)
+
+        if alias_name and alias_name != name:
+            updated = dict(element)
+            updated["name"] = alias_name
+            aligned.append(updated)
+        else:
+            aligned.append(element)
+
+    return aligned
 
 
 def _merge_kling_elements(explicit_elements: Any, auto_elements: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -19618,8 +19692,16 @@ def _collect_prompt_entity_ref_images_relaxed(prompt: str, entity_lookup: Dict[s
 
 def _normalize_video_ref_mode(value: Any) -> str:
     mode = str(value or "").strip().lower()
-    aliases = {"refs_video", "refs-video", "reference", "reference_image", "reference_images"}
-    return "refs_video" if mode in aliases else ""
+    refs_aliases = {"refs_video", "refs-video", "reference", "reference_image", "reference_images"}
+    if mode in refs_aliases:
+        return "refs_video"
+    if mode in {"start", "start_only", "start-only", "only_start", "only-start"}:
+        return "start"
+    if mode in {"start_end", "start-end", "start+end", "both", "both_ends"}:
+        return "start_end"
+    if mode in {"end", "end_only", "end-only", "only_end", "only-end"}:
+        return "end"
+    return ""
 
 
 def _compute_subject_ref_index_map(prompt: str, entity_lookup: Dict[str, Dict[str, Any]]) -> Dict[str, int]:
@@ -20099,9 +20181,26 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             if isinstance(tech.get("video_ref_image_urls"), list):
                                 refs.extend([str(x).strip() for x in tech.get("video_ref_image_urls") or [] if str(x).strip()])
                         elif isinstance(tech.get("video_ref_image_urls"), list):
-                            refs.extend([str(x).strip() for x in tech.get("video_ref_image_urls") or [] if str(x).strip()])
+                            shot_mode = str(video_mode or "").strip().lower()
+                            manual_refs = [str(x).strip() for x in tech.get("video_ref_image_urls") or [] if str(x).strip()]
+                            manual_unique_refs = [x for x in dict.fromkeys(manual_refs) if x]
+                            manual_end_ref = str(end_frame_url or "").strip()
+                            manual_start_refs = [x for x in manual_unique_refs if not manual_end_ref or x != manual_end_ref]
+
+                            if shot_mode == "end":
+                                if manual_end_ref:
+                                    refs.append(manual_end_ref)
+                                elif manual_unique_refs:
+                                    refs.append(manual_unique_refs[-1])
+                            elif shot_mode == "start_end":
+                                refs.extend(manual_unique_refs)
+                            else:
+                                if manual_start_refs:
+                                    refs.append(manual_start_refs[0])
+                                elif manual_unique_refs:
+                                    refs.append(manual_unique_refs[0])
                         else:
-                            shot_mode = str(tech.get("video_gen_mode") or "").strip().lower()
+                            shot_mode = str(video_mode or "").strip().lower()
                             if not shot_mode:
                                 end_prompt_len = len(str(shot.end_frame or "").strip())
                                 shot_mode = "start_end" if end_frame_url and end_prompt_len >= 3 else "start"
@@ -20123,8 +20222,11 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                         if video_ref_submit_mode == "refs_video":
                             final_start_ref = refs[0] if refs else None
                         elif refs:
-                            final_start_ref = refs[0]
-                            if len(refs) > 1:
+                            if str(video_mode or "").strip().lower() == "end":
+                                final_start_ref = refs[-1]
+                            else:
+                                final_start_ref = refs[0]
+                            if str(video_mode or "").strip().lower() == "start_end" and len(refs) > 1:
                                 final_end_ref = refs[-1]
 
                         video_keyframes: List[str] = []
@@ -20148,6 +20250,18 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             video_keyframes,
                         )
 
+                        logger.info(
+                            "[shot_media_batch] video ref resolution | shot_id=%s shot_label=%s video_mode=%s submit_mode=%s refs=%s start=%s end=%s keyframes=%s",
+                            shot.id,
+                            shot_label,
+                            video_mode,
+                            video_ref_submit_mode,
+                            len(refs),
+                            bool(str(final_start_ref or "").strip()),
+                            bool(str(final_end_ref or "").strip()),
+                            len(video_keyframes),
+                        )
+
                         duration_val = 5.0
                         try:
                             duration_val = float(str(shot.duration or 5).strip() or 5)
@@ -20158,6 +20272,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             prompt=video_prompt,
                             ref_image_url=final_start_ref,
                             last_frame_url=final_end_ref,
+                            ref_mode=video_mode,
                             keyframes=video_keyframes or None,
                             duration=duration_val,
                             project_id=episode.project_id,

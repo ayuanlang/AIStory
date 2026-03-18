@@ -20014,8 +20014,31 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     refs.push(...tech.video_ref_image_urls);
                 }
             } else if (tech.video_ref_image_urls && Array.isArray(tech.video_ref_image_urls)) {
-                // Manual Mode: Use strictly what's in the list
-                refs.push(...tech.video_ref_image_urls);
+                // Manual Mode still respects the selected start/start_end/end behavior.
+                const manualRefs = tech.video_ref_image_urls
+                    .map((item) => String(item || '').trim())
+                    .filter(Boolean);
+                const manualUniqueRefs = [...new Set(manualRefs)];
+                const manualEndRef = String(tech.end_frame_url || '').trim();
+                const manualStartRefs = manualEndRef
+                    ? manualUniqueRefs.filter((item) => item !== manualEndRef)
+                    : manualUniqueRefs;
+
+                if (shotMode === 'end') {
+                    if (manualEndRef) {
+                        refs.push(manualEndRef);
+                    } else if (manualUniqueRefs.length > 0) {
+                        refs.push(manualUniqueRefs[manualUniqueRefs.length - 1]);
+                    }
+                } else if (shotMode === 'start_end') {
+                    refs.push(...manualUniqueRefs);
+                } else {
+                    if (manualStartRefs.length > 0) {
+                        refs.push(manualStartRefs[0]);
+                    } else if (manualUniqueRefs.length > 0) {
+                        refs.push(manualUniqueRefs[0]);
+                    }
+                }
             } else {
                 // Auto Mode respecting shotMode ('start_end' | 'start' | 'end')
                 
@@ -20116,7 +20139,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     shot_id: targetShotId,
                     shot_number: editingShot.shot_id,
                     shot_name: editingShot.shot_name,
-                    ref_mode: videoRefSubmitMode,
+                    ref_mode: effectiveVideoMode,
                     prompt_language: resolvedPromptSubmitLang,
                     asset_type: 'video',
                     negative_prompt: buildEntityNegativePrompt(rawPrompt, null, entities),

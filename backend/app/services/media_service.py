@@ -15,6 +15,7 @@ import io
 import traceback
 import math
 import ipaddress
+import mimetypes
 from PIL import Image
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Union
@@ -1385,7 +1386,7 @@ class MediaGenerationService:
         runtime_activation = None
         if resolved_category == "Image" and "/v1/images/generations" in endpoint_hint_lower:
             runtime_activation = "image_openai_compatible"
-        elif resolved_category == "Video" and "/v1/videos" in endpoint_hint_lower:
+        elif resolved_category == "Video" and ("/v1/videos" in endpoint_hint_lower or "/v1/chat/completions" in endpoint_hint_lower):
             runtime_activation = "video_openai_compatible"
         elif resolved_category == "LLM" and "/v1/chat/completions" in endpoint_hint_lower:
             runtime_activation = "llm_openai_compatible"
@@ -3851,6 +3852,134 @@ class MediaGenerationService:
                 resolved.append(url)
         return resolved
 
+    def _load_media_binary_for_upload(self, url_or_path: Any):
+        raw = str(url_or_path or "").strip()
+        if not raw:
+            return None, None, None
+
+        def _normalize_ext(ext: str, mime: str) -> str:
+            normalized = str(ext or "").strip().lower()
+            if normalized == ".jpe":
+                return ".jpg"
+            if normalized:
+                return normalized
+            guessed = mimetypes.guess_extension(mime or "") or ""
+            if guessed == ".jpe":
+                guessed = ".jpg"
+            return guessed
+
+        if raw.startswith("data:"):
+            marker = ";base64,"
+            idx = raw.find(marker)
+            if idx <= 5:
+                return None, None, None
+            mime = raw[5:idx].strip().lower() or "application/octet-stream"
+            b64 = raw[idx + len(marker):].strip()
+            if not b64:
+                return None, None, None
+            try:
+                data = base64.b64decode(b64)
+            except Exception:
+                return None, None, None
+            ext = _normalize_ext("", mime)
+            filename = f"rh-upload-{uuid.uuid4().hex[:12]}{ext or '.bin'}"
+            return data, mime, filename
+
+        if raw.startswith("http://") or raw.startswith("https://"):
+            try:
+                resp = requests.get(raw, stream=True, timeout=60, headers={"User-Agent": "Mozilla/5.0"})
+                if resp.status_code != 200:
+                    return None, None, None
+                data = resp.content
+                mime = str(resp.headers.get("Content-Type", "")).split(";")[0].strip().lower() or "application/octet-stream"
+                parsed_path = requests.utils.urlparse(raw).path or ""
+                ext = _normalize_ext(os.path.splitext(parsed_path)[1], mime)
+                filename = f"rh-upload-{uuid.uuid4().hex[:12]}{ext or '.bin'}"
+                return data, mime, filename
+            except Exception:
+                return None, None, None
+
+        path = raw
+        if raw.startswith("/uploads/") or "/uploads/" in raw:
+            fname = raw.split("/uploads/")[-1]
+            upload_dir = settings.UPLOAD_DIR
+            if not os.path.isabs(upload_dir):
+                upload_dir = os.path.abspath(upload_dir)
+            import urllib.parse
+            clean_fname = fname.split('?')[0]
+            path = os.path.join(upload_dir, urllib.parse.unquote(clean_fname))
+
+        if not os.path.isabs(path):
+            path = os.path.abspath(path)
+
+        if not os.path.exists(path) or not os.path.isfile(path):
+            return None, None, None
+
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+        except Exception:
+            return None, None, None
+
+        mime = (mimetypes.guess_type(path)[0] or "application/octet-stream").lower()
+        ext = _normalize_ext(os.path.splitext(path)[1], mime)
+        filename = f"rh-upload-{uuid.uuid4().hex[:12]}{ext or '.bin'}"
+        return data, mime, filename
+
+    def _upload_runninghub_binary_ref(self, ref_value: Any, api_key: str, base_url: str) -> Optional[str]:
+        if not api_key:
+            return None
+        data, mime, filename = self._load_media_binary_for_upload(ref_value)
+        if not data:
+            return None
+
+        upload_url = f"{str(base_url or 'https://www.runninghub.cn').rstrip('/')}/openapi/v2/media/upload/binary"
+        headers = {"Authorization": f"Bearer {api_key}"}
+        files = {
+            "file": (filename or f"rh-upload-{uuid.uuid4().hex[:12]}.bin", data, mime or "application/octet-stream")
+        }
+
+        try:
+            resp = requests.post(upload_url, headers=headers, files=files, timeout=(15, 120), verify=False)
+            if resp.status_code != 200:
+                logger.warning("RunningHub binary upload failed | status=%s body=%s", resp.status_code, (resp.text or "")[:500])
+                return None
+
+            payload = resp.json() if resp.content else {}
+            if not isinstance(payload, dict):
+                return None
+
+            code = payload.get("code")
+            if code not in (0, "0", None):
+                logger.warning("RunningHub binary upload rejected | code=%s message=%s", code, str(payload.get("message") or payload)[:300])
+                return None
+
+            data_block = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+            download_url = str(data_block.get("download_url") or data_block.get("downloadUrl") or "").strip()
+            if download_url.startswith(("http://", "https://")):
+                return download_url
+            return None
+        except Exception as e:
+            logger.warning("RunningHub binary upload exception | error=%s", str(e)[:300])
+            return None
+
+    def _resolve_runninghub_media_input(self, value: Any, api_key: str, base_url: str, media_kind: str = "image") -> Optional[str]:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        if self._is_public_http_url(raw):
+            return raw
+
+        uploaded_url = self._upload_runninghub_binary_ref(raw, api_key=api_key, base_url=base_url)
+        if uploaded_url:
+            return uploaded_url
+
+        if str(media_kind or "").strip().lower() == "image":
+            fallback = self._resolve_ref_for_api(raw, force_data_uri_for_local=True)
+            return str(fallback or "").strip() or None
+
+        return None
+
     async def _handle_runninghub_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None):
         prompt = self._merge_negative_prompt(prompt, negative_prompt)
         api_key = str(config.get("api_key") or "").strip()
@@ -3868,7 +3997,27 @@ class MediaGenerationService:
         query_url = query_endpoint if re.match(r"^https?://", query_endpoint, flags=re.IGNORECASE) else f"{base_url}{query_endpoint if query_endpoint.startswith('/') else '/' + query_endpoint}"
         endpoint_lower = endpoint.lower()
 
-        resolved_refs = self._resolve_public_media_urls(ref_image)
+        raw_ref_values = ref_image if isinstance(ref_image, list) else [ref_image]
+        image_refs: List[str] = []
+        video_refs: List[str] = []
+        for item in raw_ref_values:
+            raw = str(item or "").strip()
+            if not raw:
+                continue
+            media_kind = "video" if self._looks_like_video_media_ref(raw) else "image"
+            resolved_value = await asyncio.to_thread(
+                self._resolve_runninghub_media_input,
+                raw,
+                api_key,
+                base_url,
+                media_kind,
+            )
+            if not resolved_value:
+                continue
+            if media_kind == "video":
+                video_refs.append(resolved_value)
+            else:
+                image_refs.append(resolved_value)
 
         def _normalize_bool(raw: Any, default: bool) -> bool:
             if raw is None:
@@ -3901,22 +4050,77 @@ class MediaGenerationService:
                     return tool_conf.get(key)
             return None
 
-        resolved_refs.extend(self._resolve_public_media_urls(_pick_tool_value("reference_video_urls", "ref_video_urls")))
-        if resolved_refs:
-            resolved_refs = list(dict.fromkeys(resolved_refs))
-        resolved_last_frame = self._resolve_public_media_url(last_frame_url)
-        image_refs = [item for item in resolved_refs if not self._looks_like_video_media_ref(item)]
-        video_refs = [item for item in resolved_refs if self._looks_like_video_media_ref(item)]
+        configured_video_refs = _pick_tool_value("reference_video_urls", "ref_video_urls")
+        for item in (configured_video_refs if isinstance(configured_video_refs, list) else [configured_video_refs]):
+            raw = str(item or "").strip()
+            if not raw:
+                continue
+            resolved_video = await asyncio.to_thread(
+                self._resolve_runninghub_media_input,
+                raw,
+                api_key,
+                base_url,
+                "video",
+            )
+            if resolved_video:
+                video_refs.append(resolved_video)
+        if image_refs:
+            image_refs = list(dict.fromkeys(image_refs))
+        if video_refs:
+            video_refs = list(dict.fromkeys(video_refs))
+        resolved_last_frame = await asyncio.to_thread(
+            self._resolve_runninghub_media_input,
+            last_frame_url,
+            api_key,
+            base_url,
+            "image",
+        )
+
+        def _is_runninghub_vidu_q2_video_endpoint() -> bool:
+            return "/vidu/" in endpoint_lower and ("q2-pro" in endpoint_lower or "q2-pro-fast" in endpoint_lower)
+
+        def _runninghub_video_resolution_allowed_values() -> List[str]:
+            if "/vidu/" not in endpoint_lower:
+                return []
+            if "q2-pro-fast" in endpoint_lower:
+                return ["720p", "1080p"]
+            if "q2-pro" in endpoint_lower:
+                return ["540p", "720p", "1080p"]
+            return []
+
+        def _normalize_runninghub_video_resolution(raw_value: Any, default_value: Optional[str] = None) -> Optional[str]:
+            allowed_values = _runninghub_video_resolution_allowed_values()
+            raw = str(raw_value or "").strip()
+            if not raw:
+                raw = str(default_value or "").strip()
+            if not raw:
+                return None
+            if not allowed_values:
+                return raw
+            mapped = self._map_resolution_to_allowed(raw, allowed_values)
+            return str(mapped or raw).strip() or None
 
         def _set_audio_flags(payload_obj: Dict[str, Any]):
-            if _pick_tool_value("generateAudio") is not None:
-                payload_obj["generateAudio"] = _normalize_bool(_pick_tool_value("generateAudio"), False)
-            elif _pick_tool_value("audio") is not None:
-                payload_obj["audio"] = _normalize_bool(_pick_tool_value("audio"), False)
-            elif _pick_tool_value("sound") is not None:
-                payload_obj["sound"] = _normalize_bool(_pick_tool_value("sound"), False)
-            elif _pick_tool_value("bgm") is not None:
-                payload_obj["bgm"] = _normalize_bool(_pick_tool_value("bgm"), True)
+            if _is_runninghub_vidu_q2_video_endpoint():
+                if _pick_tool_value("bgm") is not None:
+                    payload_obj["bgm"] = _normalize_bool(_pick_tool_value("bgm"), True)
+                elif _pick_tool_value("sound") is not None:
+                    payload_obj["bgm"] = _normalize_bool(_pick_tool_value("sound"), True)
+                elif _pick_tool_value("generateAudio") is not None:
+                    payload_obj["bgm"] = _normalize_bool(_pick_tool_value("generateAudio"), False)
+                elif _pick_tool_value("audio") is not None:
+                    payload_obj["bgm"] = _normalize_bool(_pick_tool_value("audio"), False)
+                else:
+                    payload_obj["bgm"] = True
+            else:
+                if _pick_tool_value("generateAudio") is not None:
+                    payload_obj["generateAudio"] = _normalize_bool(_pick_tool_value("generateAudio"), False)
+                elif _pick_tool_value("audio") is not None:
+                    payload_obj["audio"] = _normalize_bool(_pick_tool_value("audio"), False)
+                elif _pick_tool_value("sound") is not None:
+                    payload_obj["sound"] = _normalize_bool(_pick_tool_value("sound"), False)
+                elif _pick_tool_value("bgm") is not None:
+                    payload_obj["bgm"] = _normalize_bool(_pick_tool_value("bgm"), True)
 
             if _pick_tool_value("keepOriginalSound") is not None:
                 payload_obj["keepOriginalSound"] = _normalize_bool(_pick_tool_value("keepOriginalSound"), True)
@@ -3935,7 +4139,7 @@ class MediaGenerationService:
             is_image_edit = any(token in endpoint_lower for token in ("image-to-image", "/edit", "image-edit"))
             if is_image_edit:
                 if not image_refs:
-                    return {"error": "RunningHub image edit requires at least one public reference image URL", "submit_failed": True}
+                    return {"error": "RunningHub image edit requires at least one reference image input", "submit_failed": True}
                 payload["imageUrls"] = image_refs[:3]
             elif image_refs and "youchuan/" in endpoint_lower:
                 payload["imageUrl"] = image_refs[0]
@@ -3999,22 +4203,25 @@ class MediaGenerationService:
         explicit_aspect_ratio = _pick_tool_value("aspectRatio", "aspect_ratio") or aspect_ratio
         explicit_size = _pick_tool_value("size")
         movement_amplitude = str(_pick_tool_value("movementAmplitude", "movement_amplitude", "motion_amplitude") or "").strip() or None
+        if not movement_amplitude and _is_runninghub_vidu_q2_video_endpoint():
+            movement_amplitude = "auto"
+        normalized_video_resolution = _normalize_runninghub_video_resolution(explicit_resolution, "720p" if _is_runninghub_vidu_q2_video_endpoint() else None)
 
         if "video-edit" in endpoint_lower or "edit-video" in endpoint_lower or "video-extend" in endpoint_lower:
             source_video = video_refs[0] if video_refs else None
             if not source_video:
-                return {"error": "RunningHub video-edit/video-extend requires a public source video URL; current request did not include one", "submit_failed": True}
+                return {"error": "RunningHub video-edit/video-extend requires a source video input; current request did not include one", "submit_failed": True}
             if "video-extend" in endpoint_lower:
                 payload["video"] = source_video
             else:
                 payload["videoUrl"] = source_video
             if image_refs:
                 payload["imageUrls"] = image_refs[:3]
-            _set_if_present(payload, "resolution", str(explicit_resolution).strip() if explicit_resolution is not None else None)
+            _set_if_present(payload, "resolution", normalized_video_resolution)
             _set_audio_flags(payload)
         elif "reference-to-video" in endpoint_lower:
             if not image_refs and not video_refs:
-                return {"error": "RunningHub reference-to-video requires public reference images or videos", "submit_failed": True}
+                return {"error": "RunningHub reference-to-video requires reference images or videos", "submit_failed": True}
             if image_refs:
                 payload["imageUrls"] = image_refs[:3]
             if video_refs:
@@ -4027,7 +4234,7 @@ class MediaGenerationService:
                 else:
                     payload["videoUrl"] = video_refs[0]
             payload["duration"] = _normalize_duration_value(explicit_duration or duration)
-            _set_if_present(payload, "resolution", str(explicit_resolution).strip() if explicit_resolution is not None else None)
+            _set_if_present(payload, "resolution", normalized_video_resolution)
             _set_if_present(payload, "aspectRatio", str(explicit_aspect_ratio).strip() if explicit_aspect_ratio else None)
             _set_if_present(payload, "size", str(explicit_size).strip() if explicit_size is not None else None)
             _set_if_present(payload, "cameraFixed", _pick_tool_value("cameraFixed"))
@@ -4036,7 +4243,7 @@ class MediaGenerationService:
             first_image = image_refs[0] if image_refs else None
             last_image = resolved_last_frame or (image_refs[1] if len(image_refs) > 1 else None)
             if not first_image:
-                return {"error": "RunningHub start-end video requires a public first-frame image URL", "submit_failed": True}
+                return {"error": "RunningHub start-end video requires a first-frame image input", "submit_failed": True}
             if "/rhart-video-" in endpoint_lower:
                 payload["firstFrameUrl"] = first_image
                 if last_image:
@@ -4046,26 +4253,26 @@ class MediaGenerationService:
                 if last_image:
                     payload["lastImageUrl"] = last_image
             payload["duration"] = _normalize_duration_value(explicit_duration or duration)
-            _set_if_present(payload, "resolution", str(explicit_resolution).strip() if explicit_resolution is not None else None)
+            _set_if_present(payload, "resolution", normalized_video_resolution)
             _set_if_present(payload, "aspectRatio", str(explicit_aspect_ratio).strip() if explicit_aspect_ratio else None)
             _set_if_present(payload, "mode", _pick_tool_value("mode"))
             _set_if_present(payload, "movementAmplitude", movement_amplitude)
             _set_audio_flags(payload)
         elif "text-to-video" in endpoint_lower:
             payload["duration"] = _normalize_duration_value(explicit_duration or duration)
-            _set_if_present(payload, "resolution", str(explicit_resolution).strip() if explicit_resolution is not None else None)
+            _set_if_present(payload, "resolution", normalized_video_resolution)
             _set_if_present(payload, "aspectRatio", str(explicit_aspect_ratio).strip() if explicit_aspect_ratio else None)
             _set_if_present(payload, "size", str(explicit_size).strip() if explicit_size is not None else None)
             _set_audio_flags(payload)
         else:
             first_image = image_refs[0] if image_refs else None
             if not first_image:
-                return {"error": "RunningHub image-to-video requires a public reference image URL", "submit_failed": True}
+                return {"error": "RunningHub image-to-video requires a reference image input", "submit_failed": True}
             payload["imageUrl"] = first_image
             if resolved_last_frame and "/rhart-video-" in endpoint_lower:
                 payload["lastImageUrl"] = resolved_last_frame
             payload["duration"] = _normalize_duration_value(explicit_duration or duration)
-            _set_if_present(payload, "resolution", str(explicit_resolution).strip() if explicit_resolution is not None else "720p")
+            _set_if_present(payload, "resolution", normalized_video_resolution or "720p")
             _set_if_present(payload, "aspectRatio", str(explicit_aspect_ratio).strip() if explicit_aspect_ratio else None)
             _set_if_present(payload, "movementAmplitude", movement_amplitude)
             _set_audio_flags(payload)
@@ -4135,7 +4342,13 @@ class MediaGenerationService:
 
         if gen_type == "video":
             endpoint_lower = endpoint.lower()
-            if "/v1/videos" not in endpoint_lower:
+            # Veo / Sora Reverse models may carry /v1/chat/completions as endpoint_hint
+            # (the sync calling convention).  Rewrite to the async /v1/videos endpoint
+            # so the existing submit-and-poll handler works.
+            if "/v1/chat/completions" in endpoint_lower:
+                endpoint = "/v1/videos"
+                submit_url = f"{base_url}/v1/videos"
+            elif "/v1/videos" not in endpoint_lower:
                 return {"error": f"APIYI video endpoint family not supported yet: {endpoint}", "submit_failed": True}
 
             payload = {
@@ -4151,10 +4364,17 @@ class MediaGenerationService:
                 }
                 payload["size"] = size_map.get(str(aspect_ratio).strip(), payload["size"])
 
-            # APIYI /v1/videos supports input_reference as multipart file upload for image-to-video.
-            # Keep the first slice text-to-video ready and defer reference upload until a dedicated upload path is added.
-            if ref_image or last_frame_url:
-                return {"error": "APIYI /v1/videos reference-image upload is not enabled yet in media service", "submit_failed": True}
+            # APIYI /v1/videos: non-fl models are text-to-video only — silently
+            # ignore any reference image the caller passes through.  For -fl models
+            # the async API requires multipart upload which is not implemented yet.
+            model_lower = model.lower()
+            is_frame_model = model_lower.endswith("-fl") or "-fl-" in model_lower
+            if is_frame_model and (ref_image or last_frame_url):
+                return {"error": "APIYI /v1/videos frame-to-video (multipart upload) is not enabled yet in media service", "submit_failed": True}
+            # For non-fl models, just drop the ref images
+            if not is_frame_model:
+                ref_image = None
+                last_frame_url = None
 
             base_metadata = {
                 "provider": "apiyi",
@@ -4381,10 +4601,19 @@ class MediaGenerationService:
                 return {"error": f"Submission Failed {resp.status_code}", "details": resp.text, "submit_failed": True}
 
             data = resp.json()
+            submit_error_code = data.get("errorCode")
+            submit_error_message = str(data.get("errorMessage") or "").strip()
             task_id = data.get("taskId") or data.get("task_id") or data.get("id")
             if not task_id and isinstance(data.get("data"), dict):
                 task_id = data.get("data", {}).get("taskId") or data.get("data", {}).get("task_id") or data.get("data", {}).get("id")
             if not task_id:
+                if submit_error_code not in (None, "", 0, "0") or submit_error_message:
+                    upstream_message = submit_error_message or f"RunningHub submit rejected with code {submit_error_code}"
+                    return {
+                        "error": upstream_message,
+                        "details": data,
+                        "submit_failed": True,
+                    }
                 return {"error": "No Task ID", "details": data, "submit_failed": True}
 
             max_attempts = max(1, int(poll_timeout_seconds / max(1, poll_interval_seconds)))
@@ -4481,11 +4710,26 @@ class MediaGenerationService:
                     status = str(p_data.get("status") or p_data.get("state") or "").strip()
                     status_l = status.lower()
                     if status_l in ["succeeded", "success", "completed", "done"]:
-                        content = p_data.get("content", {})
-                        video_url = content.get("video_url") or content.get("url")
+                        content = p_data.get("content") or {}
+                        video_url = None
+                        if isinstance(content, dict):
+                            video_url = content.get("video_url") or content.get("url")
                         if not video_url and isinstance(p_data.get("data"), dict):
                             data_content = p_data.get("data", {}).get("content", {}) or {}
                             video_url = data_content.get("video_url") or data_content.get("url")
+                        # Veo-style: url at top level of poll response
+                        if not video_url:
+                            video_url = p_data.get("video_url") or p_data.get("url")
+                        # Veo async API: separate /content endpoint
+                        if not video_url and task_id:
+                            try:
+                                content_url = f"{url}/{task_id}/content"
+                                c_resp = await asyncio.to_thread(lambda: requests.get(content_url, headers=headers, timeout=30, verify=False))
+                                if c_resp.status_code == 200:
+                                    c_data = c_resp.json()
+                                    video_url = c_data.get("url") or c_data.get("video_url")
+                            except Exception:
+                                pass
                         metadata = {"raw": p_data}
                         if extra_metadata:
                             metadata.update(extra_metadata)
