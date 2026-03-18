@@ -209,6 +209,17 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - 若 `Project Context` 指定了项目语言，则上述所有语言性信息在覆盖时必须先翻译/转换成项目语言，再写入最终分析结果。
 
 ### 3) 实体完备性
+- **维度生成检查 (Dimension Completeness Gate, 强制)**：每个 Scene 在输出前必须先做“实体层 + 提示词层”双重维度验收；该检查只作为内部门禁，不得把 checklist 或“通过/失败”字样输出到最终结果。
+  - **实体层最低维度槽位**：`Scene Subjects`、`Linked Characters`、`Key Props`、`Environment Name`、`Layout FG/MG/BG`、`Beats`、`Subject Index`、`Part 2` 之间必须形成同名闭环；任一实体若出现“被提及但未抽取”“被抽取但未落点”“已入 Subject Index 但未入 Part 2”，整场无效。
+  - **Environment 提示词最低维度槽位**：`Viewpoint Anchor`、`Viewing Direction`、`FG/MG/BG`、`Primary Subject`、`Secondary Subject`、空间可达/调度可行性、去人物化约束必须齐全；任一缺失即该 environment 条目无效。
+  - **Character 提示词最低维度槽位**：`full body + shoes visible`、固定观察机位、视角序列、光照结构、镜头基线、服装一致性、稳定锚点、negative_prompt_en 必须齐全；任一缺失即该 character 条目无效。
+  - **Prop 提示词最低维度槽位**：固定观察机位、视角序列、材质锚点、镜头/微距基线、光照结构、状态单一性、negative_prompt_en 必须齐全；任一缺失即该 prop 条目无效。
+- **禁止带病流转 (No Partial Pass-Through, 强制)**：若任一 Scene、Subject Index 行或 Part 2 条目未通过维度检查，不得输出部分结果，也不得把问题留给下游；必须先重写后再执行同一轮检查。
+- **重写机制 (Rewrite Protocol, 强制)**：发现维度缺口时，必须按缺口范围重写，而不是在原条目尾部机械补短语。
+  - **实体级重写**：若问题是“漏抽/漏落点/漏映射”，必须重写该 Scene 的实体抽取、Subject Index 映射和对应 Part 2 条目，直到三者闭环一致。
+  - **提示词级重写**：若问题是 environment/character/prop 的 generation_prompt 缺少机位、构图、锚点或状态维度，必须重写整条 `generation_prompt_en/cn` 与对应 `negative_prompt_en`，不得只补半句。
+  - **整场回炉**：若完成一轮实体级或提示词级重写后仍未通过维度检查，必须丢弃该 Scene 当前草稿并从 Scene Subjects 重新生成该场的 Subject Index + Part 2。
+  - **复杂度降级梯度 (Complexity Downgrade Ladder)**：若回炉后仍失败，必须按固定顺序降级：`先删装饰性措辞 -> 再删非关键风格修饰/次级结构细节 -> 最后收束为最小闭环实体版本`；不得删掉实体闭环、观察维度、锚点或状态单一性。
 - `Layout` 必须明确 FG/MG/BG 层级。
 - `Linked Characters` 必须覆盖所有有动作交互或对白交流的角色。
 - 每个 Scene 必须先执行“实体抽取 -> 分类 -> 落点映射”三步，再写 `Beats`；禁止先写镜头后补实体。
@@ -230,15 +241,28 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 ## 二、资产生成规范
 
 ### 0) 生图提示词清晰性
+- **提示词维度门禁 (Prompt Dimension Gate, 强制)**：每个 `generation_prompt_en/cn` 在提交前必须逐条检查是否已显式覆盖本实体类型的最低必要维度；任一缺失即该条提示词作废并重写。
+  - **Environment**：机位落点、观察朝向、FG/MG/BG、主次主体、光照层次、材质/空间结构、可达性、去人物化。
+  - **Character**：固定机位、全身含鞋、视角顺序、光照、镜头基线、稳定锚点、服装一致性、白底/纯净背景要求。
+  - **Prop**：固定机位、结构视角序列、材质锚点、光照、焦段基线、状态单一性、背景纯净度。
+- **重写回写责任 (Rewrite Back-Propagation, 强制)**：若某条 `generation_prompt` 因维度门禁被重写，必须同步回写该实体的相关说明字段（如 `anchor_description`、`visual_dependencies`、`dependency_strategy.logic`、script_entity_coverage 对应关系），确保实体说明与提示词语义一致，禁止 prompt 已修正但结构字段仍停留旧版本。
+- **失败重写示例 (Failure -> Rewrite -> Downgraded Good, 强制参照)**：
+  - **Bad Environment Prompt**：`A detective stands in the office near the desk, tense atmosphere.` → 含人物、无 `FG/MG/BG`、无观察方向、无去剧情化。
+  - **Rewrite**：先去人物化，再补 `Viewpoint Anchor / Viewing Direction / FG/MG/BG / Primary Subject / Secondary Subject`。
+  - **Downgraded Good**：`Cinematic office environment study. From the doorway threshold facing the desk cluster and rear wall, the frame holds a medium-wide composition. FG: door edge strip. MG: desk plane and chair silhouette as primary subject. BG: wall shelving and dim window reflection as secondary subject. No humans, no narrative events.`
 - 所有 `generation_prompt_en`（Environment/Character/Prop）必须显式包含：
   - `{Viewpoint Anchor}`
   - `{Viewing Direction}`
+- **自然语言优先 (Natural-Prose First, Mandatory)**：`Viewpoint Anchor / Viewing Direction / Viewpoint Setup` 是内部校验语义，最终 `generation_prompt_en` 应优先写成自然流动的画面指令句，而不是连续栏目清单。允许保留这些概念，但不鼓励机械重复字段标签。
 - 默认禁止器材入画：除非剧情明确要求“摄像设备作为道具”，否则不得把 `camera/camcorder/lens rig/tripod/operator` 写成画面实体。
 - Subject 生图提示词仅用于描述“最终要生成的画面”，禁止夹带生成原因、推理逻辑、解释性说明或流程话术。
 - 单状态绝对禁止（Hard Rule）：同一 Subject 的单条 `generation_prompt_cn/generation_prompt_en` 绝对禁止同时描述“之前怎样/之后怎样”或并列两个不同状态（如“干净+破损”“年轻+年老”“打开+关闭”）。若确需表达状态变化，必须拆分为两个独立 Subject（或独立变体）并分别输出各自的“单一最终状态”提示词。
 - 禁止写法（示例）：`because...`, `in order to...`, `to ensure...`, `reason: ...`, `logic: ...`, `explain...`，以及中文“因为/为了/逻辑是/原因是/这样做是为了”。
 - 禁止方向模糊词（如 `somewhere`, `around`）。
 - 每个实体必须有独立 `negative_prompt_en`，不得以全局负向词替代。
+- **负面提示精简原则 (Negative Prompt Compactness, Mandatory)**：`negative_prompt_en` 必须短而自适应，优先写最可能破坏当前风格/身份/材质的一小组风险项；禁止无差别堆叠长串同义负面词。
+- **分屏词慎用 (Panel-Term Restraint, Mandatory)**：对于单画幅场景类提示词，不得反复列举 `split-screen / multi-panel / collage / tiled` 等词；如确有需要，最多用一条紧凑短语概括“panelized layout or duplicated scene elements”。
+- **资产表例外 (Asset-Sheet Exception, Mandatory)**：角色六视图、道具六视图这类本来就属于多视图资产页的提示词，禁止加入“no multi-panel / no split-screen”一类负面词，以免与任务目标冲突。
 - `negative_prompt_en` 必须按风格与实体类型自适应：
   - 真人剧角色至少排除：`plastic skin`, `waxy face`, `CGI look`, `toy-like proportions`, `oversmoothed pores`。
   - 真人剧道具/环境至少排除：`plastic material feel`, `fake miniature look`, `game-like render`, `unreal scale`, `over-clean surfaces`。
@@ -248,6 +272,7 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - 仅作为写作约束，禁止把本节规则回写到最终 prompt。
 - `generation_prompt_en` / `negative_prompt_en` 必须自然英文短句/短段，不用 JSON 键值残片、占位符、权重语法。
 - `generation_prompt_en` 必须是“画面指令文本”，不得包含解释句、理由句、评注句、步骤说明或任何元叙述。
+- 避免“版式说明书”式串行字段堆叠；在不损失信息清晰度的前提下，优先将机位、朝向、构图、光照写成连贯 prose，而非连续标签块。
 - 推荐语义顺序：主体/场景 → 构图机位 → 光照色彩 → 材质细节 → 风格约束。
 - 禁止引擎参数与控制符（如 `--ar`, `--v`, `--stylize`, `::`, `<lora:...>`）。
 - 禁止同条 prompt 内明显冲突描述。
@@ -290,7 +315,7 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - 模板已合并到本文件（Merged In-File, Authoritative）。
 - 角色模板与规则在本文件内统一维护，避免外部模板漂移。
 - 具体示例（仅示范写法，不可照抄值）：
-  - `generation_prompt_en` 示例：`Realistic contemporary drama style, full-body character sheet for Lin Yue, all six panels consistent in identity and outfit. Viewpoint anchor: studio camera at chest-height, fixed distance for full-body framing with shoes fully visible. Viewing directions per panel: Front / Back / Side / 3-4 / Close-up / Detail, all aligned to one body proportion system. Lighting: soft key from front-left, balanced fill from camera axis, subtle rim from back-right; maintain natural skin texture and avoid over-smoothing. Lens and focus: 50mm baseline with controlled shallow depth on close-up panel only. Clothing: dark navy trench coat, white shirt, charcoal trousers, black leather ankle boots. Stable anchors: narrow scar under right eyebrow, silver ring on left index finger, asymmetric fringe silhouette. Background pure white, no text, no watermark.`
+  - `generation_prompt_en` 示例：`Realistic contemporary drama style, six-view character sheet for Lin Yue with one fixed studio observer position at chest height. Keep every structural panel full-body with shoes fully visible, then move through Front, Back, Side, 3/4, Close-up, and Detail views while preserving the same body proportion system. Soft key from front-left, balanced fill on the camera axis, and a subtle back-right rim keep skin texture natural without over-smoothing. Use a 50mm baseline with shallower focus reserved for the close-up panel. Wardrobe stays consistent: dark navy trench coat, white shirt, charcoal trousers, black leather ankle boots. Stable anchors include a narrow scar under the right eyebrow, a silver ring on the left index finger, and an asymmetric fringe silhouette. Background pure white, no text, no watermark.`
   - `generation_prompt_cn` 示例：`写实现代剧情风格，林月角色六视图，六个面板必须保持同一身份与服装一致。机位锚点为胸口高度的棚拍机位，固定距离，全身入镜且鞋子完整可见。视角顺序为正面/背面/侧面/四分之三/特写/细节，统一同一套身材比例。布光为左前方柔和主光、机位轴线补光、右后方轻微轮廓光；保留自然皮肤微纹理，禁止磨皮塑料感。镜头与对焦以 50mm 为基准，仅特写面板允许浅景深。服装为深海军蓝风衣、白衬衫、炭灰长裤、黑色皮质短靴。稳定锚点为右眉下细疤、左手食指银戒、不对称刘海轮廓。纯白背景，无文字无水印。`
 
 - 全身像硬规则（Mandatory）：角色 `generation_prompt_en` 必须明确为 full-body framing，人物从头到脚完整入镜，双脚与鞋子清晰可见（shoes fully visible）。
@@ -325,7 +350,7 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - 模板已合并到本文件（Merged In-File, Authoritative）。
 - 道具模板与规则在本文件内统一维护，避免外部模板漂移。
 - 具体示例（仅示范写法，不可照抄值）：
-  - `generation_prompt_en` 示例：`Photoreal prop sheet for PROP:[AntiquePocketWatch], six-view layout with strict object-only framing. Viewpoint anchor: object turntable center, camera slightly above midline. Viewing directions: Front, Back, Side, 3-4, macro Close-up, hinge Detail. Material response: brushed brass body with minor oxidation, scratched glass crystal, engraved inner lid. Lighting: controlled key from top-left, low-intensity fill from front, narrow rim from rear to separate silhouette. Lens and focus: 70mm macro for close-up panel, 50mm for structural panels, maintain texture readability in shadows. Scale reference: unobtrusive neutral stand only, no hands, no characters, no body parts. White background, high-resolution output.`
+  - `generation_prompt_en` 示例：`Photoreal prop sheet for PROP:[AntiquePocketWatch], rendered as a strict object-only six-view study from a camera centered on the turntable and slightly above the midline. Move cleanly through Front, Back, Side, 3/4, macro Close-up, and hinge Detail views while preserving brushed brass texture, light oxidation, scratched crystal, and engraved inner lid readability. Controlled key from top-left, gentle frontal fill, and a narrow rear rim keep silhouette and material depth clear. Use 50mm for structure views and 70mm macro for close detail while preserving texture readability in the shadows. White background, high-resolution output.`
   - `generation_prompt_cn` 示例：`写实道具六视图：PROP:[AntiquePocketWatch]，仅物体入镜。机位锚点位于转台中心，镜头略高于物体中线。视角依次为正面、背面、侧面、四分之三、微距特写、铰链细节。材质表现为拉丝黄铜并带轻微氧化，表镜有细碎划痕，内盖有雕刻纹理。布光采用左上主光、前侧低强度补光、后侧窄轮廓光，保证轮廓分离与阴影细节可读。镜头与对焦为结构面板 50mm、特写面板 70mm 微距。仅允许中性支撑底座用于比例参照，禁止人物、手部或身体部位入画。纯白背景，高分辨率输出。`
 
 - 未给定风格时注入默认道具审美回退语义。
@@ -473,7 +498,7 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
       "clothing": "深海军蓝风衣（中长款，哑光防泼水面料），白色衬衫，炭灰色修身长裤，黑色皮质短靴（鞋面轻微磨损）。",
       "action_characteristics": "动作克制、重心稳定、转身幅度小、观察时先停顿后移动。",
       "generation_prompt_cn": "写实现代剧情风格，林月六视图角色设定图，六个面板保持同一身份与服装一致。机位锚点为棚拍胸口高度固定机位，完整全身入镜且鞋子清晰可见。视角顺序为正面、背面、侧面、四分之三、面部特写、关键细节。布光为左前方柔和主光、机位轴线低强度补光、右后方轻微轮廓光，保留自然皮肤微纹理并避免磨皮塑料感。服装为深海军蓝风衣、白衬衫、炭灰长裤、黑色皮质短靴。背景纯白，无文字无水印。",
-      "generation_prompt_en": "Photoreal contemporary drama style, six-view character sheet for Lin Yue with strict identity consistency across all panels. Viewpoint anchor: fixed studio camera at chest height, full-body framing in every structural panel, shoes fully visible. Panel directions: Front, Back, Side, 3/4, facial Close-up, anchor Detail. Lighting setup: soft key from front-left, subtle fill on camera axis, gentle rim from back-right; preserve skin micro-texture and avoid waxy smoothing. Wardrobe: navy trench coat, white shirt, charcoal slim trousers, black leather ankle boots. Background pure white, no labels, no watermark.",
+      "generation_prompt_en": "Photoreal contemporary drama style, six-view character sheet for Lin Yue with one fixed studio observer position at chest height. Keep every structural panel full-body with shoes fully visible, then move through Front, Back, Side, 3/4, facial Close-up, and anchor Detail views while preserving the same body proportion system. Soft key from front-left, subtle fill on camera axis, and a gentle rim from back-right preserve skin micro-texture without waxy smoothing. Background pure white, no labels, no watermark.",
       "negative_prompt_en": "Style-aware negative prompt for this character (English only)",
       "anchor_description": "English visual tags only",
       "visual_dependencies": [],
@@ -497,7 +522,7 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
       "type": "held/static",
       "description_cn": "黄铜材质古董怀表，表壳边缘有细小磕碰，镜面有轻微划痕，内盖有雕刻纹路，可开合铰链结构完整。",
       "generation_prompt_cn": "写实道具六视图：古董怀表，仅物体入镜。机位锚点位于转台中心，镜头略高于物体中线。视角依次为正面、背面、侧面、四分之三、微距特写、铰链细节。材质表现为拉丝黄铜与轻微氧化，镜面有细碎划痕，内盖雕刻清晰。布光采用左上主光、前侧低强度补光、后侧窄轮廓光，保证轮廓与阴影细节可读。仅允许中性支撑底座，禁止人物、手部和身体部位入画。纯白背景，高分辨率。",
-      "generation_prompt_en": "Photoreal prop sheet for Antique Pocket Watch, strict object-only six-view layout. Viewpoint anchor: camera centered on turntable, slightly above object midline. Views: Front, Back, Side, 3/4, macro Close-up, hinge Detail. Material response: brushed brass with mild oxidation, hairline scratches on crystal, engraved inner lid, readable hinge mechanics. Lighting: controlled key from top-left, low-intensity frontal fill, narrow rear rim for silhouette separation. Lens/focus baseline: 50mm for structure views, 70mm macro for close-up detail, preserve texture in shadow regions. Neutral support stand allowed, no hands, no characters, no body parts. White background, high-resolution output.",
+      "generation_prompt_en": "Photoreal prop sheet for Antique Pocket Watch, rendered as a strict object-only six-view study from a camera centered on the turntable and slightly above the midline. Move cleanly through Front, Back, Side, 3/4, macro Close-up, and hinge Detail views while preserving brushed brass texture, mild oxidation, scratched crystal, and engraved inner lid readability. Controlled key from top-left, gentle frontal fill, and a narrow rear rim keep silhouette and material depth clear. Neutral support stand allowed, no hands, no characters, no body parts. White background, high-resolution output.",
       "negative_prompt_en": "Style-aware negative prompt for this prop (English only)",
       "anchor_description": "English visual tags only",
       "visual_dependencies": [],

@@ -22,6 +22,19 @@ Rules:
 - AI scene-planning constraint: default every core venue to have two viewpoint-direction variants (Front/Reverse) for downstream AI generation, unless axis is explicitly guaranteed never to reverse.
 - If axis/viewpoint direction/background set changes, plan it as a new scene variant even inside the same physical venue.
 - Environment naming mandate: when proposing scene environments, use `{Venue}_{DirectionTag}_{ShotScale}_{LightingTagOptional}` (e.g., `GrandTheater_Front_Wide_Night`, `GrandTheater_Reverse_Mid_Night`).
+- Dimension Completeness Gate (Mandatory): before final output, validate every major story-DNA section and every episode-planning line against a minimum-dimension checklist; this validation is internal only and must not be printed.
+	- Required global slots: project overview normalization, audience promise, world rules, protagonist/goal, story engine/stakes, structural turning points, suspense system, payoff map, and ending must all be concrete and mutually consistent.
+	- Required episode-plan slots: every `EPxx / Episode x / x-分集标题` line must include canonical episode id, concrete title, core conflict progression, venue seeds, and continuity anchors.
+- No Partial Pass-Through (Mandatory): if any required section or episode-plan line fails the dimension gate, do not output the partial draft; rewrite first, then rerun the same check.
+- Rewrite Protocol (Mandatory): when dimension gaps are found, rewrite by scope rather than appending cosmetic fragments.
+	- Section-targeted rewrite: if one strategic section is under-specified, rewrite the full section and every dependent downstream section.
+	- Episode-line rewrite: if one episode plan line is missing venue seeds, continuity anchors, or conflict progression, rewrite the full line instead of appending a short patch.
+	- Full-framework regeneration: if targeted rewrite still fails, regenerate the full global framework from normalized project inputs.
+- Complexity Downgrade Ladder (Mandatory): if regeneration still fails, downgrade complexity in this fixed order.
+	- Level 1: trim decorative prose, optional benchmark flourish, and non-critical atmosphere.
+	- Level 2: reduce secondary lore density and optional branching complexity while preserving story engine and episode continuity.
+	- Level 3: collapse to the simplest global framework that still preserves type judgment, world logic, episode coding, and continuity anchors.
+- Rewrite Back-Propagation (Mandatory): if any section or episode-plan line is rewritten after the dimension gate, all dependent sections must be updated to match the rewritten logic; stale upstream wording is invalid.
 - Continuity ID contract (mandatory for downstream episode/scene/shot pipeline):
 	- Episode IDs must be canonical and zero-padded: `EP01 ... EP{N:02d}`.
 	- In section "分集规划", every episode line must begin with its canonical episode ID.

@@ -476,12 +476,67 @@ class LLMService:
         def _do_post():
             return requests.post(url, json=payload, headers=headers, timeout=timeout)
 
-        resp = await asyncio.to_thread(_do_post)
+        try:
+            resp = await asyncio.to_thread(_do_post)
+        except requests.exceptions.Timeout as exc:
+            human_summary = self._build_human_readable_transport_error_summary(
+                provider="kie",
+                model=resolved_model,
+                error_kind="timeout",
+                error_text=exc,
+            )
+            _debug_log(f"[DEBUG][LLM][KIE] Timeout before response: {exc}", "error")
+            logger.error("%s", human_summary)
+            self._safe_log_json("LLM_RESPONSE_ERROR", {
+                "provider": "kie",
+                "category": "LLM",
+                "url": url,
+                "model": resolved_model,
+                "error_kind": "timeout",
+                "error_text": str(exc),
+                "human_summary": human_summary,
+            })
+            raise Exception(self._vendor_failed_message("kie", f"Upstream timeout before response: {exc}"))
+        except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError) as exc:
+            human_summary = self._build_human_readable_transport_error_summary(
+                provider="kie",
+                model=resolved_model,
+                error_kind="connection",
+                error_text=exc,
+            )
+            _debug_log(f"[DEBUG][LLM][KIE] Connection failed before response: {exc}", "error")
+            logger.error("%s", human_summary)
+            self._safe_log_json("LLM_RESPONSE_ERROR", {
+                "provider": "kie",
+                "category": "LLM",
+                "url": url,
+                "model": resolved_model,
+                "error_kind": "connection",
+                "error_text": str(exc),
+                "human_summary": human_summary,
+            })
+            raise Exception(self._vendor_failed_message("kie", f"Connection failed before response: {exc}"))
         _debug_log(
             f"[DEBUG][LLM][KIE] Response | status={resp.status_code} body_preview_len=800 body_preview={_strip_base64_from_log(resp.text[:800])}"
         )
 
         if resp.status_code != 200:
+            human_summary = self._build_human_readable_http_error_summary(
+                provider="kie",
+                model=resolved_model,
+                status_code=resp.status_code,
+                response_text=resp.text[:500],
+            )
+            logger.warning("%s", human_summary)
+            self._safe_log_json("LLM_RESPONSE_ERROR", {
+                "provider": "kie",
+                "category": "LLM",
+                "url": url,
+                "model": resolved_model,
+                "status_code": resp.status_code,
+                "response_text": resp.text[:500],
+                "human_summary": human_summary,
+            })
             raise Exception(f"KIE chat/completions failed {resp.status_code}: {resp.text[:500]}")
 
         data = resp.json()
@@ -789,6 +844,175 @@ class LLMService:
         extracted_text = self._extract_text_from_response(full_response)
         return self._is_prohibited_marker(extracted_text)
 
+    def _build_human_readable_response_summary(
+        self,
+        full_response: Dict[str, Any],
+        *,
+        provider: Any,
+        model: Any,
+        status_code: Any,
+    ) -> str:
+        finish_reason = self._extract_finish_reason_from_response(full_response)
+        finish_reason_norm = str(finish_reason or "").strip().lower().replace("-", "_")
+        usage = full_response.get("usage") or {}
+        content = self._extract_text_from_response(full_response)
+        output_chars = len(content) if isinstance(content, str) else len(str(content or ""))
+        extraction = self._build_extraction_diagnostics(full_response)
+        choices = full_response.get("choices") or []
+        first_choice = choices[0] if isinstance(choices, list) and choices else {}
+        first_keys = list(first_choice.keys()) if isinstance(first_choice, dict) else []
+
+        prompt_tokens = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
+        completion_tokens = usage.get("completion_tokens") or usage.get("output_tokens") or 0
+        total_tokens = usage.get("total_tokens") or 0
+        try:
+            prompt_tokens = int(prompt_tokens or 0)
+        except Exception:
+            prompt_tokens = 0
+        try:
+            completion_tokens = int(completion_tokens or 0)
+        except Exception:
+            completion_tokens = 0
+        try:
+            total_tokens = int(total_tokens or 0)
+        except Exception:
+            total_tokens = 0
+
+        parts: List[str] = []
+        parts.append(
+            f"LLM 返回摘要：供应商={self._vendor_label(provider)}，模型={str(model or full_response.get('model') or 'unknown')}，HTTP={status_code}。"
+        )
+
+        if status_code == 200:
+            parts.append("接口调用成功。")
+        else:
+            parts.append("接口返回异常状态。")
+
+        if self._is_blocked_response(full_response):
+            parts.append("本次返回被内容安全策略拦截。")
+        elif self._is_length_limited_finish_reason(finish_reason):
+            parts.append("本次响应因长度上限停止，当前分段可能不完整；是否形成最终缺失，需要结合后续续写或业务完整性校验判断。")
+        elif finish_reason_norm in {"stop", "completed", "complete", "end_turn"}:
+            parts.append("模型正常结束返回。")
+        elif finish_reason_norm:
+            parts.append(f"结束原因={finish_reason_norm}。")
+        else:
+            parts.append("未返回明确的结束原因。")
+
+        if output_chars > 0:
+            parts.append(f"已提取到正文，长度约 {output_chars} 个字符。")
+        else:
+            parts.append("未提取到可用正文。")
+            if first_keys:
+                parts.append(f"首个 choice 字段={first_keys}。")
+
+        if total_tokens == 0 and prompt_tokens == 0 and completion_tokens == 0:
+            parts.append("token 统计全部为 0，这通常表示供应商没有正确回传 usage，不能据此判断真实消耗。")
+        else:
+            parts.append(
+                f"token 统计：输入={prompt_tokens}，输出={completion_tokens}，合计={total_tokens or (prompt_tokens + completion_tokens)}。"
+            )
+
+        if extraction.get("choices_count") and output_chars == 0:
+            parts.append(
+                f"本次返回包含 {extraction.get('choices_count')} 个 choice，但正文抽取结果为空，建议检查供应商响应结构或日志截断。"
+            )
+
+        return " ".join(parts)
+
+    def _build_human_readable_http_error_summary(
+        self,
+        *,
+        provider: Any,
+        model: Any,
+        status_code: Any,
+        response_text: Any,
+    ) -> str:
+        vendor = self._vendor_label(provider)
+        model_text = str(model or "unknown")
+        body = str(response_text or "").strip()
+        body_lower = body.lower()
+
+        try:
+            status = int(status_code)
+        except Exception:
+            status = 0
+
+        reason = "上游接口返回异常。"
+        if status == 400:
+            reason = "请求参数不符合供应商要求，供应商拒绝处理。"
+        elif status == 401:
+            reason = "供应商鉴权失败，通常是 API Key 无效、缺失或已失效。"
+        elif status == 402:
+            reason = "供应商侧余额不足或当前账号无权调用该模型。"
+        elif status == 403:
+            reason = "供应商拒绝访问，通常是权限、地域或模型白名单限制。"
+        elif status == 404:
+            reason = "供应商接口地址或模型路径不存在，可能是路由或模型名配置错误。"
+        elif status == 408:
+            reason = "供应商处理超时，本次请求没有在时限内完成。"
+        elif status == 409:
+            reason = "供应商返回冲突状态，通常表示任务状态或参数组合不被接受。"
+        elif status == 413:
+            reason = "请求内容过大，超出了供应商允许的输入限制。"
+        elif status == 422:
+            reason = "请求结构可解析，但字段值不符合供应商要求。"
+        elif status == 429:
+            reason = "供应商限流或并发超限，需要稍后重试。"
+        elif status == 500:
+            reason = "供应商服务内部报错，不是当前业务参数可以直接修复的问题。"
+        elif status == 502:
+            reason = "供应商网关或上游链路异常，本次调用未得到有效结果。"
+        elif status == 503:
+            reason = "供应商服务暂时不可用，通常是维护、过载或短时故障。"
+        elif status == 504:
+            reason = "供应商网关等待上游超时，本次调用未在时限内完成。"
+
+        body_hint = ""
+        if body:
+            if "insufficient" in body_lower or "余额" in body or "quota" in body_lower:
+                body_hint = "返回内容提示额度、余额或配额不足。"
+            elif "invalid api key" in body_lower or "unauthorized" in body_lower or "authentication" in body_lower:
+                body_hint = "返回内容提示鉴权失败。"
+            elif "rate limit" in body_lower or "too many requests" in body_lower:
+                body_hint = "返回内容提示触发了限流。"
+            elif "model" in body_lower and ("not found" in body_lower or "does not exist" in body_lower):
+                body_hint = "返回内容提示模型不存在或当前账号不可用。"
+
+        summary = f"LLM 异常摘要：供应商={vendor}，模型={model_text}，HTTP={status or status_code}。{reason}"
+        if body_hint:
+            summary += f" {body_hint}"
+        summary += " 建议先检查供应商配置、模型名、额度和限流状态。"
+        return summary
+
+    def _build_human_readable_transport_error_summary(
+        self,
+        *,
+        provider: Any,
+        model: Any,
+        error_kind: str,
+        error_text: Any,
+    ) -> str:
+        vendor = self._vendor_label(provider)
+        model_text = str(model or "unknown")
+        kind = str(error_kind or "unknown").strip().lower()
+        detail = str(error_text or "").strip()
+
+        if kind == "timeout":
+            reason = "请求已经发出，但在等待供应商返回时超时，没有拿到有效响应。"
+        elif kind == "proxy_retry_timeout":
+            reason = "代理链路失败后已切换直连重试，但直连仍然超时，没有拿到有效响应。"
+        elif kind == "connection":
+            reason = "请求未能稳定连接到供应商，可能是网络、证书、代理或上游服务不稳定。"
+        else:
+            reason = "请求在拿到 HTTP 响应之前就失败了，未形成可解析的返回结果。"
+
+        summary = f"LLM 异常摘要：供应商={vendor}，模型={model_text}。{reason}"
+        if detail:
+            summary += f" 原始异常={detail[:180]}。"
+        summary += " 建议检查网络连通性、代理配置、供应商服务状态与超时设置。"
+        return summary
+
     async def analyze_multimodal(self, prompt: str, image_url: str, config: Dict[str, Any]) -> Dict[str, Any]:
         """
         Analyzes an image with a prompt using multimodal LLM capabilities.
@@ -866,6 +1090,22 @@ class LLMService:
             _debug_log(f"[DEBUG][LLM][Doubao] Response | status={response.status_code} body={_strip_base64_from_log(response.text[:500])}")
             
             if response.status_code != 200:
+                 human_summary = self._build_human_readable_http_error_summary(
+                     provider="doubao",
+                     model=model,
+                     status_code=response.status_code,
+                     response_text=response.text[:500],
+                 )
+                 logger.warning("%s", human_summary)
+                 self._safe_log_json("LLM_RESPONSE_ERROR", {
+                     "provider": "doubao",
+                     "category": "LLM",
+                     "url": url,
+                     "model": model,
+                     "status_code": response.status_code,
+                     "response_text": response.text[:500],
+                     "human_summary": human_summary,
+                 })
                  # Try fallback to standard OpenAI format if 404/400, in case it's a standard model
                  logger.warning(f"Doubao proprietary call failed: {response.text}. Attempting OpenAI standard format...")
                  return await self._call_openai_vision(base_url, api_key, model, prompt, image_url)
@@ -882,7 +1122,28 @@ class LLMService:
                  return {"content": f"Error: Unexpected response format from Doubao: {data}", "usage": {}}
                  
         except Exception as e:
+            error_kind = "exception"
+            if isinstance(e, requests.exceptions.Timeout):
+                error_kind = "timeout"
+            elif isinstance(e, (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError)):
+                error_kind = "connection"
+            human_summary = self._build_human_readable_transport_error_summary(
+                provider="doubao",
+                model=model,
+                error_kind=error_kind,
+                error_text=e,
+            )
             logger.error(f"Doubao Multimodal failed: {e}")
+            logger.error("%s", human_summary)
+            self._safe_log_json("LLM_RESPONSE_ERROR", {
+                "provider": "doubao",
+                "category": "LLM",
+                "url": url,
+                "model": model,
+                "error_kind": error_kind,
+                "error_text": str(e),
+                "human_summary": human_summary,
+            })
             return {"content": f"Error: {e}", "usage": {}}
 
     async def _call_openai_vision(self, base_url: str, api_key: str, model: str, prompt: str, image_url: str) -> Dict[str, Any]:
@@ -1671,11 +1932,47 @@ class LLMService:
             try:
                 response = await asyncio.to_thread(_request, True, max(3, DEFAULT_LLM_NO_PROXY_CONNECT_TIMEOUT_SECONDS))
             except requests.exceptions.Timeout as e2:
+                human_summary = self._build_human_readable_transport_error_summary(
+                    provider=provider,
+                    model=model,
+                    error_kind="proxy_retry_timeout",
+                    error_text=e2,
+                )
                 _debug_log(f"[DEBUG][LLM][{provider}] No-proxy retry also timed out: {e2}", "error")
                 logger.error(f"No-proxy retry also timed out: {e2}")
+                logger.error("%s", human_summary)
+                self._safe_log_json("LLM_RESPONSE_ERROR", {
+                    "provider": provider,
+                    "category": resolved_category,
+                    "url": url,
+                    "model": model,
+                    "error_kind": "proxy_retry_timeout",
+                    "error_text": str(e2),
+                    "human_summary": human_summary,
+                    "resolved_source": (extra_config or {}).get("__resolved_source"),
+                    "resolved_setting_id": (extra_config or {}).get("__resolved_setting_id"),
+                })
                 raise Exception(self._vendor_failed_message(provider, f"Upstream timeout (proxy failed, direct also timed out): {e2}"))
             except Exception as e2:
+                human_summary = self._build_human_readable_transport_error_summary(
+                    provider=provider,
+                    model=model,
+                    error_kind="connection",
+                    error_text=e2,
+                )
                 logger.error(f"No-proxy retry also failed: {e2}")
+                logger.error("%s", human_summary)
+                self._safe_log_json("LLM_RESPONSE_ERROR", {
+                    "provider": provider,
+                    "category": resolved_category,
+                    "url": url,
+                    "model": model,
+                    "error_kind": "connection",
+                    "error_text": str(e2),
+                    "human_summary": human_summary,
+                    "resolved_source": (extra_config or {}).get("__resolved_source"),
+                    "resolved_setting_id": (extra_config or {}).get("__resolved_setting_id"),
+                })
                 raise Exception(self._vendor_failed_message(provider, e2))
         
         _debug_log(f"[DEBUG][LLM][{provider}] Response | status={response.status_code} model={model} url={url} body={_strip_base64_from_log(response.text[:500])}")
@@ -1684,6 +1981,13 @@ class LLMService:
             provider = (extra_config or {}).get("__provider") or (extra_config or {}).get("provider") or self._infer_provider(base_url, model)
             resolved_setting_id = (extra_config or {}).get("__resolved_setting_id")
             resolved_source = (extra_config or {}).get("__resolved_source")
+            human_summary = self._build_human_readable_http_error_summary(
+                provider=provider,
+                model=model,
+                status_code=response.status_code,
+                response_text=response.text,
+            )
+            logger.warning("%s", human_summary)
             self._safe_log_json("LLM_RESPONSE_ERROR", {
                 "provider": provider,
                 "category": resolved_category,
@@ -1691,6 +1995,7 @@ class LLMService:
                 "model": model,
                 "status_code": response.status_code,
                 "response_text": response.text,
+                "human_summary": human_summary,
                 "resolved_source": resolved_source,
                 "resolved_setting_id": resolved_setting_id,
             })
@@ -1730,6 +2035,12 @@ class LLMService:
             content = self._extract_text_from_response(data)
             usage = data.get("usage") or {}
             output_chars = len(content) if isinstance(content, str) else len(str(content))
+            human_summary = self._build_human_readable_response_summary(
+                data,
+                provider=provider,
+                model=data.get("model") or model,
+                status_code=response.status_code,
+            )
             logger.info(
                 "LLM Response: model=%s finish_reason=%s output_chars=%s usage=%s",
                 data.get("model") or model,
@@ -1737,6 +2048,7 @@ class LLMService:
                 output_chars,
                 usage,
             )
+            logger.info("%s", human_summary)
             self._safe_log_json("LLM_RESPONSE_SUMMARY", {
                 "provider": provider,
                 "category": resolved_category,
@@ -1747,10 +2059,11 @@ class LLMService:
                 "usage": usage,
                 "prompt_chars": prompt_chars,
                 "max_tokens": effective_max_tokens,
+                "human_summary": human_summary,
             })
             if self._is_length_limited_finish_reason(finish_reason):
                 logger.warning(
-                    "LLM output appears truncated (finish_reason=length). prompt_chars=%s output_chars=%s max_tokens=%s prompt_tokens=%s completion_tokens=%s total_tokens=%s usage=%s",
+                    "LLM segment stopped by length limit (finish_reason=length); current segment may be partial until continuation/integrity checks complete. prompt_chars=%s output_chars=%s max_tokens=%s prompt_tokens=%s completion_tokens=%s total_tokens=%s usage=%s",
                     prompt_chars,
                     output_chars,
                     effective_max_tokens,
@@ -1772,6 +2085,9 @@ class LLMService:
                     "completion_tokens": usage.get("completion_tokens") or usage.get("output_tokens"),
                     "total_tokens": usage.get("total_tokens"),
                     "usage": usage,
+                    "segment_only": True,
+                    "final_result_unknown": True,
+                    "human_summary": "Current segment stopped by length limit; final completeness must be determined after continuation or business-level integrity checks.",
                 })
             if output_chars == 0:
                 first_choice_keys = list(first.keys()) if isinstance(first, dict) else []
@@ -1852,10 +2168,19 @@ class LLMService:
                 url = f"{configured_endpoint.rstrip('/')}/chat/completions"
         elif configured_endpoint and resolved_category != "LLM":
             url = configured_endpoint.rstrip("/")
+            url_source = "config.endpoint(non-llm)"
         else:
             url = base_url.rstrip("/")
             if resolved_category == "LLM" and not url.endswith("/chat/completions"):
                 url = f"{url}/chat/completions"
+            url_source = "base_url"
+
+        if configured_endpoint and resolved_category == "LLM":
+            endpoint_lower = configured_endpoint.lower()
+            if "/chat/completions" in endpoint_lower:
+                url_source = "config.endpoint"
+            else:
+                url_source = "config.endpoint"
 
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -1877,6 +2202,22 @@ class LLMService:
                     payload[k] = v
 
         print(f"[STREAM-DEBUG] _raw_llm_request_stream: url={url}, model={model}, provider={provider}, payload_keys={list(payload.keys())}, stream={payload.get('stream')}")
+        self._safe_log_json("LLM_REQUEST", {
+            "provider": provider,
+            "category": resolved_category,
+            "url": url,
+            "url_source": url_source,
+            "model": payload.get("model") or model,
+            "headers": {
+                **headers,
+                "Authorization": "Bearer ***REDACTED***",
+            },
+            "payload": payload,
+            "message_count": len(messages or []),
+            "stream": True,
+            "resolved_source": (extra_config or {}).get("__resolved_source"),
+            "resolved_setting_id": (extra_config or {}).get("__resolved_setting_id"),
+        })
         logger.info(
             "Calling LLM (stream): provider=%s model=%s url=%s messages=%d",
             provider, model, url, len(messages or []),
@@ -1892,10 +2233,30 @@ class LLMService:
                     print(f"[STREAM-DEBUG] _raw_llm_request_stream: got response status={response.status_code}")
                     if response.status_code != 200:
                         error_body = await response.aread()
+                        error_text = error_body.decode("utf-8", errors="replace")[:500]
+                        human_summary = self._build_human_readable_http_error_summary(
+                            provider=provider,
+                            model=payload.get("model") or model,
+                            status_code=response.status_code,
+                            response_text=error_text,
+                        )
+                        logger.warning("%s", human_summary)
+                        self._safe_log_json("LLM_RESPONSE_ERROR", {
+                            "provider": provider,
+                            "category": resolved_category,
+                            "url": url,
+                            "model": payload.get("model") or model,
+                            "status_code": response.status_code,
+                            "response_text": error_text,
+                            "human_summary": human_summary,
+                            "resolved_source": (extra_config or {}).get("__resolved_source"),
+                            "resolved_setting_id": (extra_config or {}).get("__resolved_setting_id"),
+                            "stream": True,
+                        })
                         raise Exception(
                             self._vendor_failed_message(
                                 provider,
-                                f"API Error {response.status_code}: {error_body.decode('utf-8', errors='replace')[:500]}",
+                                f"API Error {response.status_code}: {error_text}",
                             )
                         )
 
@@ -1938,9 +2299,68 @@ class LLMService:
                             _last_yield_time = _asyncio.get_event_loop().time()
 
         except httpx.ConnectError as exc:
+            human_summary = self._build_human_readable_transport_error_summary(
+                provider=provider,
+                model=payload.get("model") or model,
+                error_kind="connection",
+                error_text=exc,
+            )
+            logger.error("%s", human_summary)
+            self._safe_log_json("LLM_RESPONSE_ERROR", {
+                "provider": provider,
+                "category": resolved_category,
+                "url": url,
+                "model": payload.get("model") or model,
+                "error_kind": "connection",
+                "error_text": str(exc),
+                "human_summary": human_summary,
+                "resolved_source": (extra_config or {}).get("__resolved_source"),
+                "resolved_setting_id": (extra_config or {}).get("__resolved_setting_id"),
+                "stream": True,
+            })
             raise Exception(self._vendor_failed_message(provider, f"Connection failed: {exc}"))
         except httpx.ReadTimeout as exc:
+            human_summary = self._build_human_readable_transport_error_summary(
+                provider=provider,
+                model=payload.get("model") or model,
+                error_kind="timeout",
+                error_text=exc,
+            )
+            logger.error("%s", human_summary)
+            self._safe_log_json("LLM_RESPONSE_ERROR", {
+                "provider": provider,
+                "category": resolved_category,
+                "url": url,
+                "model": payload.get("model") or model,
+                "error_kind": "timeout",
+                "error_text": str(exc),
+                "human_summary": human_summary,
+                "resolved_source": (extra_config or {}).get("__resolved_source"),
+                "resolved_setting_id": (extra_config or {}).get("__resolved_setting_id"),
+                "stream": True,
+            })
             raise Exception(self._vendor_failed_message(provider, f"Read timeout: {exc}"))
+        except Exception as exc:
+            human_summary = self._build_human_readable_transport_error_summary(
+                provider=provider,
+                model=payload.get("model") or model,
+                error_kind="exception",
+                error_text=exc,
+            )
+            logger.error("%s", human_summary)
+            self._safe_log_json("LLM_RESPONSE_ERROR", {
+                "provider": provider,
+                "category": resolved_category,
+                "url": url,
+                "model": payload.get("model") or model,
+                "error_kind": "exception",
+                "error_text": str(exc),
+                "human_summary": human_summary,
+                "resolved_source": (extra_config or {}).get("__resolved_source"),
+                "resolved_setting_id": (extra_config or {}).get("__resolved_setting_id"),
+                "stream": True,
+            })
+            raise
 
         yield {"type": "done", "usage": usage}
 

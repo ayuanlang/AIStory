@@ -3,6 +3,7 @@ import uuid
 import logging
 from moviepy import VideoFileClip, concatenate_videoclips
 from app.core.config import settings
+from app.core.mp4_faststart import optimize_mp4_faststart
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +97,11 @@ async def create_montage(project_id: int, items: list) -> str:
             threads=4,
             logger=None # Suppress TQDM output to stdout
         )
+
+        try:
+            optimize_mp4_faststart(output_path)
+        except Exception as faststart_error:
+            logger.warning(f"MP4 faststart optimization skipped for montage {output_filename}: {faststart_error}")
         
         # Close all clips
         final_clip.close()

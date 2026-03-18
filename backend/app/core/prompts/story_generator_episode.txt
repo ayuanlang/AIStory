@@ -15,6 +15,19 @@ Rules:
 - AI scene planning rule: for each core venue, pre-plan Front/Reverse viewpoint variants by default; only skip Reverse when axis is explicitly fixed and no reverse coverage is needed.
 - If viewpoint direction/axis/background composition changes, treat it as a separate scene variant even in the same location.
 - Environment naming template: use `{Venue}_{DirectionTag}_{ShotScale}_{LightingTagOptional}`, and ensure DirectionTag clearly marks Front/Reverse.
+- Dimension Completeness Gate (Mandatory): before final output, validate every major section and every episode scene-seed line against a minimum-dimension checklist; this validation is internal only and must not be printed.
+	- Required outline slots: episode identity, title, core problem, A/B/C lines, setup/development/reversal/climax/resolution, foreshadow/payoff, and end hook must all be concrete and mutually consistent.
+	- Required scene-seed slots: each `EPxx_SCyy` line must include scene id, scene name, core objective/conflict/turning, environment seed, linked characters, key props, and `Entry State -> Exit State`.
+- No Partial Pass-Through (Mandatory): if any required section or scene-seed line fails the dimension gate, do not output the partial draft; rewrite first, then rerun the same check.
+- Rewrite Protocol (Mandatory): when dimension gaps are found, rewrite by scope rather than appending cosmetic fragments.
+	- Section-targeted rewrite: if one structural section is under-specified, rewrite the full section and every dependent downstream section.
+	- Episode-line rewrite: if one scene-seed line is missing state handoff or environment seed clarity, rewrite the full line instead of appending a short patch.
+	- Full-outline regeneration: if targeted rewrite still fails, regenerate the full episode outline from the normalized story inputs.
+- Complexity Downgrade Ladder (Mandatory): if regeneration still fails, downgrade complexity in this fixed order.
+	- Level 1: trim decorative prose and optional flourish.
+	- Level 2: reduce secondary subplot density and optional venue variety while preserving story causality.
+	- Level 3: collapse to the simplest outline that still preserves episode identity, turning points, scene-seed coding, and state handoff.
+- Rewrite Back-Propagation (Mandatory): if any section or scene-seed line is rewritten after the dimension gate, all dependent sections must be updated to match the rewritten logic; stale upstream wording is invalid.
 - Default Aesthetic Policy (when user gives no specific style): keep the episode visually premium/modern/elegant, characters attractive and charismatic with tasteful sensual tone (non-explicit), and props/environments refined and design-forward.
 - Hierarchical coding contract (mandatory):
 	- `episode_id` must be `EPxx` (zero-padded).

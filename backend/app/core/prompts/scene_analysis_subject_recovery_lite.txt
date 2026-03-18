@@ -36,7 +36,10 @@
 本提示词下的资产生成规范必须与 `scene_analysis` 的资产规范一致，至少覆盖并严格执行：
 - 模板来源策略：`scene_analysis*.txt` 内嵌模板为唯一权威来源（Merged In-File）。补全过程不得依赖外部 `templates.py` 注入。
 - `0) 生图提示词清晰性`：每个实体 `generation_prompt_en` 必须显式含 `Viewpoint Anchor` + `Viewing Direction`。
+- 自然语言优先（Natural-Prose First, Mandatory）：`Viewpoint Anchor / Viewing Direction / Viewpoint Setup` 是内部约束语义，最终 `generation_prompt_en` 应优先写成自然流动的画面描述句，而不是连续字段栏目。
 - `0.5) Imagen 兼容质量规范`：自然英文、无引擎参数、无元说明、语义顺序清晰、负向词可执行。
+- 负面提示精简原则（Negative Prompt Compactness, Mandatory）：`negative_prompt_en` 必须短而自适应，禁止堆叠长串同义负面词；对单画幅提示词不得反复列举 `split-screen / multi-panel / collage / tiled`，如确有需要，最多保留一条简洁概括。
+- 资产表例外（Asset-Sheet Exception, Mandatory）：角色六视图、道具六视图等天然多视图任务，禁止注入 `no multi-panel / no split-screen` 类负面词。
 - `1) Environment Prompt Template`：空场景、Base+Delta 思路、可执行空间、机位/光照/焦距与材质信息完整。
 - `2) Character Prompt Template`：六视图一致性、风格驱动光学与颗粒、稳定锚点、真人感约束（真人剧）。
 - `3) Prop Prompt Template`：独立资产、材质与磨损可读、风格映射与稳定锚点。
@@ -45,12 +48,26 @@
 
 若当前输入与以上规则冲突，以以上规则优先。
 
+- 维度生成检查（Dimension Completeness Gate, Mandatory）：每个补充生成的 Subject 在输出前必须通过“命名闭环 + 提示词闭环”双重验收；该检查只作为内部门禁，不得打印到最终结果。
+  - 命名闭环最低槽位：补充生成的 subject 名称必须与输入中已有命名体系逐字符一致，并与最终 Part 2A / 2B / 2C 一一映射。
+  - 提示词闭环最低槽位：Environment 必须具备 Viewpoint Anchor、Viewing Direction、FG/MG/BG、Primary/Secondary Subject、去人物化；Character 必须具备 full body、shoes visible、固定观察机位、视角序列、光照、镜头基线、稳定锚点；Prop 必须具备固定观察机位、视角序列、材质锚点、光照、焦段基线、状态单一性。
+- 禁止带病流转（No Partial Pass-Through, Mandatory）：若任一补充 Subject 未通过维度检查，不得输出部分结果，也不得把缺口留给下游。
+- 重写机制（Rewrite Protocol, Mandatory）：维度缺失时必须按作用域重写，而不是在原文本尾部追加补丁短语。
+  - Subject 级重写：若名称、依赖链或提示词维度不完整，必须重写该 Subject 的完整条目。
+  - 批次回炉：若一轮 Subject 级重写后仍失败，必须丢弃当前补全批次并基于输入片段重新生成缺失实体。
+- 复杂度降级梯度（Complexity Downgrade Ladder, Mandatory）：若批次回炉后仍失败，必须按固定顺序降级：先删装饰性风格修辞，再删非关键细节，最后收束为最小可用资产版本；不得删掉命名闭环、依赖链、机位维度与锚点。
+- 重写回写责任（Rewrite Back-Propagation, Mandatory）：若补全条目因维度门禁被重写，必须同步修正其 `anchor_description`、`visual_dependencies`、`dependency_strategy.logic` 与对应 Part 2 分区内容，禁止结构字段与提示词语义脱节。
+- 失败重写示例（Failure -> Rewrite -> Downgraded Good, Mandatory Reference）：
+  - Bad recovery draft: `Add a new woman character with similar style.` → 名称漂移、锚点缺失、未基于输入命名体系。
+  - Rewrite: keep the missing subject name exactly as provided by input, then restore anchor and prompt dimensions.
+  - Downgraded good: `补充 CHAR:[@Lin_Adult_Injured]，沿用既有命名与依赖链；generation_prompt_en 收束为固定机位、全身含鞋、受伤状态单一、稳定锚点清晰的最小可用版本。`
+
 - Environment 命名权威继承：若输入携带 `environment_name`，仅可视作种子参考；需在当前补全中保持与 `scene_analysis` 命名体系一致并定稿。
 
 ## Prompt Template（必须使用）
 
 ### 1) Environment Prompt Template
-`[Global Style]. {Base Environment Reference}: 【base_env_name / reference image id】. {Environment Delta}: 【only changed items; if REUSE write 'None'】. {Viewpoint Anchor}: 【exact observer placement in/around environment】. {Viewing Direction}: 【Front/Reverse/Side + facing target/vector】. {Viewpoint Setup}: 【Height/Angle/Framing】. {Composition Layers}: 【FG: elements + depth relation; MG: primary structure/subject anchor; BG: distant structure/light anchor; Primary Subject + Secondary Subject】. {Lighting Setup}: 【key/fill/back source position + quality + intensity + color temperature】. {Lens & Focus Baseline}: 【focal length family + DOF strategy】. {Grain/Noise Strategy}: 【clean digital / fine film grain / medium grain + shadow readability】. Atmosphere: 【mood keywords】. Details: 【materials, textures】. **No humans or characters present.**`
+`[Global Style]. Use 【base_env_name / reference image id】 as the visual base while keeping architecture and material anchors stable. From 【exact observer placement in/around environment】, the view faces 【Front/Reverse/Side + target/vector】 in a 【Height/Angle/Framing】 composition. FG/MG/BG must stay explicit, with Primary Subject + Secondary Subject carried by continuous space, lighting, and material detail. Add mood, grain/noise, lens baseline, and textures in natural prose. **No humans or characters present.**`
 
 ### 1.1) Base + Delta 执行增强（观察方向切换）
 - 环境构图必须显式按前景（FG）/中景（MG）/后景（BG）描述，三层均需给出可见元素与空间关系。
@@ -81,7 +98,7 @@
   `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint relocated to opposite sidewalk across traffic lane, now facing reverse toward ENV:[CrosswalkJunction]; Axis Side: left -> right; Background Set Change: Visible Set = [crosswalk signal pole, storefront neon, bus-stop shelter], Excluded Set = [alley dumpster row, rear parking gate, service entrance shutter]; Lighting Direction Change: key light becomes back-right from street signage and vehicle headlights; Framing Change: wide shot with crosswalk signal as new composition anchor; Dynamic Parts State: None}`。
 
 ### 2) Character Prompt Template
-`[Global Style] 6-view character sheet for 【Name】. {Viewpoint Anchor}: 【studio observer placement for sheet capture】. {Viewing Direction}: 【for each panel explicitly mark Front/Back/Side/3-4 + facing】. {Lighting Setup}: 【key/fill/rim source position + quality + intensity + color temperature】. {Lens & Focus}: 【focal length (e.g. 35mm/50mm/85mm) + depth of field strategy】. {Grain/Noise Strategy}: 【clean digital / fine film grain / medium film grain + shadow noise control】. Structure: 6-view layout (Front, Back, Side, 3/4, Close-up, Detail). Appearance: 【Age, Body Type, ethnicity】. Attire: 【Clothing details, footwear】. Anchors: 【Signature features e.g. scar, accessory】. Consistency: T-pose/Neutral pose. Background: White.`
+`[Global Style] 6-view character sheet for 【Name】. Describe the fixed studio observer placement and the required Front/Back/Side/3/4/Close-up/Detail views in smooth natural prose, while keeping full-body framing, shoes fully visible in structural panels, lighting setup, lens baseline, grain strategy, attire, and signature anchors explicit. Background: White.`
 
 - 全身像硬规则（Mandatory）：角色 `generation_prompt_en` 必须明确为 full-body framing，人物从头到脚完整入镜，双脚与鞋子清晰可见（shoes fully visible）。
 - 鞋子可见硬规则（Mandatory）：不得使用会裁切鞋子的构图（如 waist-up / bust shot / knee crop）作为角色资产主图；若需近景，仅可作为附加 panel，且必须保留至少一个全身含鞋 panel。
@@ -89,7 +106,7 @@
 - 锚点只读硬规则（Mandatory）：`anchor_description` 与角色身份锚点是不可变更锚点（immutable anchors）；补全过程只能逐字符继承，不得重写、扩写、弱化、同义替换或风格化改写。
 
 ### 3) Prop Prompt Template
-`[Global Style] Prop Asset: 【Name】. {Viewpoint Anchor}: 【exact studio/object-relative observer placement】. {Viewing Direction}: 【Front/Reverse/Side/Top or Isometric facing】. {Lighting Setup}: 【key/fill/rim source position + quality + intensity + color temperature】. {Lens & Focus}: 【focal length + DOF strategy】. {Grain/Noise Strategy}: 【clean digital / fine film grain / medium grain】. View: 【Angle e.g. Isometric/Front】. Material: 【Texture details】. Wear & Tear: 【Condition】. Background: White.`
+`[Global Style] Prop Asset: 【Name】. Describe the object-relative observer placement and required Front/Reverse/Side/Top or Isometric view in natural prose, while keeping lighting setup, lens/focus baseline, grain strategy, material texture, wear state, and white background explicit.`
 
 ## 引用与命名语法
 - 角色引用：`CHAR:[@Name]`
@@ -182,7 +199,7 @@ Part 2A:
       "appearance_cn": "Chinese Desc",
       "clothing": "Clothing Desc",
       "action_characteristics": "Action Traits",
-      "generation_prompt_en": "[Global Style] ... Viewpoint Anchor: ... Viewing Direction: ...",
+      "generation_prompt_en": "[Global Style] ... describe the observer placement and viewing direction in natural prose ...",
       "negative_prompt_en": "Entity-specific negatives ...",
       "anchor_description": "English visual tags only",
       "visual_dependencies": [],
@@ -203,7 +220,7 @@ Part 2B:
       "name_en": "English Name",
       "type": "held/static",
       "description_cn": "Chinese Desc",
-      "generation_prompt_en": "[Global Style] ... Viewpoint Anchor: ... Viewing Direction: ...",
+      "generation_prompt_en": "[Global Style] ... describe the observer placement and viewing direction in natural prose ...",
       "negative_prompt_en": "Entity-specific negatives ...",
       "anchor_description": "English visual tags only",
       "visual_dependencies": [],
@@ -225,7 +242,7 @@ Part 2C:
       "atmosphere": "Atmosphere",
       "visual_params": "Wide/Interior/Day",
       "description_cn": "Chinese Desc",
-      "generation_prompt_en": "[Global Style] ... Viewpoint Anchor: ... Viewing Direction: ...",
+      "generation_prompt_en": "[Global Style] ... describe the observer placement and viewing direction in natural prose ...",
       "negative_prompt_en": "Entity-specific negatives ...",
       "anchor_description": "English visual tags only",
       "visual_dependencies": [],

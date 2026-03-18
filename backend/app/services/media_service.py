@@ -23,6 +23,7 @@ from typing import List, Dict, Any, Optional, Union
 from app.db.session import SessionLocal
 from app.models.all_models import APISetting, SystemAPISetting, ProviderKeyPool
 from app.core.config import settings
+from app.core.mp4_faststart import optimize_mp4_faststart
 from app.services.billing_service import BillingService
 from app.services.system_default_api_service import get_task_default_system_setting
 from sqlalchemy import cast, String, func, text
@@ -4744,6 +4745,12 @@ class MediaGenerationService:
                                     video_url = c_data.get("url") or c_data.get("video_url")
                             except Exception:
                                 pass
+                        if not video_url:
+                            return {
+                                "error": "Generation completed without video URL",
+                                "details": f"task_id={task_id} status={status or '<empty>'}",
+                                "raw": p_data,
+                            }
                         metadata = {"raw": p_data}
                         if extra_metadata:
                             metadata.update(extra_metadata)
@@ -6496,10 +6503,46 @@ class MediaGenerationService:
                 "response_text": raw_text[:8000],
             }
 
+        def _truncate_kie_log_value(value: Any, limit: int = 1500) -> str:
+            try:
+                text = json.dumps(_strip_base64_from_log(value), ensure_ascii=False)
+            except Exception:
+                text = str(_strip_base64_from_log(value))
+            text = str(text or "")
+            if len(text) <= limit:
+                return text
+            return f"{text[:limit]}..."
+
+        def _summarize_kie_input_for_log(payload_input_obj: Any) -> Dict[str, Any]:
+            input_obj = payload_input_obj if isinstance(payload_input_obj, dict) else {}
+            summary: Dict[str, Any] = {
+                "mode": str(input_obj.get("mode") or "").strip() or None,
+                "aspect_ratio": str(input_obj.get("aspect_ratio") or "").strip() or None,
+                "duration": input_obj.get("duration"),
+                "quality": str(input_obj.get("quality") or "").strip() or None,
+                "image_url": bool(str(input_obj.get("image_url") or "").strip()),
+                "last_frame_url": bool(str(input_obj.get("last_frame_url") or "").strip()),
+                "image_urls": len(input_obj.get("image_urls") or []) if isinstance(input_obj.get("image_urls"), list) else 0,
+                "input_urls": len(input_obj.get("input_urls") or []) if isinstance(input_obj.get("input_urls"), list) else 0,
+                "generate_audio": input_obj.get("generate_audio") if "generate_audio" in input_obj else None,
+                "sound": input_obj.get("sound") if "sound" in input_obj else None,
+            }
+            return summary
+
         submit_payload: Dict[str, Any] = dict(payload or {})
         submitted_model = submit_payload.get("model") if isinstance(submit_payload, dict) else model
         initial_submitted_model = str(submitted_model or "").strip()
         veo_retry_models = _build_veo_retry_models(submitted_model) if use_veo_api else []
+
+        if gen_type == "video":
+            logger.info(
+                "KIE video submit prepared | endpoint=%s model=%s callback_enabled=%s callback_url=%s input_summary=%s",
+                submit_url,
+                submitted_model,
+                bool(callback_url and callback_url != "-1"),
+                callback_url or None,
+                _summarize_kie_input_for_log(submit_payload.get("input") if isinstance(submit_payload, dict) else None),
+            )
 
         def _rebuild_veo_image_urls_with_limit(limit_bytes: int) -> List[str]:
             rebuilt_refs: List[str] = []
@@ -6804,6 +6847,15 @@ class MediaGenerationService:
                 final_elements_count,
                 task_id,
             )
+        elif gen_type == "video":
+            final_input = (submit_payload or {}).get("input") if isinstance((submit_payload or {}).get("input"), dict) else {}
+            logger.info(
+                "KIE video final submit resolved | endpoint=%s model=%s taskId=%s input_summary=%s",
+                submit_url,
+                submitted_model,
+                task_id,
+                _summarize_kie_input_for_log(final_input),
+            )
 
         def _is_ok_code(value: Any) -> bool:
             if value in (None, 200, "200"):
@@ -6933,6 +6985,7 @@ class MediaGenerationService:
             pass
 
         poll_attempts = max(1, int(poll_timeout_seconds / max(1, poll_interval_seconds)))
+        last_poll_state_marker: Optional[str] = None
 
         def _poll_status():
             param_candidates = [
@@ -7013,6 +7066,26 @@ class MediaGenerationService:
             if isinstance(success_flag, str):
                 success_flag = success_flag.strip().lower()
 
+            video_urls = _extract_kie_video_urls(record.get("resultJson"))
+            if not video_urls:
+                video_urls = _extract_kie_video_urls(record)
+            if not video_urls and isinstance(record.get("response"), dict):
+                video_urls = _extract_kie_video_urls(record.get("response"))
+
+            poll_state_marker = f"{state or '<empty>'}|{success_flag}|{len(video_urls)}"
+            if poll_state_marker != last_poll_state_marker:
+                logger.info(
+                    "KIE poll state change | task_id=%s attempt=%s/%s state=%s success_flag=%s media_url_count=%s record_keys=%s",
+                    task_id,
+                    i + 1,
+                    poll_attempts,
+                    state or None,
+                    success_flag,
+                    len(video_urls),
+                    sorted([str(key) for key in record.keys()])[:20] if isinstance(record, dict) else [],
+                )
+                last_poll_state_marker = poll_state_marker
+
             if state in {"waiting", "queued", "queuing", "processing", "running", "generating", "pending", "submitted", "in_progress", "in-progress"}:
                 continue
             if success_flag in {0, "0", False, "false", "failed", "error"}:
@@ -7048,6 +7121,13 @@ class MediaGenerationService:
                     urls = self._extract_urls_from_payload(record)
                 selected_url = _pick_preferred_kie_media_url(urls)
                 if not selected_url:
+                    logger.error(
+                        "KIE poll succeeded without media URL | task_id=%s state=%s success_flag=%s raw=%s",
+                        task_id,
+                        state or None,
+                        success_flag,
+                        _truncate_kie_log_value(poll_data),
+                    )
                     return {"error": "KIE task succeeded but no media URL found", "details": poll_data}
 
                 meta = {"raw": poll_data}
@@ -7074,24 +7154,47 @@ class MediaGenerationService:
                     urls = self._extract_urls_from_payload(record.get("response"))
                 selected_url = _pick_preferred_kie_media_url(urls)
                 if not selected_url:
+                    logger.error(
+                        "KIE poll successFlag without media URL | task_id=%s state=%s success_flag=%s raw=%s",
+                        task_id,
+                        state or None,
+                        success_flag,
+                        _truncate_kie_log_value(poll_data),
+                    )
                     return {"error": "KIE task succeeded but no media URL found", "details": poll_data}
                 meta = {"raw": poll_data}
                 meta.update(base_metadata)
                 return {"url": selected_url, "metadata": meta}
 
             if state in {"fail", "failed", "error", "canceled", "cancelled", "abort", "aborted", "timeout"}:
+                logger.error(
+                    "KIE poll terminal failure | task_id=%s state=%s success_flag=%s details=%s raw=%s",
+                    task_id,
+                    state or None,
+                    success_flag,
+                    _truncate_kie_log_value(record.get("failMsg") or record.get("message") or poll_data, limit=800),
+                    _truncate_kie_log_value(poll_data),
+                )
                 return {
                     "error": "KIE generation failed",
                     "details": record.get("failMsg") or record.get("message") or poll_data,
                     "runtime_model": submitted_model,
                 }
             if success_flag in {2, "2", 3, "3", "2", "3", "cancelled", "canceled"}:
+                logger.error(
+                    "KIE poll terminal failure by success_flag | task_id=%s state=%s success_flag=%s raw=%s",
+                    task_id,
+                    state or None,
+                    success_flag,
+                    _truncate_kie_log_value(poll_data),
+                )
                 return {
                     "error": "KIE generation failed",
                     "details": record.get("failMsg") or record.get("message") or poll_data,
                     "runtime_model": submitted_model,
                 }
 
+        logger.error("KIE polling timeout | task_id=%s attempts=%s interval=%s", task_id, poll_attempts, poll_interval_seconds)
         return {"error": "Timeout polling KIE task"}
 
     # -- Helpers --
@@ -7164,6 +7267,13 @@ class MediaGenerationService:
                 file_path = os.path.join(USER_DIR, filename)
                 with open(file_path, 'wb') as f:
                     for chunk in response.iter_content(4096): f.write(chunk)
+
+                if ext == ".mp4":
+                    try:
+                        if optimize_mp4_faststart(file_path):
+                            _debug_log(f"[MediaService] Applied mp4 faststart optimization: {file_path}")
+                    except Exception as faststart_error:
+                        _debug_log(f"[MediaService] MP4 faststart optimization skipped: {faststart_error}", "warning")
                 
                 relative_path = f"/uploads/{user_id}/{filename}"
                 if settings.RENDER_EXTERNAL_URL:
@@ -7412,6 +7522,15 @@ class MediaGenerationService:
             "Content-Type": "application/json",
         }
 
+        logger.info(
+            "KIE file upload attempt | mode=base64 endpoint=%s upload_path=%s file_name=%s mime=%s bytes=%s",
+            endpoint,
+            upload_path,
+            file_name,
+            self._extract_data_uri_mime(data_uri) or None,
+            self._data_uri_image_size_bytes(data_uri),
+        )
+
         try:
             resp = requests.post(endpoint, json=payload, headers=headers, timeout=(15, 120), verify=False)
             if resp.status_code != 200:
@@ -7430,6 +7549,11 @@ class MediaGenerationService:
                 return None
             file_url = str(data_block.get("fileUrl") or data_block.get("downloadUrl") or "").strip()
             if file_url and file_url.startswith("http"):
+                logger.info(
+                    "KIE file upload success | mode=base64 file_name=%s hosted_url=%s",
+                    file_name,
+                    file_url,
+                )
                 return file_url
             return None
         except Exception as e:
@@ -7476,6 +7600,14 @@ class MediaGenerationService:
             "Content-Type": "application/json",
         }
 
+        logger.info(
+            "KIE file upload attempt | mode=file_url endpoint=%s upload_path=%s file_name=%s file_url=%s",
+            endpoint,
+            upload_path,
+            file_name,
+            normalized_url[:500],
+        )
+
         try:
             resp = requests.post(endpoint, json=payload, headers=headers, timeout=(15, 120), verify=False)
             if resp.status_code != 200:
@@ -7494,6 +7626,11 @@ class MediaGenerationService:
                 return None
             hosted_url = str(data_block.get("fileUrl") or data_block.get("downloadUrl") or "").strip()
             if hosted_url.startswith("http"):
+                logger.info(
+                    "KIE file upload success | mode=file_url file_name=%s hosted_url=%s",
+                    file_name,
+                    hosted_url,
+                )
                 return hosted_url
             return None
         except Exception as e:
@@ -7531,6 +7668,11 @@ class MediaGenerationService:
                 if fallback_hosted:
                     logger.info("KIE reference upload fallback succeeded | mode=base64 file_name_prefix=%s", file_name_prefix)
                     return fallback_hosted
+            logger.warning(
+                "KIE reference upload failed | ref_kind=public_url ref_preview=%s file_name_prefix=%s",
+                ref_text[:300],
+                file_name_prefix,
+            )
             return None
 
         data_uri = ref_text
@@ -7558,6 +7700,13 @@ class MediaGenerationService:
             file_name=f"{file_name_prefix}-{uuid.uuid4().hex[:10]}{ext}",
             upload_path=upload_path,
         )
+        if not hosted:
+            logger.warning(
+                "KIE reference upload failed | ref_kind=local_or_data_uri ref_preview=%s file_name_prefix=%s mime=%s",
+                ref_text[:300],
+                file_name_prefix,
+                mime or None,
+            )
         return hosted
 
     def _optimize_image_bytes_for_data_uri(self, data: bytes, mime: str = "image/png") -> tuple[bytes, str]:
@@ -7624,33 +7773,92 @@ class MediaGenerationService:
             _debug_log(f"[MediaService] Conversion: Processing ref image: {str(url_or_path)[:100]}")
             data = None
             mime = "image/png"
-            if "/uploads/" in url_or_path:
-                 fname = url_or_path.split("/uploads/")[-1]
-                 UPLOAD_DIR = settings.UPLOAD_DIR
-                 if not os.path.isabs(UPLOAD_DIR):
-                     UPLOAD_DIR = os.path.abspath(UPLOAD_DIR)
+            raw_ref = str(url_or_path or "").strip()
+            normalized_ref = raw_ref.replace("\\", "/")
 
-                 # simplified path resolution
-                 import urllib.parse
-                 # Ensure fname doesn't contain query params for local file check
-                 clean_fname = fname.split('?')[0]
-                 path = os.path.join(UPLOAD_DIR, urllib.parse.unquote(clean_fname))
-                 
-                 if os.path.exists(path):
-                     with open(path, "rb") as f: data = f.read()
-                     if path.endswith(".jpg"): mime = "image/jpeg"
-                 else:
-                     _debug_log(f"[MediaService] Error: Local File Not Found: {path}", "error")
-            elif url_or_path.startswith("http"):
-                 r = requests.get(url_or_path, timeout=30)
-                 if r.status_code == 200: 
-                     data = r.content
-                     ct = r.headers.get("Content-Type", "")
-                     if "jpeg" in ct: mime = "image/jpeg"
-                 else:
-                     _debug_log(f"[MediaService] Error: HTTP Download Failed {r.status_code}: {url_or_path}", "error")
+            def _guess_mime_from_path(path_value: str) -> str:
+                lowered = str(path_value or "").strip().lower()
+                if lowered.endswith((".jpg", ".jpeg")):
+                    return "image/jpeg"
+                if lowered.endswith(".webp"):
+                    return "image/webp"
+                if lowered.endswith(".gif"):
+                    return "image/gif"
+                return "image/png"
+
+            def _resolve_local_ref_path(raw_value: str) -> Optional[str]:
+                candidate = str(raw_value or "").strip()
+                if not candidate:
+                    return None
+
+                if candidate.lower().startswith("file:///"):
+                    from urllib.parse import unquote
+
+                    candidate = unquote(candidate[8:])
+                elif candidate.lower().startswith("file://"):
+                    from urllib.parse import unquote
+
+                    candidate = unquote(candidate[7:])
+
+                candidate = candidate.strip().strip('"').strip("'")
+                normalized_candidate = candidate.replace("\\", "/")
+
+                local_candidates: List[str] = []
+
+                if "/uploads/" in normalized_candidate:
+                    upload_suffix = normalized_candidate.split("/uploads/", 1)[1].split("?", 1)[0].lstrip("/")
+                    upload_dir = settings.UPLOAD_DIR
+                    if not os.path.isabs(upload_dir):
+                        upload_dir = os.path.abspath(upload_dir)
+                    from urllib.parse import unquote
+
+                    local_candidates.append(os.path.join(upload_dir, unquote(upload_suffix.replace("/", os.sep))))
+
+                if os.path.isabs(candidate):
+                    local_candidates.append(candidate)
+                else:
+                    workspace_candidate = os.path.abspath(candidate)
+                    backend_candidate = os.path.abspath(os.path.join(os.getcwd(), candidate))
+                    local_candidates.append(workspace_candidate)
+                    if backend_candidate != workspace_candidate:
+                        local_candidates.append(backend_candidate)
+
+                for item in local_candidates:
+                    try:
+                        if item and os.path.exists(item):
+                            return item
+                    except Exception:
+                        continue
+                return None
+
+            local_path = _resolve_local_ref_path(raw_ref)
+            if local_path:
+                logger.info("KIE local ref resolved | source=%s local_path=%s", raw_ref[:300], local_path)
+                with open(local_path, "rb") as f:
+                    data = f.read()
+                mime = _guess_mime_from_path(local_path)
+            elif raw_ref.startswith("http"):
+                r = requests.get(url_or_path, timeout=30)
+                if r.status_code == 200:
+                    data = r.content
+                    ct = r.headers.get("Content-Type", "")
+                    if "jpeg" in ct:
+                        mime = "image/jpeg"
+                    elif "webp" in ct:
+                        mime = "image/webp"
+                    elif "gif" in ct:
+                        mime = "image/gif"
+                else:
+                    _debug_log(f"[MediaService] Error: HTTP Download Failed {r.status_code}: {url_or_path}", "error")
             
             if data:
+                logger.info(
+                    "KIE ref bytes loaded | source=%s mime=%s bytes=%s force_data_uri=%s",
+                    raw_ref[:300],
+                    mime,
+                    len(data),
+                    force_data_uri,
+                )
                 if force_data_uri:
                     before_size = len(data)
                     data, mime = self._optimize_image_bytes_for_data_uri(data, mime)
@@ -7661,7 +7869,7 @@ class MediaGenerationService:
                 if force_data_uri: return f"data:{mime};base64,{b64}"
                 return b64
             else:
-                _debug_log(f"[MediaService] Error: No Data retrieved for {url_or_path}", "error")
+                _debug_log(f"[MediaService] Error: No Data retrieved for {url_or_path} | normalized={normalized_ref[:200]}", "error")
         except Exception as e:
             _debug_log(f"[MediaService] Exception in Base64 Conversion: {e}", "error")
         

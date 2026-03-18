@@ -58,13 +58,16 @@
   - **噪点策略必写**：必须给出噪点/颗粒控制（如 `clean digital look`, `fine film grain`, `low noise in shadows`, `avoid heavy chroma noise`），确保暗部可读与质感稳定。
   - **参考图继承与重构（温和版）**：要求“继承身份锚点并进行镜头重构”，避免“复制粘贴式复刻”；优先使用以下英文模板：`Use reference images for identity and key asset consistency. Keep continuity of character identity and scene geography, while adapting viewpoint, framing, pose, lighting, and depth for the current shot.`
   - **单画布完整性 (Single-Canvas Integrity, 强制)**：首尾帧与关键帧必须是单一画面，严禁出现多宫格/分屏/拼贴/重复背景分块/并列多画布（如 split-screen, collage layout, tiled panels, duplicated background tiles, multi-frame contact-sheet look）。描述中必须显式声明单画布约束，并避免使用可能诱发多面板结果的词（如 "multiple frames", "grid layout", "split panel", "contact sheet"）。
+  - **双主体同空间强制 (Dual-Subject Shared-Space Mandate, 强制)**：当同一帧中出现 2 个及以上可见角色时，提示词必须把他们写在同一个连续空间里，而不是两个被分开展示的版面区块。至少明确以下要素中的任意 2 项：`one continuous floor/ground plane`、`shared perspective lines / one uninterrupted background depth`、`one continuous light source affecting both figures`、`foreground-to-background depth relation`。
+  - **二宫图诱发词禁用 (Split-Layout Trigger Ban, 强制)**：在双人或多人同框的 `Start Frame` / `End Frame` / `Keyframes` 中，禁止把以下表达写成主构图指令：`two separated characters`, `significant negative space between subjects`, `subject A in lower third while subject B in upper third`, `left panel / right panel`, `top panel / bottom panel`, `each subject occupying a separate zone`。如需表达疏离或距离，只能写成共享空间里的地面距离、纵深距离或轴线关系。
+  - **正向优先于负向 (Positive Spatial Guidance First, 强制)**：防多宫格/防二宫图时，必须优先写正向空间约束，如 `single continuous cave floor`, `both characters grounded in the same perspective`, `one uninterrupted environment behind them`。否定短句最多 1 句，不得堆叠大量 `no split-screen / no collage / no tiled duplication` 同义词列表来主导构图。
   - **背景唯一性 (Background Uniqueness, 强制)**：同一帧中背景只能有一套连贯透视与光照，不得出现“同一背景被重复绘制两次以上”或“左右区块重复场景”。
 - **镜头参数补充建议 (Lens Parameter Supplement, 推荐强执行)**：为提升动作清晰度与打斗流畅感，建议在 `Start Frame` 与 `End Frame`（必要时 `Video Content`）显式补充下列参数短语：
   - **动作追逐焦段建议**：`24-35mm`（环境与速度感）、`35-50mm`（人身关系与可读性）、`50-85mm`（受力反应与压缩感特写）。
   - **动态清晰度短语**：`crisp subject edges during fast motion`, `controlled motion blur on background only`, `readable limb silhouette at impact`。
   - **景深控制短语**：`moderate depth of field to keep both fighters readable`, `shallow depth of field only at reaction close-up`。
   - **打斗优先模板 (可直接复用)**：`35mm handheld follow, moderate depth of field, crisp subject edges during fast motion, controlled background blur, clean digital look with low shadow noise.`
-  - **防多宫格快捷短句 (Negative Quick Phrase, 推荐)**：`single-canvas cinematic frame, one continuous scene plane, no split-screen, no collage, no tiled duplication, no contact-sheet layout.`
+  - **防多宫格快捷短句 (Single-Space Quick Phrase, 推荐)**：`single-canvas cinematic frame, one continuous scene plane, one uninterrupted background depth, both subjects grounded on the same floor plane, no panelized layout.`
 - **风格驱动视觉映射 (Style-Driven Visual Mapping, 强制)**：`Start Frame` / `Video Content` / `End Frame` / `Keyframes` 必须根据 `Global Style + type + tone` 动态调整光源、焦距与颗粒策略，禁止整场景套用同一参数模板。
   - `Live-Action / Realistic Drama`：优先自然动机光、`35–85mm` 人像友好焦段、`clean digital` 或 `fine film grain`、真实皮肤与材质微纹理；禁止塑料感/CGI感。
   - `Stylized / Fantasy`：允许更风格化色彩与颗粒，但仍必须写清光源结构与焦距逻辑。
@@ -137,7 +140,7 @@
 - **人物塑造与景变 (Character Shaping & Scale Rules)**
   - **强制特写 (Mandatory Character Shot)**: 每个 Scene 的分镜序列中，**必须至少包含一次**针对主要人物 (Lead Character) 的 Close-up 或 Medium Close-up 级别分镜，以强化人物形象与面部细节。
 - **轴线规则**：恪守 180° 规则，破轴需有回位镜头或明确运镜意图。
-- **主体独立性 (Subject Isolation)**：针对关键动作或情感反应，优先给予单人镜头；但在连贯交互中（如打斗、递物品），鼓励使用 **Two-shot** 保持关系连贯。
+- **主体独立性 (Subject Isolation)**：针对关键动作或情感反应，优先给予单人镜头；但在连贯交互中（如打斗、递物品），鼓励使用共享空间双人镜头保持关系连贯。若采用双人同框，必须明确两者位于同一连续环境中的前后/左右/纵深关系，而不是抽象写成 `Two-shot` 后把两人拆成两个版面区域。
 
 
 ### 3. 视觉锚点与空间结构 (Visual Anchor & Spatial Structure)
@@ -279,7 +282,7 @@
   - 对话镜头中，听者**反应**往往比说话者更重要（Core Logic 的直接体现），须确保听者反应在台词同一或紧邻主节拍内可见。
 - **Sequence Logic (Revised)**:
   - **Prioritize OTS (Over-the-Shoulder)**: 对于对话场景（尤其是带有肢体动作或物体交互时），**必须优先采用过肩镜头 (Over-the-Shoulder Shot)** 及其正反打 (Reverse Shot) 结构。相比于单人特写，OTS 能更好呈现角色间的空间关系与动作互动。
-  - **Structure**: Establishing (Optional) -> Master/Two-shot -> **OTS Pattern (A over B's shoulder -> B over A's shoulder)** -> ECU (Climax).
+  - **Structure**: Establishing (Optional) -> Master/shared-space two-character frame -> **OTS Pattern (A over B's shoulder -> B over A's shoulder)** -> ECU (Climax).
 - **Advanced Technical Planning (高级规划)**:
   - **Rack Focus (Advanced FX)**: 用于多人对话。Start Frame 聚焦前景角色 A (Blur B)，Video Content 描述焦点平滑滑向后景角色 B (Blur A)，End Frame 聚焦角色 B。有效引导注意力转移。
   - **Slow Dolly In (Standard)**: 情绪高潮时刻。Start Frame 为 Medium Shot，Video Content 描述 "Viewpoint slowly pushes in by about an arm's length over several seconds" 压缩空间，End Frame 变为 Close-up，以此强化心理压迫或亲密感。
@@ -318,11 +321,11 @@
 - **Space Destruction**: 仅在剧情/动作本身需要冲击或破坏时才加入（例如撞击造成翻倒、追逐带起水花、开枪后烟雾）。不要为了“看起来更刺激”而凭空打碎环境物体，避免引入未定义道具与连续性错误。
 - **Action & Chase Copy-Ready Examples (可复制示例)**：
   - **Example A: Close-Combat Punch Chain (4.0s)**
-    - `Start Frame`: `[Global Style]. **{Viewpoint Anchor}**: waist-height observer at corridor side in Environment Anchor. **{Viewing Direction}**: front-left 3/4 facing A and B. **{ViewpointSetup}**: Medium Full Shot, 35mm handheld, eye-level. **{Image Fidelity}**: clean digital look, low shadow noise, controlled background blur. **{Single-Canvas Guard}**: single-canvas cinematic frame, one continuous scene plane, no split-screen, no collage, no tiled duplication, no contact-sheet layout. **Layers**: {Foreground} Empty. {Midground} CHAR:[@A] guarded stance facing CHAR:[@B]; CHAR:[@B] shoulders tight, weight on rear leg. {Background} ENV:[Environment Anchor].`
+    - `Start Frame`: `[Global Style]. From a waist-height observer position along the corridor side of Environment Anchor, looking front-left across both fighters, the frame settles into a medium full 35mm eye-level handheld view. Hard side spill cuts across the corridor floor from frame-left, shadows stay readable with clean digital clarity and low shadow noise, and one continuous floor plane ties both figures to the same depth map. **Layers**: {Foreground} Empty. {Midground} CHAR:[@A] guarded stance facing CHAR:[@B]; CHAR:[@B] shoulders tight, weight on rear leg. {Background} ENV:[Environment Anchor].`
     - `Video Content`: `**{Viewpoint Movement}**: short lateral follow, micro-acceleration at contact, then brief hold. **Action**: (P1) CHAR:[@A] shifts weight to the rear foot, coils shoulders and hips, then surges one explosive step toward CHAR:[@B] with a committed straight punch driving through centerline; (P2) contact lands with a sharp torso jolt on CHAR:[@B], forcing half-step to one-step recovery while guard opens briefly — CHAR:[@A] retracts into structure and CHAR:[@B] struggles to reset balance -> resulting in a heavy stagger, not a launch.`
     - `End Frame`: `[Global Style]. **{Viewpoint Anchor}**: same lane, slightly closer by a short push. **{Viewing Direction}**: right 3/4 toward both fighters. **{Viewpoint Setup}**: Medium Shot, 35mm. **Layers**: {Foreground} brief dust lift near planted feet. {Midground} CHAR:[@A] guard re-formed, chest heaving; CHAR:[@B] staggered with guard reopening during recovery. {Background} ENV:[Environment Anchor].`
   - **Example B: Weapon Clash and Carry-Over (5.0s)**
-    - `Start Frame`: `[Global Style]. **{Viewpoint Anchor}**: shoulder-height observer near center path in Environment Anchor. **{Viewing Direction}**: side-facing across A and B. **{Viewpoint Setup}**: Full Shot, 35mm, stable handheld. **{Image Fidelity}**: crisp subject edges during fast motion, fine film grain, avoid heavy chroma noise. **{Single-Canvas Guard}**: single-canvas cinematic frame, one continuous scene plane, no split-screen, no collage, no tiled duplication, no contact-sheet layout. **Layers**: {Foreground} Empty. {Midground} CHAR:[@A] blade lifted chest-to-eye line; CHAR:[@B] compact guard. {Background} ENV:[Environment Anchor].`
+    - `Start Frame`: `[Global Style]. From a shoulder-height observer near the center path of Environment Anchor, looking side-on across both fighters, the full-shot 35mm handheld frame holds crisp subject edges, fine film grain, and one uninterrupted background depth so the clash reads inside a single shared combat space. A narrow motivated key from frame-left rakes across the weapon line while the darker far wall stays controlled rather than crushed. **Layers**: {Foreground} Empty. {Midground} CHAR:[@A] blade lifted chest-to-eye line; CHAR:[@B] compact guard. {Background} ENV:[Environment Anchor].`
     - `Video Content`: `**{Viewpoint Movement}**: low-to-mid tracking with slight push at the clash, then stabilize to preserve spacing. **Action**: (P1) CHAR:[@A] advances one step with urgent forward pressure, diagonal blade line accelerating from shoulder rotation into a committed cut; (P2) CHAR:[@B] meets the strike with a hard parry, wrists recoiling on contact as a short spark burst and tight debris flick register at the weapon edge — both bodies rebound only enough to reopen guard structure, with CHAR:[@B] quarter-turning into counter-ready alignment while CHAR:[@A] slips outward to keep silhouettes clear -> resulting in controlled carry-over, not a chaotic flurry.`
     - `End Frame`: `[Global Style]. **{Viewpoint Anchor}**: same axis side, slight pull-back to preserve distance map. **{Viewing Direction}**: profile-right on both subjects. **{Viewpoint Setup}**: Full Shot, 35mm. **Layers**: {Foreground} minor spark fade and dust fleck. {Midground} CHAR:[@A] defensive lane reset with blade recovered; CHAR:[@B] counter-ready posture stabilized. {Background} ENV:[Environment Anchor].`
   - **Common Fight Safe Templates (常见打斗安全模板)**：默认写强冲击、强节奏、受控结果；未命中 `Level 3` 授权时不得升级后果。
@@ -488,14 +491,34 @@
   - **逐字符继承**：`Associated Entities` 中每个实体名必须与上游权威实体名逐字符一致（含大小写与分隔符）；禁止等价改写（如大小写变化、`_`/`-`/空格互换、简写或翻译变体）。
 
 ### 2. 画面描述规范 (Visual Description)
-必须描述中加入标签化字段，避免歧义。
-- **Tag 格式**：使用 `{Tag: Value}`。
-  - `{Viewpoint Anchor: exact observer placement relative to [Environment Anchor]}`
-  - `{Viewing Direction: gaze vector from anchor to target/cardinal direction}`
-  - `{Viewpoint Setup: shot size + angle + framing/stability}`
-  - `{Image Fidelity: Noise/Grain Strategy + Anti-Copy Constraint from references}`
-  - `{Lighting: Style, Source}`
+必须在描述中包含这些信息维度，避免歧义，但不要求机械标签化输出。
+- **信息维度（自然融入 prose）**：优先将以下信息写成自然语言中的连续短句；只有在需要消歧时，才允许使用 `{Tag: Value}`。
+  - 观察者落位：exact observer placement relative to [Environment Anchor]
+  - 观察朝向：gaze vector from anchor to target/cardinal direction
+  - 镜头形态：shot size + angle + framing/stability
+  - 画质约束：Noise/Grain Strategy + Anti-Copy Constraint from references
+  - 光照结构：Style, Source
   - `{Composition: Placement, Depth}`
+- **维度生成检查 (Dimension Completeness Gate, 强制)**：每一行 Shot 在最终输出前，必须对 `Shot Logic (CN)`、`Start Frame`、`Video Content`、`End Frame` 四段分别执行一次内部维度验收；该检查只作为内部门禁，不得把 checklist 或“已通过/未通过”字样输出到最终表格。
+  - **Start Frame 最低维度槽位**：`[Global Style]`、`Viewpoint Anchor`、`Viewing Direction`、`Viewpoint Setup`、`Focal Length`、`Framing/Angle`、`Noise/Grain Strategy`、`Anti-Copy Constraint`、`Lighting Structure`、`Single-Canvas/Shared-Space Guard`、`Layers`、每个可见核心角色的 `Viewer-Relative Facing`。任一缺失即判该字段无效。
+  - **Video Content 最低维度槽位**：`Viewpoint Movement 起点->终点`、`Direction Chain`、`2-3 个主节拍中的动作闭环`、每个主节拍的 `Quantification`、所有可见角色的可见反应/状态变化、光照/焦段/颗粒连续性、若存在台词则包含说话者与听者反应。任一缺失即判该字段无效。
+  - **End Frame 最低维度槽位**：`[Global Style]`、最终 `Viewpoint Anchor`、最终 `Viewing Direction`、最终 `Viewpoint Setup`、重算后的 `Layers`、每个可见核心角色的最终朝向、动作后视觉证据、与 Start/Video 可推导的一致性。任一缺失即判该字段无效。
+  - **Shot Logic (CN) 最低维度槽位**：`场景类型分析`、`时长/主节拍数`、`动态`、`首帧`、`过程`、`尾帧`、`稳定态/近景收束判定`、`实体完整性校验` 八项必须齐全。任一缺失即判该字段无效。
+- **维度门禁触发后禁止带病输出 (No Partial Pass-Through, 强制)**：只要四段中的任一字段未通过维度检查，该 Shot 整行不得输出到最终表格；必须先完成重写，再重新执行同一轮维度检查。
+- **重写机制 (Rewrite Protocol, 强制)**：维度缺失时不得只在原句末尾机械补一个短语糊弄过关，必须按缺口范围重写对应字段，并同步修正受影响的上下游字段。
+  - **字段级定向重写 (Targeted Rewrite)**：若仅 `Start Frame` 缺维度，则完整重写 `Start Frame`，并回看 `Video Content` / `End Frame` 是否仍与新的起始状态一致；若不一致，必须一并改写相关字段。
+  - **动态链重写 (Motion-Chain Rewrite)**：若 `Video Content` 缺少量化、反应链、方向链或结果闭环，必须整体重写 `Video Content`，不得只插入单个补丁短句；必要时同步重写 `End Frame` 与 `Shot Logic` 的过程/尾帧描述。
+  - **终态重写 (Outcome Rewrite)**：若 `End Frame` 缺少终态朝向、视觉证据或与前文不闭环，必须完整重写 `End Frame`，不得以“same as start”或局部差分补丁代替。
+  - **整行回炉 (Full-Row Regeneration)**：若完成一轮字段级重写后仍有任一字段未通过维度检查，则丢弃该 Shot 当前整行草稿，回到 `Shot Logic (CN)` 重新规划并整行重生一次；禁止在失败草稿上无上限叠补丁。
+  - **重写上限 (Rewrite Limit)**：同一 Shot 最多允许 `1 次字段级重写 + 1 次整行回炉`。若第二次仍不通过，必须优先简化镜头设计、减少主节拍或收窄运镜复杂度后再生成，不能硬保留复杂但缺维度的版本。
+- **复杂度降级梯度 (Complexity Downgrade Ladder, 强制)**：若同一 Shot 在完成 `1 次字段级重写 + 1 次整行回炉` 后仍未通过维度检查，必须按以下固定顺序降级，不得跳级乱改：
+  - **Level 1**：删除装饰性风格修辞、可选氛围语、非关键微细节，保留全部核心维度槽位。
+  - **Level 2**：减少可选主节拍/次级角色响应复杂度，收窄运镜术语数量，优先保留空间关系与动作闭环。
+  - **Level 3**：将镜头收束为单一清晰目标的基础版本，仅保留必要机位、朝向、主体关系、光照、画质与结果状态；绝不允许为了简化而删除身份锚点、状态承接或单画布约束。
+- **失败重写示例 (Failure -> Rewrite -> Downgraded Good, 强制参照)**：
+  - **Bad**：`[Global Style]. Medium shot of CHAR:[@A] and CHAR:[@B] fighting in ENV:[Arena].` → 缺 `Viewpoint Anchor / Viewing Direction / Focal Length / Facing / Single-Canvas Guard / 动作闭环`。
+  - **Rewrite**：先补全完整首尾与动作链；若仍失败，不要继续叠补丁。
+  - **Downgraded Good**：`[Global Style]. From a chest-height observer position at the arena edge, looking diagonally across both fighters, the frame holds a medium 35mm eye-level view with one continuous floor plane and one uninterrupted background depth. Controlled side light keeps both silhouettes readable. **Layers**: {Foreground} Empty. {Midground} CHAR:[@A] 3/4 View Right, guard raised, facing CHAR:[@B]; CHAR:[@B] 3/4 View Left, weight set back. {Background} ENV:[Arena].`
 - **特别重要：执行顺序调整 (Critical Execution Order)**：
   1. **Classify Shot Type**: 判断镜头类型（Single/Standard/Multi-Keyframe）。
   2. **Draft Shot Logic (Planning Blueprint)**: **Critical Step**. 在编写具体的英文视觉描述前，**必须先用中文规划**好首帧状态、视频动作演化及尾帧结果的逻辑链。这是确保物理与时空连贯的**思考草稿**。
@@ -504,6 +527,8 @@
   5. **Generate Duration**: 确定动作需要的总时长（根据动作密度自然估算）。
   6. **Generate Video Content**: 根据 Logic 规划与 Duration 填充每一秒的动作。
   7. **Generate End Frame**: 根据 Video Content 的最终结果生成结束状态。
+  8. **Run Dimension Completeness Gate**: 对 `Shot Logic (CN)` / `Start Frame` / `Video Content` / `End Frame` 执行维度验收；缺项即触发下方重写机制，不得直接输出。
+  9. **Rewrite If Needed, Then Recheck**: 先做字段级定向重写；仍失败则整行回炉重生；重写后必须重新执行同一套维度检查，直到通过后才能输出。
   - **Entity Integrity Check (角色/实体完整性检查)**:
     - **Rule: No Mystery Guests**. 在 `Video Content` 中发生的任何主动行为主体，**必须**显式地出现在 `Start Frame` (开始画面) 或者 `End Frame` (结束画面) 的描述中。
     - **Logic**: 视频生成模型需要首尾帧作为视觉锚点。如果提示词里写了 "John 举起了手"，但 Start Frame 和 End Frame 都没有提到 "John"，模型可能会凭空捏造一个陌生人作为 actor，或导致动作失效。
@@ -533,8 +558,9 @@
     - **{Viewpoint Anchor}**：只描述观察者的空间落点（回答 "Where is the observer?"）。
     - **{Viewing Direction}**：只描述从该落点出发的观察朝向（回答 "Where does the observer look?"）。
     - **{Viewpoint Setup}**：只描述镜头形态（景别/角度/构图稳定性），不承载位置或朝向。
+  - **自然语言融合规则 (Natural-Prose Rendering, 强制)**：`{Viewpoint Anchor}`、`{Viewing Direction}`、`{Viewpoint Setup}` 是内部检查维度，不是鼓励输出成僵硬栏目。最终镜头提示词必须优先写成 1-2 句流动自然语言，让机位落点、朝向与镜头形态顺势融入画面描述；仅当信息会歧义时，才允许保留显式字段标签。
   - **Environment-Relative (环境基准)**：机位描述必须以 **[Environment Anchor]** 为坐标系，绝对位置固定（如 "Near the north window"），严禁仅使用 "Behind character" 等相对描述。即使是跟拍，也要说明 "Tracking character along the corridor walls"。
-  - **格式**：`{Viewpoint Anchor}: Placed at {Specific Location in Env}. {Viewing Direction}: Facing {Cardinal Direction/Target}. {Viewpoint Setup}: {Shot Size/Angle/Framing}.`
+  - **格式**：优先使用自然融合法，例如 `From a chest-height observer position near the doorway threshold, looking across the corridor toward the two figures, the frame holds a medium 50mm eye-level composition.`；若确有必要，也可退回 `Anchor + Direction + Setup` 的显式字段写法。
   - **初始锚定原则**：此处定义的是**动作开始时**的机位。Video Content 的运镜必须由此出发。
 - **必须包含 (Mandatory Elements)**：
   - **[Global Style]**：所有描述必须以 `[Global Style]` 开头。
@@ -545,12 +571,14 @@
     - 禁止模糊词：如 `facing sideways`、`turned a bit`、`angled`、`partially facing` 等不可判定表达。
   - **{Shot Description}**: 必须包含 **Focal Length** (焦距), **Framing** (景别) 和 **Angle** (角度)。
   - **{Image Fidelity}**: 必须包含 **Noise/Grain 控制** 与 **Anti-Copy 约束**（继承 reference 的身份锚点，但重构构图/光线/姿态，禁止复制粘贴参考图构图）。
-  - **{Single-Canvas Guard}**: 必须显式或等效表达“single-canvas, no split-screen, no collage, no tiled duplication”。
+  - **{Single-Canvas Guard}**: 必须显式或等效表达“single-canvas + one continuous scene plane + one uninterrupted background depth”；若为双人/多人同框，还需补充 `shared floor/light/perspective` 中至少一项，不能只写否定词。
   - **主体引用单一性 (Subject Reference Singularity, 强制 — 防二宫格核心规则)**：每个实体的 `CHAR:[@Name]` / `ENV:[Name]` / `PROP:[Name]` 在同一个生图提示词（Start Frame / End Frame / Keyframe）中只能出现一次方括号引用，且必须放在 **Layers** 区；`{Viewpoint Anchor}` 与 `{Viewing Direction}` 中提及实体时必须使用纯文本名称，不加方括号或类型前缀。唯一例外是 `[Global Style]`。
   - **{Style Mapping Note}**：必须声明该镜头采用的风格映射（至少 1 句），说明为何使用当前光照/焦距/颗粒组合；真人剧需强调写实质感控制。
+  - **标签密度上限 (Label Density Cap, 强制)**：除 `Layers` 外，单条 Start/End/Keyframe 提示词中不应连续堆叠 5 个以上独立栏目标签。优先把 `{Single-Canvas Guard}`、`{Style Mapping Note}`、部分 `{Image Fidelity}` 约束吸收到构图、光照或画质句中，避免输出成版式说明书。
   - **主角布光加权 (Lead Lighting Weighting)**：当主叙事主体为主角时，按「一-1 主角美化布光优先」规则执行。
   - **光影与色调 (Lighting & Color)**：严格继承 `[Global Style]` 的视觉基调。必须明确描述**光源性质**（Hard/Soft）、**光影对比度**（High key/Low key/Chiaroscuro）以及**主色调**（Color Palette）。例如：若风格为 "Neon Noir"，则描述 "Harsh neon side lighting, deep shadows, wet pavement reflections, cyan and magenta contrast"。
   - **构图法则 (Composition Technique)**：必须指定一种经典的构图方式以增强形式感。可选技法包括：**Symmetrical Composition** (对称), **Rule of Thirds** (三分法), **Leading Lines** (引导线), **Center Framed** (中心), **Frame within a Frame** (框中框), **Triangular** (三角), **Negative Space** (留白)。
+    - **双人构图安全限制 (Dual-Subject Composition Safety, 强制)**：当 2 个及以上角色同框时，优先使用 `Leading Lines`、`Triangular`、`Rule of Thirds with depth layering`、`Center Framed with shared axis` 等强调共享空间的技法。`Negative Space` 只能用于单主体镜头，或用于“主体与环境”的关系，不得作为“双主体彼此分离”的主要指令，尤其在 `Full Shot + vertical 9:16` 中禁止用它来强调两人被空白硬隔开。
   - **构图景深与主体状态 (Composition & Subject Status)**：**Critical**: 不要**单独**使用“距离3米/5米”等物理数值。若业务必须表达米数，必须采用 **Hybrid Distance Anchoring（混合距离锚定）**：`米数 + 步幅/身位参照 + 屏幕占比 + 图层关系` 四项同时出现。
     - **Hybrid Distance Anchoring (强制四联动)**：
       - `Metric`: 米数仅作辅助（如 `about 5 meters apart`）。
@@ -561,6 +589,7 @@
       - `{Foreground} (前景)`: 任何靠近镜头、产生虚化或遮挡的物体（e.g., "Blurred shoulder", "Raindrops", "Leaves"）。若无，填 "Empty".
       - `{Midground} (中景)`: **主要叙事区域**。主体通常在此层。
       - `{Background} (后景)`: 环境基底（e.g., "Distant city lights", "Wall texture"）。
+    - **竖版双人落位护栏 (Vertical Dual-Subject Placement Guard, 强制)**：在 `vertical 9:16` 的双人/多人全景中，不得仅通过 `lower third / upper third` 或纯版面区块来安置角色；必须同时交代共享地面、纵深关系或共同受光关系。除非剧情明确存在高低落差（如楼梯/高台/坠落），否则禁止把双主体写成上下两格式阅读路径。
     - **Standard Static Syntax (标准静态句式)**：在主体出现的层级中，紧接主体名称必须严格遵循以下标准句式：
       - **Formula**: `{@Subject Name} {Subject Info: Shot Size + Screen Position + Viewer-Relative Facing + Static Pose + Expression}`
       - **Constraint**: Each field must use **Relative/Visual terms**, not absolute physics.
@@ -573,7 +602,7 @@
         - `Expression`: Micro-expression at T=0. (e.g., "Gritted teeth", "Eyes narrowed").
     - **Spatial Relation (相对关系)**: 若有多主体，严禁使用坐标 (X,Y)；必须描述视觉遮挡或相对位。
   - **Sentence Structure Optimization (首帧标准句式)**:
-    - **Global Formula**: `[Global Style]. **{Viewpoint Anchor}**: {plain-text position, entity names without brackets} ... **{Viewing Direction}**: {plain-text direction, entity names without brackets} ... **{Viewpoint Setup}**: ... **{Lighting}**: ... **{Composition}**: ... **Layers**: {Foreground} ... {Midground} CHAR:[@Subject Name] {Subject Info: ...} {Background} ENV:[Name] ...`
+    - **Global Formula**: `[Global Style]. From {plain-text position} in the environment, the observer looks {plain-text direction} in a {shot size/angle/framing} view. {Lighting + fidelity + anti-copy + single-space constraints woven into natural prose}. **Layers**: {Foreground} ... {Midground} CHAR:[@Subject Name] {Subject Info: ...} {Background} ENV:[Name] ...`
     - **方括号仅限 Layers 区**：`{Viewpoint Anchor}` 与 `{Viewing Direction}` 中的实体名称一律使用纯文本（不加 `CHAR:`/`ENV:`/`PROP:`、不加方括号）。所有方括号引用集中在 **Layers** 区，确保每个实体仅被注入一次外观描述（详见「主体引用单一性」规则）。
     - **Narrative Integration**: In the **Layers** section, enforce the "Subject IS State" sentence flow for clarity.
     - **Multi-Subject Logic**: If multiple characters act in the same layer, use explicit **Spatial Connectors** (e.g., "standing next to", "looming behind", "face-to-face with") to link their `{Subject Info}` blocks.
@@ -813,6 +842,7 @@
   - **尾帧**：{中文} 描述 T=End 时的主体落位与最终状态。**必须显式标注**：{稳定态（非动作过渡）: 是/否(原因)}，{近景收束: 是/否(原因)}。
   - **校验**：{实体完整性: 通过/已强制修正(说明补回了哪些遗漏角色)}。
 - **作用**：以此为逻辑基准，生成后续的英文 Prompt。如果逻辑不通或密度不足，则视为无效生成。
+- **重写回写责任 (Rewrite Back-Propagation, 强制)**：若后续维度检查发现 `Start/Video/End` 任一字段被重写，必须把对应变化回写到 `Shot Logic (CN)` 的 `首帧/过程/尾帧/校验` 段，确保中文逻辑稿与最终英文字段完全一致，禁止出现“英文已修正、中文蓝图仍是旧版本”的漂移。
 - **分隔符**：六部分内容必须用 `<br>` 换行分隔。
 - Shot Name的语言与提供的剧本一致。
 
@@ -827,6 +857,6 @@
 
 | Shot ID | Shot Name | Scene ID | Shot Logic (CN) | Start Frame | Video Content | Duration (s) | Keyframes | End Frame | Start Frame (CN) | Video Content (CN) | Keyframes (CN) | End Frame (CN) | Associated Entities |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| EP01_SC03_SH01 | 逼近质问 | EP01_SC03 | 场景类型分析：Dialogue & Emotion，核心是压问与听者反应。<br>预估：时长 5s，主节拍 2 个。<br>动态：slow push in，towards lens，one short step。<br>首帧：A 在门内压近，B 贴门把防守。<br>过程：(P1) A 前压发问，B 移开视线并握紧门把；(P2) B 半身后倾回应，A 不退，走廊张力锁住。<br>尾帧：两人近距对峙落稳；稳定态：是，近景收束：是。<br>校验：实体完整性通过。 | [Global Style]. **{Viewpoint Anchor}**: chest-height observer one short stride inside the doorway lane of Environment Anchor. **{Viewing Direction}**: facing screen-right toward the narrow gap between Character A and Character B. **{Viewpoint Setup}**: Medium Shot, 50mm, eye-level, stable slight over-shoulder compression. **{Image Fidelity}**: controlled fine grain, low shadow noise, preserve identity anchor from references while rebuilding framing and pose. **{Lighting}**: soft window spill from screen-left, low-key interior contrast, desaturated blue-gray palette. **{Composition}**: Rule of Thirds with shallow depth layering. **{Single-Canvas Guard}**: single-canvas cinematic frame, no split-screen, no collage, no tiled duplication. **{Style Mapping Note}**: realistic drama mapping using a restrained 50mm perspective, soft spill lighting, and fine grain to keep facial tension readable without stylization drift. **Layers**: {Foreground} Empty. {Midground} CHAR:[@Character A] Medium Shot, Rule of Thirds Left, 3/4 View Right, shoulders angled forward, jaw tight; standing face-to-face with CHAR:[@Character B] Medium Shot, Rule of Thirds Right, 3/4 View Left, back near the doorframe, fingers resting on PROP:[Door] handle, lips pressed thin. {Background} ENV:[Environment Anchor] narrow corridor wall and dim doorway depth. | **{Viewpoint Movement}**: Starting from the doorway-side medium setup, slowly pushing in one short step while facing direction remains unchanged. **Action**: (P1) As the viewpoint pushes in, CHAR:[@Character A] leans forward **firmly** **towards CHAR:[@Character B]** **one short step**, chin lowered — Dialogue (CHAR:[@Character A]) (low, controlled): "You knew the key was missing before anyone opened the drawer." — CHAR:[@Character B] gaze breaks screen-right, fingers tighten on PROP:[Door], shoulders drawing back -> resulting in pressure closing the gap; (P2) CHAR:[@Character B] inhales **sharply** **away from viewer** **half a body lean**, grip fixed on PROP:[Door] handle as if choosing between retreat and denial — Dialogue (CHAR:[@Character B]) (tight, unsteady): "I heard the latch move, nothing more." — CHAR:[@Character A] holds position without retreat, coat edge settling as tension locks the space in ENV:[Environment Anchor] -> resulting in a contained standoff, not a physical clash. | 5 | NO | [Global Style]. **{Viewpoint Anchor}**: chest-height observer now one short step closer inside the doorway lane of Environment Anchor. **{Viewing Direction}**: facing screen-right at the tightened line between Character A and Character B. **{Viewpoint Setup}**: Medium Close-up, 50mm, eye-level, stable pressure framing. **{Image Fidelity}**: controlled fine grain, low shadow noise, preserve identity anchor from references while rebuilding final pose and spacing. **{Lighting}**: soft window spill still shaping both faces, low-key contrast holding, desaturated blue-gray palette. **{Composition}**: Rule of Thirds with compressed negative space behind Character B. **{Single-Canvas Guard}**: single-canvas cinematic frame, no split-screen, no collage, no tiled duplication. **{Style Mapping Note}**: realistic drama mapping stays consistent so the push-in ends on readable facial tension rather than stylized distortion. **Layers**: {Foreground} faint coat edge blur near frame-left. {Midground} CHAR:[@Character A] Medium Close-up, Rule of Thirds Left, 3/4 View Right, weight settled forward, eyes fixed and unblinking; standing close to CHAR:[@Character B] Medium Close-up, Rule of Thirds Right, 3/4 View Left, shoulders compressed toward the doorframe, hand still locked on PROP:[Door] handle, breath held after speaking. {Background} ENV:[Environment Anchor] dim corridor wall and narrowed doorway depth with still air. | [Global Style]. **{Viewpoint Anchor}**: 观察者位于 Environment Anchor 门道内一小步的胸口高度位置。 **{Viewing Direction}**: 面向画面右侧，观察 Character A 与 Character B 之间收紧的缝隙。 **{Viewpoint Setup}**: 中景，50mm，平视，稳定的轻微过肩压缩。 **{Image Fidelity}**: 细颗粒受控、阴影噪点低，继承参考图身份锚点但重构构图与姿态。 **{Lighting}**: 来自画面左侧的柔和窗光，低调室内反差，去饱和蓝灰色调。 **{Composition}**: 三分法，浅层景深分层。 **{Single-Canvas Guard}**: 单画布电影画面，无分屏、无拼贴、无平铺复制。 **{Style Mapping Note}**: 采用写实剧情映射，以克制的 50mm 视角、柔和侧光与细颗粒保持面部紧张感可读，避免风格漂移。 **Layers**: {Foreground} 空。 {Midground} CHAR:[@Character A] 中景，位于左三分，3/4 View Right，肩线前压，下颌绷紧；与 CHAR:[@Character B] 正面对峙，后者为中景，位于右三分，3/4 View Left，背靠门框，手指搭在 PROP:[Door] 把手上，嘴唇紧抿。 {Background} ENV:[Environment Anchor] 狭窄走廊墙面与昏暗门道纵深。 | **{Viewpoint Movement}**: 从门侧中景机位开始，缓慢推进一小步，观察方向保持不变。 **Action**: (P1) 随着机位推进，CHAR:[@Character A] 稳定地向 CHAR:[@Character B] 前压一小步，下巴压低 —— Dialogue (CHAR:[@Character A]) (低声，克制): "你在任何人打开抽屉之前，就知道钥匙不见了。" —— CHAR:[@Character B] 视线偏向画面右侧，握住 PROP:[Door] 的手指收紧，肩线后缩 -> resulting in 压迫距离收紧；(P2) CHAR:[@Character B] 急促吸气，半个身位向后倾，把手仍锁在 PROP:[Door] 上，像是在撤退与否认之间选择 —— Dialogue (CHAR:[@Character B]) (紧绷，发虚): "我只听见门闩响了一下，仅此而已。" —— CHAR:[@Character A] 保持原位不退，衣摆边缘回落，ENV:[Environment Anchor] 内的张力被锁住 -> resulting in 受控对峙，而非肢体冲突。 | NO | [Global Style]. **{Viewpoint Anchor}**: 观察者现在位于 Environment Anchor 门道内更近一小步的胸口高度位置。 **{Viewing Direction}**: 面向画面右侧，观察 Character A 与 Character B 之间已经收紧的对峙线。 **{Viewpoint Setup}**: 中近景，50mm，平视，稳定压迫式构图。 **{Image Fidelity}**: 细颗粒受控、阴影噪点低，继承参考图身份锚点但重构最终姿态与间距。 **{Lighting}**: 柔和窗光仍勾勒两人面部，低调反差保持不变，去饱和蓝灰色调延续。 **{Composition}**: 三分法，Character B 身后负空间被压缩。 **{Single-Canvas Guard}**: 单画布电影画面，无分屏、无拼贴、无平铺复制。 **{Style Mapping Note}**: 写实剧情映射保持一致，使推进后的收尾落在清晰可读的面部紧张感上，而不是风格化失真。 **Layers**: {Foreground} 画面左侧近处有轻微衣摆虚化。 {Midground} CHAR:[@Character A] 中近景，位于左三分，3/4 View Right，重心前落，目光固定不眨；贴近 CHAR:[@Character B]，后者为中近景，位于右三分，3/4 View Left，肩线压向门框，手仍锁在 PROP:[Door] 把手上，说话后屏住呼吸。 {Background} ENV:[Environment Anchor] 昏暗走廊墙面与被压窄的门道纵深，空气静止。 | [@Character A], [@Character B], [Environment Anchor], [Door] |
+| EP01_SC03_SH01 | 逼近质问 | EP01_SC03 | 场景类型分析：Dialogue & Emotion，核心是压问与听者反应。<br>预估：时长 5s，主节拍 2 个。<br>动态：slow push in，towards lens，one short step。<br>首帧：A 在门内压近，B 贴门把防守。<br>过程：(P1) A 前压发问，B 移开视线并握紧门把；(P2) B 半身后倾回应，A 不退，走廊张力锁住。<br>尾帧：两人近距对峙落稳；稳定态：是，近景收束：是。<br>校验：实体完整性通过。 | [Global Style]. From a chest-height observer position one short stride inside the doorway lane of Environment Anchor, looking screen-right along the tightening line between Character A and Character B, the frame holds a medium 50mm eye-level composition with controlled fine grain, low shadow noise, and a single uninterrupted doorway depth. Soft window spill from screen-left shapes both figures while preserving one shared floor plane and one continuous corridor perspective. **Layers**: {Foreground} Empty. {Midground} CHAR:[@Character A] Medium Shot, Rule of Thirds Left, 3/4 View Right, shoulders angled forward, jaw tight; standing face-to-face with CHAR:[@Character B] Medium Shot, Rule of Thirds Right, 3/4 View Left, back near the doorframe, fingers resting on PROP:[Door] handle, lips pressed thin. {Background} ENV:[Environment Anchor] narrow corridor wall and dim doorway depth. | **{Viewpoint Movement}**: Starting from the doorway-side medium setup, slowly pushing in one short step while facing direction remains unchanged. **Action**: (P1) As the viewpoint pushes in, CHAR:[@Character A] leans forward **firmly** **towards CHAR:[@Character B]** **one short step**, chin lowered — Dialogue (CHAR:[@Character A]) (low, controlled): "You knew the key was missing before anyone opened the drawer." — CHAR:[@Character B] gaze breaks screen-right, fingers tighten on PROP:[Door], shoulders drawing back -> resulting in pressure closing the gap; (P2) CHAR:[@Character B] inhales **sharply** **away from viewer** **half a body lean**, grip fixed on PROP:[Door] handle as if choosing between retreat and denial — Dialogue (CHAR:[@Character B]) (tight, unsteady): "I heard the latch move, nothing more." — CHAR:[@Character A] holds position without retreat, coat edge settling as tension locks the space in ENV:[Environment Anchor] -> resulting in a contained standoff, not a physical clash. | 5 | NO | [Global Style]. From a chest-height observer now one short step closer inside the doorway lane of Environment Anchor, looking screen-right at the compressed confrontation line, the medium close-up 50mm frame keeps fine grain controlled, low-key contrast stable, and both figures locked inside one continuous doorway space rather than two separated visual zones. **Layers**: {Foreground} faint coat edge blur near frame-left. {Midground} CHAR:[@Character A] Medium Close-up, Rule of Thirds Left, 3/4 View Right, weight settled forward, eyes fixed and unblinking; standing close to CHAR:[@Character B] Medium Close-up, Rule of Thirds Right, 3/4 View Left, shoulders compressed toward the doorframe, hand still locked on PROP:[Door] handle, breath held after speaking. {Background} ENV:[Environment Anchor] dim corridor wall and narrowed doorway depth with still air. | [Global Style]. 从 Environment Anchor 门道内一小步的胸口高度观察位置出发，视线沿着 Character A 与 Character B 之间收紧的对峙线朝画面右侧推进，画面保持中景 50mm 平视构图，细颗粒受控、阴影噪点低，并明确两人处在同一条门道纵深与同一块地面关系里。来自画面左侧的柔和窗光同时塑形两人，空间保持单一连续。 **Layers**: {Foreground} 空。 {Midground} CHAR:[@Character A] 中景，位于左三分，3/4 View Right，肩线前压，下颌绷紧；与 CHAR:[@Character B] 正面对峙，后者为中景，位于右三分，3/4 View Left，背靠门框，手指搭在 PROP:[Door] 把手上，嘴唇紧抿。 {Background} ENV:[Environment Anchor] 狭窄走廊墙面与昏暗门道纵深。 | **{Viewpoint Movement}**: 从门侧中景机位开始，缓慢推进一小步，观察方向保持不变。 **Action**: (P1) 随着机位推进，CHAR:[@Character A] 稳定地向 CHAR:[@Character B] 前压一小步，下巴压低 —— Dialogue (CHAR:[@Character A]) (低声，克制): "你在任何人打开抽屉之前，就知道钥匙不见了。" —— CHAR:[@Character B] 视线偏向画面右侧，握住 PROP:[Door] 的手指收紧，肩线后缩 -> resulting in 压迫距离收紧；(P2) CHAR:[@Character B] 急促吸气，半个身位向后倾，把手仍锁在 PROP:[Door] 上，像是在撤退与否认之间选择 —— Dialogue (CHAR:[@Character B]) (紧绷，发虚): "我只听见门闩响了一下，仅此而已。" —— CHAR:[@Character A] 保持原位不退，衣摆边缘回落，ENV:[Environment Anchor] 内的张力被锁住 -> resulting in 受控对峙，而非肢体冲突。 | NO | [Global Style]. 从更近一小步的门道内观察位置出发，视线继续沿已收紧的对峙线朝画面右侧保持，中近景 50mm 平视构图将两人压缩在同一连续门道空间里，而不是分成两个独立版面。画面延续低调反差与柔和窗光，背景纵深保持单一不被切裂。 **Layers**: {Foreground} 画面左侧近处有轻微衣摆虚化。 {Midground} CHAR:[@Character A] 中近景，位于左三分，3/4 View Right，重心前落，目光固定不眨；贴近 CHAR:[@Character B]，后者为中近景，位于右三分，3/4 View Left，肩线压向门框，手仍锁在 PROP:[Door] 把手上，说话后屏住呼吸。 {Background} ENV:[Environment Anchor] 昏暗走廊墙面与被压窄的门道纵深，空气静止。 | [@Character A], [@Character B], [Environment Anchor], [Door] |
 
 *******************请按以上规则，对以下完整剧本分析，要完整分析：

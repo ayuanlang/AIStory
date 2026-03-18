@@ -23,10 +23,136 @@ const getFullUrl = (url) => {
     return url;
 };
 
+const normalizeMediaRefList = (items) => {
+    if (!Array.isArray(items)) return [];
+    return [...new Set(
+        items
+            .map((item) => String(item || '').trim())
+            .filter(Boolean)
+    )];
+};
+
+const areMediaRefListsEqual = (left, right) => {
+    const a = normalizeMediaRefList(left);
+    const b = normalizeMediaRefList(right);
+    if (a.length !== b.length) return false;
+    return a.every((item, idx) => item === b[idx]);
+};
+
+const collectMatchedEntitiesFromPrompt = ({
+    promptText = '',
+    associatedEntities = '',
+    entityPool = [],
+    includeAssociatedEntities = true,
+}) => {
+    const entities = Array.isArray(entityPool) ? entityPool : [];
+    if (!entities.length) return [];
+
+    const rawMatches = [];
+    if (includeAssociatedEntities && associatedEntities) {
+        rawMatches.push(...String(associatedEntities).split(/[,，]/));
+    }
+
+    const sourceText = String(promptText || '');
+    const regexes = [
+        /\[([\s\S]+?)\]/g,
+        /\{([\s\S]+?)\}/g,
+        /【([\s\S]+?)】/g,
+        /｛([\s\S]+?)｝/g,
+        /(?:^|[\s,，;；])(@[^\s,，;；\]\[\(\)（）\{\}【】]+)/g,
+    ];
+
+    regexes.forEach((regex) => {
+        regex.lastIndex = 0;
+        let match;
+        while ((match = regex.exec(sourceText)) !== null) {
+            if (match[1]) rawMatches.push(match[1]);
+        }
+    });
+
+    const typedRefRegex = /(CHAR\s*:\s*\[@([^\]]+)\])|(ENV\s*:\s*\[([^\]]+)\])|(PROP\s*:\s*\[([^\]]+)\])/gi;
+    let typedMatch;
+    typedRefRegex.lastIndex = 0;
+    while ((typedMatch = typedRefRegex.exec(sourceText)) !== null) {
+        rawMatches.push(typedMatch[2] || typedMatch[4] || typedMatch[6] || '');
+    }
+
+    const candidates = new Set();
+    rawMatches
+        .map((value) => String(value || '').trim())
+        .filter(Boolean)
+        .forEach((raw) => {
+            const content = raw.replace(/[\[\]\{\}【】｛｝]/g, '');
+            const normalized = normalizeEntityToken(content);
+            if (normalized) candidates.add(normalized);
+        });
+
+    return entities.filter((entity) => {
+        const nameCn = normalizeEntityToken(entity?.name || '');
+        const nameEn = normalizeEntityToken(entity?.name_en || '');
+        if (!nameCn && !nameEn) return false;
+
+        return Array.from(candidates).some((candidate) => {
+            if (nameCn && candidate === nameCn) return true;
+            if (nameEn && candidate === nameEn) return true;
+            return false;
+        });
+    });
+};
+
+const collectMatchedEntityImageUrlsFromPrompt = ({
+    promptText = '',
+    associatedEntities = '',
+    entityPool = [],
+    includeAssociatedEntities = true,
+}) => {
+    return normalizeMediaRefList(
+        collectMatchedEntitiesFromPrompt({
+            promptText,
+            associatedEntities,
+            entityPool,
+            includeAssociatedEntities,
+        }).map((entity) => entity?.image_url)
+    );
+};
+
+const resolveUnifiedVideoMode = (techObj = {}) => {
+    const rawMode = String(techObj?.video_mode_unified || techObj?.video_ref_submit_mode || techObj?.video_gen_mode || 'start').trim().toLowerCase();
+    if (rawMode === 'refs_video' || rawMode === 'entity_refs') return 'entity_refs';
+    return rawMode || 'start';
+};
+
+const buildAutoVideoRefList = (shotLike = {}, techObj = {}, explicitMode = null, entityRefUrls = []) => {
+    const mode = String(explicitMode || resolveUnifiedVideoMode(techObj) || 'start').trim().toLowerCase();
+    const refs = [];
+    const startRef = String(shotLike?.image_url || '').trim();
+    const endRef = String(techObj?.end_frame_url || '').trim();
+    const keyframes = normalizeMediaRefList(techObj?.keyframes || []);
+
+    if (mode === 'end') {
+        if (endRef) refs.push(endRef);
+        return normalizeMediaRefList(refs);
+    }
+
+    if (startRef) refs.push(startRef);
+
+    if (mode === 'entity_refs') {
+        refs.push(...normalizeMediaRefList(entityRefUrls));
+        refs.push(...keyframes);
+    }
+
+    if ((mode === 'start_end' || mode === 'entity_refs') && endRef) {
+        refs.push(endRef);
+    }
+
+    return normalizeMediaRefList(refs);
+};
+
 const LazyHoverVideo = ({
     src,
     poster = '',
     className = '',
+    mediaClassName = 'w-full h-full object-cover',
     playOnHover = false,
     resetOnLeave = false,
     preload = 'metadata',
@@ -95,9 +221,92 @@ const LazyHoverVideo = ({
                 src={shouldLoad ? getFullUrl(src) : undefined}
                 poster={poster ? getFullUrl(poster) : undefined}
                 preload={shouldLoad ? preload : 'none'}
-                className="w-full h-full object-cover"
+                className={mediaClassName}
                 {...videoProps}
             />
+        </div>
+    );
+};
+
+const ManagedVideoPlayer = ({
+    src,
+    poster = '',
+    className = '',
+    wrapperClassName = '',
+    controls = true,
+    autoPlay = false,
+    muted = false,
+    loop = false,
+    playsInline = true,
+    preload = 'metadata',
+    suspend = false,
+    uiLang = 'zh',
+    onClick,
+}) => {
+    const t = (zh, en) => (uiLang === 'zh' ? zh : en);
+    const [loadState, setLoadState] = useState(() => (src && !suspend ? 'loading' : 'idle'));
+
+    useEffect(() => {
+        if (!src || suspend) {
+            setLoadState('idle');
+            return;
+        }
+        setLoadState('loading');
+    }, [src, suspend]);
+
+    const isBusy = loadState === 'loading' || loadState === 'buffering';
+    const busyText = loadState === 'buffering'
+        ? t('视频缓冲中...', 'Buffering video...')
+        : t('视频下载中...', 'Downloading video...');
+
+    if (!src) {
+        return (
+            <div className={`relative ${wrapperClassName}`.trim()} onClick={onClick}>
+                <div className={`absolute inset-0 flex items-center justify-center opacity-20 ${className}`.trim()}>
+                    <Video className="w-8 h-8" />
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className={`relative ${wrapperClassName}`.trim()} onClick={onClick}>
+            {!suspend ? (
+                <video
+                    key={src}
+                    src={getFullUrl(src)}
+                    poster={poster ? getFullUrl(poster) : undefined}
+                    className={className}
+                    controls={controls}
+                    autoPlay={autoPlay}
+                    muted={muted}
+                    loop={loop}
+                    playsInline={playsInline}
+                    preload={preload}
+                    onLoadStart={() => setLoadState('loading')}
+                    onLoadedData={() => setLoadState('ready')}
+                    onCanPlay={() => setLoadState('ready')}
+                    onPlaying={() => setLoadState('ready')}
+                    onWaiting={() => setLoadState('buffering')}
+                    onStalled={() => setLoadState('buffering')}
+                    onSeeking={() => setLoadState('buffering')}
+                    onSeeked={() => setLoadState('ready')}
+                    onSuspend={() => setLoadState((prev) => (prev === 'loading' ? 'ready' : prev))}
+                />
+            ) : poster ? (
+                <img src={getFullUrl(poster)} className={className} alt="video-poster" />
+            ) : (
+                <div className={`absolute inset-0 flex items-center justify-center opacity-20 ${className}`.trim()}>
+                    <Video className="w-8 h-8" />
+                </div>
+            )}
+
+            {isBusy && !suspend && (
+                <div className="absolute inset-0 z-10 bg-black/55 flex items-center justify-center flex-col gap-2 pointer-events-none">
+                    <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                    <span className="text-xs text-white/80">{busyText}</span>
+                </div>
+            )}
         </div>
     );
 };
@@ -4003,19 +4212,19 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         const normalized = String(code || '').trim();
         if (!normalized) return '';
         if (normalized === 'ANALYSIS_OUTPUT_TRUNCATED') {
-            return t('AI Scene Analysis 输出可能已被截断（达到长度上限）。', 'AI Scene Analysis output may be truncated (length limit reached).');
+            return t('AI Scene Analysis 的最后一段输出在长度上限处停止，当前结果未通过完整性校验。', 'The final AI Scene Analysis segment stopped at the length limit, and the result did not pass integrity checks.');
         }
         if (normalized === 'ANALYSIS_OUTPUT_CONTINUED') {
-            return t('AI Scene Analysis 发生过截断，系统已尝试自动续写。', 'AI Scene Analysis was truncated and auto-continuation was attempted.');
+            return t('AI Scene Analysis 曾因长度上限分段，系统已自动续写；是否最终完整以结果校验为准。', 'AI Scene Analysis hit a length limit and auto-continuation was applied; final completeness depends on integrity checks.');
         }
         if (normalized === 'ANALYSIS_JSON_INVALID') {
-            return t('AI Scene Analysis 检测到部分 JSON 不完整；将继续按可解析内容执行后续流程。', 'AI Scene Analysis detected partially invalid JSON; continuing with parseable content.');
+            return t('AI Scene Analysis 检测到结构片段损坏。', 'AI Scene Analysis detected invalid structured fragments.');
         }
         if (normalized === 'ANALYSIS_SUBJECTS_UNVERIFIED') {
-            return t('Subject 一致性无法从 JSON 完整校验（非阻断，流程继续）。', 'Subject consistency could not be fully verified from JSON (non-blocking, flow continues).');
+            return t('Subject 一致性无法从 JSON 完整校验。', 'Subject consistency could not be fully verified from JSON.');
         }
         if (normalized === 'ANALYSIS_SUBJECTS_INCOMPLETE') {
-            return t('Subject 一致性告警：场景中出现的部分实体未在 JSON 中完整覆盖（非阻断）。', 'Subject consistency warning: some scene subjects are missing in JSON entities (non-blocking).');
+            return t('Subject 一致性告警：场景中出现的部分实体未在 JSON 中完整覆盖。', 'Subject consistency warning: some scene subjects are missing in JSON entities.');
         }
         if (normalized === 'ANALYSIS_LLM_CALL_FAILED_RETRIED') {
             return t('场景分析过程中出现过 LLM 调用失败，系统已自动重试/回退模型继续执行。请关注分析结果与告警详情。', 'LLM call failures occurred during scene analysis; the system retried/fallback to continue. Please review result details and warnings.');
@@ -4041,13 +4250,68 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         return [...new Set([...localizedByCode, ...fallbackRawWarnings])];
     }, [localizeAnalysisWarningCode]);
 
+    const localizeAnalysisFailureMessage = useCallback((rawMessage) => {
+        const stable = String(rawMessage || '').trim();
+        if (!stable) {
+            return t('场景分析失败：当前返回结果不可用。请直接重新执行 AI 场景分析。', 'Scene analysis failed: the returned result is unusable. Please rerun AI Scene Analysis.');
+        }
+
+        const normalized = stable.toLowerCase();
+        if (
+            normalized.includes('场景分析结果不可用')
+            || normalized.includes('请直接重新执行 ai 场景分析')
+            || normalized.includes('please directly rerun ai scene analysis')
+        ) {
+            return stable;
+        }
+        if (
+            normalized.includes('analysis_structure_incomplete')
+            || normalized.includes('scene analysis output failed structural consistency checks')
+            || normalized.includes('missing required sections')
+        ) {
+            return t(
+                '场景分析失败：本次返回缺少必要结构段，结果不可导入也不能继续使用。请直接重新执行 AI 场景分析。',
+                'Scene analysis failed: required sections are missing, so the result cannot be imported or used. Please rerun AI Scene Analysis.'
+            );
+        }
+        if (
+            normalized.includes('analysis_subjects_unverified')
+            || normalized.includes('subject consistency check could not be verified')
+        ) {
+            return t(
+                '场景分析失败：角色、环境或道具的一致性未校验通过，当前结果不可靠。请直接重新执行 AI 场景分析。',
+                'Scene analysis failed: character/environment/prop consistency could not be verified, so the result is unreliable. Please rerun AI Scene Analysis.'
+            );
+        }
+        if (
+            normalized.includes('analysis_output_truncated')
+            || normalized.includes('truncated')
+        ) {
+            return t(
+                '场景分析失败：续写结束后结果仍不完整，当前分析不可用。请直接重新执行 AI 场景分析。',
+                'Scene analysis failed: the result is still incomplete after continuation, so it cannot be used. Please rerun AI Scene Analysis.'
+            );
+        }
+        if (
+            normalized.includes('analysis_json_invalid')
+            || normalized.includes('json invalid')
+            || normalized.includes('json 不完整')
+        ) {
+            return t(
+                '场景分析失败：本次返回的结构片段损坏，系统无法安全解析。请直接重新执行 AI 场景分析。',
+                'Scene analysis failed: structured output fragments are invalid and cannot be parsed safely. Please rerun AI Scene Analysis.'
+            );
+        }
+        return stable;
+    }, [t]);
+
     const extractAnalysisRuntimeMeta = useCallback((meta) => {
         if (!meta || typeof meta !== 'object') return null;
         const integrity = (meta.integrity && typeof meta.integrity === 'object') ? meta.integrity : {};
         const segments = Array.isArray(meta.segments) ? meta.segments : [];
         const providerLimitHints = Array.isArray(meta.provider_limit_hints) ? meta.provider_limit_hints : [];
         const finishReason = String(meta.finish_reason || '').trim() || '-';
-        const truncated = !!(
+        const incompleteAfterContinuation = !!(
             integrity.truncation_suspected ||
             integrity.ended_with_length ||
             meta.continuation_stopped_by_max_segments
@@ -4055,7 +4319,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         return {
             finishReason,
             segmentsCount: segments.length,
-            truncated,
+            incompleteAfterContinuation,
             maxSegmentsStop: !!meta.continuation_stopped_by_max_segments,
             requestedCap: meta.requested_output_cap_tokens ?? meta.config_max_tokens_effective ?? '-',
             completionTokens: meta.completion_tokens ?? '-',
@@ -7959,48 +8223,31 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         } catch (e) {
             console.error(e);
             const canceled = isTaskCanceledError(e) || analysisStopRequestedRef.current;
+            const friendlyAnalysisError = localizeAnalysisFailureMessage(e?.message || String(e || ''));
             phaseMarks.completedAt = Date.now();
             const phaseTimings = computeAnalysisPhaseTimings(phaseMarks);
-            if (llmReturned) {
-                if (onLog) onLog(`Analysis completed with warnings: ${e.message}`, "warning");
-                setAnalysisFlowStatus({
-                    phase: 'warning',
-                    message: t(`分析已完成，但后续处理有告警：${e.message}`, `Analysis completed, but follow-up processing has warnings: ${e.message}`),
-                });
-                setAnalysisUiReport({
-                    status: 'warning',
-                    startedAt,
-                    durationMs: Date.now() - startedAt,
-                    phaseTimings,
-                    importReport,
-                    runtimeMeta,
-                    warning: e?.message || String(e || ''),
-                    error: '',
-                });
+            if (canceled) {
+                if (onLog) onLog('Analysis task canceled by user.', 'warning');
             } else {
-                if (canceled) {
-                    if (onLog) onLog('Analysis task canceled by user.', 'warning');
-                } else {
-                    if (onLog) onLog(`Analysis Failed: ${e.message}`, "error");
-                }
-                setAnalysisFlowStatus(
-                    canceled
-                        ? { phase: 'warning', message: t('分析任务已停止。', 'Analysis task was stopped.') }
-                        : { phase: 'failed', message: t(`分析失败：${e.message}`, `Analysis failed: ${e.message}`) }
-                );
-                setAnalysisUiReport({
-                    status: canceled ? 'warning' : 'failed',
-                    startedAt,
-                    durationMs: Date.now() - startedAt,
-                    phaseTimings,
-                    importReport: null,
-                    runtimeMeta,
-                    warning: canceled ? t('分析任务已由用户停止。', 'Analysis task was stopped by user.') : '',
-                    error: canceled ? '' : (e?.message || String(e || '')),
-                });
-                if (!canceled) {
-                    alert(`Analysis failed: ${e.message}`);
-                }
+                if (onLog) onLog(`Analysis Failed: ${friendlyAnalysisError}`, "error");
+            }
+            setAnalysisFlowStatus(
+                canceled
+                    ? { phase: 'warning', message: t('分析任务已停止。', 'Analysis task was stopped.') }
+                    : { phase: 'failed', message: t(`分析失败：${friendlyAnalysisError}`, `Analysis failed: ${friendlyAnalysisError}`) }
+            );
+            setAnalysisUiReport({
+                status: canceled ? 'warning' : 'failed',
+                startedAt,
+                durationMs: Date.now() - startedAt,
+                phaseTimings,
+                importReport: canceled ? importReport : null,
+                runtimeMeta,
+                warning: canceled ? t('分析任务已由用户停止。', 'Analysis task was stopped by user.') : '',
+                error: canceled ? '' : friendlyAnalysisError,
+            });
+            if (!canceled) {
+                alert(`Analysis failed: ${friendlyAnalysisError}`);
             }
         } finally {
             clearAnalysisTaskMarker(activeEpisode?.id);
@@ -8283,48 +8530,31 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         } catch (e) {
             console.error(e);
             const canceled = isTaskCanceledError(e) || analysisStopRequestedRef.current;
+            const friendlyAnalysisError = localizeAnalysisFailureMessage(e?.message || String(e || ''));
             phaseMarks.completedAt = Date.now();
             const phaseTimings = computeAnalysisPhaseTimings(phaseMarks);
-            if (llmReturned) {
-                if (onLog) onLog(`Advanced analysis completed with warnings: ${e.message}`, "warning");
-                setAnalysisFlowStatus({
-                    phase: 'warning',
-                    message: t(`分析已完成，但后续处理有告警：${e.message}`, `Analysis completed, but follow-up processing has warnings: ${e.message}`),
-                });
-                setAnalysisUiReport({
-                    status: 'warning',
-                    startedAt,
-                    durationMs: Date.now() - startedAt,
-                    phaseTimings,
-                    importReport,
-                    runtimeMeta,
-                    warning: e?.message || String(e || ''),
-                    error: '',
-                });
+            if (canceled) {
+                if (onLog) onLog('Advanced analysis task canceled by user.', 'warning');
             } else {
-                if (canceled) {
-                    if (onLog) onLog('Advanced analysis task canceled by user.', 'warning');
-                } else {
-                    if (onLog) onLog(`Advanced analysis failed: ${e.message}`, "error");
-                }
-                setAnalysisFlowStatus(
-                    canceled
-                        ? { phase: 'warning', message: t('分析任务已停止。', 'Analysis task was stopped.') }
-                        : { phase: 'failed', message: t(`分析失败：${e.message}`, `Analysis failed: ${e.message}`) }
-                );
-                setAnalysisUiReport({
-                    status: canceled ? 'warning' : 'failed',
-                    startedAt,
-                    durationMs: Date.now() - startedAt,
-                    phaseTimings,
-                    importReport: null,
-                    runtimeMeta,
-                    warning: canceled ? t('分析任务已由用户停止。', 'Analysis task was stopped by user.') : '',
-                    error: canceled ? '' : (e?.message || String(e || '')),
-                });
-                if (!canceled) {
-                    alert(`Analysis failed: ${e.message}`);
-                }
+                if (onLog) onLog(`Advanced analysis failed: ${friendlyAnalysisError}`, "error");
+            }
+            setAnalysisFlowStatus(
+                canceled
+                    ? { phase: 'warning', message: t('分析任务已停止。', 'Analysis task was stopped.') }
+                    : { phase: 'failed', message: t(`分析失败：${friendlyAnalysisError}`, `Analysis failed: ${friendlyAnalysisError}`) }
+            );
+            setAnalysisUiReport({
+                status: canceled ? 'warning' : 'failed',
+                startedAt,
+                durationMs: Date.now() - startedAt,
+                phaseTimings,
+                importReport: canceled ? importReport : null,
+                runtimeMeta,
+                warning: canceled ? t('分析任务已由用户停止。', 'Analysis task was stopped by user.') : '',
+                error: canceled ? '' : friendlyAnalysisError,
+            });
+            if (!canceled) {
+                alert(`Analysis failed: ${friendlyAnalysisError}`);
             }
         } finally {
             clearAnalysisTaskMarker(activeEpisode?.id);
@@ -8358,22 +8588,35 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                         </button>
                     )}
                     {isRawMode && (
-                        <button 
-                            onClick={handleAnalysisClick} 
-                            disabled={isAnalyzing}
-                            className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${isAnalyzing ? 'bg-purple-900/50 text-purple-200 cursor-not-allowed' : 'bg-purple-600 text-white hover:bg-purple-500'}`}
-                            title={t('分析原始剧本并生成结构', 'Analyze raw script to generate structure')}
-                        >
-                            {isAnalyzing ? (
-                                <>
-                                    <Loader2 className="w-4 h-4 animate-spin" /> {t('分析中...', 'Analyzing...')}
-                                </>
-                            ) : (
-                                <>
-                                    <Wand2 className="w-4 h-4" /> {t('AI 场景分析', 'AI Scene Analysis')}
-                                </>
+                        <>
+                            <button 
+                                onClick={handleAnalysisClick} 
+                                disabled={isAnalyzing}
+                                className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${isAnalyzing ? 'bg-purple-900/50 text-purple-200 cursor-not-allowed' : 'bg-purple-600 text-white hover:bg-purple-500'}`}
+                                title={t('分析原始剧本并生成结构', 'Analyze raw script to generate structure')}
+                            >
+                                {isAnalyzing ? (
+                                    <>
+                                        <Loader2 className="w-4 h-4 animate-spin" /> {t('分析中...', 'Analyzing...')}
+                                    </>
+                                ) : (
+                                    <>
+                                        <Wand2 className="w-4 h-4" /> {t('AI 场景分析', 'AI Scene Analysis')}
+                                    </>
+                                )}
+                            </button>
+                            {isAnalyzing && (
+                                <button
+                                    onClick={handleStopAnalysisTask}
+                                    disabled={isStoppingAnalysisTask}
+                                    className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 border ${isStoppingAnalysisTask ? 'bg-white/5 text-muted-foreground border-white/10 cursor-not-allowed' : 'bg-red-500/20 hover:bg-red-500/30 text-red-100 border-red-400/40'}`}
+                                    title={t('手动停止当前 AI 场景分析任务', 'Stop the current AI scene analysis task')}
+                                >
+                                    {isStoppingAnalysisTask ? <Loader2 className="w-4 h-4 animate-spin" /> : <X className="w-4 h-4" />}
+                                    {isStoppingAnalysisTask ? t('停止中...', 'Stopping...') : t('停止分析', 'Stop Analysis')}
+                                </button>
                             )}
-                        </button>
+                        </>
                     )}
                     {!isRawMode && (
                         <button 
@@ -8659,7 +8902,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                                     </div>
                                     {analysisRuntimeMeta && (
                                         <div className="text-[10px] text-white/60 mt-1">
-                                            {t('结束原因', 'Finish')}: {analysisRuntimeMeta.finishReason} · seg: {analysisRuntimeMeta.segmentsCount} · {t('疑似截断', 'Truncated')}: {analysisRuntimeMeta.truncated ? t('是', 'yes') : t('否', 'no')}
+                                            {t('结束原因', 'Finish')}: {analysisRuntimeMeta.finishReason} · seg: {analysisRuntimeMeta.segmentsCount} · {t('最终不完整', 'Final incomplete')}: {analysisRuntimeMeta.incompleteAfterContinuation ? t('是', 'yes') : t('否', 'no')}
                                             {analysisRuntimeMeta.maxSegmentsStop ? ` · ${t('续写达到上限', 'Continuation hit max segments')}` : ''}
                                             {` · ${t('请求上限', 'Req cap')}: ${analysisRuntimeMeta.requestedCap}`}
                                             {` · ${t('完成token', 'Out tok')}: ${analysisRuntimeMeta.completionTokens}`}
@@ -9634,113 +9877,42 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
 const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images", promptText = "", onPickMedia = null, useSequenceLogic = false, storageKey = "ref_image_urls", additionalAutoRefs = [], strictPromptOnly = false, onFindPrevFrame = null, uiLang = 'zh' }) => {
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
     const [selectedImage, setSelectedImage] = useState(null);
+    const tech = JSON.parse(shot.technical_notes || '{}');
+    const isVideoRefManager = storageKey === 'video_ref_image_urls';
+    const resolvedVideoMode = resolveUnifiedVideoMode(tech);
+    const isVideoManualOverride = isVideoRefManager && tech.video_ref_image_urls_manual === true;
 
-    // 1. Parsing Entities Logic
-    const getEntityMatches = () => {
-        if (!shot || !entities.length) return [];
-        
-        // 1. Collect Raw Strings
-        const rawMatches = [];
-        
-        // Source 1: Associated Entities (if allowed)
-        if (!strictPromptOnly && shot.associated_entities) {
-            rawMatches.push(...shot.associated_entities.split(/[,，]/));
-        }
-        
-        // Source 2: Prompt Text - Extract content inside [], {}, 【】, ｛｝ and standalone @Name
-        // Use [\s\S]+? to capture anything (including newlines) until the first closing bracket.
-        // This is robust against strange characters and newlines.
-        const regexes = [
-            /\[([\s\S]+?)\]/g,    // [...]
-            /\{([\s\S]+?)\}/g,    // {...}
-            /【([\s\S]+?)】/g,     // 【...】
-            /｛([\s\S]+?)｝/g,      // ｛...｝ (Full-width braces)
-            /(?:^|[\s,，;；])(@[^\s,，;；\]\[\(\)（）\{\}【】]+)/g // standalone @Name
-        ];
+    const getEntityMatches = () => collectMatchedEntitiesFromPrompt({
+        promptText,
+        associatedEntities: shot?.associated_entities || '',
+        entityPool: entities,
+        includeAssociatedEntities: !strictPromptOnly,
+    });
 
-        if (promptText) {
-            regexes.forEach(regex => {
-                let match;
-                regex.lastIndex = 0;
-                while ((match = regex.exec(promptText)) !== null) {
-                    if (match[1]) rawMatches.push(match[1]);
-                }
-            });
-        }
-        
-        // Manual override for tricky nested cases or if regex fails:
-        // Try to find specific pattern {Entity (...)}
-        const complexRegex = /\{([^\}]+?)\}\(/g; // Look for } followed by (
-        // Actually the main regex should catch {Entity...} fine.
-        
-        const uniqueRaws = [...new Set(rawMatches.map(s => s.trim()).filter(Boolean))];
-        
-        // Helper to normalize punctuation while preserving full name semantics
-        const normalize = (str) => normalizeEntityToken(str);
+    const getVideoPromptEntityRefs = () => collectMatchedEntityImageUrlsFromPrompt({
+        promptText,
+        associatedEntities: shot?.associated_entities || '',
+        entityPool: entities,
+        includeAssociatedEntities: false,
+    });
 
-        // 2. Generate Search Candidates
-        const candidates = new Set();
-        uniqueRaws.forEach(raw => {
-            // Remove outer brackets [] {} first
-            const content = raw.replace(/[\[\]\{\}【】｛｝]/g, '');
-            
-            // Strict mode: only keep full normalized token (no parenthesis/content stripping)
-            const base = normalize(content);
-            if (base) candidates.add(base);
-        });
+    useEffect(() => {
+        if (useSequenceLogic || !isVideoRefManager || isVideoManualOverride) return;
 
-        const typedRefRegex = /(CHAR\s*:\s*\[@([^\]]+)\])|(ENV\s*:\s*\[([^\]]+)\])|(PROP\s*:\s*\[([^\]]+)\])/gi;
-        if (promptText) {
-            let typedMatch;
-            typedRefRegex.lastIndex = 0;
-            while ((typedMatch = typedRefRegex.exec(promptText)) !== null) {
-                const rawName = typedMatch[2] || typedMatch[4] || typedMatch[6] || '';
-                const normalized = normalize(rawName);
-                if (normalized) candidates.add(normalized);
-            }
-        }
+        const seededRefs = buildAutoVideoRefList(shot, tech, resolvedVideoMode, getVideoPromptEntityRefs());
+        const existingRefs = normalizeMediaRefList(tech[storageKey]);
+        if (areMediaRefListsEqual(existingRefs, seededRefs)) return;
 
-        // 3. Match against Entities
-        return entities.filter(e => {
-            const cn = normalize(e.name);
-            const en = normalize(e.name_en);
-            
-            // Skip empty entities
-            if (!cn && !en) return false;
-
-            // Check if ANY candidate matches this entity
-            const isMatch = Array.from(candidates).some(cand => {
-                // Algorithm: 
-                // 1. Exact Match (Highest Priority) - Reference content vs Entity Name
-                // User Requirement: Strict Name Matching. NO partial match allowed between candidates and Entity Name.
-                // e.g. "Isabella (脏污)" != "Isabella (精致妆容)"
-                // BUT "Isabella" candidate should match "Isabella" entity.
-                
-                // IMPORTANT: The `candidates` set contains BOTH raw strings (e.g. "isabella(dirty)") 
-                // without stripped variants, to enforce full-name matching.
-                
-                // So we just need to ensure that the candidate string IS EXACTLY equal to the entity name.
-                // We should NOT do .includes() checks anymore per request.
-
-                if (cn && cand === cn) return true;
-                if (en && cand === en) return true;
-
-                return false;
-            });
-            // Optional: Log Failures for target specific debugging
-            // if (e.name.includes("动物园")) console.log(`Checking Entity [${e.name}] (norm: ${cn}) against`, Array.from(candidates), isMatch);
-            
-            return isMatch;
-        });
-    };
+        const seededTech = {
+            ...tech,
+            [storageKey]: seededRefs,
+            video_ref_image_urls_manual: false,
+            [`${storageKey}_user_edited`]: false,
+        };
+        onUpdate({ technical_notes: JSON.stringify(seededTech) });
+    }, [useSequenceLogic, isVideoRefManager, isVideoManualOverride, tech, storageKey, shot, resolvedVideoMode, onUpdate, promptText, entities, strictPromptOnly]);
 
     let activeRefs = [];
-    const tech = JSON.parse(shot.technical_notes || '{}');
-    const resolvedVideoMode = (() => {
-        if (tech?.video_mode_unified) return tech.video_mode_unified;
-        if (tech?.video_ref_submit_mode === 'refs_video') return 'refs_video';
-        return tech?.video_gen_mode || 'start';
-    })();
     
     // Normal Mode vs Sequence Mode
     if (useSequenceLogic) {
@@ -9753,6 +9925,12 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
         // Deduplicate while preserving order if needed, but for sequence, duplicates might differ by position technically
         // but image url same means same image. Let's uniq by URL to avoid UI keys issues
         activeRefs = [...new Set(activeRefs)];
+    } else if (isVideoRefManager) {
+        if (isVideoManualOverride && Array.isArray(tech[storageKey])) {
+            activeRefs = normalizeMediaRefList(tech[storageKey]);
+        } else {
+            activeRefs = buildAutoVideoRefList(shot, tech, resolvedVideoMode, getVideoPromptEntityRefs());
+        }
     } else {
         // Standard entity/manual ref logic
         const isManualMode = tech[storageKey] && Array.isArray(tech[storageKey]);
@@ -9760,7 +9938,6 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
            const isUserEdited = Boolean(tech[userEditedKey]);
            const isLockedManual = isManualMode && isUserEdited;
         
-        // User Request: Refs (Video) should NOT do entity identification (only start/end/keyframes).
         const shouldDetectEntities = storageKey !== 'video_ref_image_urls';
         const matchedEntities = shouldDetectEntities ? getEntityMatches() : [];
         const autoMatches = matchedEntities.map(e => e.image_url).filter(Boolean);
@@ -9955,20 +10132,11 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
         
         // Let's move Rule 2 out.
         
-        // 3. Special Logic for Video Refs: Only visual assets
+        // 3. Special Logic for Entity Refs mode: prompt-matched entity images + structural frames
         if (storageKey === 'video_ref_image_urls') {
-             // For video, we largely ignore user manual list if it contradicts the generated assets flow?
-             // Actually, if user customized it, we should respect it?
-             // But the code previously cleared it in Auto mode.
-             // Let's keep logic simple: If Video Mode, we assume strict structural refs.
-             // But if user manually added strict refs, we keep them?
-             // Reverting to previous strict logic for video mode seems safer to avoid "entity pollution".
-                      if (!tech[storageKey] && !isLockedManual) {
-                activeRefs = [];
-                if (shot.image_url) activeRefs.push(shot.image_url);
-                if (tech.keyframes && Array.isArray(tech.keyframes)) activeRefs.push(...tech.keyframes);
-                     if (tech.end_frame_url && resolvedVideoMode !== 'start') activeRefs.push(tech.end_frame_url);
-             }
+            if (!isLockedManual) {
+                activeRefs = buildAutoVideoRefList(shot, tech, resolvedVideoMode, getVideoPromptEntityRefs());
+            }
         }
         
         // Deduplicate
@@ -9979,7 +10147,7 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
     // USER REQUEST: Show detected entities as suggestions even if in Manual Mode, so user can add them.
     // UPDATE: Detected entities are now auto-merged into activeRefs (unless deleted), so availableMatches logic is minimized.
     // Note: Video Refs totally skip entity matching.
-    const entityMatches = (useSequenceLogic || storageKey === 'video_ref_image_urls') ? [] : getEntityMatches();
+    const entityMatches = useSequenceLogic ? [] : getEntityMatches();
     const availableMatches = entityMatches.filter(e => {
         // Technically these are items that matched but are NOT in activeRefs.
         // This only happens if they have no image OR were explicitly deleted.
@@ -9996,6 +10164,9 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
         // Let's assume we update the standard field so backend picks it up easily.
         const userEditedKey = `${storageKey}_user_edited`;
         const newTech = { ...tech, [storageKey]: newRefList, [userEditedKey]: true };
+        if (isVideoRefManager) {
+            newTech.video_ref_image_urls_manual = true;
+        }
         onUpdate({ technical_notes: JSON.stringify(newTech) });
     };
 
@@ -10011,6 +10182,9 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
         const newRefs = activeRefs.filter(u => u !== url);
         const userEditedKey = `${storageKey}_user_edited`;
         const newTech = { ...tech, [storageKey]: newRefs, deleted_ref_urls: deleted, [userEditedKey]: true };
+        if (isVideoRefManager) {
+            newTech.video_ref_image_urls_manual = true;
+        }
         onUpdate({ technical_notes: JSON.stringify(newTech) });
     };
 
@@ -10100,6 +10274,11 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
                 <div className="flex items-center justify-between">
                      <h4 className="text-xs font-bold text-muted-foreground uppercase flex items-center gap-2">
                         {title}
+                        {isVideoManualOverride && (
+                            <span className="rounded-full border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 text-[9px] font-bold text-amber-200 normal-case">
+                                {t('手工调整', 'Manual')}
+                            </span>
+                        )}
                         {onFindPrevFrame && (
                             <button 
                                 onClick={(e) => {
@@ -10124,7 +10303,8 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
                             {(url.toLowerCase().endsWith('.mp4') || url.toLowerCase().endsWith('.webm')) ? (
                                 <LazyHoverVideo
                                     src={url}
-                                    className="w-full h-full"
+                                    className="w-full h-full flex items-center justify-center"
+                                    mediaClassName="w-full h-full object-contain object-center"
                                     muted
                                     loop
                                     playsInline
@@ -10132,7 +10312,7 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
                                     resetOnLeave
                                 />
                             ) : (
-                                <img src={getFullUrl(url)} className="w-full h-full object-cover" alt="ref" />
+                                <img src={getFullUrl(url)} className="w-full h-full object-contain object-center" alt="ref" />
                             )}
                             {!useSequenceLogic && (
                                 <button 
@@ -10466,6 +10646,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         rawText: '',
         usage: null,
         timestamp: null,
+        warnings: [],
         error: null,
         saving: false,
         applying: false,
@@ -11740,6 +11921,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
     const finalizeAiShotsGenerationResult = useCallback(async ({ sceneId, result }) => {
         const generatedRows = Array.isArray(result?.content) ? result.content : [];
         const generatedRaw = String(result?.raw_text || '').trim();
+        const generatedWarnings = Array.isArray(result?.warnings) ? result.warnings.map(w => String(w || '').trim()).filter(Boolean) : [];
         if (generatedRows.length === 0) {
             if (generatedRaw) {
                 const rawPreview = generatedRaw.replace(/\s+/g, ' ').slice(0, 300);
@@ -11755,6 +11937,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         }
 
         onLog?.(`SceneManager: Shot list generated for Scene ${sceneId}.`, 'success');
+        generatedWarnings.forEach((msg) => onLog?.(`SceneManager: ${msg}`, 'warning'));
         setShotPromptModal({ open: false, sceneId: null, data: null, loading: false });
 
         const sceneObj = scenes.find(s => Number(s?.id) === Number(sceneId)) || { id: sceneId, scene_no: sceneId };
@@ -11766,6 +11949,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
             rawText: result?.raw_text || '',
             usage: result?.usage || null,
             timestamp: result?.timestamp || null,
+            warnings: generatedWarnings,
             loading: false,
             error: null,
         }));
@@ -12565,6 +12749,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                 rawText: latest?.raw_text || '',
                 usage: latest?.usage || null,
                 timestamp: latest?.timestamp || null,
+                warnings: Array.isArray(latest?.warnings) ? latest.warnings : [],
             }));
         } catch (e) {
             console.error(e);
@@ -12579,6 +12764,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                     rawText: '',
                     usage: null,
                     timestamp: null,
+                    warnings: [],
                     error: null,
                 }));
                 return;
@@ -12604,6 +12790,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                 rawText: '',
                 usage: null,
                 timestamp: null,
+                warnings: [],
                 error: null,
                 saving: false,
                 applying: false,
@@ -13135,7 +13322,16 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                             </div>
                                         ) : aiShotsStaging.loading ? (
                                             <div className="flex items-center justify-center h-24"><Loader2 className="animate-spin text-primary" size={24}/></div>
-                                        ) : (aiShotsStaging.content || []).length === 0 ? (
+                                        ) : (
+                                            <>
+                                                {Array.isArray(aiShotsStaging.warnings) && aiShotsStaging.warnings.length > 0 && (
+                                                    <div className="text-xs text-amber-200 bg-amber-500/10 border border-amber-500/20 rounded p-3 space-y-1 mb-3">
+                                                        {aiShotsStaging.warnings.map((msg, idx) => (
+                                                            <div key={`ai-shots-warning-${idx}`}>{msg}</div>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                        {(aiShotsStaging.content || []).length === 0 ? (
                                             <div className="text-xs text-muted-foreground bg-white/5 border border-white/10 rounded p-3">
                                                 {t('暂无暂存 AI 镜头。请先为该场景生成 AI 镜头。', 'No staged AI shots yet. Generate AI shots for this scene first.')}
                                             </div>
@@ -13316,6 +13512,8 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                                     )}
                                                 </div>
                                             </div>
+                                        )}
+                                            </>
                                         )}
 
                                         {editingScene.id ? (
@@ -17598,11 +17796,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         }
     };
 
-    const resolveVideoModeFromTech = (techObj = {}) => {
-        if (techObj?.video_mode_unified) return techObj.video_mode_unified;
-        if (techObj?.video_ref_submit_mode === 'refs_video') return 'refs_video';
-        return techObj?.video_gen_mode || 'start';
-    };
+    const resolveVideoModeFromTech = (techObj = {}) => resolveUnifiedVideoMode(techObj);
 
     const updateShotTechnicalNotes = async (mutator) => {
         if (!editingShot?.id || typeof mutator !== 'function') return;
@@ -17617,12 +17811,21 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const applyVideoModeToShot = async (mode) => {
         await updateShotTechnicalNotes((techObj) => {
             techObj.video_mode_unified = mode;
-            if (mode === 'refs_video') {
-                techObj.video_ref_submit_mode = 'refs_video';
+            if (mode === 'entity_refs') {
+                techObj.video_ref_submit_mode = 'entity_refs';
             } else {
                 techObj.video_gen_mode = mode;
                 techObj.video_ref_submit_mode = 'auto';
             }
+            const promptEntityRefs = collectMatchedEntityImageUrlsFromPrompt({
+                promptText: `${getShotVideoPromptEn(editingShot) || ''}\n${String(techObj.video_prompt_cn || '').trim()}`,
+                associatedEntities: editingShot?.associated_entities || '',
+                entityPool: entities,
+                includeAssociatedEntities: false,
+            });
+            techObj.video_ref_image_urls = buildAutoVideoRefList(editingShot, techObj, mode, promptEntityRefs);
+            techObj.video_ref_image_urls_manual = false;
+            techObj.video_ref_image_urls_user_edited = false;
         });
     };
 
@@ -17717,6 +17920,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
              });
              const generatedRows = Array.isArray(result?.content) ? result.content : [];
              const generatedRaw = String(result?.raw_text || '').trim();
+             const generatedWarnings = Array.isArray(result?.warnings) ? result.warnings.map(w => String(w || '').trim()).filter(Boolean) : [];
              if (generatedRows.length === 0) {
                  if (generatedRaw) {
                      const rawPreview = generatedRaw.replace(/\s+/g, ' ').slice(0, 300);
@@ -17731,10 +17935,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                  throw new Error('Generate Shots returned empty result (no rows and no raw text)');
              }
              onLog?.(`Shot list generated for Scene ${sceneId}. Please Review/Apply.`, 'success');
+             generatedWarnings.forEach((msg) => onLog?.(msg, 'warning'));
              
              setShotPromptModal({ open: false, sceneId: null, data: null, loading: false });
              
-             // Open Review
              setShotReviewModal({
                  open: true,
                  sceneId: sceneId,
@@ -17742,7 +17946,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                  loading: false
              });
 
-             // Auto-import/apply immediately after generation
              try {
                  onLog?.(`Auto-importing shots for Scene ${sceneId}...`, 'info');
                  await applySceneAIResult(sceneId, { content: generatedRows });
@@ -19981,96 +20184,16 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 }
             }
 
-            const resolveVideoMode = (t) => {
-                if (t?.video_mode_unified) return t.video_mode_unified;
-                if (t?.video_ref_submit_mode === 'refs_video') return 'refs_video';
-                return t?.video_gen_mode || 'start';
-            };
-            const videoMode = resolveVideoMode(tech);
-            const videoRefSubmitMode = videoMode === 'refs_video' ? 'refs_video' : 'auto';
-            
-            const refs = [];
-            // 1. Video Ref Selection Strategy
-            // Shot-Specific Mode from technical_notes (default: start)
-            // USER REQUEST: Default to 'start' only (Start Only) unless specified
-            let shotMode = tech.video_gen_mode;
-            
-            // Logic: Default is Start+End IF End Frame URL exists.
-            // NEW REQ: If end_frame prompt length < 3 -> Start Only
-            if (!shotMode) {
-                 const endPrompt = editingShot.end_frame || ""; // End Frame text
-                 const endPromptLen = endPrompt.trim().length;
-                 
-                 if (tech.end_frame_url && endPromptLen >= 3) {
-                     shotMode = 'start_end';
-                 } else {
-                     shotMode = 'start';
-                 }
-            }
-            
-            // Check if user has explicitly managed video refs
-            if (videoRefSubmitMode === 'refs_video') {
-                if (tech.video_ref_image_urls && Array.isArray(tech.video_ref_image_urls)) {
-                    refs.push(...tech.video_ref_image_urls);
-                }
-            } else if (tech.video_ref_image_urls && Array.isArray(tech.video_ref_image_urls)) {
-                // Manual Mode still respects the selected start/start_end/end behavior.
-                const manualRefs = tech.video_ref_image_urls
-                    .map((item) => String(item || '').trim())
-                    .filter(Boolean);
-                const manualUniqueRefs = [...new Set(manualRefs)];
-                const manualEndRef = String(tech.end_frame_url || '').trim();
-                const manualStartRefs = manualEndRef
-                    ? manualUniqueRefs.filter((item) => item !== manualEndRef)
-                    : manualUniqueRefs;
-
-                if (shotMode === 'end') {
-                    if (manualEndRef) {
-                        refs.push(manualEndRef);
-                    } else if (manualUniqueRefs.length > 0) {
-                        refs.push(manualUniqueRefs[manualUniqueRefs.length - 1]);
-                    }
-                } else if (shotMode === 'start_end') {
-                    refs.push(...manualUniqueRefs);
-                } else {
-                    if (manualStartRefs.length > 0) {
-                        refs.push(manualStartRefs[0]);
-                    } else if (manualUniqueRefs.length > 0) {
-                        refs.push(manualUniqueRefs[0]);
-                    }
-                }
-            } else {
-                // Auto Mode respecting shotMode ('start_end' | 'start' | 'end')
-                
-                // A. Start Frame (Skip if 'end' mode)
-                if (shotMode !== 'end' && editingShot.image_url) {
-                    refs.push(editingShot.image_url);
-                }
-                
-                // B. Keyframes
-                if (keyframes && keyframes.length) refs.push(...keyframes);
-                
-                // C. End Frame as Ref (Only in Start+End mode)
-                if (shotMode === 'start_end' && tech.end_frame_url) {
-                    refs.push(tech.end_frame_url);
-                }
-
-                // D. Entity Refs from Video Prompt -> REMOVED per user request strictness
-                // "Only take from Refs (Video)". The UI for Refs (Video) excludes entity prompts by default now.
-                // const entityRefs = getSuggestedRefImages(editingShot, prompt, true);
-                // refs.push(...entityRefs);
-            }
-            
-            const effectiveVideoMode = videoMode === 'refs_video' ? 'refs_video' : (shotMode || 'start');
-            const endFrameUrlToken = String(tech.end_frame_url || '').trim();
-            const uniqueRefs = [...new Set(refs)].filter((item) => {
-                const raw = String(item || '').trim();
-                if (!raw) return false;
-                if (effectiveVideoMode === 'start' && endFrameUrlToken && raw === endFrameUrlToken) {
-                    return false;
-                }
-                return true;
+            const effectiveVideoMode = resolveUnifiedVideoMode(tech);
+            const promptEntityRefs = collectMatchedEntityImageUrlsFromPrompt({
+                promptText: `${getShotVideoPromptEn(editingShot) || ''}\n${String(tech.video_prompt_cn || '').trim()}`,
+                associatedEntities: editingShot?.associated_entities || '',
+                entityPool: entities,
+                includeAssociatedEntities: false,
             });
+            const uniqueRefs = tech.video_ref_image_urls_manual === true && Array.isArray(tech.video_ref_image_urls)
+                ? normalizeMediaRefList(tech.video_ref_image_urls)
+                : buildAutoVideoRefList(editingShot, tech, effectiveVideoMode, promptEntityRefs);
 
             const splitReferenceMediaUrls = (urls) => {
                 const imageRefs = [];
@@ -20101,24 +20224,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             let apiRefImageUrl = null;
             let apiRefVideoUrls = null;
             let apiLastFrameUrl;
-            let apiKeyframes = [];
-
-            if (effectiveVideoMode === 'refs_video') {
-                const { imageRefs, videoRefs } = splitReferenceMediaUrls(uniqueRefs);
-                apiRefImageUrl = imageRefs.length > 0 ? imageRefs : null;
-                apiRefVideoUrls = videoRefs.length > 0 ? videoRefs : null;
-                apiLastFrameUrl = undefined;
-                apiKeyframes = Array.isArray(keyframes) ? keyframes.filter(Boolean) : [];
-            } else if (effectiveVideoMode === 'start_end') {
-                apiRefImageUrl = editingShot.image_url || uniqueRefs[0] || null;
-                apiLastFrameUrl = tech.end_frame_url || (uniqueRefs.length > 1 ? uniqueRefs[uniqueRefs.length - 1] : undefined);
-            } else if (effectiveVideoMode === 'end') {
-                apiRefImageUrl = tech.end_frame_url || uniqueRefs[0] || null;
-                apiLastFrameUrl = undefined;
-            } else {
-                apiRefImageUrl = editingShot.image_url || uniqueRefs[0] || null;
-                apiLastFrameUrl = undefined;
-            }
+            const apiKeyframes = Array.isArray(keyframes) ? keyframes.filter(Boolean) : [];
+            const { imageRefs, videoRefs } = splitReferenceMediaUrls(uniqueRefs);
+            apiRefImageUrl = imageRefs.length > 0 ? imageRefs : null;
+            apiRefVideoUrls = videoRefs.length > 0 ? videoRefs : null;
+            apiLastFrameUrl = undefined;
             
             // Duration Logic: Use Shot Duration (s) if valid, else default to 5
             const durParam = parseFloat(editingShot.duration) || 5;
@@ -20128,7 +20238,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             const finalPrompt = isManual ? submitPrompt : (submitPrompt + globalCtx);
 
             onLog?.(
-                `Video API payload mode=${effectiveVideoMode}, ref=${Array.isArray(apiRefImageUrl) ? `list(${apiRefImageUrl.length})` : (apiRefImageUrl ? 'single' : 'none')}, ref_videos=${Array.isArray(apiRefVideoUrls) ? apiRefVideoUrls.length : 0}, last_frame=${apiLastFrameUrl ? 'yes' : 'no'}, keyframes=${Array.isArray(apiKeyframes) ? apiKeyframes.length : 0}, duration=${durParam}`,
+                `Video API payload mode=${effectiveVideoMode}, visible_refs=${uniqueRefs.length}, ref=${Array.isArray(apiRefImageUrl) ? `list(${apiRefImageUrl.length})` : (apiRefImageUrl ? 'single' : 'none')}, ref_videos=${Array.isArray(apiRefVideoUrls) ? apiRefVideoUrls.length : 0}, last_frame=${apiLastFrameUrl ? 'yes' : 'no'}, keyframes=${Array.isArray(apiKeyframes) ? apiKeyframes.length : 0}, duration=${durParam}`,
                 'info'
             );
 
@@ -20809,7 +20919,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                             key={shot.video_url}
                                             src={shot.video_url}
                                             poster={shot.image_url}
-                                            className="w-full h-full"
+                                            className="w-full h-full flex items-center justify-center"
+                                            mediaClassName="w-full h-full object-contain object-center"
                                             muted
                                             loop
                                             playsInline
@@ -20817,7 +20928,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                             resetOnLeave
                                         />
                                     ) : shot.image_url ? (
-                                        <img src={getFullUrl(shot.image_url)} alt={shot.shot_name} className="w-full h-full object-cover" />
+                                        <img src={getFullUrl(shot.image_url)} alt={shot.shot_name} className="w-full h-full object-contain object-center" />
                                     ) : (
                                         <div className="flex flex-col items-center gap-2 opacity-50">
                                             <ImageIcon className="w-8 h-8" />
@@ -21292,26 +21403,15 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                     value={(() => {
                                                         try {
                                                             const t = JSON.parse(editingShot.technical_notes || '{}');
-                                                            if (t.video_mode_unified) return t.video_mode_unified;
-                                                            if (t.video_ref_submit_mode === 'refs_video') return 'refs_video';
-                                                            return t.video_gen_mode || 'start';
+                                                            return resolveUnifiedVideoMode(t);
                                                         } catch(e) { return 'start'; }
                                                     })()}
                                                     onChange={(e) => {
-                                                        const mode = e.target.value;
-                                                        try {
-                                                            const t = JSON.parse(editingShot.technical_notes || '{}');
-                                                            t.video_mode_unified = mode;
-                                                            if (mode === 'refs_video') {
-                                                                t.video_ref_submit_mode = 'refs_video';
-                                                            } else {
-                                                                t.video_gen_mode = mode;
-                                                                t.video_ref_submit_mode = 'auto';
-                                                            }
-                                                            setEditingShot(prev => ({ ...prev, technical_notes: JSON.stringify(t) }));
-                                                            // Auto-save happens on blur or next action usually, but we might want to trigger update if needed
-                                                            // onUpdateShot(editingShot.id, { technical_notes: JSON.stringify(t) }); // Optional: immediate save
-                                                        } catch(e) {}
+                                                        const nextMode = e.target.value;
+                                                        applyVideoModeToShot(nextMode).catch((err) => {
+                                                            console.error(err);
+                                                            showNotification(t('保存视频模式失败', 'Failed to save video mode'), 'error');
+                                                        });
                                                     }}
                                                     className="bg-black/40 border border-white/20 text-[10px] rounded px-1 py-0.5 text-white/70 outline-none hover:bg-white/5"
                                                     title={t('最终视频生成模式', 'Final Video Generation Mode')}
@@ -21319,7 +21419,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                     <option value="start_end">{t('起始+结束', 'Start+End')}</option>
                                                     <option value="start">{t('仅起始', 'Start Only')}</option>
                                                     <option value="end">{t('仅结束', 'End Only')}</option>
-                                                    <option value="refs_video">{t('视频参考图模式', 'Refs (Video) As Ref')}</option>
+                                                    <option value="entity_refs">{t('实体参考图模式', 'Entity Refs Mode')}</option>
                                                 </select>
 
                                                 <button 
@@ -21361,12 +21461,15 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 </div>
                                             )}
                                             {(editingShot.video_url) ? (
-                                                <video 
-                                                    key={editingShot.video_url}
-                                                    src={getFullUrl(editingShot.video_url)} 
-                                                    className="max-w-full max-h-full object-contain" 
-                                                    onClick={(e) => e.preventDefault()} 
-                                                    controls
+                                                <ManagedVideoPlayer
+                                                    src={editingShot.video_url}
+                                                    poster={editingShot.image_url}
+                                                    className="max-w-full max-h-full object-contain"
+                                                    wrapperClassName="w-full h-full"
+                                                    preload="metadata"
+                                                    suspend={assetDetailModal.open && assetDetailModal.type === 'video'}
+                                                    uiLang={uiLang}
+                                                    onClick={(e) => e?.preventDefault?.()}
                                                 />
                                             ) : (
                                                 <div className="absolute inset-0 flex items-center justify-center opacity-20 flex-col gap-2">
@@ -21408,8 +21511,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                             shot={editingShot} 
                                             entities={entities} 
                                             onUpdate={(updates) => { persistEditingShotUpdates(updates); }} 
-                                            title={t('参考图（视频）', 'Refs (Video)')}
-                                            promptText={getShotVideoPromptEn(editingShot)}
+                                            title={t('参考图（实体）', 'Refs (Entity)')}
+                                            promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`}
                                             uiLang={uiLang}
                                             onPickMedia={openMediaPicker}
                                             storageKey="video_ref_image_urls"
@@ -21674,7 +21777,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                         return allMatches.map((e, idx) => (
                                             <div key={e.id} className="flex flex-col items-center gap-2 min-w-[70px]">
                                                 <div className="w-14 h-14 rounded-full overflow-hidden border border-white/20 bg-black/50 relative">
-                                                    {e.image_url ? <img src={getFullUrl(e.image_url)} className="w-full h-full object-cover" /> : <Users className="w-6 h-6 m-auto absolute inset-0 text-muted-foreground opacity-50"/>}
+                                                    {e.image_url ? <img src={getFullUrl(e.image_url)} className="w-full h-full object-contain object-center" /> : <Users className="w-6 h-6 m-auto absolute inset-0 text-muted-foreground opacity-50"/>}
                                                 </div>
                                                 <span className="text-[10px] text-center line-clamp-1 w-full opacity-80">{e.name}</span>
                                             </div>
@@ -22151,7 +22254,16 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                             <span className="text-xs text-white/80">{t('正在生成视频...', 'Generating Video...')}</span>
                                                                         </div>
                                                                     )}
-                                                                    {editingShot.video_url ? <video src={getFullUrl(editingShot.video_url)} controls className="max-w-full max-h-full object-contain" /> : <Video className="w-8 h-8 opacity-30" />}
+                                                                    {editingShot.video_url ? (
+                                                                        <ManagedVideoPlayer
+                                                                            src={editingShot.video_url}
+                                                                            poster={editingShot.image_url}
+                                                                            className="max-w-full max-h-full object-contain"
+                                                                            wrapperClassName="w-full h-full"
+                                                                            preload="metadata"
+                                                                            uiLang={uiLang}
+                                                                        />
+                                                                    ) : <Video className="w-8 h-8 opacity-30" />}
                                                                 </div>
                                                                 <div className="text-xs text-muted-foreground break-all">{t('视频 URL', 'Video URL')}: {editingShot.video_url || '-'}</div>
                                                                 <div className="text-xs text-muted-foreground break-all">{t('配音 URL', 'Voice URL')}: {String(tech.voiceover_url || '') || '-'}</div>
@@ -22177,7 +22289,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                         {t('保存后会写回当前 shot 的 Duration 字段，并作为后续视频生成默认时长。', 'Saving writes back to the shot Duration field and uses it as the default for later video generation.')}
                                                                     </div>
                                                                 </div>
-                                                                <div className="text-xs text-muted-foreground">{t('模式', 'Mode')}: {tech.video_mode_unified || tech.video_gen_mode || 'start'}</div>
+                                                                <div className="text-xs text-muted-foreground">{t('模式', 'Mode')}: {resolveUnifiedVideoMode(tech)}</div>
                                                                 {(voiceoverUrl || llmDialogueBackfillText) && (
                                                                     <div className="space-y-2 rounded-lg border border-white/10 bg-black/30 p-3">
                                                                         <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('配音预览', 'Voiceover Preview')}</div>
@@ -22262,7 +22374,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                         <option value="start_end">{t('起始+结束', 'Start+End')}</option>
                                                                         <option value="start">{t('仅起始', 'Start Only')}</option>
                                                                         <option value="end">{t('仅结束', 'End Only')}</option>
-                                                                        <option value="refs_video">{t('视频参考图模式', 'Refs (Video) As Ref')}</option>
+                                                                        <option value="entity_refs">{t('实体参考图模式', 'Entity Refs Mode')}</option>
                                                                     </select>
                                                                 </div>
                                                                 <div className="text-[11px] text-muted-foreground uppercase font-bold">
@@ -22286,7 +22398,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                     }
                                                                     setEditingShot({ ...editingShot, ...buildVideoPromptEnUpdates(v) });
                                                                 }} type="video" />
-                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（视频）', 'Refs (Video)')} promptText={getShotVideoPromptEn(editingShot)} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="video_ref_image_urls" strictPromptOnly={true} />
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（实体）', 'Refs (Entity)')} promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="video_ref_image_urls" strictPromptOnly={true} />
                                                             </div>
                                                         </div>
                                                     );

@@ -1056,6 +1056,43 @@ def _vendor_failed_message(provider: Optional[str], reason: Any) -> str:
     return f"{vendor}供应商调用失败: {detail}"
 
 
+def _build_scene_analysis_blocking_failure_detail(
+    blocking_codes: List[str],
+    integrity_warnings: List[str],
+    subject_warnings: List[str],
+) -> str:
+    codes = {str(code or "").strip() for code in (blocking_codes or []) if str(code or "").strip()}
+    reasons_cn: List[str] = []
+
+    if "ANALYSIS_STRUCTURE_INCOMPLETE" in codes:
+        reasons_cn.append("结果缺少必要结构段，无法形成完整的场景分析")
+    if "ANALYSIS_SUBJECTS_UNVERIFIED" in codes:
+        reasons_cn.append("角色/环境/道具的一致性校验未完成，当前结果不可靠")
+    if "ANALYSIS_SUBJECTS_INCOMPLETE" in codes:
+        reasons_cn.append("角色/环境/道具覆盖不完整，当前结果不能继续使用")
+    if "ANALYSIS_OUTPUT_TRUNCATED" in codes:
+        reasons_cn.append("返回内容疑似被截断，结果不完整")
+    if "ANALYSIS_JSON_INVALID" in codes:
+        reasons_cn.append("返回内容的结构片段损坏，系统无法安全解析")
+
+    raw_reasons: List[str] = []
+    raw_reasons.extend([str(x or "").strip() for x in (integrity_warnings or []) if str(x or "").strip()])
+    raw_reasons.extend([str(x or "").strip() for x in (subject_warnings or []) if str(x or "").strip()])
+    raw_reasons = list(dict.fromkeys(raw_reasons))
+
+    detail_parts: List[str] = []
+    if reasons_cn:
+        detail_parts.append("；".join(reasons_cn[:3]))
+
+    if raw_reasons:
+        detail_parts.append("技术明细：" + "；".join(raw_reasons[:3]))
+
+    body = "；".join([part for part in detail_parts if part])
+    if body:
+        return "场景分析结果不可用：" + body + "。请直接重新执行 AI 场景分析。"
+    return "场景分析结果不可用：返回内容结构不完整或校验未通过。请直接重新执行 AI 场景分析。"
+
+
 @router.post("/fix-db-schema")
 def fix_db_schema_endpoint(current_user: User = Depends(get_current_user)):
     """
@@ -1938,11 +1975,11 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             warnings: List[str] = []
             if len(markdown_set) > 0 and len(json_set) == 0:
                 warning_codes.append("ANALYSIS_SUBJECTS_UNVERIFIED")
-                warnings.append("Subject consistency check could not be verified from JSON sections; flow continues with parseable content.")
+                warnings.append("Subject consistency check could not be verified from JSON sections; result must be regenerated before apply.")
             elif len(missing) > 0:
                 warning_codes.append("ANALYSIS_SUBJECTS_INCOMPLETE")
                 warnings.append(
-                    "Subject consistency warning: some subjects found in scene text are missing in entity JSON (non-blocking). "
+                    "Subject consistency failure: some subjects found in scene text are missing in entity JSON. "
                     + f"Missing: {', '.join(missing[:20])}"
                 )
 
@@ -2703,6 +2740,29 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             "integrity": integrity_meta,
         })
 
+        if integrity_meta.get("truncation_suspected") or continuation_stopped_by_max_segments:
+            logger.warning(
+                "[analyze_scene] final_output_incomplete episode_id=%s provider=%s model=%s ended_with_length=%s truncation_detected=%s structure_incomplete=%s missing_sections=%s continuation_stopped_by_max_segments=%s warning_codes=%s",
+                getattr(request, "episode_id", None),
+                (config or {}).get("provider"),
+                (config or {}).get("model"),
+                integrity_meta.get("ended_with_length"),
+                integrity_meta.get("truncation_detected"),
+                integrity_meta.get("structure_incomplete"),
+                integrity_meta.get("missing_sections") or [],
+                continuation_stopped_by_max_segments,
+                integrity_meta.get("warning_codes") or [],
+            )
+        elif integrity_meta.get("truncation_detected"):
+            logger.info(
+                "[analyze_scene] length_limited_segments_resolved episode_id=%s provider=%s model=%s segments=%s warning_codes=%s",
+                getattr(request, "episode_id", None),
+                (config or {}).get("provider"),
+                (config or {}).get("model"),
+                len(segments_meta or []),
+                integrity_meta.get("warning_codes") or [],
+            )
+
         # Persist result to DB if caller provided episode_id.
         saved_to_episode = False
         if getattr(request, "episode_id", None):
@@ -2853,6 +2913,37 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 )
             except Exception:
                 pass
+
+        blocking_codes = set()
+        blocking_codes.update(integrity_meta.get("warning_codes") or [])
+        blocking_codes.update(sc_warning_codes or [])
+        blocking_failures = {
+            "ANALYSIS_OUTPUT_TRUNCATED",
+            "ANALYSIS_JSON_INVALID",
+            "ANALYSIS_STRUCTURE_INCOMPLETE",
+            "ANALYSIS_SUBJECTS_UNVERIFIED",
+            "ANALYSIS_SUBJECTS_INCOMPLETE",
+        }
+        matched_blockers = [code for code in blocking_failures if code in blocking_codes]
+        if matched_blockers:
+            failure_messages: List[str] = []
+            failure_messages.extend([str(x or "").strip() for x in (integrity_meta.get("warnings") or []) if str(x or "").strip()])
+            failure_messages.extend([str(x or "").strip() for x in (sc_warnings or []) if str(x or "").strip()])
+            failure_messages = list(dict.fromkeys(failure_messages))
+            logger.warning(
+                "[analyze_scene] import_review_required episode_id=%s blocking_codes=%s warnings=%s",
+                getattr(request, "episode_id", None),
+                matched_blockers,
+                failure_messages,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=_build_scene_analysis_blocking_failure_detail(
+                    matched_blockers,
+                    list(integrity_meta.get("warnings") or []),
+                    list(sc_warnings or []),
+                ),
+            )
         return response_payload
 
     except HTTPException as e:
@@ -4265,6 +4356,229 @@ def _normalize_shot_markdown_col_key(key: str) -> str:
     return re.sub(r"[\s_\-./()（）:：]", "", str(key or "").strip().lower())
 
 
+_SHOT_MARKDOWN_DEFAULT_HEADERS: List[str] = [
+    "Shot ID",
+    "Shot Name",
+    "Scene ID",
+    "Shot Logic (CN)",
+    "Start Frame",
+    "Video Content",
+    "Duration (s)",
+    "Keyframes",
+    "End Frame",
+    "Start Frame (CN)",
+    "Video Content (CN)",
+    "Keyframes (CN)",
+    "End Frame (CN)",
+    "Associated Entities",
+]
+
+
+_SHOT_REQUIRED_ROW_FIELDS: List[Tuple[str, List[str]]] = [
+    ("Shot ID", ["Shot ID", "shot_id", "镜头ID"]),
+    ("Shot Name", ["Shot Name", "shot_name", "镜头名称"]),
+    ("Scene ID", ["Scene ID", "scene_id", "Scene Code", "scene_code", "场景ID", "场次号"]),
+    ("Shot Logic (CN)", ["Shot Logic (CN)", "shot_logic_cn", "镜头逻辑", "镜头逻辑（中文）"]),
+    ("Start Frame", ["Start Frame", "start_frame", "起始帧"]),
+    ("Video Content", ["Video Content", "video_content", "视频内容"]),
+    ("Duration (s)", ["Duration (s)", "Duration", "duration", "时长", "时长(s)"]),
+    ("Keyframes", ["Keyframes", "keyframes", "关键帧"]),
+    ("End Frame", ["End Frame", "end_frame", "结束帧"]),
+    ("Start Frame (CN)", ["Start Frame (CN)", "start_frame_cn", "起始帧（中文）"]),
+    ("Video Content (CN)", ["Video Content (CN)", "video_prompt_cn", "视频内容（中文）"]),
+    ("Keyframes (CN)", ["Keyframes (CN)", "keyframes_cn", "关键帧（中文）", "关键帧中文"]),
+    ("End Frame (CN)", ["End Frame (CN)", "end_frame_cn", "结束帧（中文）"]),
+]
+
+
+def _pick_shot_cell(row: Dict[str, Any], aliases: List[str], default: str = "") -> str:
+    if not isinstance(row, dict):
+        return default
+    for key in aliases:
+        if key in row and row.get(key) is not None:
+            return str(row.get(key) or "").strip()
+    return default
+
+
+def _escape_shot_markdown_cell(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value)
+    text = text.replace("|", "\\|")
+    text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "<br>")
+    return text
+
+
+def _collect_shot_markdown_headers(rows: List[Dict[str, Any]]) -> List[str]:
+    discovered_headers: List[str] = []
+    discovered_set = set()
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        for key in item.keys():
+            normalized_key = str(key or "").strip()
+            if not normalized_key or normalized_key in discovered_set:
+                continue
+            discovered_set.add(normalized_key)
+            discovered_headers.append(normalized_key)
+
+    if not discovered_headers:
+        return list(_SHOT_MARKDOWN_DEFAULT_HEADERS)
+
+    headers: List[str] = [h for h in _SHOT_MARKDOWN_DEFAULT_HEADERS if h in discovered_set]
+    headers.extend([h for h in discovered_headers if h not in headers])
+    return headers
+
+
+def _serialize_shot_rows_to_markdown(rows: List[Dict[str, Any]]) -> str:
+    headers = _collect_shot_markdown_headers(rows)
+    header_line = "| " + " | ".join(headers) + " |"
+    separator_line = "| " + " | ".join([":---"] * len(headers)) + " |"
+    body_lines = []
+    for item in rows:
+        row_values = [_escape_shot_markdown_cell(item.get(header, "")) for header in headers]
+        body_lines.append("| " + " | ".join(row_values) + " |")
+    return "\n".join([header_line, separator_line] + body_lines)
+
+
+def _validate_shot_rows_or_raise(
+    content: Any,
+    *,
+    source_label: str,
+    status_code: int = 400,
+) -> List[Dict[str, Any]]:
+    if not isinstance(content, list):
+        raise HTTPException(status_code=status_code, detail=f"{source_label} must be a non-empty shot row list")
+
+    normalized_rows: List[Dict[str, Any]] = []
+    for idx, item in enumerate(content, start=1):
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=status_code, detail=f"{source_label} row {idx} is not an object")
+        if not any(str(val or "").strip() for val in item.values()):
+            continue
+        normalized_rows.append(item)
+
+    if not normalized_rows:
+        raise HTTPException(status_code=status_code, detail=f"{source_label} did not contain any non-empty shot rows")
+
+    row_errors: List[str] = []
+    for idx, row in enumerate(normalized_rows, start=1):
+        missing_fields: List[str] = []
+        for label, aliases in _SHOT_REQUIRED_ROW_FIELDS:
+            if not _pick_shot_cell(row, aliases, ""):
+                missing_fields.append(label)
+
+        raw_duration = _pick_shot_cell(row, ["Duration (s)", "Duration", "duration", "时长", "时长(s)"], "")
+        duration_ok = False
+        if raw_duration:
+            match = re.search(r"[\d\.]+", str(raw_duration))
+            if match:
+                try:
+                    duration_ok = float(match.group()) > 0
+                except Exception:
+                    duration_ok = False
+        if not duration_ok:
+            missing_fields.append("Duration (s): positive number required")
+
+        if missing_fields:
+            row_errors.append(f"row {idx} missing/invalid: {', '.join(missing_fields)}")
+
+    if row_errors:
+        detail = "; ".join(row_errors[:5])
+        if len(row_errors) > 5:
+            detail += f"; and {len(row_errors) - 5} more rows"
+        raise HTTPException(status_code=status_code, detail=f"{source_label} failed structural validation: {detail}")
+
+    return normalized_rows
+
+
+def _validate_shot_rows_for_apply_with_tolerance(
+    content: Any,
+    *,
+    source_label: str,
+    status_code: int = 400,
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    if not isinstance(content, list):
+        raise HTTPException(status_code=status_code, detail=f"{source_label} must be a non-empty shot row list")
+
+    normalized_rows: List[Dict[str, Any]] = []
+    skipped_errors: List[str] = []
+    for idx, item in enumerate(content, start=1):
+        if not isinstance(item, dict):
+            skipped_errors.append(f"row {idx} is not an object")
+            continue
+        if not any(str(val or "").strip() for val in item.values()):
+            continue
+
+        missing_fields: List[str] = []
+        for label, aliases in _SHOT_REQUIRED_ROW_FIELDS:
+            if not _pick_shot_cell(item, aliases, ""):
+                missing_fields.append(label)
+
+        raw_duration = _pick_shot_cell(item, ["Duration (s)", "Duration", "duration", "时长", "时长(s)"], "")
+        duration_ok = False
+        if raw_duration:
+            match = re.search(r"[\d\.]+", str(raw_duration))
+            if match:
+                try:
+                    duration_ok = float(match.group()) > 0
+                except Exception:
+                    duration_ok = False
+        if not duration_ok:
+            missing_fields.append("Duration (s): positive number required")
+
+        if missing_fields:
+            skipped_errors.append(f"row {idx} missing/invalid: {', '.join(missing_fields)}")
+            continue
+
+        normalized_rows.append(item)
+
+    if not normalized_rows:
+        detail = "; ".join(skipped_errors[:5]) if skipped_errors else "no non-empty shot rows"
+        if len(skipped_errors) > 5:
+            detail += f"; and {len(skipped_errors) - 5} more rows"
+        raise HTTPException(status_code=status_code, detail=f"{source_label} failed structural validation: {detail}")
+
+    return normalized_rows, skipped_errors
+
+
+def _parse_shot_markdown_or_raise(
+    markdown_text: str,
+    *,
+    source_label: str,
+    status_code: int = 400,
+) -> Tuple[List[str], List[Dict[str, str]], int]:
+    headers, rows, table_line_count = parse_shots_markdown_table(markdown_text or "")
+    if not rows:
+        raise HTTPException(status_code=status_code, detail=f"{source_label} did not produce a parseable markdown table")
+    if table_line_count >= 4 and len(rows) > 0 and (len(rows) * 2) <= table_line_count:
+        raise HTTPException(
+            status_code=status_code,
+            detail=f"{source_label} lost rows during markdown parsing; fix the table before continuing",
+        )
+    return headers, rows, table_line_count
+
+
+def _validate_shot_rows_roundtrip_or_raise(
+    content: Any,
+    *,
+    source_label: str,
+    status_code: int = 400,
+) -> Tuple[List[Dict[str, Any]], str]:
+    rows = _validate_shot_rows_or_raise(content, source_label=source_label, status_code=status_code)
+    markdown_text = _serialize_shot_rows_to_markdown(rows)
+    _, reparsed_rows, _ = _parse_shot_markdown_or_raise(markdown_text, source_label=source_label, status_code=status_code)
+    if len(reparsed_rows) != len(rows):
+        raise HTTPException(
+            status_code=status_code,
+            detail=(
+                f"{source_label} changed row count after markdown round-trip "
+                f"({len(rows)} -> {len(reparsed_rows)}); fix pipe escaping or multiline cells before continuing"
+            ),
+        )
+    return rows, markdown_text
+
+
 def is_valid_markdown_output(text: str, require_h1: bool = True) -> bool:
     if not text:
         return False
@@ -4392,50 +4706,43 @@ async def generate_markdown_with_retry(
     if content_2 and not _looks_like_error_text(content_2) and is_valid_markdown_output(content_2, require_h1=require_h1) and not _is_truncated(meta_2):
         return _result_payload(content_2, meta_2)
 
-    fallback_sys_prompt = (
+    final_retry_sys_prompt = (
         f"{sys_prompt}\n\n"
-        "[FINAL FALLBACK FORMAT]\n"
-        "Output ONLY markdown with this minimum structure:\n"
-        "# Episode Script Draft\n"
-        "## Core Conflict\n"
-        "- ...\n"
-        "## Beat Sheet\n"
-        "1. ...\n"
-        "2. ...\n"
-        "3. ...\n"
-        "No analysis text. No code fences."
+        "[FINAL RETRY - STRICT MARKDOWN ONLY]\n"
+        "Return ONLY complete final markdown that fully satisfies the requested structure.\n"
+        "Do NOT output a partial draft.\n"
+        "Do NOT output placeholder sections.\n"
+        "Do NOT output reasoning, analysis text, or code fences.\n"
+        "The first non-empty line must be an H1 markdown header starting with '# '."
     )
-    fallback_user_prompt = (
+    final_retry_user_prompt = (
         f"{user_prompt}\n\n"
-        "[FINAL RETRY]\n"
-        "Return compact markdown draft even if partial."
+        "[FINAL STRICT RETRY]\n"
+        "Return only the fully valid final markdown now. If you cannot satisfy the required structure, do not emit a partial draft."
     )
-    raw_3, content_3, meta_3 = await _call_once("fallback_retry", fallback_user_prompt, fallback_sys_prompt)
+    raw_3, content_3, meta_3 = await _call_once("final_strict_retry", final_retry_user_prompt, final_retry_sys_prompt)
     if _is_prohibited_marker(raw_3) or _is_prohibited_marker(content_3):
-        logger.error("[generate_markdown_with_retry] provider returned PROHIBITED_CONTENT on fallback retry")
+        logger.error("[generate_markdown_with_retry] provider returned PROHIBITED_CONTENT on final strict retry")
         raise RuntimeError("LLM content blocked by provider (PROHIBITED_CONTENT)")
-    if content_3 and not _looks_like_error_text(content_3):
-        if require_h1 and not content_3.lstrip().startswith("#"):
-            content_3 = "# Episode Script Draft\n\n" + content_3
-        if is_valid_markdown_output(content_3, require_h1=require_h1) and not _is_truncated(meta_3):
-            return _result_payload(content_3, meta_3)
+    if content_3 and not _looks_like_error_text(content_3) and is_valid_markdown_output(content_3, require_h1=require_h1) and not _is_truncated(meta_3):
+        return _result_payload(content_3, meta_3)
 
     diagnostics = {
         "initial_finish_reason": meta_1.get("finish_reason"),
         "strict_retry_finish_reason": meta_2.get("finish_reason"),
-        "fallback_retry_finish_reason": meta_3.get("finish_reason"),
+        "final_strict_retry_finish_reason": meta_3.get("finish_reason"),
         "initial_usage": meta_1.get("usage"),
         "strict_retry_usage": meta_2.get("usage"),
-        "fallback_retry_usage": meta_3.get("usage"),
+        "final_strict_retry_usage": meta_3.get("usage"),
         "initial_clean_len": len(content_1 or ""),
         "strict_retry_clean_len": len(content_2 or ""),
-        "fallback_retry_clean_len": len(content_3 or ""),
+        "final_strict_retry_clean_len": len(content_3 or ""),
         "initial_error_like": _looks_like_error_text(content_1),
         "strict_retry_error_like": _looks_like_error_text(content_2),
-        "fallback_retry_error_like": _looks_like_error_text(content_3),
+        "final_strict_retry_error_like": _looks_like_error_text(content_3),
         "initial_raw_sample": (raw_1 or "")[:120],
         "strict_retry_raw_sample": (raw_2 or "")[:120],
-        "fallback_retry_raw_sample": (raw_3 or "")[:120],
+        "final_strict_retry_raw_sample": (raw_3 or "")[:120],
     }
     logger.error(f"[generate_markdown_with_retry] exhausted retries. {json.dumps(diagnostics, ensure_ascii=False)}")
     if _is_truncated(meta_1) or _is_truncated(meta_2) or _is_truncated(meta_3):
@@ -8935,8 +9242,7 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
         system_prompt = _resolve_prompt_text("shot_generator.txt")
     except Exception as e:
         logger.error(f"Failed to load shot_generator.txt: {e}")
-        # Very drastic fallback, but better than crash
-        system_prompt = "You are a Storyboard Master. Generate a shot list as a markdown table."
+        raise HTTPException(status_code=500, detail="Prompt file 'shot_generator.txt' could not be loaded.")
 
     global_section = f"# Global Context\nGlobal Style: {global_style}"
     if additional_context:
@@ -9636,8 +9942,8 @@ async def ai_generate_shots(
 
         if not shots_data:
              logger.warning(f"DEBUG: No table found using delimiter |. Content snippet: {response_content[:200]}")
-             # Fallback: Try Parse using Markdown table logic more loosely or return raw
-             pass
+             raw_preview = response_content.replace("\n", " ")[:300]
+             raise HTTPException(status_code=502, detail=f"Generate Shots returned 0 parsed rows; raw preview: {raw_preview}")
              
         logger.info(
             f"[ai_generate_shots] parsed_result scene_id={scene_id} table_lines={table_line_count} parsed_shots={len(shots_data)}"
@@ -9646,6 +9952,10 @@ async def ai_generate_shots(
             logger.warning(
                 f"[ai_generate_shots] suspicious_row_drop scene_id={scene_id} "
                 f"table_lines={table_line_count} parsed_shots={len(shots_data)}"
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="Shot generation output may have lost rows during markdown parsing; regenerate before apply.",
             )
 
         # 6. Save to DB (Scheme A)
@@ -9658,9 +9968,10 @@ async def ai_generate_shots(
             "raw_text": raw_text_original,
             "content": shots_data,
             "usage": usage,
+            "warnings": [],
         }
 
-        scene.ai_shots_result = raw_text_original
+        scene.ai_shots_result = response_content
         db.commit()
         
         logger.info(f"[ai_generate_shots] Saved raw markdown to scene.ai_shots_result; parsed_shots={len(shots_data)} scene_id={scene_id}")
@@ -9729,16 +10040,21 @@ def get_scene_latest_ai_result(
             pass
 
     # Parse markdown table into list-of-dicts for the staging editor
+    warnings: List[str] = []
     _, shots_data, table_line_count = parse_shots_markdown_table(raw_value or "")
+    if str(raw_value or "").strip() and not shots_data:
+        warnings.append("Shot generation output did not produce a parseable markdown table; review the raw markdown before apply.")
     if table_line_count >= 4 and len(shots_data) > 0 and (len(shots_data) * 2) <= table_line_count:
         logger.warning(
             f"[get_scene_latest_ai_result] suspicious_row_drop scene_id={scene_id} "
             f"table_lines={table_line_count} parsed_shots={len(shots_data)}"
         )
+        warnings.append("Shot generation output may have lost rows during markdown parsing; review the raw markdown before apply.")
 
     return {
         "raw_text": raw_value,
         "content": shots_data,
+        "warnings": warnings,
     }
 
 @router.put("/scenes/{scene_id}/latest_ai_result")
@@ -9759,62 +10075,11 @@ def update_scene_latest_ai_result(
     episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
     _require_project_access(db, episode.project_id, current_user)
     
-    # Scheme A: Save draft by converting edited content back to Markdown and overwriting ai_shots_result.
-    default_headers = [
-        "Shot ID",
-        "Shot Name",
-        "Scene ID",
-        "Shot Logic (CN)",
-        "Start Frame",
-        "Video Content",
-        "Duration (s)",
-        "Keyframes",
-        "End Frame",
-        "Start Frame (CN)",
-        "Video Content (CN)",
-        "Keyframes (CN)",
-        "End Frame (CN)",
-        "Associated Entities",
-    ]
-
-    # Preserve newly added columns from markdown table instead of dropping them.
-    # Keep known headers first, then append unknown headers by first appearance order.
-    discovered_headers: List[str] = []
-    discovered_set = set()
-    for item in (data.content or []):
-        if not isinstance(item, dict):
-            continue
-        for key in item.keys():
-            k = str(key or "").strip()
-            if not k or k in discovered_set:
-                continue
-            discovered_set.add(k)
-            discovered_headers.append(k)
-
-    if discovered_headers:
-        headers: List[str] = [h for h in default_headers if h in discovered_set]
-        headers.extend([h for h in discovered_headers if h not in headers])
-    else:
-        headers = list(default_headers)
-
-    def esc(val: str) -> str:
-        if val is None:
-            return ""
-        s = str(val)
-        s = s.replace("|", "\\|")
-        s = s.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "<br>")
-        return s
-
-    rows = []
-    for item in (data.content or []):
-        if not isinstance(item, dict):
-            continue
-        row_vals = [esc(item.get(h, "")) for h in headers]
-        rows.append(f"| " + " | ".join(row_vals) + " |")
-
-    sep = "| " + " | ".join([":---"] * len(headers)) + " |"
-    header_line = "| " + " | ".join(headers) + " |"
-    md = "\n".join([header_line, sep] + rows)
+    validated_rows, md = _validate_shot_rows_roundtrip_or_raise(
+        data.content,
+        source_label="Edited scene shot table",
+        status_code=400,
+    )
 
     scene.ai_shots_result = md
     db.commit()
@@ -9822,7 +10087,7 @@ def update_scene_latest_ai_result(
     return {
         "timestamp": now_bj_iso(),
         "raw_text": md,
-        "content": data.content or [],
+        "content": validated_rows,
     }
 
 @router.post("/scenes/{scene_id}/apply_ai_result")
@@ -9844,10 +10109,15 @@ def apply_scene_ai_result(
     project = _require_project_access(db, episode.project_id, current_user)
          
     shots_data = []
+    skipped_row_errors: List[str] = []
     
     # 1. Determine Source
     if data and data.content:
-        shots_data = data.content
+        shots_data, skipped_row_errors = _validate_shot_rows_for_apply_with_tolerance(
+            data.content,
+            source_label="Provided scene shot table",
+            status_code=400,
+        )
     else:
         # Parse from stored Markdown table
         raw_value = scene.ai_shots_result or ""
@@ -9861,7 +10131,27 @@ def apply_scene_ai_result(
             except Exception:
                 pass
 
-        _, shots_data, _ = parse_shots_markdown_table(raw_value or "")
+        _, shots_data, _ = _parse_shot_markdown_or_raise(
+            raw_value or "",
+            source_label="Stored scene shot table",
+            status_code=409,
+        )
+        shots_data, skipped_row_errors = _validate_shot_rows_for_apply_with_tolerance(
+            shots_data,
+            source_label="Stored scene shot table",
+            status_code=409,
+        )
+
+    if not shots_data:
+        raise HTTPException(status_code=400, detail="No shot rows provided or available to apply")
+
+    if skipped_row_errors:
+        logger.warning(
+            "[apply_scene_ai_result] skipped_invalid_rows scene_id=%s skipped=%s details=%s",
+            scene_id,
+            len(skipped_row_errors),
+            skipped_row_errors[:5],
+        )
                  
     # 2. Extract and Auto-Link Entities (System Import Feature)
     try:
@@ -9903,14 +10193,6 @@ def apply_scene_ai_result(
     
     db.query(Shot).filter(Shot.scene_id == scene_id).delete()
     
-    def _pick_shot_cell(s_data: Dict[str, Any], aliases: List[str], default: str = "") -> str:
-        if not isinstance(s_data, dict):
-            return default
-        for key in aliases:
-            if key in s_data and s_data.get(key) is not None:
-                return str(s_data.get(key) or "").strip()
-        return default
-
     def _split_combined_cn_prompt(raw_text: str) -> Tuple[str, str, str, str]:
         text = str(raw_text or "").strip()
         if not text:
@@ -10091,7 +10373,25 @@ def apply_scene_ai_result(
     db.commit()
     
     # Return the real shots
-    return db.query(Shot).filter(Shot.scene_id == scene_id).all()
+    applied_shots = db.query(Shot).filter(Shot.scene_id == scene_id).all()
+    if skipped_row_errors:
+        try:
+            for shot in applied_shots:
+                notes_obj = {}
+                if getattr(shot, "technical_notes", None):
+                    try:
+                        notes_obj = json.loads(shot.technical_notes) if isinstance(shot.technical_notes, str) else {}
+                    except Exception:
+                        notes_obj = {}
+                notes_obj["import_warnings"] = list(dict.fromkeys([str(x or "").strip() for x in skipped_row_errors if str(x or "").strip()]))
+                shot.technical_notes = json.dumps(notes_obj, ensure_ascii=False)
+            db.commit()
+            applied_shots = db.query(Shot).filter(Shot.scene_id == scene_id).all()
+        except Exception:
+            db.rollback()
+            applied_shots = db.query(Shot).filter(Shot.scene_id == scene_id).all()
+
+    return applied_shots
 
 @router.get("/scenes/{scene_id}/shots", response_model=List[ShotOut])
 def read_shots(
@@ -10491,11 +10791,9 @@ async def clone_entity_with_llm(
 
     try:
         base_subject_prompt = _resolve_prompt_text("subject_generation.txt")
-    except Exception:
-        base_subject_prompt = (
-            "You are a senior subject prompt editor for film/storyboard assets. "
-            "Generate stable subject fields and keep identity anchors consistent."
-        )
+    except Exception as e:
+        logger.error("Failed to load subject_generation.txt for clone mode: %s", e)
+        raise HTTPException(status_code=500, detail="Prompt file 'subject_generation.txt' could not be loaded.")
 
     system_prompt = (
         f"{str(base_subject_prompt or '').strip()}\n\n"
@@ -17472,20 +17770,45 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
 
         prompt_text = str(req.prompt or "")
         normalized_ref_mode = _normalize_video_ref_mode(getattr(req, "ref_mode", None))
-        if normalized_ref_mode == "start":
-            req.last_frame_url = None
-        elif normalized_ref_mode == "end":
-            req.last_frame_url = None
-            if isinstance(req.ref_image_url, list):
-                end_refs = [str(x).strip() for x in req.ref_image_url if str(x).strip()]
-                req.ref_image_url = end_refs[-1] if end_refs else None
-        is_reference_image_mode = bool(normalized_ref_mode == "refs_video" or isinstance(req.ref_image_url, list))
+        resolved_video_provider = str(reserve_provider or req.provider or "").strip().lower()
+        resolved_video_model = str(reserve_model or req.model or "").strip().lower()
+        supports_last_frame_mode = _video_api_supports_last_frame_mode(resolved_video_provider, resolved_video_model)
+        req.ref_image_url, req.last_frame_url, ref_normalization_info = _normalize_video_request_refs(
+            req.ref_image_url,
+            req.last_frame_url,
+            normalized_ref_mode,
+            supports_last_frame_mode=supports_last_frame_mode,
+        )
+        normalized_ref_mode = str(ref_normalization_info.get("normalized_mode") or normalized_ref_mode or "")
+        logger.info(
+            "[GenerateVideo] ref mode normalization | shot_id=%s shot_number=%s ref_mode=%s supports_last_frame=%s fallback_to_refs=%s start_before=%s start_after=%s last_before=%s last_after=%s provider=%s model=%s",
+            req.shot_id,
+            req.shot_number,
+            normalized_ref_mode or "<empty>",
+            supports_last_frame_mode,
+            bool(ref_normalization_info.get("fallback_to_refs")),
+            ref_normalization_info.get("start_count_before"),
+            ref_normalization_info.get("start_count_after"),
+            ref_normalization_info.get("had_last_frame_before"),
+            ref_normalization_info.get("had_last_frame_after"),
+            resolved_video_provider or None,
+            resolved_video_model or None,
+        )
+        is_reference_image_mode = bool(normalized_ref_mode == "entity_refs")
+        has_explicit_visual_refs = False
+        if isinstance(req.ref_image_url, list):
+            has_explicit_visual_refs = any(str(x).strip() for x in req.ref_image_url)
+        elif isinstance(req.ref_image_url, str) and req.ref_image_url.strip():
+            has_explicit_visual_refs = True
+        elif isinstance(req.ref_video_urls, list) and any(str(x).strip() for x in req.ref_video_urls):
+            has_explicit_visual_refs = True
 
         auto_entity_refs: List[str] = []
         if is_reference_image_mode and resolved_project_id:
             entity_lookup = _build_project_entity_lookup(db, int(resolved_project_id))
             prompt_candidates: List[str] = [prompt_text]
             shot_for_ref: Optional[Shot] = None
+            shot_tech: Dict[str, Any] = {}
 
             if req.shot_id:
                 shot_for_ref = db.query(Shot).filter(Shot.id == int(req.shot_id)).first()
@@ -17502,33 +17825,45 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
                         str(shot_tech.get("end_frame_cn") or "").strip(),
                     ])
 
-            for candidate_text in prompt_candidates:
-                if not str(candidate_text or "").strip():
-                    continue
-                auto_entity_refs.extend(_collect_prompt_entity_ref_images_relaxed(candidate_text, entity_lookup))
+            existing_start_refs: List[str] = []
+            if isinstance(req.ref_image_url, list):
+                existing_start_refs = [str(x).strip() for x in req.ref_image_url if str(x).strip()]
+            elif isinstance(req.ref_image_url, str) and req.ref_image_url.strip():
+                existing_start_refs = [req.ref_image_url.strip()]
 
-            auto_entity_refs = [
-                x for x in dict.fromkeys([str(x).strip() for x in auto_entity_refs if str(x).strip()])
-                if x
-            ]
+            merged_refs, auto_entity_refs = _merge_entity_refs_for_video_mode(
+                existing_start_refs,
+                ref_mode=normalized_ref_mode,
+                prompt_candidates=prompt_candidates,
+                entity_lookup=entity_lookup,
+                manual_override=bool(shot_tech.get("video_ref_image_urls_manual")) and has_explicit_visual_refs,
+            )
+            if merged_refs:
+                req.ref_image_url = merged_refs
+
             if auto_entity_refs:
-                existing_start_refs: List[str] = []
-                if isinstance(req.ref_image_url, list):
-                    existing_start_refs = [str(x).strip() for x in req.ref_image_url if str(x).strip()]
-                elif isinstance(req.ref_image_url, str) and req.ref_image_url.strip():
-                    existing_start_refs = [req.ref_image_url.strip()]
-
-                req.ref_image_url = [
-                    x for x in dict.fromkeys(existing_start_refs + auto_entity_refs)
-                    if str(x).strip()
-                ]
-
+                logger.info(
+                    "[GenerateVideo] merged entity refs | shot_id=%s project_id=%s ref_mode=%s explicit_refs=%s detected=%s final_refs=%s",
+                    req.shot_id,
+                    resolved_project_id,
+                    normalized_ref_mode or "list_ref",
+                    has_explicit_visual_refs,
+                    len(auto_entity_refs),
+                    len(merged_refs),
+                )
+            elif has_explicit_visual_refs:
+                logger.info(
+                    "[GenerateVideo] preserve explicit visual refs | shot_id=%s project_id=%s ref_mode=%s",
+                    req.shot_id,
+                    resolved_project_id,
+                    normalized_ref_mode or "list_ref",
+                )
+        elif is_reference_image_mode and has_explicit_visual_refs:
             logger.info(
-                "[GenerateVideo] auto entity refs | shot_id=%s project_id=%s ref_mode=%s detected=%s",
+                "[GenerateVideo] preserve explicit visual refs | shot_id=%s project_id=%s ref_mode=%s",
                 req.shot_id,
                 resolved_project_id,
                 normalized_ref_mode or "list_ref",
-                len(auto_entity_refs),
             )
 
         flat_refs: List[str] = []
@@ -17576,8 +17911,6 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
             pass
 
         video_provider_options = _build_video_provider_options(req)
-        resolved_video_provider = str(reserve_provider or req.provider or "").strip().lower()
-        resolved_video_model = str(reserve_model or req.model or "").strip().lower()
         is_kie_kling3_video = bool(
             resolved_video_provider == "kie"
             and resolved_video_model in {"kling-3.0/video", "kling3", "kling-3.0", "kling-3-0"}
@@ -17699,6 +18032,19 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
              billing_service.log_failed_transaction(db, current_user.id, "video_gen", req.provider, req.model, detail)
              
              raise HTTPException(status_code=400, detail=detail)
+
+        if not result.get("url"):
+            detail = "Video generation returned no URL"
+            if isinstance(result.get("metadata"), dict) and result["metadata"].get("raw"):
+                try:
+                    raw_status = result["metadata"]["raw"].get("status") or result["metadata"]["raw"].get("state")
+                    if raw_status:
+                        detail = f"{detail}: upstream status={raw_status}"
+                except Exception:
+                    pass
+            logger.error("[GenerateVideo] Failed: %s | result=%s", detail, result)
+            billing_service.log_failed_transaction(db, current_user.id, "video_gen", req.provider, req.model, detail)
+            raise HTTPException(status_code=502, detail=detail)
 
         _log_api_switch_regenerate_if_needed(
             db=db,
@@ -19692,9 +20038,9 @@ def _collect_prompt_entity_ref_images_relaxed(prompt: str, entity_lookup: Dict[s
 
 def _normalize_video_ref_mode(value: Any) -> str:
     mode = str(value or "").strip().lower()
-    refs_aliases = {"refs_video", "refs-video", "reference", "reference_image", "reference_images"}
+    refs_aliases = {"entity_refs", "entity-refs", "refs_video", "refs-video", "reference", "reference_image", "reference_images"}
     if mode in refs_aliases:
-        return "refs_video"
+        return "entity_refs"
     if mode in {"start", "start_only", "start-only", "only_start", "only-start"}:
         return "start"
     if mode in {"start_end", "start-end", "start+end", "both", "both_ends"}:
@@ -19702,6 +20048,120 @@ def _normalize_video_ref_mode(value: Any) -> str:
     if mode in {"end", "end_only", "end-only", "only_end", "only-end"}:
         return "end"
     return ""
+
+
+def _dedupe_media_ref_urls(values: Optional[List[str]]) -> List[str]:
+    refs = [str(x).strip() for x in (values or []) if str(x).strip()]
+    return [x for x in dict.fromkeys(refs) if x]
+
+
+def _video_api_supports_last_frame_mode(provider: Any, model: Any) -> bool:
+    provider_text = str(provider or "").strip().lower()
+    model_text = str(model or "").strip().lower()
+
+    if provider_text == "kie" and model_text in {
+        "kling-2.6/image-to-video",
+        "sora-2-image-to-video",
+        "sora-2-pro-image-to-video",
+        "hailuo/2-3-image-to-video-standard",
+        "hailuo/2-3-image-to-video-pro",
+    }:
+        return False
+
+    if provider_text == "wanxiang":
+        if model_text and "kf2v" not in model_text and ("image-to-video" in model_text or model_text.endswith("i2v") or "-i2v" in model_text):
+            return False
+
+    return True
+
+
+def _normalize_video_request_refs(
+    ref_image_url: Optional[Union[str, List[str]]],
+    last_frame_url: Optional[str],
+    ref_mode: Any,
+    *,
+    supports_last_frame_mode: bool,
+) -> Tuple[Optional[Union[str, List[str]]], Optional[str], Dict[str, Any]]:
+    normalized_mode = _normalize_video_ref_mode(ref_mode)
+    start_refs = _dedupe_media_ref_urls(
+        ref_image_url if isinstance(ref_image_url, list) else ([ref_image_url] if str(ref_image_url or "").strip() else [])
+    )
+    end_ref = str(last_frame_url or "").strip() or None
+
+    info: Dict[str, Any] = {
+        "normalized_mode": normalized_mode,
+        "supports_last_frame_mode": supports_last_frame_mode,
+        "fallback_to_refs": False,
+        "start_count_before": len(start_refs),
+        "had_last_frame_before": bool(end_ref),
+    }
+
+    if normalized_mode == "entity_refs":
+        info["start_count_after"] = len(start_refs)
+        info["had_last_frame_after"] = False
+        return (start_refs or None), None, info
+
+    if normalized_mode == "end":
+        if not end_ref and start_refs:
+            end_ref = start_refs[-1]
+        start_refs = []
+    elif normalized_mode == "start_end":
+        if not end_ref and len(start_refs) >= 2:
+            end_ref = start_refs[-1]
+        start_refs = start_refs[:1]
+    elif normalized_mode == "start":
+        start_refs = start_refs[:1]
+        end_ref = None
+
+    if end_ref and not supports_last_frame_mode:
+        merged_refs = list(start_refs)
+        if end_ref not in merged_refs:
+            merged_refs.append(end_ref)
+        start_refs = merged_refs
+        end_ref = None
+        info["fallback_to_refs"] = True
+
+    normalized_ref_image_url: Optional[Union[str, List[str]]] = None
+    if len(start_refs) == 1:
+        normalized_ref_image_url = start_refs[0]
+    elif start_refs:
+        normalized_ref_image_url = start_refs
+
+    info["start_count_after"] = len(start_refs)
+    info["had_last_frame_after"] = bool(end_ref)
+    return normalized_ref_image_url, end_ref, info
+
+
+def _collect_video_prompt_entity_refs(
+    prompt_candidates: List[str],
+    entity_lookup: Dict[str, Dict[str, Any]],
+) -> List[str]:
+    refs: List[str] = []
+    for candidate_text in (prompt_candidates or []):
+        if not str(candidate_text or "").strip():
+            continue
+        refs.extend(_collect_prompt_entity_ref_images_relaxed(candidate_text, entity_lookup))
+    return _dedupe_media_ref_urls(refs)
+
+
+def _merge_entity_refs_for_video_mode(
+    base_refs: List[str],
+    *,
+    ref_mode: Any,
+    prompt_candidates: List[str],
+    entity_lookup: Dict[str, Dict[str, Any]],
+    manual_override: bool = False,
+) -> Tuple[List[str], List[str]]:
+    normalized_mode = _normalize_video_ref_mode(ref_mode)
+    current_refs = _dedupe_media_ref_urls(base_refs)
+    if normalized_mode != "entity_refs" or manual_override:
+        return current_refs, []
+
+    auto_entity_refs = _collect_video_prompt_entity_refs(prompt_candidates, entity_lookup)
+    if not auto_entity_refs:
+        return current_refs, []
+
+    return _dedupe_media_ref_urls(current_refs + auto_entity_refs), auto_entity_refs
 
 
 def _compute_subject_ref_index_map(prompt: str, entity_lookup: Dict[str, Dict[str, Any]]) -> Dict[str, int]:
@@ -20167,99 +20627,84 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                         video_prompt = _inject_shot_prompt_anchors(video_prompt_raw, entity_lookup, global_style, video_ref_index_map)
 
                         def _resolve_video_mode(payload: Dict[str, Any]) -> str:
-                            if payload.get("video_mode_unified"):
-                                return str(payload.get("video_mode_unified"))
-                            if str(payload.get("video_ref_submit_mode") or "") == "refs_video":
-                                return "refs_video"
-                            return str(payload.get("video_gen_mode") or "start")
+                            raw_mode = payload.get("video_mode_unified") or payload.get("video_ref_submit_mode") or payload.get("video_gen_mode") or "start"
+                            return _normalize_video_ref_mode(raw_mode) or "start"
 
                         video_mode = _resolve_video_mode(tech)
-                        video_ref_submit_mode = "refs_video" if video_mode == "refs_video" else "auto"
-
                         refs: List[str] = []
-                        if video_ref_submit_mode == "refs_video":
-                            if isinstance(tech.get("video_ref_image_urls"), list):
-                                refs.extend([str(x).strip() for x in tech.get("video_ref_image_urls") or [] if str(x).strip()])
-                        elif isinstance(tech.get("video_ref_image_urls"), list):
-                            shot_mode = str(video_mode or "").strip().lower()
-                            manual_refs = [str(x).strip() for x in tech.get("video_ref_image_urls") or [] if str(x).strip()]
-                            manual_unique_refs = [x for x in dict.fromkeys(manual_refs) if x]
-                            manual_end_ref = str(end_frame_url or "").strip()
-                            manual_start_refs = [x for x in manual_unique_refs if not manual_end_ref or x != manual_end_ref]
-
-                            if shot_mode == "end":
-                                if manual_end_ref:
-                                    refs.append(manual_end_ref)
-                                elif manual_unique_refs:
-                                    refs.append(manual_unique_refs[-1])
-                            elif shot_mode == "start_end":
-                                refs.extend(manual_unique_refs)
-                            else:
-                                if manual_start_refs:
-                                    refs.append(manual_start_refs[0])
-                                elif manual_unique_refs:
-                                    refs.append(manual_unique_refs[0])
+                        explicit_last_frame_url = end_frame_url or None
+                        video_prompt_candidates: List[str] = [
+                            str(video_prompt_raw or "").strip(),
+                            str(shot.start_frame or "").strip(),
+                            str(shot.end_frame or "").strip(),
+                            str(tech.get("video_prompt_cn") or "").strip(),
+                            str(tech.get("start_frame_cn") or "").strip(),
+                            str(tech.get("end_frame_cn") or "").strip(),
+                        ]
+                        if isinstance(tech.get("video_ref_image_urls"), list):
+                            refs.extend([str(x).strip() for x in tech.get("video_ref_image_urls") or [] if str(x).strip()])
                         else:
                             shot_mode = str(video_mode or "").strip().lower()
                             if not shot_mode:
                                 end_prompt_len = len(str(shot.end_frame or "").strip())
                                 shot_mode = "start_end" if end_frame_url and end_prompt_len >= 3 else "start"
 
-                            if shot_mode != "end" and str(shot.image_url or "").strip():
-                                refs.append(str(shot.image_url).strip())
-
-                            keyframes = tech.get("keyframes")
-                            if isinstance(keyframes, list):
-                                refs.extend([str(x).strip() for x in keyframes if str(x).strip()])
-
-                            if shot_mode == "start_end" and end_frame_url:
-                                refs.append(end_frame_url)
-
-                        refs = [x for x in dict.fromkeys([str(x).strip() for x in refs if str(x).strip()]) if x]
-
-                        final_start_ref = None
-                        final_end_ref = None
-                        if video_ref_submit_mode == "refs_video":
-                            final_start_ref = refs[0] if refs else None
-                        elif refs:
-                            if str(video_mode or "").strip().lower() == "end":
-                                final_start_ref = refs[-1]
+                            if shot_mode == "end":
+                                if end_frame_url:
+                                    explicit_last_frame_url = end_frame_url
                             else:
-                                final_start_ref = refs[0]
-                            if str(video_mode or "").strip().lower() == "start_end" and len(refs) > 1:
-                                final_end_ref = refs[-1]
+                                if str(shot.image_url or "").strip():
+                                    refs.append(str(shot.image_url).strip())
 
-                        video_keyframes: List[str] = []
-                        if refs:
-                            start_idx = refs.index(final_start_ref) if final_start_ref in refs else -1
-                            end_idx = refs.index(final_end_ref) if final_end_ref in refs else -1
-                            if start_idx >= 0 and end_idx > start_idx:
-                                video_keyframes = refs[start_idx + 1:end_idx]
-                            elif start_idx >= 0:
-                                video_keyframes = refs[start_idx + 1:]
-                            elif end_idx > 0:
-                                video_keyframes = refs[:end_idx]
-                            else:
-                                video_keyframes = refs[1:] if len(refs) > 1 else []
+                                if shot_mode == "entity_refs":
+                                    keyframes = tech.get("keyframes")
+                                    if isinstance(keyframes, list):
+                                        refs.extend([str(x).strip() for x in keyframes if str(x).strip()])
+
+                                if shot_mode == "start_end" and end_frame_url:
+                                    explicit_last_frame_url = end_frame_url
+
+                        refs, auto_entity_refs = _merge_entity_refs_for_video_mode(
+                            refs,
+                            ref_mode=video_mode,
+                            prompt_candidates=video_prompt_candidates,
+                            entity_lookup=entity_lookup,
+                            manual_override=bool(tech.get("video_ref_image_urls_manual")) and isinstance(tech.get("video_ref_image_urls"), list),
+                        )
+
+                        normalized_refs, normalized_last_frame_url, batch_ref_info = _normalize_video_request_refs(
+                            refs or None,
+                            explicit_last_frame_url,
+                            video_mode,
+                            supports_last_frame_mode=True,
+                        )
+
+                        ordered_video_refs: List[str] = []
+                        if isinstance(normalized_refs, list):
+                            ordered_video_refs.extend([str(x).strip() for x in normalized_refs if str(x).strip()])
+                        elif str(normalized_refs or "").strip():
+                            ordered_video_refs.append(str(normalized_refs).strip())
+                        if str(normalized_last_frame_url or "").strip():
+                            ordered_video_refs.append(str(normalized_last_frame_url).strip())
+                        ordered_video_refs = [x for x in dict.fromkeys(ordered_video_refs) if x]
 
                         video_prompt = _append_video_api_ref_mapping(
                             video_prompt,
-                            refs,
-                            final_start_ref,
-                            final_end_ref,
-                            video_keyframes,
+                            ordered_video_refs,
+                            normalized_refs,
+                            normalized_last_frame_url,
+                            None,
                         )
 
                         logger.info(
-                            "[shot_media_batch] video ref resolution | shot_id=%s shot_label=%s video_mode=%s submit_mode=%s refs=%s start=%s end=%s keyframes=%s",
+                            "[shot_media_batch] video ref resolution | shot_id=%s shot_label=%s video_mode=%s refs=%s last_frame=%s auto_entity_refs=%s fallback_to_refs=%s",
                             shot.id,
                             shot_label,
                             video_mode,
-                            video_ref_submit_mode,
-                            len(refs),
-                            bool(str(final_start_ref or "").strip()),
-                            bool(str(final_end_ref or "").strip()),
-                            len(video_keyframes),
+                            len(ordered_video_refs),
+                            bool(str(normalized_last_frame_url or "").strip()),
+                            len(auto_entity_refs),
+                            bool(batch_ref_info.get("fallback_to_refs")),
                         )
 
                         duration_val = 5.0
@@ -20270,10 +20715,10 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
 
                         video_req = VideoGenerationRequest(
                             prompt=video_prompt,
-                            ref_image_url=final_start_ref,
-                            last_frame_url=final_end_ref,
+                            ref_image_url=normalized_refs,
+                            last_frame_url=normalized_last_frame_url,
                             ref_mode=video_mode,
-                            keyframes=video_keyframes or None,
+                            keyframes=None,
                             duration=duration_val,
                             project_id=episode.project_id,
                             shot_id=shot.id,

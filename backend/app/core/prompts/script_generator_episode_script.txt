@@ -59,6 +59,28 @@ Rules:
 - Do NOT separate dialogue and action into different blocks. Write them interleaved in time order, character-driven.
 - Keep the draft production-friendly: each scene should be readable and not overly long.
 - Creative Priority Override (Mandatory): for AI script ideation, do NOT downscale creativity due to production budget, on-set safety execution, or dangerous-action feasibility; prioritize dramatic/visual impact and narrative intensity.
+- Natural-Prose Camera Rule (Mandatory): preserve all required camera-observer dimensions, but express them as fluent shot prose rather than stacked labels or layout-spec fragments whenever possible.
+  - Keep viewpoint anchor, viewing direction, subject-viewpoint relation, framing, and transition cause explicit, but integrate them into one filmable sentence instead of rigid term repetition.
+  - Avoid turning the writing into a diagram legend or panel instruction sheet.
+- Panel-Language Restraint (Mandatory): do not describe scenes or beats with panelized layout language such as split-screen, multi-panel, collage, tiled, or grid unless the story explicitly requires an in-world screen mosaic, surveillance wall, comic-page effect, or similar graphic device.
+- Dimension Completeness Gate (Mandatory): before final output, validate each scene block and each beat against a minimum-dimension checklist; this validation is internal only and must not be printed in the final Markdown.
+  - Scene-block required slots: `Scene ID`, `Entry State`, `Exit State`, `目标/冲突/赌注`, and every beat list must be present and mutually consistent.
+  - Beat-level required slots: viewpoint anchor, viewing direction, subject-viewpoint relation, framing parameter, subject-to-subject relation, visible action transition, and resulting new state must all be explicit.
+  - Dialogue-event required slots: every spoken line, subtitle, screen text, or sound cue in the source material must bind to a visible beat with a concrete speaker/source and visible listener/reactor when applicable.
+- No Partial Pass-Through (Mandatory): if any scene block or beat fails the dimension gate, do not output the partial draft; rewrite first, then rerun the same check.
+- Rewrite Protocol (Mandatory): when dimension gaps are found, rewrite by scope rather than appending cosmetic fragments.
+  - Beat-targeted rewrite: if one beat is missing viewpoint / relation / transition / state slots, rewrite the full beat line.
+  - Scene-block rewrite: if `Entry State`, `Exit State`, or `目标/冲突/赌注` is under-specified or drifts from the beats, rewrite the entire scene header block and the dependent beats.
+  - Full scene regeneration: if one round of targeted rewrite still leaves dimension gaps, discard the current scene draft and regenerate the whole scene from the episode event chain.
+- Complexity Downgrade Ladder (Mandatory): if regeneration still fails, downgrade complexity in this fixed order rather than improvising a patch.
+  - Level 1: trim decorative prose, optional emotional garnish, and non-critical atmosphere.
+  - Level 2: reduce beat density, optional secondary reactions, and stylistic flourish while preserving causal clarity and observer readability.
+  - Level 3: collapse to the simplest scene-block expression that still preserves state handoff, dialogue binding, and all required viewpoint/relation slots.
+- Rewrite Back-Propagation (Mandatory): if a beat or scene block is rewritten after the dimension gate, `Entry State`, `Exit State`, `目标/冲突/赌注`, and neighboring dependent beats must be updated to match the rewritten content; stale wording is invalid.
+- Failure -> Rewrite -> Downgraded Good Example (Mandatory Reference):
+  - Bad beat: `【A】愤怒地说话，B 很震惊。` → 缺观察者维度、位置关系、对白绑定、过渡过程、新状态。
+  - Rewrite: restore speaker action, listener reaction, and observer-readable transition.
+  - Downgraded good beat: `1. 【CHAR:[@A]】（压低怒气）：机位在ENV:[门框]内侧平视朝向两人，CHAR:[@A]位于中景偏左侧对镜头，向CHAR:[@B]逼近半步并说：“你早就知道门被动过。”【CHAR:[@B]】（僵住）：位于中景偏右背靠ENV:[墙面]，视线先避开再回看，手指收紧在PROP:[门把]上。`
 - Hierarchical continuity contract (mandatory):
   - Resolve and print `Episode ID` as `EPxx`.
   - Every scene must carry canonical `Scene ID = EPxx_SCyy` (zero-padded).
@@ -74,6 +96,9 @@ Rules:
       3) **角色-镜头关系**（subject-viewpoint relation：角色位于前景/中景/后景、镜头左/右、朝镜头/背镜头/侧对镜头、接近/远离镜头）；
       4) **镜头画面参数**（Shot framing：至少给出景别与镜高/俯仰之一）。
       若机位或朝向改变，必须在 Beat 内写明“机位变化触发原因 + 变化后新视角”。
+    - **自然表述优先 (Natural-Prose First)**：以上维度必须保留，但优先写成连续、可拍的摄影叙述，不要机械堆叠成“视点落位:... 观察朝向:... 角色-镜头关系:...”式标签串；只有在不影响可读性的前提下，才能用短标签辅助澄清。
+    - **标签密度约束 (Label Density Cap)**：单个 Beat 中不要连续堆叠多个抽象栏目名或版式化提示词；应让镜头位置、朝向、人物关系和动作变化自然落在一句或两句可执行描述里。
+    - **维度生成检查 (Dimension Completeness Gate, 强制)**：每个 Beat 输出前，必须逐槽位检查：机位落点、观察朝向、角色-镜头关系、主体关系、动作变化过程、新状态、以及存在时的对白/字幕/音效内容；任一缺失即该 Beat 无效，不得输出。
     - **左右判定基准强制 (Left/Right Reference Lock)**：Beat 中“左/右/前/后”默认以当前镜头观察方向为基准，不得混用角色自身体向；如需使用角色自身体向，必须显式标注“角色视角”。
     - **主体关系强制 (Subject-to-Subject Mandate)**：每个 Beat 必须明确角色之间的相对关系，至少覆盖：位置关系、朝向关系、视线关系、接触关系。
     - **状态过渡强制 (Transition-to-New-State Mandate)**：凡位置/朝向/视线/接触任一项发生变化，必须描述从旧状态到新状态的过渡过程（动作路径、顺序与触发原因），禁止只给结果态。
@@ -83,6 +108,8 @@ Rules:
       `1. {镜头:机位在{ }旁/朝向{ }/轴线{左侧|右侧}} + {角色-镜头关系:CHAR:[@角色A]处于{前景|中景|后景}偏{左|右}、{正对|侧对|背对}镜头、景别{远景|全景|中景|近景|特写}、镜高/俯仰{平视|俯拍|仰拍}} + {主体关系:CHAR:[@角色A]与CHAR:[@角色B]位置{ }/朝向{ }/视线{ }/接触{ }} + {动作变化:因{触发原因}执行{动作路径与顺序}，对白/字幕/音效:{ }} -> {新状态:{位置|朝向|视线|接触|道具状态}}`。
     - **硬校验（缺槽位即无效）**：上述最小模板任一槽位缺失、留空或被抽象概述替代（如“关系紧张了”），该 Beat 视为无效，必须按同一模板补全后重写该行。
     - **输出前自检（强制）**：提交结果前必须逐 Beat、逐槽位自检一次；任一槽位未填满或语义不具体，必须先修正，再输出。
+    - **重写机制 (Rewrite Protocol, 强制)**：若 Beat 自检失败，不得在原行末尾追加一个补丁短语蒙混过关；必须重写整行 Beat。若整行重写后仍失败，则回退重写该 Beat 所在场景的相关前后 Beat，确保状态传递闭环。
+    - **复杂度降级梯度 (Complexity Downgrade Ladder, 强制)**：若 Beat 在整行重写后仍失败，必须按 `删装饰 -> 减复杂动作/次级反应 -> 收束为最小可拍 Beat` 的固定顺序降级，不能跳过状态闭环与观察者维度。
       - 必须包含具体的对白/字幕/屏幕文字/音效内容（若该 Beat 存在）。
       - **实体引用**：Beat 描述中涉及的所有**角色**、**道具**、**环境**均须用 `[]` 包裹（例如：`CHAR:[@Alice] walks to ENV:[Window] holding PROP:[Cup]`）。
       - **@Subject 强制**：角色/主体名必须写为 `CHAR:[@Name]`；若角色名缺少 `@`，该 Beat 视为无效并重写。
