@@ -168,6 +168,7 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - 服装暗示识别规则（Mandatory）：服装证据不只包括直接文字描述，也包括足以锁定特定服装状态的动作、触碰或整理行为。凡是剧本出现“摸了下婚纱”“整了整将军服”“提起裙摆”“扯正领带”“扣上白大褂/雨衣/盔甲”“扶正头纱/肩章/帽檐/披风”等暗示，必须判定对应特殊着装已经存在，并将其作为**不同着装状态的独立角色**抽取；不得仍并入“常服基态角色”。
 - 换装独立实体强制（Mandatory）：上述着装变化必须直接拆分为独立角色实体，并在 Subject Index 与 Part 2 中各自占据独立条目；禁止只在同一角色条目里改 `clothing` 字段或在 `generation_prompt` 中临时追加“现在穿另一套衣服”。
 - 一角双衣绝对禁令（Mandatory）：**绝对禁止**在同一个角色条目、同一个 `clothing` 字段、同一个 `anchor_description` 或同一个 `generation_prompt` 中并列写入两套或以上着装状态。只要出现“日间装 + 夜间装”“白天制服 + 晚上睡衣”“外出装 + 居家装”这类双套描述，就必须复制为两个独立角色，分别承载各自服装版本。
+- clothing 外部衣着声明规则（Mandatory）：Part 2A 中每个角色 JSON 的 `clothing` 字段必须同时回答两件事：1) 当前这个角色条目**此刻唯一生效**的服装版本是什么；2) 剧本里是否还出现过该人物的其他衣着描述。固定写法要求为“当前服装：...。其他剧本衣着描述：无。”或“当前服装：...。其他剧本衣着描述：有；另见 CHAR:[@OtherOutfit]（...）。”；即使没有其他服装版本，也不得省略“其他剧本衣着描述：无”。
 - 换装依赖建模规则（Mandatory）：换装后的独立角色实体必须依赖原角色建立继承链；若该换装同时依赖明确的服饰/装备道具（如面具、盔甲、制服外套、礼帽、雨衣、围巾、工牌），则必须在依赖说明中写清“继承原角色稳定锚点 + 叠加/替换哪些服饰道具”，必要时把相关 `PROP:[...]` 一并纳入 `visual_dependencies` 或在 `dependency_strategy.logic` 中逐项点名。
 - 换装抽取示例（Mandatory）：
   - 不合规：仅一个 `CHAR:[@Lin]`，在后文用文字改成“脱掉风衣后的林月”或“穿上制服的林月”。
@@ -522,7 +523,7 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
       "role": "Investigative Reporter",
       "archetype": "Calm Truth Seeker",
       "appearance_cn": "28岁，东亚女性，身高约168cm，头身比约1:7.2，脸部线条利落，眼神专注，肤质保留真实毛孔与微细纹理。",
-      "clothing": "深海军蓝风衣（中长款，哑光防泼水面料），白色衬衫，炭灰色修身长裤，黑色皮质短靴（鞋面轻微磨损）。",
+      "clothing": "当前服装：深海军蓝风衣（中长款，哑光防泼水面料），白色衬衫，炭灰色修身长裤，黑色皮质短靴（鞋面轻微磨损）。其他剧本衣着描述：无。",
       "action_characteristics": "动作克制、重心稳定、转身幅度小、观察时先停顿后移动。",
       "generation_prompt_cn": "写实现代剧情风格，林月六视图角色设定图，六个面板保持同一身份与服装一致。机位锚点为棚拍胸口高度固定机位，完整全身入镜且鞋子清晰可见。视角顺序为正面、背面、侧面、四分之三、面部特写、关键细节。布光为左前方柔和主光、机位轴线低强度补光、右后方轻微轮廓光，保留自然皮肤微纹理并避免磨皮塑料感。服装为深海军蓝风衣、白衬衫、炭灰长裤、黑色皮质短靴。背景纯白，无文字无水印。",
       "generation_prompt_en": "Photoreal contemporary drama style, six-view character sheet for Lin Yue with one fixed studio observer position at chest height. Keep every structural panel full-body with shoes fully visible, then move through Front, Back, Side, 3/4, facial Close-up, and anchor Detail views while preserving the same body proportion system. Soft key from front-left, subtle fill on camera axis, and a gentle rim from back-right preserve skin micro-texture without waxy smoothing. Background pure white, no labels, no watermark.",

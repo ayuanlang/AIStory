@@ -39,6 +39,7 @@ REQUIRED_CLAUSES: List[ClauseCheck] = [
     ClauseCheck("wardrobe_implied_signal", r"服装暗示识别规则"),
     ClauseCheck("wardrobe_entity_split", r"换装独立实体强制"),
     ClauseCheck("wardrobe_multi_outfit_ban", r"一角双衣绝对禁令"),
+    ClauseCheck("clothing_other_outfits_flag", r"clothing\s*外部衣着声明规则|clothing\s*字段必须同时"),
     ClauseCheck("ots_leakage_guard", r"OTS\s*污染防护"),
     ClauseCheck("ots_environment_isolation", r"OTS\s*环境隔离规则"),
     ClauseCheck("ots_occluder_ban", r"OTS\s*前景遮挡禁令"),

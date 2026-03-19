@@ -4464,7 +4464,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         return unique;
     };
 
-    const getEntitiesPayloadFromJsonText = (jsonText) => {
+    const getAnalysisEntitiesPayloadFromJsonText = (jsonText) => {
         const objects = extractJsonObjectsFromText(jsonText);
         const normalizeKey = (key) => String(key || '').toLowerCase().replace(/[\s_\-]/g, '');
 
@@ -4707,7 +4707,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         let merged = { ...emptyPayload };
         const sources = [];
 
-        const parsedPayload = getEntitiesPayloadFromJsonText(text);
+        const parsedPayload = getAnalysisEntitiesPayloadFromJsonText(text);
         if (hasAny(parsedPayload)) {
             merged = mergePayload(merged, parsedPayload);
             sources.push('entities_json');
@@ -4740,7 +4740,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         const sourceText = llmRawResultContent || llmResultContent;
         const merged = getMergedEntitiesPayloadFromText(sourceText);
         if (merged?.payload) return merged.payload;
-        return getEntitiesPayloadFromJsonText(sourceText);
+        return getAnalysisEntitiesPayloadFromJsonText(sourceText);
     }, [llmRawResultContent, llmResultContent]);
 
     const extractAnalysisTextFromResult = useCallback((result) => {
@@ -5009,7 +5009,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         const markdownSource = normalizeLlmMarkdownTable(rawText || llmResultContent || '');
         const markdownSubjects = extractSubjectsFromMarkdownTable(markdownSource);
         const mergedPayload = getMergedEntitiesPayloadFromText(rawText || llmRawResultContent || llmResultContent);
-        const entitiesPayload = mergedPayload?.payload || getEntitiesPayloadFromJsonText(rawText || llmRawResultContent || llmResultContent);
+        const entitiesPayload = mergedPayload?.payload || getAnalysisEntitiesPayloadFromJsonText(rawText || llmRawResultContent || llmResultContent);
 
         if (!entitiesPayload) {
             return {
@@ -5355,8 +5355,8 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             );
 
             const recoveryText = recoveryResult?.result || recoveryResult?.analysis || (typeof recoveryResult === 'string' ? recoveryResult : JSON.stringify(recoveryResult, null, 2));
-            const baseEntities = getEntitiesPayloadFromJsonText(rawText || llmRawResultContent || llmResultContent) || { characters: [], props: [], environments: [] };
-            const patchEntities = getEntitiesPayloadFromJsonText(recoveryText || '');
+            const baseEntities = getAnalysisEntitiesPayloadFromJsonText(rawText || llmRawResultContent || llmResultContent) || { characters: [], props: [], environments: [] };
+            const patchEntities = getAnalysisEntitiesPayloadFromJsonText(recoveryText || '');
 
             if (!patchEntities) {
                 setSubjectRecoveryModal({
@@ -5473,7 +5473,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
     };
 
     const handleImportEntities = async () => {
-        const payload = getEntitiesPayloadFromJsonText(llmRawResultContent || llmResultContent);
+        const payload = getAnalysisEntitiesPayloadFromJsonText(llmRawResultContent || llmResultContent);
         if (!payload) {
             if (onLog) onLog('No entities JSON (characters/props/environments) found.', 'warning');
             alert(t('未检测到可导入的实体 JSON（characters/props/environments）。', 'No importable entities JSON found (characters/props/environments).'));
@@ -11437,13 +11437,65 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                 },
             };
         }
-        const normalizedPayload =
-            getEntitiesPayloadFromJsonText(JSON.stringify(payload))
-            || {
+
+        const normalizeKey = (key) => String(key || '').toLowerCase().replace(/[\s_\-]/g, '');
+        const readArray = (source, aliases) => {
+            if (!source || typeof source !== 'object') return [];
+            const aliasSet = new Set((aliases || []).map(normalizeKey));
+            for (const [rawKey, rawValue] of Object.entries(source)) {
+                if (Array.isArray(rawValue) && aliasSet.has(normalizeKey(rawKey))) {
+                    return rawValue;
+                }
+            }
+            return [];
+        };
+
+        const splitTypedItems = (items) => {
+            const next = { characters: [], props: [], environments: [] };
+            for (const item of (items || [])) {
+                if (!item || typeof item !== 'object') continue;
+                const itemType = normalizeKey(item.type || item.subject_type || item.entity_type || '');
+                if (['character', 'characters', 'char', 'role', 'roles', '人物', '角色'].includes(itemType)) {
+                    next.characters.push(item);
+                } else if (['prop', 'props', 'item', 'items', '道具', '物件'].includes(itemType)) {
+                    next.props.push(item);
+                } else if (['environment', 'environments', 'env', 'scene', '场景', '环境'].includes(itemType)) {
+                    next.environments.push(item);
+                }
+            }
+            return next;
+        };
+
+        const normalizedPayload = (() => {
+            const direct = {
+                characters: readArray(payload, ['characters', 'character', 'chars', 'roles', 'people', '人物', '角色']),
+                props: readArray(payload, ['props', 'prop', 'items', '道具', '物件']),
+                environments: readArray(payload, ['environments', 'environment', 'env', 'scenes', '场景', '环境']),
+            };
+            if (direct.characters.length || direct.props.length || direct.environments.length) {
+                return direct;
+            }
+
+            const wrapped = payload.entities || payload.entity || payload.subjects || payload.subject || null;
+            if (wrapped && typeof wrapped === 'object' && !Array.isArray(wrapped)) {
+                return {
+                    characters: readArray(wrapped, ['characters', 'character', 'chars', 'roles', 'people', '人物', '角色']),
+                    props: readArray(wrapped, ['props', 'prop', 'items', '道具', '物件']),
+                    environments: readArray(wrapped, ['environments', 'environment', 'env', 'scenes', '场景', '环境']),
+                };
+            }
+
+            const mixedItems = readArray(payload, ['entities', 'entity', 'subjectlist', 'subjects']);
+            if (mixedItems.length) {
+                return splitTypedItems(mixedItems);
+            }
+
+            return {
                 characters: Array.isArray(payload?.characters) ? payload.characters : [],
                 props: Array.isArray(payload?.props) ? payload.props : [],
                 environments: Array.isArray(payload?.environments) ? payload.environments : [],
             };
+        })();
 
         const plannedByType = {
             character: Array.isArray(normalizedPayload.characters) ? normalizedPayload.characters.length : 0,

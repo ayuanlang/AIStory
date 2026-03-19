@@ -66,6 +66,7 @@
 - 换装补全硬规则（Mandatory）：若缺失 subject 涉及同一人物的不同着装版本，必须把该着装差异视为重大状态变化，补成独立角色实体；不得把“制服版/便装版/脱外套版/戴头盔版”回填到同一角色条目里。
 - 服装暗示补全规则（Mandatory）：若原文虽未直接写出服装名，但出现“摸了下婚纱”“整了整将军服”“提起裙摆”“扯正领带”“扶正头纱/肩章/帽檐/披风”等足以锁定特殊服装状态的动作，补全时必须恢复对应着装状态角色，并与常服基态角色拆分为独立实体。
 - 一角双衣补全禁令（Mandatory）：补全时绝对禁止把两个服装版本塞回同一个角色条目。若候选描述出现“日间简约复古裙装，夜间棉质睡衣”这类日夜双着装并列，必须拆成两个独立角色实体，分别输出各自 clothing / prompt / dependency 信息。
+- clothing 外部衣着补全声明（Mandatory）：补全 characters 时，每个角色 JSON 的 `clothing` 字段都必须显式写明“其他剧本衣着描述：无/有”。若有其他服装版本，必须在当前角色条目的 clothing 中写成“其他剧本衣着描述：有；另见 CHAR:[@OtherOutfit]（...）。”，以便下游识别这不是唯一衣着版本。
 - 换装依赖补全规则（Mandatory）：补全换装角色时，必须依赖原角色建立 `visual_dependencies + dependency_strategy` 继承链；若换装对应明确服饰/装备道具，也必须在依赖逻辑中写清这些道具与角色版本的关系。
 - 失败重写示例（Failure -> Rewrite -> Downgraded Good, Mandatory Reference）：
   - Bad recovery draft: `Add a new woman character with similar style.` → 名称漂移、锚点缺失、未基于输入命名体系。
@@ -209,7 +210,7 @@ Part 2A:
       "role": "Role",
       "archetype": "Archetype",
       "appearance_cn": "Chinese Desc",
-      "clothing": "Clothing Desc",
+      "clothing": "当前服装：Clothing Desc。其他剧本衣着描述：无。",
       "action_characteristics": "Action Traits",
       "generation_prompt_en": "[Global Style] ... describe the observer placement and viewing direction in natural prose ...",
       "negative_prompt_en": "Entity-specific negatives ...",

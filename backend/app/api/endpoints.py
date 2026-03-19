@@ -112,6 +112,18 @@ router = APIRouter()
 media_service = MediaGenerationService()
 logger = logging.getLogger("api_logger")
 
+
+def _release_db_connection(db: Optional[Session], reason: str = "") -> None:
+    if db is None:
+        return
+    try:
+        db.rollback()
+    except Exception as exc:
+        if reason:
+            logger.debug("[db_release] rollback skipped | reason=%s error=%s", reason, exc)
+        else:
+            logger.debug("[db_release] rollback skipped | error=%s", exc)
+
 _VIDEO_DEDUP_WINDOW_SECONDS = 20
 _VIDEO_DEDUP_MAX_CACHE = 256
 _VIDEO_INFLIGHT_BY_KEY: Dict[str, asyncio.Task] = {}
@@ -5537,6 +5549,7 @@ async def analyze_project_novel_to_story_generator_fields(
         sys_prompt = sys_prompt_template
 
     try:
+        _release_db_connection(db, "analyze_novel_llm_call")
         resp = await llm_service.generate_content_with_fallback(user_prompt, sys_prompt, llm_config)
     except Exception as e:
         if reservation_tx:
@@ -6321,6 +6334,7 @@ async def generate_project_character_profile(
         billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
 
     try:
+        _release_db_connection(db, "character_profile_project_llm_call")
         resp = await llm_service.generate_content_with_fallback(user_prompt, sys_prompt, llm_config)
     except Exception as e:
         if reservation_tx:
@@ -6551,6 +6565,7 @@ def _run_episode_scene_generation_job(episode_id: int, req_payload: Dict[str, An
             return
 
         req = ScriptScenesGenerateRequest(**(req_payload or {}))
+        _release_db_connection(db, "episode_scene_generation_job")
         result = asyncio.run(
             generate_episode_scenes_from_story(
                 episode_id=episode_id,
@@ -6725,6 +6740,7 @@ async def generate_episode_character_profile(
         billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
 
     try:
+        _release_db_connection(db, "character_profile_episode_llm_call")
         resp = await llm_service.generate_content_with_fallback(user_prompt, sys_prompt, llm_config)
     except Exception as e:
         if reservation_tx:
@@ -7147,6 +7163,7 @@ async def generate_episode_scenes_from_story(
         billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
 
     try:
+        _release_db_connection(db, "generate_episode_scenes_llm_call")
         resp = await llm_service.generate_content_with_fallback(user_prompt, sys_prompt, llm_config)
     except Exception as e:
         if reservation_tx:
@@ -8736,6 +8753,7 @@ async def regenerate_scene(
     model = llm_config.get("model") if llm_config else None
     billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
 
+    _release_db_connection(db, "regenerate_scene_llm_call")
     resp = await llm_service.generate_content_with_fallback(user_prompt, system_instruction, llm_config)
     raw = str((resp or {}).get("content") or "").strip()
     if not raw:
@@ -9490,6 +9508,7 @@ def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id
             _persist_scene_ai_shots_batch_status(db, episode, latest)
 
             try:
+                _release_db_connection(db, "scene_ai_shots_batch_job")
                 generated = asyncio.run(
                     asyncio.wait_for(
                         ai_generate_shots(scene_id=sid, req=None, db=db, current_user=user),
@@ -9886,6 +9905,7 @@ async def ai_generate_shots(
             # Ensure we have at least a default task type if provider is missing (though check_balance handles None)
             billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
 
+        _release_db_connection(db, "ai_generate_shots_llm_call")
         response_dict = await llm_service.generate_content_with_fallback(user_input, system_prompt, llm_config)
         response_content_raw = response_dict.get("content", "")
         usage = response_dict.get("usage", {})
@@ -11239,6 +11259,7 @@ async def generate_sora_character(
     # Let's assume we call `generate_content` but with a special system prompt that triggers the provider's logic.
     
     try:
+        _release_db_connection(db, "sora_create_character_llm_call")
         response = await llm_service.generate_content_with_fallback(
             user_prompt=prompt,
             system_prompt="sora-create-character", # Special flag for the service to recognize?
@@ -20652,6 +20673,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                                 shot_name=shot.shot_name,
                                 asset_type="start_frame",
                             )
+                            _release_db_connection(db, "shot_media_batch_start_frame")
                             asyncio.run(_run_stage_with_retry(
                                 lambda: _run_generate_image(req=start_req, current_user=user, db=db),
                                 "start_frame",
@@ -20739,6 +20761,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                                 shot_name=shot.shot_name,
                                 asset_type="end_frame",
                             )
+                            _release_db_connection(db, "shot_media_batch_end_frame")
                             asyncio.run(_run_stage_with_retry(
                                 lambda: _run_generate_image(req=end_req, current_user=user, db=db),
                                 "end_frame",
@@ -20874,6 +20897,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             shot_name=shot.shot_name,
                             asset_type="video",
                         )
+                        _release_db_connection(db, "shot_media_batch_video")
                         asyncio.run(_run_stage_with_retry(
                             lambda: _run_generate_video(req=video_req, current_user=user, db=db),
                             "video",
