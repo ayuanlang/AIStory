@@ -34,6 +34,7 @@
 
 ## 与 scene_analysis 一致性硬规则
 本提示词下的资产生成规范必须与 `scene_analysis` 的资产规范一致，至少覆盖并严格执行：
+- 现有 Subjects 复用硬规则（强制）：若输入片段已携带当前项目已有 subjects 清单（名称、subject_ref、anchor_description、description/hint），补全过程必须把它们视为权威可复用资产，优先引用，不得重命名、重定义或重复补出同名/近义新实体。
 - 模板来源策略：`scene_analysis*.txt` 内嵌模板为唯一权威来源（Merged In-File）。补全过程不得依赖外部 `templates.py` 注入。
 - `0) 生图提示词清晰性`：每个实体 `generation_prompt_en` 必须显式含 `Viewpoint Anchor` + `Viewing Direction`。
 - 自然语言优先（Natural-Prose First, Mandatory）：`Viewpoint Anchor / Viewing Direction / Viewpoint Setup` 是内部约束语义，最终 `generation_prompt_en` 应优先写成自然流动的画面描述句，而不是连续字段栏目。
@@ -62,6 +63,10 @@
   - 批次回炉：若一轮 Subject 级重写后仍失败，必须丢弃当前补全批次并基于输入片段重新生成缺失实体。
 - 复杂度降级梯度（Complexity Downgrade Ladder, Mandatory）：若批次回炉后仍失败，必须按固定顺序降级：先删装饰性风格修辞，再删非关键细节，最后收束为最小可用资产版本；不得删掉命名闭环、依赖链、机位维度与锚点。
 - 重写回写责任（Rewrite Back-Propagation, Mandatory）：若补全条目因维度门禁被重写，必须同步修正其 `anchor_description`、`visual_dependencies`、`dependency_strategy.logic` 与对应 Part 2 分区内容，禁止结构字段与提示词语义脱节。
+- 换装补全硬规则（Mandatory）：若缺失 subject 涉及同一人物的不同着装版本，必须把该着装差异视为重大状态变化，补成独立角色实体；不得把“制服版/便装版/脱外套版/戴头盔版”回填到同一角色条目里。
+- 服装暗示补全规则（Mandatory）：若原文虽未直接写出服装名，但出现“摸了下婚纱”“整了整将军服”“提起裙摆”“扯正领带”“扶正头纱/肩章/帽檐/披风”等足以锁定特殊服装状态的动作，补全时必须恢复对应着装状态角色，并与常服基态角色拆分为独立实体。
+- 一角双衣补全禁令（Mandatory）：补全时绝对禁止把两个服装版本塞回同一个角色条目。若候选描述出现“日间简约复古裙装，夜间棉质睡衣”这类日夜双着装并列，必须拆成两个独立角色实体，分别输出各自 clothing / prompt / dependency 信息。
+- 换装依赖补全规则（Mandatory）：补全换装角色时，必须依赖原角色建立 `visual_dependencies + dependency_strategy` 继承链；若换装对应明确服饰/装备道具，也必须在依赖逻辑中写清这些道具与角色版本的关系。
 - 失败重写示例（Failure -> Rewrite -> Downgraded Good, Mandatory Reference）：
   - Bad recovery draft: `Add a new woman character with similar style.` → 名称漂移、锚点缺失、未基于输入命名体系。
   - Rewrite: keep the missing subject name exactly as provided by input, then restore anchor and prompt dimensions.

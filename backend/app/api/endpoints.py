@@ -1,5 +1,5 @@
 
-from fastapi import APIRouter, Depends, HTTPException, Body, Request, Query
+from fastapi import APIRouter, Depends, HTTPException, Body, Request, Query, Response
 from fastapi.responses import StreamingResponse
 import logging
 import smtplib
@@ -908,6 +908,28 @@ def _compact_job_result(result: Any) -> Any:
             compact["metadata"] = compact_meta
 
     return compact or {"url": result.get("url")}
+
+
+def _extract_job_result_url(result: Any) -> str:
+    if not isinstance(result, dict):
+        return ""
+
+    for key in ("url", "image_url", "imageUrl", "video_url", "videoUrl", "generated_url"):
+        value = str(result.get(key) or "").strip()
+        if value:
+            return value
+
+    nested = result.get("result")
+    if isinstance(nested, dict):
+        return _extract_job_result_url(nested)
+
+    return ""
+
+
+def _apply_no_store_headers(response: Response) -> None:
+    response.headers["Cache-Control"] = "no-cache, no-store, max-age=0, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
 
 
 def _build_provider_alias_lookup(db: Session) -> Dict[str, str]:
@@ -2298,8 +2320,25 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         # Inject project entity inventory as system-level subject baseline for recognizability.
         try:
             project_id_for_inventory = None
+            direct_project_id = getattr(request, "project_id", None)
+            try:
+                direct_project_id = int(direct_project_id) if direct_project_id is not None else None
+            except Exception:
+                direct_project_id = None
+
+            if direct_project_id:
+                try:
+                    _require_project_access(db, direct_project_id, current_user)
+                    project_id_for_inventory = direct_project_id
+                except HTTPException as access_err:
+                    logger.warning(
+                        "[analyze_scene] ignored direct project_id for subject inventory injection: project_id=%s detail=%s",
+                        direct_project_id,
+                        getattr(access_err, "detail", None),
+                    )
+
             ep_id_for_inventory = getattr(request, "episode_id", None)
-            if ep_id_for_inventory:
+            if not project_id_for_inventory and ep_id_for_inventory:
                 episode_for_inventory = db.query(Episode).filter(Episode.id == ep_id_for_inventory).first()
                 if episode_for_inventory:
                     project_id_for_inventory = int(episode_for_inventory.project_id)
@@ -2307,11 +2346,24 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             if project_id_for_inventory:
                 inventory = _build_project_subject_inventory(db, project_id_for_inventory, limit_per_type=80)
                 inventory_block = _format_project_subject_inventory_block(inventory)
+                inventory_system_guard = (
+                    "\n\n"
+                    "[Existing Subjects Reuse Guard - High Priority]\n"
+                    "The injected System-level Subjects Inventory contains authoritative existing reusable subjects for this project.\n"
+                    "You MUST reuse these existing subjects first whenever they match the script.\n"
+                    "Do NOT rename, redefine, replace, or regenerate them as new entities.\n"
+                    "When names and descriptions are provided, treat both as canonical recognition anchors.\n"
+                    "Only create a new subject when the script clearly requires an entity that is not already present in the inventory.\n"
+                    "If you output entity JSON, existing inventory subjects must be reused by reference and MUST NOT be duplicated as newly generated entities."
+                )
+                system_instruction = f"{system_instruction}{inventory_system_guard}"
                 inventory_guidance = (
                     "System-level subject reuse rules:\n"
                     "- Treat the above inventory as authoritative identifiers for this project.\n"
                     "- Prefer reusing listed subject_ref names directly in Scene Subjects and Part 2 outputs.\n"
-                    "- Preserve anchor semantics when generating/repairing character, prop, and environment subjects."
+                    "- Preserve anchor semantics when generating/repairing character, prop, and environment subjects.\n"
+                    "- Use both the provided names and descriptions/anchors as recognition baselines.\n"
+                    "- Do not duplicate existing inventory subjects in newly generated entity outputs."
                 )
                 user_content = f"{inventory_block}\n\n{inventory_guidance}\n\n{user_content}"
                 logger.info(
@@ -2319,6 +2371,12 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     len(inventory.get("characters") or []),
                     len(inventory.get("props") or []),
                     len(inventory.get("environments") or []),
+                )
+            else:
+                logger.info(
+                    "Skipped system-level subject inventory injection for analyze_scene: no accessible project_id resolved (direct_project_id=%s, episode_id=%s)",
+                    direct_project_id,
+                    ep_id_for_inventory,
                 )
         except Exception as inventory_inject_err:
             logger.warning("[analyze_scene] failed to inject system-level subject inventory: %s", inventory_inject_err)
@@ -10602,16 +10660,25 @@ def create_entity(
     current_user: User = Depends(get_current_user)
 ):
     _require_project_access(db, project_id, current_user)
-        
-    # Check if entity with same name exists in project
-    existing_entity = db.query(Entity).filter(
-        Entity.project_id == project_id,
-        Entity.name == entity.name
-    ).first()
+
+    incoming_name = str(entity.name or "").strip()
+    incoming_name_en = str(entity.name_en or "").strip()
+
+    # Reuse existing subject instead of overwriting when either canonical name or name_en already exists.
+    existing_query = db.query(Entity).filter(Entity.project_id == project_id)
+    existing_entity = None
+    if incoming_name and incoming_name_en:
+        existing_entity = existing_query.filter(
+            or_(Entity.name == incoming_name, Entity.name_en == incoming_name_en)
+        ).first()
+    elif incoming_name:
+        existing_entity = existing_query.filter(Entity.name == incoming_name).first()
+    elif incoming_name_en:
+        existing_entity = existing_query.filter(Entity.name_en == incoming_name_en).first()
 
     if existing_entity:
-        # If entity exists, do NOT update it (as per "do not import repeatedly" requirement).
-        # We simply return the existing entity essentially ignoring the import data for this specific name.
+        # If entity exists, do NOT update or overwrite it during subject import.
+        # Reuse the existing DB row and ignore incoming fields for this duplicate entity.
         return existing_entity
     else:
         # Create new
@@ -15597,6 +15664,14 @@ def _bind_generated_media_to_shot(db: Session, current_user: User, req: Any, med
 
     db.add(shot)
     db.commit()
+    logger.info(
+        "[ShotMediaBind] shot_id=%s asset_type=%s media_url=%s project_id=%s user_id=%s",
+        shot_id_int,
+        asset_type or None,
+        media_url,
+        getattr(shot, "project_id", None),
+        getattr(current_user, "id", None),
+    )
 
 
 def _bind_generated_media_to_entity(db: Session, current_user: User, req: Any, media_url: Optional[str]) -> None:
@@ -15647,6 +15722,14 @@ def _bind_generated_media_to_entity(db: Session, current_user: User, req: Any, m
     entity.image_url = media_url
     db.add(entity)
     db.commit()
+    logger.info(
+        "[SubjectMediaBind] entity_id=%s name=%s project_id=%s media_url=%s user_id=%s",
+        getattr(entity, "id", None),
+        getattr(entity, "name", None) or getattr(entity, "name_en", None),
+        getattr(entity, "project_id", None),
+        media_url,
+        getattr(current_user, "id", None),
+    )
 
 @router.post("/generate/image")
 async def generate_image_endpoint(
@@ -16226,6 +16309,8 @@ def _set_image_job(job_id: str, **fields) -> None:
     with IMAGE_JOB_LOCK:
         _prune_image_jobs_locked()
         current = IMAGE_JOB_STORE.get(job_id, {})
+        previous_status = str(current.get("status") or "").strip().lower()
+        previous_result_url = _extract_job_result_url(current.get("result"))
         if "result" in fields:
             fields["result"] = _compact_job_result(fields.get("result"))
         current.update(fields)
@@ -16233,6 +16318,17 @@ def _set_image_job(job_id: str, **fields) -> None:
         IMAGE_JOB_STORE[job_id] = current
 
         status = str(current.get("status") or "").strip().lower()
+        result_url = _extract_job_result_url(current.get("result"))
+        if status != previous_status or (result_url and result_url != previous_result_url):
+            logger.info(
+                "[ImageJob] state updated | job_id=%s prev_status=%s status=%s has_result_url=%s result_url=%s error=%s",
+                job_id,
+                previous_status or None,
+                status or None,
+                bool(result_url),
+                result_url or None,
+                current.get("error"),
+            )
         if status in {"succeeded", "failed", "canceled", "cancelled", "error"}:
             task_scope = str(current.get("task_scope") or "").strip()
             if task_scope and IMAGE_ACTIVE_SCOPE_STORE.get(task_scope) == job_id:
@@ -16299,6 +16395,7 @@ async def _dispatch_generation_callback(kind: str, callback_url: str, job: Dict[
         return
 
     callback_payload = _build_generation_callback_payload(kind, job)
+    callback_result_url = _extract_job_result_url(callback_payload.get("result"))
     headers = {
         "Content-Type": "application/json",
         "User-Agent": "AIStory-Callback/1.0",
@@ -16324,11 +16421,13 @@ async def _dispatch_generation_callback(kind: str, callback_url: str, job: Dict[
 
         response = await asyncio.to_thread(_post_callback)
         logger.info(
-            "[GenerationCallback] dispatched kind=%s job_id=%s callback_url=%s status_code=%s",
+            "[GenerationCallback] dispatched kind=%s job_id=%s callback_url=%s status_code=%s has_result_url=%s result_url=%s",
             kind,
             job.get("job_id"),
             callback_url,
             getattr(response, "status_code", None),
+            bool(callback_result_url),
+            callback_result_url or None,
         )
     except Exception as e:
         logger.warning(
@@ -16609,8 +16708,10 @@ async def submit_generate_image_endpoint(
 @router.get("/generate/image/jobs/{job_id}")
 def get_generate_image_job_status(
     job_id: str,
+    response: Response,
     current_claims: Dict[str, Any] = Depends(get_current_claims),
 ):
+    _apply_no_store_headers(response)
     with IMAGE_JOB_LOCK:
         job = dict(IMAGE_JOB_STORE.get(job_id) or {})
 
@@ -16662,6 +16763,16 @@ def get_generate_image_job_status(
     )
     if not is_superuser and not is_owner:
         raise HTTPException(status_code=403, detail="Not authorized")
+
+    result_url = _extract_job_result_url(job.get("result"))
+    if result_url and image_status in {"queued", "running"}:
+        logger.warning(
+            "[ImageJob] polling anomaly | job_id=%s status=%s result_url=%s user_id=%s",
+            job_id,
+            image_status,
+            result_url,
+            owner_id,
+        )
 
     return {
         "job_id": job.get("job_id"),
@@ -18215,6 +18326,8 @@ def _set_video_job(job_id: str, **fields) -> None:
     with VIDEO_JOB_LOCK:
         _prune_video_jobs_locked()
         current = VIDEO_JOB_STORE.get(job_id, {})
+        previous_status = str(current.get("status") or "").strip().lower()
+        previous_result_url = _extract_job_result_url(current.get("result"))
         if "result" in fields:
             fields["result"] = _compact_job_result(fields.get("result"))
         current.update(fields)
@@ -18222,6 +18335,17 @@ def _set_video_job(job_id: str, **fields) -> None:
         VIDEO_JOB_STORE[job_id] = current
 
         status = str(current.get("status") or "").strip().lower()
+        result_url = _extract_job_result_url(current.get("result"))
+        if status != previous_status or (result_url and result_url != previous_result_url):
+            logger.info(
+                "[VideoJob] state updated | job_id=%s prev_status=%s status=%s has_result_url=%s result_url=%s error=%s",
+                job_id,
+                previous_status or None,
+                status or None,
+                bool(result_url),
+                result_url or None,
+                current.get("error"),
+            )
         if status in {"succeeded", "failed", "canceled", "cancelled", "error"}:
             task_scope = str(current.get("task_scope") or "").strip()
             if task_scope and VIDEO_ACTIVE_SCOPE_STORE.get(task_scope) == job_id:
@@ -18310,10 +18434,11 @@ async def _run_generate_video_job(job_id: str, user_id: int, req_payload: Dict[s
 
 
 @router.post("/generate/callback/{ticket}")
-async def receive_generation_callback(ticket: str, request: Request):
+async def receive_generation_callback(ticket: str, request: Request, response: Response):
     stable_ticket = str(ticket or "").strip()
     if not stable_ticket:
         raise HTTPException(status_code=400, detail="Invalid callback ticket")
+    _apply_no_store_headers(response)
 
     try:
         payload = await request.json()
@@ -18329,14 +18454,25 @@ async def receive_generation_callback(ticket: str, request: Request):
     _verify_kie_webhook_request(request, payload if isinstance(payload, dict) else {})
 
     _set_generation_callback_payload(stable_ticket, payload)
+    payload_status = str((payload or {}).get("status") or "").strip().lower() if isinstance(payload, dict) else ""
+    payload_result_url = _extract_job_result_url(payload if isinstance(payload, dict) else {})
+    logger.info(
+        "[GenerationCallback] received ticket=%s status=%s has_result_url=%s result_url=%s remote=%s",
+        stable_ticket,
+        payload_status or None,
+        bool(payload_result_url),
+        payload_result_url or None,
+        getattr(getattr(request, "client", None), "host", None),
+    )
     return {"ok": True, "ticket": stable_ticket}
 
 
 @router.get("/generate/callback/{ticket}")
-def get_generation_callback_result(ticket: str):
+def get_generation_callback_result(ticket: str, response: Response):
     stable_ticket = str(ticket or "").strip()
     if not stable_ticket:
         raise HTTPException(status_code=400, detail="Invalid callback ticket")
+    _apply_no_store_headers(response)
 
     with GENERATION_CALLBACK_LOCK:
         _prune_generation_callback_locked()
@@ -18468,8 +18604,10 @@ async def submit_generate_video_endpoint(
 @router.get("/generate/video/jobs/{job_id}")
 def get_generate_video_job_status(
     job_id: str,
+    response: Response,
     current_claims: Dict[str, Any] = Depends(get_current_claims),
 ):
+    _apply_no_store_headers(response)
     with VIDEO_JOB_LOCK:
         job = dict(VIDEO_JOB_STORE.get(job_id) or {})
 
@@ -18521,6 +18659,16 @@ def get_generate_video_job_status(
     )
     if not is_superuser and not is_owner:
         raise HTTPException(status_code=403, detail="Not authorized")
+
+    result_url = _extract_job_result_url(job.get("result"))
+    if result_url and video_status in {"queued", "running"}:
+        logger.warning(
+            "[VideoJob] polling anomaly | job_id=%s status=%s result_url=%s user_id=%s",
+            job_id,
+            video_status,
+            result_url,
+            owner_id,
+        )
 
     return {
         "job_id": job.get("job_id"),

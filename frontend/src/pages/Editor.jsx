@@ -5349,7 +5349,9 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 null,
                 activeEpisode.id,
                 analysisAttentionNotes,
-                selectedReuseSubjectAssets
+                selectedReuseSubjectAssets,
+                null,
+                projectId
             );
 
             const recoveryText = recoveryResult?.result || recoveryResult?.analysis || (typeof recoveryResult === 'string' ? recoveryResult : JSON.stringify(recoveryResult, null, 2));
@@ -5756,7 +5758,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         }
         try {
             // Coverage check is an auxiliary audit call and must not overwrite episode ai_scene_analysis_result.
-            const result = await analyzeScene(userPrompt, systemPrompt, null, null, null, null);
+            const result = await analyzeScene(userPrompt, systemPrompt, null, null, null, null, null, projectId);
             const analyzedText = extractAnalysisTextFromResult(result);
             const report = parseCoreCoverageReport(analyzedText);
             setCoreCoverageReport(report);
@@ -8089,7 +8091,8 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                             setActiveAnalysisTaskId(String(taskId || '').trim());
                             saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt });
                         },
-                    }
+                    },
+                    projectId
                 ),
                 { startedAt, baselineText: baselineAnalysisText }
             );
@@ -8398,7 +8401,8 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                             setActiveAnalysisTaskId(String(taskId || '').trim());
                             saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt });
                         },
-                    }
+                    },
+                    projectId
                 ),
                 { startedAt, baselineText: baselineAnalysisText }
             );
@@ -11660,8 +11664,8 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
 
             onLog?.(
                 t(
-                    `已重新导入重生成 LLM 内容：导入/更新 ${importResult.created} 条，跳过 ${importResult.skipped} 条。`,
-                    `Re-imported regenerated LLM content: imported/updated ${importResult.created}, skipped ${importResult.skipped}.`
+                    `已重新导入重生成 LLM 内容：新增 ${importResult.created} 条，复用并跳过 ${importResult.skipped} 条。`,
+                    `Re-imported regenerated LLM content: created ${importResult.created}, reused/skipped ${importResult.skipped}.`
                 ),
                 'success'
             );
@@ -12440,11 +12444,11 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
             onLog?.(
                 t(
                     ((Boolean(result?.entity_only_mode || sceneRegenEntityOnlyMode))
-                        ? `场景重生成完成（仅补实体模式）：未替换场景/分镜，已回填环境锚点、关联角色、关键道具；按 subjects_json 导入/更新 ${importResult.created} 条（跳过 ${importResult.skipped} 条）。`
+                        ? `场景重生成完成（仅补实体模式）：未替换场景/分镜，已回填环境锚点、关联角色、关键道具；按 subjects_json 新增 ${importResult.created} 条（复用并跳过 ${importResult.skipped} 条）。`
                         : `场景重生成完成：替换 1 个旧场景，新增 ${generated.length} 个场景；按 subjects_json 增量导入 ${importResult.created} 条（跳过已存在 ${importResult.skipped} 条）。`),
                     ((Boolean(result?.entity_only_mode || sceneRegenEntityOnlyMode))
-                        ? `Scene regeneration completed (Entity-only mode): scene/shots unchanged; patched environment anchor, linked characters, key props; imported/updated ${importResult.created} entities from subjects_json (skipped ${importResult.skipped}).`
-                        : `Scene regeneration completed: replaced 1 scene with ${generated.length} new scene(s); incrementally imported ${importResult.created} subject entities from subjects_json (skipped existing ${importResult.skipped}).`)
+                        ? `Scene regeneration completed (Entity-only mode): scene/shots unchanged; patched environment anchor, linked characters, key props; created ${importResult.created} entities from subjects_json and reused/skipped ${importResult.skipped}.`
+                        : `Scene regeneration completed: replaced 1 scene with ${generated.length} new scene(s); incrementally created ${importResult.created} subject entities from subjects_json and reused/skipped ${importResult.skipped} existing subjects.`)
                 ),
                 'success'
             );
@@ -14146,6 +14150,27 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                     }
 
                     const status = String(statusResp?.status || '').trim().toLowerCase();
+                    const generatedUrl = extractImageJobResultUrl(statusResp);
+                    if (generatedUrl) {
+                        try {
+                            await updateEntity(Number(entityId), { image_url: generatedUrl });
+                        } catch {
+                            // Best effort; local refresh still updates UX.
+                        }
+                        if (!disposed && isMountedRef.current) {
+                            setAllEntities(prev => prev.map(item => String(item?.id) === String(entityId) ? { ...item, image_url: generatedUrl } : item));
+                            setEntities(prev => prev.map(item => String(item?.id) === String(entityId) ? { ...item, image_url: generatedUrl } : item));
+                            setViewingEntity(prev => (String(prev?.id || '') === String(entityId) ? { ...prev, image_url: generatedUrl } : prev));
+                            setSelectedEntity(prev => (String(prev?.id || '') === String(entityId) ? { ...prev, image_url: generatedUrl } : prev));
+                            if (showImageModal && String(selectedEntity?.id || '') === String(entityId)) {
+                                setShowImageModal(false);
+                            }
+                        }
+                        if (onLog) onLog(t(`主体生成完成：${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
+                        completed.push(entityId);
+                        continue;
+                    }
+
                     if (status === 'queued' || status === 'running') {
                         const startedAtMs = Number(job?.startedAt || 0) || 0;
                         if (startedAtMs > 0 && (Date.now() - startedAtMs) > SUBJECT_IMAGE_JOB_MAX_RUNNING_MS) {
@@ -14161,23 +14186,6 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                     }
 
                     if (status === 'succeeded' || status === 'completed') {
-                        const generatedUrl = extractImageJobResultUrl(statusResp);
-                        if (generatedUrl) {
-                            try {
-                                await updateEntity(Number(entityId), { image_url: generatedUrl });
-                            } catch {
-                                // Best effort; local refresh still updates UX.
-                            }
-                            if (!disposed && isMountedRef.current) {
-                                setAllEntities(prev => prev.map(item => String(item?.id) === String(entityId) ? { ...item, image_url: generatedUrl } : item));
-                                setEntities(prev => prev.map(item => String(item?.id) === String(entityId) ? { ...item, image_url: generatedUrl } : item));
-                                setViewingEntity(prev => (String(prev?.id || '') === String(entityId) ? { ...prev, image_url: generatedUrl } : prev));
-                                setSelectedEntity(prev => (String(prev?.id || '') === String(entityId) ? { ...prev, image_url: generatedUrl } : prev));
-                                if (showImageModal && String(selectedEntity?.id || '') === String(entityId)) {
-                                    setShowImageModal(false);
-                                }
-                            }
-                        }
                         if (onLog) onLog(t(`主体生成完成：${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
                         completed.push(entityId);
                         continue;
@@ -18116,13 +18124,20 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                         try {
                             const status = await getVideoGenerationJobStatus(jobId);
                             const phase = String(status?.status || '').toLowerCase();
+                            const resultUrl = String(
+                                status?.result?.url
+                                || status?.result?.video_url
+                                || status?.url
+                                || status?.video_url
+                                || ''
+                            ).trim();
                             errorStreak = 0;
                             waitMs = 3000;
 
-                            if (phase === 'succeeded') {
-                                const resultUrl = String(status?.result?.url || '').trim();
-                                if (resultUrl) {
-                                    const newData = { video_url: resultUrl };
+                            if (resultUrl || phase === 'succeeded' || phase === 'completed') {
+                                const serverBoundVideoUrl = resultUrl || await probeShotVideoUrl(stableShotId);
+                                if (serverBoundVideoUrl) {
+                                    const newData = { video_url: serverBoundVideoUrl };
                                     try {
                                         await onUpdateShot(stableShotId, newData);
                                     } catch (persistErr) {
@@ -18140,7 +18155,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                             }
 
                             if (phase === 'failed' || phase === 'error' || phase === 'canceled' || phase === 'cancelled') {
-                                const resultUrl = String(status?.result?.url || '').trim();
                                 const serverBoundVideoUrl = resultUrl || await probeShotVideoUrl(stableShotId);
                                 if (serverBoundVideoUrl) {
                                     const newData = { video_url: serverBoundVideoUrl };
@@ -22914,6 +22928,7 @@ const ImportModal = ({ isOpen, onClose, onImport, defaultType = 'auto', project,
             const token = localStorage.getItem('token');
             const body = { 
                 text: text,
+                project_id: projectId,
                 prompt_file: "scene_analysis.txt",
                 include_negative_prompt: true,
             };
@@ -24149,6 +24164,18 @@ const Editor = ({
                 try {
                     addLog("Processing Entities block...", "process");
                     let count = 0;
+                    const skippedExistingSubjectCounts = { character: 0, prop: 0, environment: 0 };
+                    const logSkippedExistingSubject = (type, entityName, entityNameEn = '') => {
+                        const normalizedType = String(type || '').trim().toLowerCase();
+                        if (Object.prototype.hasOwnProperty.call(skippedExistingSubjectCounts, normalizedType)) {
+                            skippedExistingSubjectCounts[normalizedType] += 1;
+                        }
+                        const aliasSuffix = entityNameEn ? ` / ${entityNameEn}` : '';
+                        addLog(
+                            `Skipped existing ${normalizedType} subject during import: ${entityName}${aliasSuffix}`,
+                            'info'
+                        );
+                    };
                     const plannedCharacterCount = Array.isArray(data.characters) ? data.characters.length : 0;
                     const plannedPropCount = Array.isArray(data.props) ? data.props.length : 0;
                     const plannedEnvironmentCount = Array.isArray(data.environments) ? data.environments.length : 0;
@@ -24211,16 +24238,16 @@ const Editor = ({
                                 const existing = existingEntityMap.get(normalizeEntityKey('character', entityName))
                                     || (entityNameEn ? existingEntityMap.get(normalizeEntityKey('character', entityNameEn)) : null);
                                 if (existing?.id) {
-                                    await updateEntity(existing.id, payload);
+                                    logSkippedExistingSubject('character', entityName, entityNameEn);
                                 } else {
                                     const created = await createEntity(id, payload);
                                     if (created?.id) {
                                         existingEntityMap.set(normalizeEntityKey('character', entityName), created);
                                         if (entityNameEn) existingEntityMap.set(normalizeEntityKey('character', entityNameEn), created);
+                                        count++;
+                                        importedSubjectCounts.character += 1;
                                     }
                                 }
-                                count++;
-                                importedSubjectCounts.character += 1;
                             } catch (err) {
                                 addLog(`Character import failed (${entityName}): ${err?.message || err}`, 'warning');
                             }
@@ -24273,16 +24300,16 @@ const Editor = ({
                                 const existing = existingEntityMap.get(normalizeEntityKey('prop', entityName))
                                     || (entityNameEn ? existingEntityMap.get(normalizeEntityKey('prop', entityNameEn)) : null);
                                 if (existing?.id) {
-                                    await updateEntity(existing.id, payload);
+                                    logSkippedExistingSubject('prop', entityName, entityNameEn);
                                 } else {
                                     const created = await createEntity(id, payload);
                                     if (created?.id) {
                                         existingEntityMap.set(normalizeEntityKey('prop', entityName), created);
                                         if (entityNameEn) existingEntityMap.set(normalizeEntityKey('prop', entityNameEn), created);
+                                        count++;
+                                        importedSubjectCounts.prop += 1;
                                     }
                                 }
-                                count++;
-                                importedSubjectCounts.prop += 1;
                             } catch (err) {
                                 addLog(`Prop import failed (${entityName}): ${err?.message || err}`, 'warning');
                             }
@@ -24339,16 +24366,16 @@ const Editor = ({
                                 const existing = existingEntityMap.get(normalizeEntityKey('environment', entityName))
                                     || (entityNameEn ? existingEntityMap.get(normalizeEntityKey('environment', entityNameEn)) : null);
                                 if (existing?.id) {
-                                    await updateEntity(existing.id, payload);
+                                    logSkippedExistingSubject('environment', entityName, entityNameEn);
                                 } else {
                                     const created = await createEntity(id, payload);
                                     if (created?.id) {
                                         existingEntityMap.set(normalizeEntityKey('environment', entityName), created);
                                         if (entityNameEn) existingEntityMap.set(normalizeEntityKey('environment', entityNameEn), created);
+                                        count++;
+                                        importedSubjectCounts.environment += 1;
                                     }
                                 }
-                                count++;
-                                importedSubjectCounts.environment += 1;
                             } catch (err) {
                                 addLog(`Environment import failed (${entityName}): ${err?.message || err}`, 'warning');
                             }
@@ -24357,9 +24384,24 @@ const Editor = ({
                     
                     if (count > 0) {
                         addLog(`Imported ${count} entities from block.`, "success");
+                        const skippedExistingTotal = skippedExistingSubjectCounts.character + skippedExistingSubjectCounts.prop + skippedExistingSubjectCounts.environment;
+                        if (skippedExistingTotal > 0) {
+                            addLog(
+                                `Reused existing subjects without overwrite: character=${skippedExistingSubjectCounts.character}, prop=${skippedExistingSubjectCounts.prop}, environment=${skippedExistingSubjectCounts.environment}.`,
+                                'info'
+                            );
+                        }
                         changesMade = true;
                     } else {
-                        addLog('Entities block found but no importable subjects were created.', 'warning');
+                        const skippedExistingTotal = skippedExistingSubjectCounts.character + skippedExistingSubjectCounts.prop + skippedExistingSubjectCounts.environment;
+                        if (skippedExistingTotal > 0) {
+                            addLog(
+                                `Entities block matched existing subjects only; no overwrite performed. Reused existing subjects: character=${skippedExistingSubjectCounts.character}, prop=${skippedExistingSubjectCounts.prop}, environment=${skippedExistingSubjectCounts.environment}.`,
+                                'info'
+                            );
+                        } else {
+                            addLog('Entities block found but no importable subjects were created.', 'warning');
+                        }
                     }
                 } catch (e) {
                     addLog(`Entity Import Failed: ${e.message}`, "error");

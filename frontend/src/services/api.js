@@ -246,7 +246,7 @@ const fetchVideoJobStatusLimited = async (jobId, { baseURL } = {}) => {
         try {
             const response = await api.get(
                 `/generate/video/jobs/${stableJobId}`,
-                baseURL ? { baseURL } : undefined
+                buildNoCachePollConfig(baseURL)
             );
             return response?.data || {};
         } finally {
@@ -1196,6 +1196,43 @@ const isTransientPollingError = (error) => {
     return code === 'ECONNABORTED' || code === 'ERR_NETWORK';
 };
 
+const buildNoCachePollConfig = (baseURL) => ({
+    ...(baseURL ? { baseURL } : {}),
+    params: { _ts: Date.now() },
+    headers: {
+        'Cache-Control': 'no-cache, no-store, max-age=0',
+        Pragma: 'no-cache',
+    },
+});
+
+const normalizeGenerationResult = (payload) => {
+    const root = (payload && typeof payload === 'object') ? payload : {};
+    const nested = (root.result && typeof root.result === 'object') ? root.result : {};
+    const url = [
+        nested?.url,
+        nested?.image_url,
+        nested?.imageUrl,
+        nested?.video_url,
+        nested?.videoUrl,
+        nested?.generated_url,
+        root?.url,
+        root?.image_url,
+        root?.imageUrl,
+        root?.video_url,
+        root?.videoUrl,
+        root?.generated_url,
+    ].map((value) => String(value || '').trim()).find(Boolean) || '';
+
+    if (!url) {
+        return nested;
+    }
+
+    return {
+        ...(nested || {}),
+        url,
+    };
+};
+
 const isLocalLikeHostname = (hostname) => {
     const host = String(hostname || '').trim().toLowerCase();
     if (!host) return false;
@@ -1265,18 +1302,25 @@ const pollGenerationCallbackUntilDone = async (
     while (Date.now() - start < timeoutMs) {
         if (cancelledRef?.current) throw new Error(`${kind} callback polling cancelled`);
         try {
-            const response = await api.get(`/generate/callback/${encodeURIComponent(stableTicket)}`);
+            const response = await api.get(
+                `/generate/callback/${encodeURIComponent(stableTicket)}`,
+                buildNoCachePollConfig()
+            );
             const data = response?.data || {};
             const received = !!data?.received;
 
             if (received) {
                 const payload = (data?.payload && typeof data.payload === 'object') ? data.payload : {};
                 const status = String(payload?.status || '').toLowerCase();
+                const result = normalizeGenerationResult(payload);
 
-                if (status === 'succeeded') {
-                    return payload?.result || {};
+                if (result?.url) {
+                    return result;
                 }
-                if (status === 'failed' || status === 'canceled' || status === 'cancelled') {
+                if (status === 'succeeded' || status === 'completed') {
+                    return result || payload?.result || {};
+                }
+                if (status === 'failed' || status === 'error' || status === 'canceled' || status === 'cancelled') {
                     throw new Error(payload?.error || `${kind} callback returned ${status}`);
                 }
             }
@@ -1308,15 +1352,19 @@ const pollImageJobUntilDone = async (
         try {
             const response = await api.get(
                 `/generate/image/jobs/${jobId}`,
-                baseURL ? { baseURL } : undefined
+                buildNoCachePollConfig(baseURL)
             );
             const data = response?.data || {};
             const status = String(data.status || '').toLowerCase();
+            const result = normalizeGenerationResult(data);
 
-            if (status === 'succeeded') {
-                return data.result || {};
+            if (result?.url) {
+                return result;
             }
-            if (status === 'failed') {
+            if (status === 'succeeded' || status === 'completed') {
+                return result || data.result || {};
+            }
+            if (status === 'failed' || status === 'error' || status === 'canceled' || status === 'cancelled') {
                 throw new Error(data.error || 'Image generation job failed');
             }
 
@@ -1347,11 +1395,15 @@ const pollVideoJobUntilDone = async (
         try {
             const data = await fetchVideoJobStatusLimited(jobId, { baseURL });
             const status = String(data.status || '').toLowerCase();
+            const result = normalizeGenerationResult(data);
 
-            if (status === 'succeeded') {
-                return data.result || {};
+            if (result?.url) {
+                return result;
             }
-            if (status === 'failed') {
+            if (status === 'succeeded' || status === 'completed') {
+                return result || data.result || {};
+            }
+            if (status === 'failed' || status === 'error' || status === 'canceled' || status === 'cancelled') {
                 throw new Error(data.error || 'Video generation job failed');
             }
 
@@ -1539,7 +1591,7 @@ export const submitImageGenerationJob = async (prompt, provider = null, ref_imag
 };
 
 export const getImageGenerationJobStatus = async (jobId) => {
-    const response = await api.get(`/generate/image/jobs/${jobId}`);
+    const response = await api.get(`/generate/image/jobs/${jobId}`, buildNoCachePollConfig());
     return response.data;
 };
 
@@ -2307,12 +2359,15 @@ export const refinePrompt = async (original_prompt, instruction, type = 'image')
     return await asyncLLMPost('/tools/refine_prompt', { original_prompt, instruction, type });
 };
 
-export const analyzeScene = async (scriptText, systemPrompt = null, projectMetadata = null, episodeId = null, analysisAttentionNotes = null, reuseSubjectAssets = null, runtimeHooks = null) => {
+export const analyzeScene = async (scriptText, systemPrompt = null, projectMetadata = null, episodeId = null, analysisAttentionNotes = null, reuseSubjectAssets = null, runtimeHooks = null, projectId = null) => {
     const payload = { 
         text: scriptText,
         system_prompt: systemPrompt,
         include_negative_prompt: true,
     };
+    if (projectId) {
+        payload.project_id = projectId;
+    }
     if (episodeId) {
         payload.episode_id = episodeId;
     }

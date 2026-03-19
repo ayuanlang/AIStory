@@ -30,6 +30,9 @@
 ### 1) 场景/环境分离
 - **Environment**：物理容器，必须空镜（无人无物）；可复用、可变体。
 - **Scene**：发生在 Environment 内的时空事件，负责人物/道具落位，不得改墙体等固定结构。
+- 现有 Subjects 复用硬规则（Mandatory）：若输入中已注入“系统级 / 当前已有 subjects 列表”（包含名称、`subject_ref`、`anchor_description`、简述或 description），则这些 subjects 属于**权威可复用资产**。场景分析阶段必须优先复用它们，禁止重命名、重定义、平替、重复生成或以近义名再造一份新 subject。
+- 现有 Subjects 引用规则（Mandatory）：当输入已给出可复用 subjects 时，`Scene Subjects`、`Linked Characters`、`Key Props`、`Environment Name`、`Beats`、`Subject Index` 与 `Part 2` 都必须优先沿用这些现有 subjects 的原始命名与描述锚点；只有剧本中确实出现**库存里没有**的新实体时，才允许新增 subject。
+- 现有 Subjects 禁重复输出（Mandatory）：已在输入 inventory 中存在的 subjects，禁止再次作为“新生成实体”重复写入；若只是当前 Scene 需要使用它们，应直接引用复用，并通过 `visual_dependencies` / `dependency_strategy` 连接到已有资产，而不是重新产出一份内容近似的新对象。
 
 #### Environment 硬规则
 - 默认高审美表达（现代、优雅、材质清晰、光影分层）。
@@ -161,6 +164,15 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
   - 人物或人化实体（含拟人角色、会话主体、具备角色行为意图的智能体）一律归入 `character`；
   - 跨多个 Scene 重复出现并承担叙事作用的非人实体归入 `prop`；
   - 其余非人实体归入所属 `environment`，作为环境组成部分显式出现。
+- 着装重大状态变化前置规则（Mandatory）：在 `Scene Subjects` 抽取阶段，只要同一人物出现**可识别的着装变化**，且该变化会改变角色轮廓、身份识别、职业状态、行动状态或叙事阅读（如制服 -> 便装、外套脱下、礼服 -> 战损装、口罩/头盔/披风/防护服上身或移除、明显换鞋、整套配色与层次切换），就必须视为**重大状态变化**，不得继续并入同一 `character` subject。
+- 服装暗示识别规则（Mandatory）：服装证据不只包括直接文字描述，也包括足以锁定特定服装状态的动作、触碰或整理行为。凡是剧本出现“摸了下婚纱”“整了整将军服”“提起裙摆”“扯正领带”“扣上白大褂/雨衣/盔甲”“扶正头纱/肩章/帽檐/披风”等暗示，必须判定对应特殊着装已经存在，并将其作为**不同着装状态的独立角色**抽取；不得仍并入“常服基态角色”。
+- 换装独立实体强制（Mandatory）：上述着装变化必须直接拆分为独立角色实体，并在 Subject Index 与 Part 2 中各自占据独立条目；禁止只在同一角色条目里改 `clothing` 字段或在 `generation_prompt` 中临时追加“现在穿另一套衣服”。
+- 一角双衣绝对禁令（Mandatory）：**绝对禁止**在同一个角色条目、同一个 `clothing` 字段、同一个 `anchor_description` 或同一个 `generation_prompt` 中并列写入两套或以上着装状态。只要出现“日间装 + 夜间装”“白天制服 + 晚上睡衣”“外出装 + 居家装”这类双套描述，就必须复制为两个独立角色，分别承载各自服装版本。
+- 换装依赖建模规则（Mandatory）：换装后的独立角色实体必须依赖原角色建立继承链；若该换装同时依赖明确的服饰/装备道具（如面具、盔甲、制服外套、礼帽、雨衣、围巾、工牌），则必须在依赖说明中写清“继承原角色稳定锚点 + 叠加/替换哪些服饰道具”，必要时把相关 `PROP:[...]` 一并纳入 `visual_dependencies` 或在 `dependency_strategy.logic` 中逐项点名。
+- 换装抽取示例（Mandatory）：
+  - 不合规：仅一个 `CHAR:[@Lin]`，在后文用文字改成“脱掉风衣后的林月”或“穿上制服的林月”。
+  - 不合规：同一个角色条目里写“日间简约复古裙装，夜间棉质睡衣”，试图用一个角色覆盖两个服装版本。
+  - 合规：`CHAR:[@Lin_Trench]` 作为基准角色，`CHAR:[@Lin_Uniform]` / `CHAR:[@Lin_NoCoat]` 作为独立角色实体；后者通过 `visual_dependencies` 与 `dependency_strategy` 继承前者稳定锚点，并在逻辑中写清仅改变服装/配件状态。
 - 实体落点硬规则：每个被抽取实体必须至少在以下之一显式落点：`{Layout}` FG/MG/BG、`{Environment Context}`、`Linked Characters`、`Key Props`、`{Beats}` 动作关系；缺一判无效。
 - 环境并入实体（非角色/非道具）必须在“中文描述 + generation_prompt_en”双通道显式锚点出现，不得只在其一出现。
 - 推荐格式：`CHAR:[@A] -> Beat2/FG-left`，`PROP:[B] -> Key Props + Beat3 interaction`，`ENV:[C] -> Layout BG anchor + Environment prompt anchor`。
@@ -239,6 +251,7 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - 非人实体最小覆盖（Mandatory）：桌子、杯子、电脑等“具体可见物体”即使不满足跨 Scene 复用，也必须被抽取为 Scene 实体；可归为 `environment` 组成项，但不得漏抽。
 - 身份形态拆分强制：分身/易容/年龄态/特殊形态必须拆成独立 `characters` 条目。
   - 示例：`CHAR:[@Lin_Adult]` 与 `CHAR:[@Lin_Teen]`；`CHAR:[@AgentK_Normal]` 与 `CHAR:[@AgentK_Disguised]`。
+- 换装拆分并列强制（Mandatory）：明确换装、脱去关键外层、穿上职业制服/防护装备、增加或移除显著配饰后，只要角色可见轮廓或身份阅读发生变化，也必须像年龄态/易容一样拆成独立 `characters` 条目，不得视作同一角色的轻微连续状态。
 - Key Props 抽取标准：剧情意义明确 + 持续影响 + 重复出现/被引用。
 - 一次性且无叙事作用的小物可不进 `props`，但若在当前 Scene 可见且参与构图/动作，仍必须作为 Scene 实体被抽取并落点到 `environment`。
 - 一次性小物来源一致性（Mandatory）：凡动作涉及一次性消耗物（如纸巾、便签、一次性杯），必须在同 Scene 的 `environment` 中存在可追溯来源实体（如纸巾盒、便签座、杯架）；若仅出现消耗物而无来源实体，判定为无效输出。
@@ -336,10 +349,11 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - 锚点只读硬规则（Mandatory）：`anchor_description` 与角色身份锚点是不可变更锚点（immutable anchors）；下游仅允许逐字符继承，不得重写、扩写、弱化、替换同义词或做风格化改写。
 - 锚点冲突处理：若“美化/风格化”与锚点冲突，必须以锚点优先；宁可降低风格化程度，也不得改变锚点。
 - 时期/状态/换装拆分强制（Mandatory）：同一人物只要出现“时期差异（年龄段/时间段）”、“状态差异（受伤/污染/湿身/妆发显著变化）”或“明确换装”，必须拆分为独立角色资产并生成独立提示词，禁止复用同一 `characters` 条目硬改字段。
+- 着装优先级强调（Mandatory）：在人物 subject 抽取时，`明确换装` 不属于次要服装修饰，而是与“受伤/湿身/年龄态”同级的重大状态变化。只要镜头中需要生成不同服装版本，就必须先拆角色实体，再写对应提示词；不得先保留一个角色条目，再靠 prompt 自由改衣服。
 - 角色变体依赖链强制（Mandatory）：上述拆分出的角色必须写明 `visual_dependencies` 与 `dependency_strategy`，形成可追溯继承链：
   - 基准角色：`dependency_strategy.type=Original`，`visual_dependencies=[]`；
   - 派生时期/状态/换装角色：`dependency_strategy.type=Type A/Type B`，`visual_dependencies` 指向基准或上一阶段角色；
-  - `dependency_strategy.logic` 必须明确“继承不变锚点 + 允许变化项（时期/状态/服装）”。
+  - `dependency_strategy.logic` 必须明确“继承不变锚点 + 允许变化项（时期/状态/服装）”；若换装涉及已抽取服饰/装备道具，也必须说明与这些道具的依赖关系。
 - 角色分期依赖合规示例（Mandatory）：
   - 不合规：仅一个 `CHAR:[@Lin]`，同时描述“青年+中年+换装+受伤”。
   - 合规：
@@ -437,6 +451,7 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - **禁止代表化（Forbidden）**：禁止用“群演/其他人/若干道具/背景角色”等统称替代具体已出现实体；若剧本明确出现可识别对象，必须给出稳定实体名并保持逐字符一致。
 - **剧本实体映射必填（Mandatory）**：Subject Index 每行必须标注该 subject 覆盖了剧本中的哪个实体（人名/物名/地点名/称谓或其稳定别称），用于可审计追踪。
 - **系统级 Subjects 列表复用（Mandatory）**：若原文或上游输入已给出“系统级 subjects 列表（含稳定命名/ID/类型）”，Subject Index 必须优先复用该列表的命名与标识；禁止改名、重编号、同义替换或拆并导致的标识漂移。
+- **系统级 Subjects 描述复用（Mandatory）**：若系统级 subjects 列表同时给出了 `anchor_description`、description/hint、subject_ref 或其他识别描述，这些描述也属于权威输入，必须作为识别与复用基线注入分析过程；不得忽略现有描述后重新发明一套新的主体说明。
 - **系统级依赖引用（Mandatory）**：当涉及角色/道具状态变化、环境视角变化（含 OTS/Front/Reverse 变体）时，必须基于系统级 subjects 列表做依赖引用：在 Subject Index 保持同名同类型映射，在 Part 2 通过 `visual_dependencies` 与 `dependency_strategy` 建立可追溯依赖链。
 - 先输出去重 Subject 列表，覆盖 Part 1 全部角色/道具/环境（使用编号列表，不得用 Markdown 表）。
 - `subject_no` 全局唯一连续（建议 `S001...`）。
