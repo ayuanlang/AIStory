@@ -25,8 +25,8 @@
 ## 全局硬规则
 - 仅输出最终结果；禁止思维链、解释、前后缀、`<think>`、代码围栏。
 - 仅补充“缺失实体”，不得生成与当前输入无关的新实体。
-- 语言一致：自然语言描述跟随输入主语言；仅固定键名/约定标签可保持既定格式，禁止中英混杂漂移。
-- 生图/生视频提示词字段统一英文（含 `generation_prompt_en`），`anchor_description` 必须英文短语。
+- 语言一致：自然语言描述默认跟随剧本原始语言；若 `Project Context` 明确给出 `Language`，则项目目标语言优先。仅固定键名/约定标签可保持既定格式，禁止中英混杂漂移。
+- 生图/生视频提示词字段可保留既定字段命名（含 `generation_prompt_en`），但凡提示词里出现实际会被看见或听见的文字/对白/旁白/字幕/屏幕文案，其内容必须遵循项目目标语言；若未指定 `Language`，则遵循剧本原始语言。`anchor_description` 仍必须英文短语。
 - 名称冻结：Environment / Character / Prop 名称一旦确定，不得改写（大小写、空格、符号、拼写、全半角、分隔符）。
 - 锚点冻结（Immutable Anchors, 强制）：`anchor_description` 与已定稿身份锚点一经确定即只读，补全过程仅可继承引用，不得增删改或语义改写。
 - 禁止别名漂移：不得用别名、翻译变体、简写替代同一实体。
@@ -48,6 +48,8 @@
 - OTS 环境隔离规则（强制）：若当前补全对象是 OTS/Front/Reverse 相关 environment 变体，必须把它当成该方向下专门服务剧情空间与调度结构的 clean plate 纯环境资产来补全，只能写背景结构、构图、材质、光照与空椅/空桌等无人物状态；人物信息与剧情信息都必须与环境提示词完全隔离，不得补入肩膀遮挡、后脑勺、手臂、镜中人脸、人物影子或任何剧情残留。
 - OTS 补全边界（强制）：若输入片段里的 OTS 分镜需要肩部遮挡或人物局部，那属于 Shot 级信息，不属于 Environment 补全范围；补全过程不得把这些人物局部回写到 environment 的 generation_prompt。
 - 剧情补全边界（强制）：若输入片段里的紧张关系、对峙状态、打斗结果、追逐方向或其他叙事进程依赖角色/事件才能成立，那属于 Scene/Shot 级信息，不属于 Environment 补全范围；补全过程不得把这些剧情信息回写到 environment 的 generation_prompt。
+- 环境变体具体化规则（强制）：补全不同视角、不同方向、不同状态的 Environment 变体时，禁止只补 `Reverse`、`另一侧`、`same as base with changes`、`damaged version` 这类抽象占位；必须补成具体实体差异，至少写清当前 `Viewpoint Anchor/Viewing Direction`、`Visible Set`、`Excluded Set`、`Primary Subject/Secondary Subject` 与 FG/MG/BG 里的实物。
+- 环境状态细节落点规则（强制）：若环境处于更旧、更乱、更脏、更破损或其他状态变体，必须把差异落到具体实体和可见细节，例如裂纹位置、污渍分布、灯具开关状态、门窗开合角度、哪一组家具翻倒或移位；禁止只写抽象气氛词或评价词。
 
 若当前输入与以上规则冲突，以以上规则优先。
 
@@ -84,6 +86,7 @@
   - `AS`：明确侧别变化（如 `left -> right`）；
   - `BG`：同时写 `Visible Set` 与 `Excluded Set`；
   - `FR`：明确景别/构图主对象变化。
+- 方向差异实体化规则：`Front/Reverse/Side` 只是标签，不等于描述；若只保留标签而缺少实体清单、层级迁移、主次锚点变化，补全结果无效，必须重写。
 - 若该方向切换同时属于 OTS 正反切换上下文，必须保持与输入 Scene 边界一致：仅补当前 Scene 所需环境资产，不得跨 Scene 回填或合并反向变体。
 - 层级重排硬规则（Depth Role Reassignment）：当 Base 前景/中景主体在反向镜头里后移为当前背景时，必须写：
   - `Depth Role Reassignment: Base FG/MG:[...] -> Current BG:[...]; Base BG:[...] -> Current MG/FG:[...]`；
@@ -99,6 +102,7 @@
   `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint moved from inside doorway threshold to exterior corridor side, now facing inward to ENV:[RoomEntrance]; Axis Side: right -> left; Background Set Change: Visible Set = [door frame interior edge, corridor wall lamps, entry mat], Excluded Set = [window-side bookshelf, bed corner, inner desk area]; Lighting Direction Change: key light switches to corridor practicals from viewer-left; Framing Change: medium-wide with doorway centered and room depth behind; Dynamic Parts State: PROP:[Door](Open -> Half-Open, reason: CHAR:[@Guard] pushes it and pauses to listen)}`。
 - Few-shot B（街道正向 -> 街道反向）：
   `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint relocated to opposite sidewalk across traffic lane, now facing reverse toward ENV:[CrosswalkJunction]; Axis Side: left -> right; Background Set Change: Visible Set = [crosswalk signal pole, storefront neon, bus-stop shelter], Excluded Set = [alley dumpster row, rear parking gate, service entrance shutter]; Lighting Direction Change: key light becomes back-right from street signage and vehicle headlights; Framing Change: wide shot with crosswalk signal as new composition anchor; Dynamic Parts State: None}`。
+- 状态变化实体化规则：若补全过程需要输出状态差异，不得只写 `messier room`、`older version`、`broken state` 这类抽象词；必须写为 `具体实体 + 可见差异 + 所在层级/位置`。
 
 ### 2) Character Prompt Template
 `[Global Style] 6-view character sheet for 【Name】. Describe the fixed studio observer placement and the required Front/Back/Side/3/4/Close-up/Detail views in smooth natural prose, while keeping full-body framing, shoes fully visible in structural panels, lighting setup, lens baseline, grain strategy, attire, and signature anchors explicit. Background: White.`

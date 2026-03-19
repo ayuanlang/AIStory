@@ -471,10 +471,13 @@
 - **排版检查 (Format Validation)**：输出前必须进行 Markdown 格式自检。确保 Markdown 表格语法严格准确，不能出现错误的换行、未闭合的竖线 `|` 或导致表格渲染失败的特殊字符。
 - **语言要求 (Language Policy, 强制)**：
   - **项目语言优先（Project Language Override, 强制）**：若 `Project Context` / `{Global Context}` 中明确给出 `Language`（例如 `Language: 英文 / English`），则该目标语言优先于剧本原始语言；凡剧本情节中出现的对白、旁白、字幕、屏幕文字、标识语、消息内容、以及“说某种语言/切换语言”的语言事件，都必须先转换成该目标语言，再用于 `Shot Logic` 与各提示词字段。
-  - **生图/生视频提示词字段必须统一英文**：`Start Frame` / `Video Content` / `End Frame` / `Keyframes` 一律使用英文，禁止夹杂中文。
+  - **未指定语言时回退原文（Fallback to Script Language, 强制）**：若 `Project Context` / `{Global Context}` 未明确给出 `Language`，则所有对白、旁白、字幕、屏幕文字、标识语、消息内容、信件文字等语言性内容，默认沿用剧本原始语言；禁止无依据地统一英文化。
+  - **描述骨架与文字载荷分离（Prompt Carrier vs Language Payload, 强制）**：`Start Frame` / `Video Content` / `End Frame` / `Keyframes` 的描述骨架可沿用字段既定语言与镜头术语规范，但其中凡属于“角色会说出来、观众会听见、画面会看见的具体语言内容”的部分，必须按项目目标语言填写；若未指定，则按剧本原始语言填写。禁止为了维持英文 prompt 外壳而把实际对白、旁白、字幕、屏幕字、招牌字、短信内容生硬写成英文。
+  - **中文项目直写中文（Chinese Project Direct Rendering, 强制）**：当 `Language: 中文 / Chinese` 时，`Start Frame` / `Video Content` / `End Frame` / `Keyframes` 内凡出现引号台词、`Dialogue/OS/V.O.` 内容、`On-screen Text`、字幕、界面文案、门牌、标识语等，都必须直接写自然中文，不得用英文句子代替，也不得先写英文再在中文列补译。
   - **中文提示词四列强制（4 CN Columns, 强制）**：必须输出四个独立中文列：`Start Frame (CN)` / `Video Content (CN)` / `Keyframes (CN)` / `End Frame (CN)`；禁止再使用单列 `Prompt (CN)` 汇总。
   - **关键帧显式化（Keyframes Explicit, 强制）**：`Keyframes (CN)` 列必须始终出现；若 `Keyframes` 列为 `NO`，则 `Keyframes (CN)` 必须写 `NO`；若 `Keyframes` 列存在内容，则中文必须逐条翻译该列内容，不得省略。
   - **中英一致性强约束（Translation-Only, 强制）**：四个中文列必须严格对应英文四字段内容，仅做翻译，不得新增、删减、改写或重排语义。
+  - **语言载荷免翻译误伤（Language Payload Preservation, 强制）**：若英文四字段中的实际台词/字幕/屏幕字内容因项目语言要求而本来就是中文、日文或其它目标语言，则中文四列在对应位置应保持同一语言载荷本体，只翻译外围描述 prose；禁止把这些已符合项目语言的引号内容再次硬译成英文或替换成概述。
   - **主体命名锁定（Subject Name Lock, 强制）**：中文四列中凡出现 `subjects` / 角色主体名 / 说话主体名时，必须严格沿用输入提供的原始名字与写法，不得中文化、音译、意译、起别名，也不得替换成“甲/乙/主角/男主/女主”等泛称；若英文列使用 `CHAR:[@Name]`，中文列中该主体名也必须保持同一 `Name`。
   - **结构一致性（Structure Lock, 强制）**：四个中文列必须与 `Start Frame -> Video Content -> Keyframes -> End Frame` 一一对应；英文中的镜头语法标签、层次关系、实体集合、动作阶段、镜头运动与时序在中文中必须逐项对应。
   - **信息守恒（Content Parity, 强制）**：英文中出现的关键约束（如镜头方向、景别、机位、光效、构图、动作数量/阶段、实体引用）在中文列中必须完整保留；中文禁止加入英文中不存在的新创意描述。
@@ -785,7 +788,9 @@
         - **仅补充非口型视觉**：只需写出模型无法从台词推导的信息——说话时的**肢体动作、表情变化、手势、听者反应**。
         - **听者反应 (必写)**：若存在听者，必须在台词同一主节拍或紧邻主节拍内写出听者可见反应。
       *   **语气明确 (强制)**：tone 用 1-3 个词即可（如 calm / urgent / angry / whispering / shaky），与同一主节拍的表情/肢体描述协调。
-      *   **语言适配**：台词内容严格遵循 `{Global Context}` 的语言设定。
+      *   **语言适配**：台词、旁白、画外音、字幕、`On-screen Text`、屏幕 UI、门牌/招牌/纸面文字等语言内容，严格遵循 `{Global Context}` 的语言设定；若未显式设定，则严格沿用剧本原始语言。
+      *   **禁止生硬英文兜底**：当项目语言是中文时，实际台词与画面文字必须直接写中文，例如 `"把门关上。"`、`"营业中"`、`"未接来电"`；禁止写成 `"Close the door."`、`"Open"`、`"Missed Call"` 再期待下游自行翻译。
+      *   **图片字段同样适用**：若 `Start Frame` / `End Frame` / `Keyframes` 里出现招牌、短信、屏幕、海报、标签、手写字条等可见文字，必须按同一语言规则填写文字内容，而不是只用英文概括 `Chinese sign` / `message text visible`。
       *   **音效 (SFX)**：注明环境音或特定的动作音效（e.g., "Sound of glass shattering"）。
       *   **紧凑示例 (Compact Example)**：
           - 多句对话应压缩在少量主节拍内，由台词驱动口型，手动只写表情、肢体与听者反应。

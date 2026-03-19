@@ -6,11 +6,12 @@
 2. 道具宁缺毋滥：仅抽取有持续叙事作用且后续被再次使用/引用的道具。
 3. 环境默认审美：未指定风格时，默认优美/大气/现代/优雅；若剧本指定风格，以剧本优先。
 4. 角色与道具默认审美：未限制时，角色镜头友好且可播出，道具精致可复现；必须保留锚定特征。
-5. 语言一致：自然语言跟随输入主语言；仅固定结构键名、约定标签可保持既定格式，其余描述禁止中英混杂漂移；每个实体必须同时输出 generation_prompt_cn 与 generation_prompt_en 且语义一致，anchor_description 必须英文短语。
-6. 名称冻结：Environment/Character/Prop 一旦定稿，下游逐字符继承，禁止任何自动改写。
-7. 角色与道具命名权威：Character/Prop 同样以本文件为最终权威，禁止别名/翻译漂移。
-8. 锚点不可变更：anchor_description 与已定稿身份锚点（脸型/体态/标志物/鞋履识别点）一经确定即为只读，后续阶段仅可引用，不得增删改或语义改写。
-9. 零推理泄露：仅输出最终结果；禁止思维链、解释、<think>、代码围栏。若指令冲突，本条优先。
+5. 语言一致：自然语言默认跟随剧本原始语言；若 `Project Context` 明确给出 `Language`，则项目目标语言优先。仅固定结构键名、约定标签可保持既定格式，其余描述禁止中英混杂漂移；每个实体必须同时输出 generation_prompt_cn 与 generation_prompt_en 且语义一致，anchor_description 必须英文短语。
+6. 文字载荷语言规则（Mandatory）：在 environment / character / prop 的图片提示词中，凡需要写出实际可见文字内容（如招牌、屏幕 UI、按钮文案、手机消息、海报标语、门牌、纸面文字），必须使用“项目目标语言；若未指定则使用剧本原始语言”来填写。禁止为了维持 `generation_prompt_en` 的英文叙述外壳，而把这些实际画面文字生硬改成英文占位。
+7. 名称冻结：Environment/Character/Prop 一旦定稿，下游逐字符继承，禁止任何自动改写。
+8. 角色与道具命名权威：Character/Prop 同样以本文件为最终权威，禁止别名/翻译漂移。
+9. 锚点不可变更：anchor_description 与已定稿身份锚点（脸型/体态/标志物/鞋履识别点）一经确定即为只读，后续阶段仅可引用，不得增删改或语义改写。
+10. 零推理泄露：仅输出最终结果；禁止思维链、解释、<think>、代码围栏。若指令冲突，本条优先。
 
 ---
 
@@ -108,6 +109,8 @@
 ### 1) Environment Prompt Template
 - 去叙事化硬规则（Mandatory）：Environment 的 generation_prompt_cn/generation_prompt_en 仅允许描述抽象空间结构、几何关系、光照层次、材质质感、构图层级，不得涉及角色、剧情事件、动作因果、对话语义。
 - 通道隔离硬规则（Mandatory）：`Core Scene Info/{Beats}` 可以描述角色与动作，但 `Environment generation_prompt_cn/en` 必须做“角色清零”。同一 Scene 内若两处信息冲突，以“环境提示词去人物化规则”优先，必须删除环境提示词中的角色语义。
+- 环境变体具体化规则（Mandatory）：生成不同视角、不同方向、不同状态的 Environment 变体时，禁止只写 `反向/Reverse`、`另一侧`、`same environment with changes`、`similar to base` 之类空泛说明；必须落到具体可见实体、层级位置与差异细节，至少明确 `Viewpoint Anchor/Viewing Direction`、`Visible Set`、`Excluded Set`、`Primary Subject/Secondary Subject` 与 `FG/MG/BG` 中实际出现的物体。
+- 环境状态细节落点规则（Mandatory）：描述环境状态变化时，禁止只写 `变坏了`、`更乱了`、`更旧了`、`damaged version`、`worse condition`、`aged feel` 这类抽象词；必须写清具体是哪些实体发生了什么可见变化，例如墙漆剥落位置、椅子翻倒数量、灯罩凹陷位置、玻璃裂纹走向、桌面污渍分布等。
 - 情节归位规则（Mandatory）：情节发展、冲突升级、关系变化与信息揭示，必须通过 `Core Scene Info / {Observer View} / {Beats}` 以及下游 Shot 的画面动作来可视化承载；`Environment generation_prompt_cn/en` 只负责提供可供剧情发生的空间条件与调度结构，不得承担情节推进本身。
 - OTS 污染防护（Mandatory）：OTS 语义只允许出现在机位说明层（`{Observer View}` / `{Beats}`），禁止写入环境提示词正文；环境提示词中出现 `over shoulder / over-the-shoulder / A over B / B over A / shoulder silhouette / behind head / CHAR:[@...]` 任一词，判为无效并重写。
 - OTS 环境隔离规则（Mandatory）：凡服务于 OTS/正反打的 `ENV:[..._OTS_A]` / `ENV:[..._OTS_B]`（或等价 Front/Reverse 变体），一律视为该方向下专门服务剧情空间与调度结构的 **clean plate / 纯环境资产**。环境提示词只负责交付空间结构、构图层级、光照关系、材质响应与关键道具/空位状态；人物信息与剧情信息都必须与环境资产完全隔离，不得把任何角色、人体局部、人物倒影、人物影子或人物遮挡残留进环境资产。
@@ -115,9 +118,11 @@
 - 环境剧情隔离硬规则（Mandatory）：Environment prompt 不得承载任何剧情可见化信息，包括但不限于“谁在逼近谁”“谁刚离开”“争执后的凌乱痕迹”“打斗后的破坏结果”“追逐路径”“偷听/躲藏/对峙状态”等。环境只描述空间可见结构与静态物理状态，不描述事件正在发生、已经发生或即将发生。
 - 泄漏根因提示（Mandatory）：高频误差来自“把 OTS 的角色关系（A/B shoulder）从分镜层串写进环境提示词”。处理顺序必须为：先完成 Scene/Beats，再单独生成 Environment prompt，最后执行角色词剔除。
 - OTS 环境生成顺序（Mandatory）：若某 Shot 计划采用 OTS，生成顺序必须固定为：先完成角色分镜与 OTS 关系，再单独抽取该视角下承载剧情空间的 **纯环境 clean plate**，最后仅在 Shot 级叠加角色肩部/头部/动作信息。禁止反向操作成“先写带人物关系或事件关系的 OTS 画面，再把人物/剧情信息回填进 Environment”。
+- 方向差异实体化规则（Mandatory）：`Front/Reverse/SideLeft/SideRight` 只是一种索引标签，不构成有效描述本身；任何方向变体都必须补齐“这一侧真正看见了什么、哪组物体退场了什么、哪一个实体成为当前主锚点、哪些层级发生前后移”四类信息。若只写“反向视角”“对侧版本”“reverse angle with darker mood”而没有实体清单与层级重排，判为无效。
 - 禁止角色信息（Hard Rule）：严禁出现任何角色名、角色代号、CHAR:[@...]、人称指代（如他/她/他们）及人物身份词（如警察、记者、保安、母亲等）。
 - 禁止剧情信息（Hard Rule）：严禁出现剧情推进语句（如因为所以、进入/离开/追逐/躲藏/对峙等）与时间线动作指令。
 - 剧情可视化承载规则（Mandatory）：情节必须继续通过画面体现，以便支持情节发展与剧情推进；但其承载通道只能是 `Core Scene Info / {Observer View} / {Beats}` 与下游 Shot 的 `Start Frame / Video Content / End Frame`，不能写入 Environment prompt。
+- 状态变化实体化规则（Mandatory）：凡 `Dynamic Parts State`、`Background Set Change`、`FG/MG/BG` 或正文 prose 涉及状态差异，必须写到“具体实体 + 可见变化 + 位置/层级”这一粒度；禁止只写 `messier room`、`damaged version`、`worse condition`、`aged state`。正确写法应类似：`MG: two overturned visitor chairs beside the reception desk`、`BG: soot-darkened wall panel above the heater vent`、`Dynamic Parts State: PROP:[Blind](Half-Open -> Fully Closed, trigger: slack cord release)`。
 - 抽象元素约束（Mandatory）：提示词中的物体/主体只能使用无具象非生命物体表达。
 - 禁止命名污染（Hard Rule）：严禁出现任何专有名词或人物姓名；环境名仅可出现在 ENV:[...] 引用位，不得扩展为剧情化命名。
 - 具体示例（仅示范写法，不可照抄值）：

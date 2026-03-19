@@ -13,8 +13,9 @@
 9. 环境默认审美：未指定风格时，默认优美/大气/现代/优雅；若剧本指定风格，以剧本优先。
 10. 角色与道具默认审美：未限制时，角色镜头友好且可播出，道具精致可复现；必须保留锚定特征。
 11. 层级编码延续：`Episode ID=EPxx`，`Scene ID=EPxx_SCyy`，下游 `Shot ID=EPxx_SCyy_SHzz`；Scene 内状态必须形成 `Entry -> Exit` 闭环。
-12. 语言一致：自然语言默认跟随输入主语言；但若 `Project Context` 中明确给出 `Language`（如 `Language: 英文 / English`），则该项目语言为最高优先级，必须覆盖剧本文本原始语言。仅 `Episode/Scene/Shot ID`、固定结构键名、约定标签可保持既定格式，其余描述禁止中英混杂漂移；每个实体必须同时输出 `generation_prompt_cn` 与 `generation_prompt_en` 且语义一致，`anchor_description` 必须英文短语。
-13. 项目语言覆盖翻译（Mandatory）：当 `Project Context` 明确指定目标语言时，剧本情节中出现的对白、旁白、字幕、屏幕文字、标识语、口号、书信/消息内容、以及任何“角色正在说某种语言/切换语言”的语言事件，都必须转换并改写为目标语言后再写入分析结果；禁止把与项目语言冲突的原文直接保留为最终字段值，除非剧情明确要求“原文内容本身是关键证据/专有文本”，此时也必须在目标语言下给出可理解表达。
+12. 语言一致：自然语言默认跟随剧本原始语言；但若 `Project Context` 中明确给出 `Language`（如 `Language: 中文 / Chinese`、`Language: 英文 / English`），则该项目语言为最高优先级，必须覆盖剧本文本原始语言。仅 `Episode/Scene/Shot ID`、固定结构键名、约定标签可保持既定格式，其余描述禁止中英混杂漂移；每个实体必须同时输出 `generation_prompt_cn` 与 `generation_prompt_en` 且语义一致，`anchor_description` 必须英文短语。
+13. 项目语言覆盖翻译（Mandatory）：当 `Project Context` 明确指定目标语言时，剧本情节中出现的对白、旁白、字幕、屏幕文字、标识语、口号、书信/消息内容、以及任何“角色正在说某种语言/切换语言”的语言事件，都必须转换并改写为目标语言后再写入分析结果；若 `Project Context` 未指定 `Language`，则上述语言性内容默认保持剧本原始语言。禁止无依据地统一改成英文，除非剧本原文就是英文或项目语言明确要求英文。
+14. 生成提示词语言载荷规则（Mandatory）：在所有图片/视频相关提示词与分析字段中，只要涉及**实际会被看见或听见的语言内容**，包括对白、旁白、OS/V.O.、字幕、屏幕文字、UI 文案、招牌、海报、书信、短信、按钮文案、门牌、涂鸦、广播词等，必须使用“项目目标语言；若未指定则使用剧本原始语言”来填写。禁止为了维持 `generation_prompt_en` 或其它英文描述字段而把这些实际语言内容生硬改写成英文占位句。
 14. 基准环境统一：同一地理场地的变体依托同一 Base Reference；变体仅写 Delta，`REUSE` 必写 `None/No visual delta`。
 15. 环境命名权威：`scene_analysis.txt` 是 Environment 最终命名唯一权威；上游若提供 `environment_name` 仅作种子参考，必须在本阶段统一定稿。
 16. 名称冻结：Environment/Character/Prop 一旦定稿，下游逐字符继承，禁止任何自动改写。
@@ -38,6 +39,8 @@
 - 环境实例需与剧本实体可映射：若剧本提及场景物体且不归入角色/道具，该物体必须作为 Environment 组成实例出现并可被追溯。
 - 环境构图必须显式按前景（FG）/中景（MG）/后景（BG）描述，三层均需给出可见元素与空间关系。
 - 每个环境必须明确当前画面主体（Primary Subject）与次级支撑主体（Secondary Subject），并与景别/机位保持一致。
+- 环境变体具体化规则（Mandatory）：生成不同视角、不同方向、不同状态的 Environment 变体时，禁止只写 `反向/Reverse`、`另一侧`、`同场景不同角度`、`similar to base`、`same environment with changes` 之类空泛说明；必须落到具体可见实体、层级位置与差异细节，至少明确 `Viewpoint Anchor/Viewing Direction`、`Visible Set`、`Excluded Set`、`Primary Subject/Secondary Subject` 与 `FG/MG/BG` 中实际出现的物体。
+- 环境状态细节落点规则（Mandatory）：描述环境状态变化时，禁止只写 `变坏了`、`更乱了`、`更旧了`、`破败感增强`、`状态恶化`、`有损坏痕迹` 这类抽象结果词；必须写清具体是哪些实体发生了什么可见变化，例如 `wall paint peeling near the window frame`、`two chairs overturned beside the desk`、`lamp shade dented with warm bulb still on`、`floor tile cracked along the doorway seam`。
 - 环境锚点禁人物（Mandatory）：Environment 的 `Primary Subject`/`Secondary Subject` 与 `Viewpoint Anchor` 必须使用固定显目物体或结构锚点（如门框、窗、舞台口、桌组、灯具、柱体、屏幕、墙面标识），禁止使用任何人物/人体部位作为锚点。
 - 环境描述去人物化（Mandatory）：Environment 的 `generation_prompt_cn/generation_prompt_en` 仅描述空间、材质、构图、光照与可变部件状态，禁止夹带人物外观、服装、姿态、表情、身份描述。
 - 通道隔离硬规则（Mandatory）：`Core Scene Info/{Beats}` 可以描述角色与动作，但 `Environment generation_prompt_cn/en` 必须做“角色清零”。同一 Scene 内若两处信息冲突，以“环境提示词去人物化规则”优先，必须删除环境提示词中的角色语义。
@@ -102,6 +105,7 @@
   - `AS` 必须明确从哪一侧切到哪一侧（如 `left -> right`）；
   - `BG` 必须同时给出 `Visible Set` 与 `Excluded Set`（本视角应出现/不应出现的背景集合）；
   - `FR` 必须写清景别与构图主对象变化，禁止仅写 `same framing`。
+- 方向差异实体化规则（Mandatory）：`Front/Reverse/SideLeft/SideRight` 只是一种索引标签，不构成有效描述本身；任何方向变体都必须补齐“这一侧真正看见了什么、哪组物体退场了什么、哪一个实体成为当前主锚点、哪些层级发生前后移”四类信息。若只写“反向视角”“对侧版本”“reverse angle with darker mood”而没有实体清单与层级重排，判为无效 Delta。
 - 正反打层级重排硬规则（Depth Role Reassignment, Mandatory）：当 Base 里的“前景/中景主体”在反向镜头中后移为当前背景时，Delta 必须显式写出层级迁移：
   - 固定写法：`Depth Role Reassignment: Base FG/MG:[A,B] -> Current BG:[...]; Base BG:[...] -> Current MG/FG:[...]`；
   - 与 `FR` 联动：若层级迁移发生，`Framing Change` 必须同步说明新的画面主锚点（谁成为中景主锚点）；
@@ -123,6 +127,7 @@
   - 合规：`Dynamic Parts State: PROP:[Door](Open -> Closed, trigger: hinge self-close + latch tension)`。
   - 不合规：`Dynamic Parts State: Door: Closed`
   - 不合规改写：`Dynamic Parts State: PROP:[Door](Open -> Closed, trigger: latch rebound after partial release)`。
+- 状态变化实体化规则（Mandatory）：凡 `Dynamic Parts State`、`Background Set Change`、`FG/MG/BG` 或正文 prose 涉及状态差异，必须写到“具体实体 + 可见变化 + 位置/层级”这一粒度；禁止只写 `damaged version`、`messier room`、`worse condition`、`aged state`、`burned feel`、`ruined atmosphere`。正确写法应类似：`BG: smoke-stained ceiling panel above the rear light box`、`MG: cracked monitor glass on the reception desk`、`Dynamic Parts State: PROP:[Blind](Half-Open -> Fully Closed, trigger: slack cord release)`。
 - `REUSE` 默认模板：
   `Environment Delta = {Viewpoint Anchor/Viewing Direction: None, Axis Side: None, Background Set Change: None, Lighting Direction Change: None, Framing Change: None, Dynamic Parts State: None}`。
   仅可在可变部件确有变化时让 `DP` 非 `None`。
@@ -197,7 +202,7 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
   `1. {镜头:机位在{ }旁/朝向{ }/轴线{左侧|右侧}} + {空间:CHAR:[@角色A]在{ }相对{Stage}位于{ }} + {角色-镜头关系:CHAR:[@角色A]处于{前景|中景|后景}偏{左|右}、{正对|侧对|背对}镜头、景别{远景|全景|中景|近景|特写}、镜高/俯仰{平视|俯拍|仰拍}} + {主体关系:CHAR:[@角色A]与CHAR:[@角色B]位置{ }/朝向{ }/视线{ }/接触{ }} + {动作变化:因{触发原因}执行{动作路径与顺序}，对白/字幕/音效:{ }} -> {新状态:{位置|朝向|视线|接触|道具状态}}`。
 - 槽位缺失即无效，必须补全重写。
 - 必须写入具体对白/字幕/屏幕文字/音效（若该 Beat 存在）。
-- 若 `Project Context` 明确指定目标语言，则上述对白/字幕/屏幕文字/标识语/语言切换描述必须统一转换为该目标语言后再写入 Beat；禁止保留与项目语言冲突的原文表述作为最终结果。
+- 若 `Project Context` 明确指定目标语言，则上述对白/字幕/屏幕文字/标识语/语言切换描述必须统一转换为该目标语言后再写入 Beat；若未指定，则保持剧本原始语言。禁止把中文项目里的实际对白/文字内容硬写成英文，或把英文剧本里的原始文字无依据改成其他语言。
 - 实体引用强制：
   - 角色：`CHAR:[@Name]`
   - 环境：`ENV:[Name]`
@@ -211,7 +216,7 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 
 #### Full Script Coverage
 - Beats 必须覆盖原剧本全部信息：动作、台词、情绪反应、字幕、屏幕文字、V.O./O.S.。
-- 若 `Project Context` 指定了项目语言，则上述所有语言性信息在覆盖时必须先翻译/转换成项目语言，再写入最终分析结果。
+- 若 `Project Context` 指定了项目语言，则上述所有语言性信息在覆盖时必须先翻译/转换成项目语言，再写入最终分析结果；若未指定，则沿用剧本原始语言，不得额外英文化。
 
 ### 3) 实体完备性
 - **维度生成检查 (Dimension Completeness Gate, 强制)**：每个 Scene 在输出前必须先做“实体层 + 提示词层”双重维度验收；该检查只作为内部门禁，不得把 checklist 或“通过/失败”字样输出到最终结果。
