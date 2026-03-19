@@ -2009,11 +2009,11 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             warnings: List[str] = []
             if len(markdown_set) > 0 and len(json_set) == 0:
                 warning_codes.append("ANALYSIS_SUBJECTS_UNVERIFIED")
-                warnings.append("Subject consistency check could not be verified from JSON sections; result must be regenerated before apply.")
+                warnings.append("Subject consistency warning: could not be fully verified from JSON sections; continue loading and review manually.")
             elif len(missing) > 0:
                 warning_codes.append("ANALYSIS_SUBJECTS_INCOMPLETE")
                 warnings.append(
-                    "Subject consistency failure: some subjects found in scene text are missing in entity JSON. "
+                    "Subject consistency warning: some subjects found in scene text are missing in entity JSON. "
                     + f"Missing: {', '.join(missing[:20])}"
                 )
 
@@ -2984,36 +2984,32 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             except Exception:
                 pass
 
-        blocking_codes = set()
-        blocking_codes.update(integrity_meta.get("warning_codes") or [])
-        blocking_codes.update(sc_warning_codes or [])
-        blocking_failures = {
+        review_required_codes = set()
+        review_required_codes.update(integrity_meta.get("warning_codes") or [])
+        review_required_codes.update(sc_warning_codes or [])
+        non_blocking_review_codes = {
             "ANALYSIS_OUTPUT_TRUNCATED",
             "ANALYSIS_JSON_INVALID",
             "ANALYSIS_STRUCTURE_INCOMPLETE",
             "ANALYSIS_SUBJECTS_UNVERIFIED",
             "ANALYSIS_SUBJECTS_INCOMPLETE",
         }
-        matched_blockers = [code for code in blocking_failures if code in blocking_codes]
-        if matched_blockers:
-            failure_messages: List[str] = []
-            failure_messages.extend([str(x or "").strip() for x in (integrity_meta.get("warnings") or []) if str(x or "").strip()])
-            failure_messages.extend([str(x or "").strip() for x in (sc_warnings or []) if str(x or "").strip()])
-            failure_messages = list(dict.fromkeys(failure_messages))
+        matched_review_codes = [code for code in non_blocking_review_codes if code in review_required_codes]
+        if matched_review_codes:
+            review_messages: List[str] = []
+            review_messages.extend([str(x or "").strip() for x in (integrity_meta.get("warnings") or []) if str(x or "").strip()])
+            review_messages.extend([str(x or "").strip() for x in (sc_warnings or []) if str(x or "").strip()])
+            review_messages = list(dict.fromkeys(review_messages))
             logger.warning(
-                "[analyze_scene] import_review_required episode_id=%s blocking_codes=%s warnings=%s",
+                "[analyze_scene] import_review_required_non_blocking episode_id=%s codes=%s warnings=%s",
                 getattr(request, "episode_id", None),
-                matched_blockers,
-                failure_messages,
+                matched_review_codes,
+                review_messages,
             )
-            raise HTTPException(
-                status_code=502,
-                detail=_build_scene_analysis_blocking_failure_detail(
-                    matched_blockers,
-                    list(integrity_meta.get("warnings") or []),
-                    list(sc_warnings or []),
-                ),
-            )
+            response_payload["import_review_required"] = True
+            response_payload["import_review_codes"] = matched_review_codes
+            if review_messages:
+                response_payload["import_review_messages"] = review_messages
         return response_payload
 
     except HTTPException as e:

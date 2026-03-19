@@ -4253,7 +4253,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
     const localizeAnalysisFailureMessage = useCallback((rawMessage) => {
         const stable = String(rawMessage || '').trim();
         if (!stable) {
-            return t('场景分析失败：当前返回结果不可用。请直接重新执行 AI 场景分析。', 'Scene analysis failed: the returned result is unusable. Please rerun AI Scene Analysis.');
+            return t('场景分析返回告警：结果需要人工复核，但已允许继续加载。', 'Scene analysis returned warnings: the result needs manual review, but loading can continue.');
         }
 
         const normalized = stable.toLowerCase();
@@ -4262,7 +4262,10 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             || normalized.includes('请直接重新执行 ai 场景分析')
             || normalized.includes('please directly rerun ai scene analysis')
         ) {
-            return stable;
+            return t(
+                '场景分析返回告警：结果需要人工复核，但不再阻断原文、Markdown 与 JSON 的加载。',
+                'Scene analysis returned warnings: the result needs manual review, but no longer blocks loading raw text, markdown, or JSON.'
+            );
         }
         if (
             normalized.includes('analysis_structure_incomplete')
@@ -4270,8 +4273,8 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             || normalized.includes('missing required sections')
         ) {
             return t(
-                '场景分析失败：本次返回缺少必要结构段，结果不可导入也不能继续使用。请直接重新执行 AI 场景分析。',
-                'Scene analysis failed: required sections are missing, so the result cannot be imported or used. Please rerun AI Scene Analysis.'
+                '场景分析返回告警：本次返回缺少部分必要结构段，请人工复核；系统仍会继续加载已返回的原文、Markdown 与 JSON。',
+                'Scene analysis returned warnings: some required sections are missing. Please review manually; the system will still load returned raw text, markdown, and JSON.'
             );
         }
         if (
@@ -4279,8 +4282,8 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             || normalized.includes('subject consistency check could not be verified')
         ) {
             return t(
-                '场景分析失败：角色、环境或道具的一致性未校验通过，当前结果不可靠。请直接重新执行 AI 场景分析。',
-                'Scene analysis failed: character/environment/prop consistency could not be verified, so the result is unreliable. Please rerun AI Scene Analysis.'
+                '场景分析返回告警：角色、环境或道具的一致性暂未完整校验，请人工复核；系统不会因此阻断加载。',
+                'Scene analysis returned warnings: character/environment/prop consistency could not be fully verified. Please review manually; loading will not be blocked.'
             );
         }
         if (
@@ -4288,8 +4291,8 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             || normalized.includes('truncated')
         ) {
             return t(
-                '场景分析失败：续写结束后结果仍不完整，当前分析不可用。请直接重新执行 AI 场景分析。',
-                'Scene analysis failed: the result is still incomplete after continuation, so it cannot be used. Please rerun AI Scene Analysis.'
+                '场景分析返回告警：续写后结果仍可能不完整，请人工复核；系统将继续加载已返回内容。',
+                'Scene analysis returned warnings: the result may still be incomplete after continuation. Please review manually; the system will continue loading returned content.'
             );
         }
         if (
@@ -4298,8 +4301,8 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             || normalized.includes('json 不完整')
         ) {
             return t(
-                '场景分析失败：本次返回的结构片段损坏，系统无法安全解析。请直接重新执行 AI 场景分析。',
-                'Scene analysis failed: structured output fragments are invalid and cannot be parsed safely. Please rerun AI Scene Analysis.'
+                '场景分析返回告警：本次返回的部分结构片段损坏，请人工复核；系统会尽可能继续解析并加载可用内容。',
+                'Scene analysis returned warnings: some structured fragments are invalid. Please review manually; the system will keep parsing and loading usable content where possible.'
             );
         }
         return stable;
@@ -5059,7 +5062,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         const ok = missing.length === 0;
         const message = ok
             ? t('一致：Markdown 中提到的 subject 均存在于 JSON entities。', 'Consistent: all markdown-mentioned subjects exist in JSON entities.')
-            : t('不一致：存在 Markdown 中提到但 JSON 缺失的 subject。', 'Inconsistent: some subjects mentioned in markdown are missing in JSON entities.');
+            : t('告警：存在 Markdown 中提到但 JSON 缺失的 subject，请人工复核。', 'Warning: some subjects mentioned in markdown are missing in JSON entities. Please review manually.');
 
         const jsonSubjects = jsonSubjectPairs.map((item) => formatSubjectRef(item.type, item.display)).filter(Boolean);
         const markdownSubjectDisplay = markdownSubjects.map((item) => formatSubjectRef(item.type, item.name)).filter(Boolean);
@@ -5437,8 +5440,8 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         }
         if (!silent && onLog) {
             if (report.ok) onLog(`Subject consistency check passed (${report.markdownSubjects.length} matched).`, 'success');
-            else if (report.missing?.length) onLog(`Subject consistency check failed: missing [${report.missing.join(', ')}]`, 'warning');
-            else onLog('Subject consistency check failed: no entities JSON.', 'warning');
+            else if (report.missing?.length) onLog(`Subject consistency warning: missing [${report.missing.join(', ')}]`, 'warning');
+            else onLog('Subject consistency warning: no entities JSON.', 'warning');
         }
         return report;
     };
